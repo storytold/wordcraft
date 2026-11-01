@@ -273,6 +273,54 @@ fn a_list_label_counts_in_a_box_that_doesnt_wrap() {
     assert_eq!(shown, 1, "label and text share one line");
 }
 
+#[test]
+fn a_right_aligned_list_item_in_a_box_that_doesnt_wrap_stays_on_the_page() {
+    // At the measuring width alignment moved the text along, and that counted as the label's width.
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "Item", 60.0, 60.0, TextBody { no_wrap: true, ..Default::default() });
+    float_box(&mut d);
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.align = Some(wordcraft_doc::props::Align::Right);
+    let l = lay(&d);
+    assert!(frame_of(&l, id).w < 100.0, "{:?}", frame_of(&l, id));
+}
+
+#[test]
+fn a_box_that_doesnt_wrap_lines_up_at_the_width_of_its_lines() {
+    // Aligned to the right margin it grows to the left, as in Word, rather than off the page.
+    let mut d = Document::from_text("x");
+    let body = TextBody { no_wrap: true, ..Default::default() };
+    let id = text_box(&mut d, 0, "A line far longer than the box it was saved in", 60.0, 60.0, body);
+    float_box(&mut d);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut() else { panic!("no box") };
+    float.h_rel = wordcraft_doc::para::Anchor::Margin;
+    float.h_align = Some(wordcraft_doc::para::FloatAlign::End);
+    let (page_w, right) = (d.last_section.page_w, d.last_section.page_w - d.last_section.margin_right);
+    let r = frame_of(&lay(&d), id);
+    assert!(r.w > 100.0 && (r.right() - right).abs() < 0.5 && r.right() < page_w, "{r:?}, margin at {right}");
+}
+
+#[test]
+fn text_wraps_around_a_box_that_doesnt_wrap_at_the_width_of_its_lines() {
+    let mut d = Document::from_text(&"Words beside the box and never over it. ".repeat(40));
+    let body = TextBody { no_wrap: true, ..Default::default() };
+    let id = text_box(&mut d, 0, "A line far longer than the box it was saved in", 60.0, 60.0, body);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut() else { panic!("no box") };
+    float.wrap = wordcraft_doc::para::Wrap::Square;
+    let l = lay(&d);
+    let r = frame_of(&l, id);
+    assert!(r.w > 100.0, "{r:?}");
+    let clear = l.pages[0].items.iter().any(|it| match it {
+        Placed::Lines { story: StoryRef::Body, para, x, .. } => para.lines.iter().any(|ln| x + ln.left >= r.right() - 0.5),
+        _ => false,
+    });
+    assert!(clear, "a line starts past the box's right edge, {}", r.right());
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.

@@ -1452,7 +1452,7 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
 pub(crate) fn para_content_labelled(pl: &ParaLayout) -> (f32, f32) {
     let (lo, hi) = para_content(pl);
     let start = pl.rp.indent_left.max(0.0) + pl.rp.indent_first.max(0.0);
-    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).and_then(|l| l.xs.first()).copied().unwrap_or(start);
+    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).filter(|l| !l.rtl).and_then(|l| l.xs.first()).copied().unwrap_or(start);
     (lo, hi + (text - start).max(0.0))
 }
 

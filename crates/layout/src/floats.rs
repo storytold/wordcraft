@@ -56,6 +56,16 @@ pub(crate) fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
     o.frame().filter(|(_, _, float)| float.wrap != Wrap::Inline)
 }
 
+/// The width floating `o`, saved `w` wide, is placed at: a text box that doesn't wrap is as wide as
+/// its lines, so it lines up and text wraps around it at that width. A turned box keeps the
+/// rectangle it turns about.
+pub(crate) fn placed_width(ctx: &mut Ctx, o: &InlineObject, w: f32) -> f32 {
+    match o {
+        InlineObject::Shape { story: Some(id), float, .. } if float.rot == 0.0 => textbox::no_wrap_width(ctx, *id, w),
+        _ => w,
+    }
+}
+
 /// Where a floating object goes, in the coordinates of the box `frame` places on the page.
 /// `col` is the column (or cell) left edge and width, `y0` the anchor paragraph's top. Without a
 /// frame (table cells, text boxes, notes) positions relative to the page or margins fall back
@@ -363,6 +373,7 @@ pub(crate) fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let w = placed_width(ctx, o, w);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -488,22 +499,13 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                match floats.get(&oi) {
+                    Some(r) => *r,
+                    None => float_rect(at.page, at.col, at.para_y, placed_width(ctx, obj, w), h, float),
+                }
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
-            };
-            let text_box = match obj {
-                InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
-                    Some(*id)
-                }
-                _ => None,
-            };
-            // Wrap text in shape off: a floating box is as wide as its lines. A turned box keeps
-            // the rectangle it turns about.
-            let rect = match text_box {
-                Some(id) if floating && float.rot == 0.0 => Rect { w: textbox::no_wrap_width(ctx, id, rect.w), ..rect },
-                _ => rect,
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
@@ -511,6 +513,12 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             if floating {
                 layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
             }
+            let text_box = match obj {
+                InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
+                    Some(*id)
+                }
+                _ => None,
+            };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
             front.push(Placed::Object {

@@ -10,7 +10,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
+use wordcraft_doc::props::{Align, TextDirection, TextVert, VAlign};
 use wordcraft_doc::{Block, Blocks, InlineObject, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
@@ -88,13 +88,24 @@ fn block_width(ctx: &mut Ctx, block: &Arc<Block>, len: f32) -> f32 {
         return crate::table::blocks_content(ctx, &vec![block.clone()], None, 0).1;
     };
     let label = ctx.next_label(p);
+    // Alignment moves a line, not its width, and at the measuring width a label would move too.
+    let left;
+    let p = if label.is_some() {
+        let mut l = p.clone();
+        l.props.align = Some(Align::Left);
+        l.touch();
+        left = l;
+        &left
+    } else {
+        p
+    };
     let tabs = p.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { .. }));
     let width = if tabs { len } else { crate::table::UNBOUNDED };
     ctx.para_measured(p, width, None, label, crate::table::para_content_labelled).1
 }
 
-/// The width of a `w` wide box `id` as drawn: as wide as its lines with Wrap text in shape off, as
-/// Word draws it whether or not it resizes to fit its text.
+/// The width of a `w` wide box `id` as placed and drawn: as wide as its lines with Wrap text in
+/// shape off, as Word draws it whether or not it resizes to fit its text.
 pub(crate) fn no_wrap_width(ctx: &mut Ctx, id: u32, w: f32) -> f32 {
     let Some(body) = ctx.doc.parts.get(&id).map(|p| p.body) else { return w };
     if !body.no_wrap || body.vert.turn() != TextDirection::Horizontal || body.next.is_some() {
