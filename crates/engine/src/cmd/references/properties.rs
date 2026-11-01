@@ -95,6 +95,15 @@ pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String
     bookmark_text_at(doc, name, &start)
 }
 
+/// Does the bookmark `name` that starts at `start` end in the paragraph it starts in?
+pub(super) fn bookmark_ends_in_its_paragraph(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> bool {
+    doc.para(start.story, &start.path).is_some_and(|para| {
+        para.object_offsets()
+            .into_iter()
+            .any(|o| o > start.off && matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
+    })
+}
+
 /// [`bookmark_text`] for the bookmark `name` that starts at `start`, for a caller that has
 /// looked the document's bookmarks up once.
 pub(super) fn bookmark_text_at(doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> Option<String> {

@@ -636,6 +636,82 @@ fn output_keeps_paragraph_number_references_as_stored() {
     assert_eq!(results, ["2.1", "2.1", "2.1", "Target heading"]);
 }
 
+/// The results of the fields in the paragraph at `path` of `d`.
+fn results_in(d: &wordcraft_doc::Document, path: &wordcraft_doc::Path) -> Vec<String> {
+    d.para(StoryRef::Body, path)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Set every field result in the last body paragraph of `s` to `stale`; that paragraph's path.
+fn stale_last_paragraph(s: &mut Session, stale: &str) -> wordcraft_doc::Path {
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = stale.into();
+        }
+    }
+    para.touch();
+    last
+}
+
+/// Word shows a REF to a bookmark that ends in a later paragraph as paragraphs of the result
+/// (measured in Word for Windows: "one" and "Beta" on two lines for a bookmark from "one" to
+/// "Beta"), which a field's one-paragraph result can't hold: output keeps the stored result
+/// rather than show the first paragraph's part alone.
+#[test]
+fn output_keeps_a_reference_to_a_bookmark_over_paragraphs_as_stored() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha one\nBeta two\nShort mark\nRefs "));
+    let at = |block: usize, off: usize| wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    s.sel = crate::Selection { anchor: at(0, 6), focus: at(1, 4) };
+    s.run("insert.bookmark", &json!({"name": "Span"})).unwrap();
+    s.run("select.text", &json!({"text": "Short mark"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Short"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF Span \\h", "REF Short \\h"] {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = stale_last_paragraph(&mut s, "stored");
+    let out = output_fields(&s.doc).expect("the short bookmark's REF changes");
+    assert_eq!(results_in(&out, &last), ["stored", "Short mark"]);
+}
+
+/// A STYLEREF to a heading holding a SEQ field shows the heading with the SEQ field's new number,
+/// in output and after F9: the numbers are filled in before the style references read them.
+#[test]
+fn a_style_reference_reads_the_headings_new_sequence_number() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Chapter \nBody\nRefs "));
+    s.run("select.text", &json!({"text": "Chapter "})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 8 });
+    s.run("insert.field", &json!({"instr": "SEQ Chapter \\* ARABIC", "result": "x"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\"", "result": "x"})).unwrap();
+    // Stale stored results: the heading's number 9, the reference "stale".
+    let heading = wordcraft_doc::Path::top(0);
+    let para = s.doc.para_mut(StoryRef::Body, &heading).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "9".into();
+        }
+    }
+    para.touch();
+    let last = stale_last_paragraph(&mut s, "stale");
+    let out = output_fields(&s.doc).expect("the fields change");
+    assert_eq!(results_in(&out, &heading), ["1"]);
+    assert_eq!(results_in(&out, &last), ["Chapter 1"]);
+    update_seq(&mut s).unwrap();
+    assert_eq!(results_in(&s.doc, &last), ["Chapter 1"], "F9's renumbering too");
+}
+
 /// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
 /// bookmark, fields to others, and one to a bookmark the document lacks each show what
 /// `bookmark_text` (F9's lookup) gives, or Word's error.
