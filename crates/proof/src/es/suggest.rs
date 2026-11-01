@@ -1,5 +1,5 @@
-//! Spanish suggestions. The ranking is the dictionary-driven one Czech uses
-//! ([`crate::cs::suggest::suggest_in`]: case, MAP — the Spanish dictionaries map each vowel to
+//! Spanish suggestions. The ranking is the shared dictionary-driven one
+//! ([`crate::affix_suggest`]: case, MAP — the Spanish dictionaries map each vowel to
 //! its accented forms and `n` to `ñ`, so `tambien` → `también` comes first —, REP, missing spaces,
 //! KEY, TRY edits and a stem scan); every table comes from the variety's installed dictionary.
 //! In Uruguayan Spanish a `vos` form typed without its accent is offered with it first
@@ -7,7 +7,7 @@
 
 use crate::ProofLang;
 use crate::affix::{AffixDict, Casing, capitalize, casing};
-use crate::cs::suggest::MAX_LETTERS;
+use crate::affix_suggest::{MAX_LETTERS, Tuning};
 
 /// Spelling suggestions for a word in `lang`'s Spanish, best first, at most `max`, in the word's
 /// case.
@@ -30,7 +30,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize, lang: ProofLang) -> Vec
             _ => v,
         });
     }
-    for s in crate::cs::suggest::suggest_in(d, word, max) {
+    for s in crate::affix_suggest::suggest_in(d, word, max, &Tuning::DEFAULT) {
         if !out.contains(&s) {
             out.push(s);
         }
