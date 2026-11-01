@@ -261,6 +261,7 @@ impl Session {
             keymap: _,
             ribbon: _,
             editing_lang: _,
+            math_left: _,
             math_latex: _,
             math_normal_text: _,
             last_highlight: _,

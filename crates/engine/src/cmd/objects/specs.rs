@@ -1,4 +1,4 @@
-use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
+use super::arrange::{MAX_OFFSET, align, bounds, copy_to, move_with_text, position_options, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, crop, recolor, relook, remove_background, reset, size};
 use super::select::{
@@ -204,12 +204,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value": bool}  (true: Move with Text, the floating object's vertical position follows its paragraph; false: Fix Position on Page. It stays where it is)"#)
             .when(has_floating),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
-            let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
+            let named = p::str(v, "preset");
+            let preset = named.unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
             let sect = crate::cmd::page::sect(s);
             let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
             with_float(s, |f| {
-                if f.wrap == Wrap::Inline {
+                // Word's nine presets are "with Square Text Wrapping".
+                if f.wrap == Wrap::Inline || named.is_some() {
                     f.wrap = Wrap::Square;
                 }
                 f.h_rel = wordcraft_doc::para::Anchor::Margin;
@@ -222,29 +224,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 f.y = y.unwrap_or(row);
             })
         })
-        .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
+        .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}  (within the margins; a preset also sets Square wrapping, as Word's Position gallery does)"#)
         .when(has_movable),
+        CommandSpec::new("arrange.positionOptions", "More Layout Options", "Layout › Arrange › Position", position_options)
+            .params(r#"{"horizontal"?: {"align": "left|center|right|inside|outside"} | {"x": pt}, "vertical"?: {"align": "top|center|bottom|inside|outside"} | {"y": pt}}, each with "relativeTo"?: "margin|page|insideMargin|outsideMargin", across also "column|leftMargin|rightMargin", down also "paragraph|topMargin|bottomMargin" (default margin; paragraph takes `y` only)  (the Layout dialog's Position tab: an axis left out stays as it is; an In Line with Text object floats with Square wrapping)"#)
+            .when(has_movable),
         CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
-        CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
-            let h = p::str(v, "value").unwrap_or("center").to_string();
-            let tw = crate::cmd::page::sect(s).text_width();
-            let w = selected(s).map(|(_, o)| obj_size(&o).0).unwrap_or(72.0);
-            with_float(s, |f| {
-                if f.wrap == Wrap::Inline {
-                    f.wrap = Wrap::Square;
-                }
-                f.h_rel = wordcraft_doc::para::Anchor::Margin;
-                f.h_align = None;
-                f.x = match h.as_str() {
-                    "left" => 0.0,
-                    "right" => tw - w,
-                    _ => (tw - w) / 2.0,
-                };
-            })
-        })
-        .params(r#"{"value": "left|center|right"}"#)
-        .when(has_movable),
+        CommandSpec::new("arrange.align", "Align", "Layout › Arrange", align)
+            .params(r#"{"value": "left|center|right|top|middle|bottom|distributeHorizontally|distributeVertically", "to"?: "margin|page|selected"}  (to: what the objects line up with; default the outline of the selected objects when two or more are selected (Shift+click), else the margin. Distribute spaces them evenly across it)"#)
+            .when(has_movable),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
         CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
             .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n, "to"?: Pos}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object by x/y floats it. to: an In Line with Text object moves to that text position and stays inline, as a drag does)"#)

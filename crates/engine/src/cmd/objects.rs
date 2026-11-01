@@ -20,6 +20,8 @@ mod select;
 mod shape;
 mod specs;
 
+#[cfg(test)]
+use arrange::MAX_OFFSET;
 pub use arrange::moves_with_text;
 pub(crate) use arrange::{anchor_paragraph, nearest_line};
 #[cfg(test)]

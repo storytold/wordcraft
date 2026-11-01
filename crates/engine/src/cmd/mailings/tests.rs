@@ -47,6 +47,76 @@ fn finishing_a_merge_to_a_file_is_not_an_edit() {
 }
 
 #[test]
+fn csv_delimiter_reads_complete_header_record() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            // All candidate separators and doubled quotes occur on both sides of the newline.
+            // The real separators follow the closing quote, beyond the first physical line.
+            let header = format!("Name,;\t \"given\"{newline}family,;\t \"last\"");
+            let quoted = header.replace('"', "\"\"");
+            let text = format!("\"{quoted}\"{sep}City{sep}{sep}\r\nAda{sep}Paris{sep}{sep}\nBo{sep}Oslo{sep}{sep}");
+            assert_eq!(
+                parse_csv(&text),
+                vec![vec![header.as_str(), "City", "", ""], vec!["Ada", "Paris", "", ""], vec!["Bo", "Oslo", "", ""]],
+                "separator {sep:?}, embedded newline {newline:?}"
+            );
+            // A multiline field after an ordinary column must not end detection either.
+            let text = format!("ID{sep}\"{quoted}\"{sep}City\n1{sep}Ada{sep}Paris\n2{sep}Bo{sep}Oslo");
+            assert_eq!(parse_csv(&text), vec![vec!["ID", header.as_str(), "City"], vec!["1", "Ada", "Paris"], vec!["2", "Bo", "Oslo"]]);
+        }
+    }
+}
+
+#[test]
+fn csv_delimiter_reads_multiline_headers_after_blank_lines() {
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("Given{newline}Family");
+            for prefix in ["\n\r\n", "\r", "\r\r"] {
+                let text = format!("{prefix}\"{header}\"{sep}City\rAda{sep}Paris");
+                assert_eq!(parse_csv(&text), vec![vec![header.as_str(), "City"], vec!["Ada", "Paris"]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn recipient_csv_blank_prefix_keeps_columns_without_dropping_literal_records() {
+    let mut s = Session::new(Document::new());
+    for sep in [',', ';', '\t'] {
+        for newline in ["\n", "\r\n", "\r"] {
+            let header = format!("First{newline}Name");
+            let csv = format!(" \t{newline}\"{header}\"{sep}Email{newline}Ada{sep}ada@example.com");
+            let result = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+            assert_eq!(result, json!({"fields": [header, "Email"], "records": 1}));
+            assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+        }
+    }
+    s.run("mailings.recipients", &json!({"csv": " \nName,Email\nAda,ada@example.com", "headers": false})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([[" ", ""], ["Name", "Email"], ["Ada", "ada@example.com"]]));
+    s.run("mailings.recipients", &json!({"csv": "\" \",Email\nAda,ada@example.com"})).unwrap();
+    assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap()["rows"], json!([["Ada", "ada@example.com"]]));
+    let rows = s.merge.rows.clone();
+    assert!(s.run("mailings.recipients", &json!({"csv": " \t\r\n \r"})).is_err());
+    assert_eq!(s.merge.rows, rows, "an empty headered list must not replace existing recipients");
+    assert_eq!(parse_csv(" \nName,Email\nAda,ada@example.com")[0], vec![" "], "the shared CSV reader keeps literal whitespace rows");
+}
+
+#[test]
+fn csv_delimiter_keeps_record_boundaries_and_ties() {
+    // Later records cannot choose the header's delimiter.
+    assert_eq!(parse_csv("Name;City\rAda;Paris,,,,\rBo;Oslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris,,,,"], vec!["Bo", "Oslo"]]);
+    // Existing ties prefer tab, then semicolon, then comma.
+    assert_eq!(parse_csv("A,B;C\n1,2;3"), vec![vec!["A,B", "C"], vec!["1,2", "3"]]);
+    assert_eq!(parse_csv("A;B\tC\n1;2\t3"), vec![vec!["A;B", "C"], vec!["1;2", "3"]]);
+    assert_eq!(parse_csv("Name\nAda,Paris;Oslo"), vec![vec!["Name"], vec!["Ada,Paris;Oslo"]]);
+    assert!(parse_csv("").is_empty());
+    assert_eq!(parse_csv("\nName\nAda"), vec![vec!["Name"], vec!["Ada"]]);
+    // The reader remains permissive about an unterminated quoted cell.
+    assert_eq!(parse_csv("Name,City\nAda,\"Paris\nOslo"), vec![vec!["Name", "City"], vec!["Ada", "Paris\nOslo"]]);
+}
+
+#[test]
 fn csv_delimiter_ignores_quoted_text() {
     let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
@@ -57,6 +127,8 @@ fn csv_delimiter_skips_leading_blank_lines() {
     let want = vec![vec!["Name", "Email"], vec!["Ann", "ann@x.org"]];
     assert_eq!(parse_csv("\nName,Email\nAnn,ann@x.org\n"), want);
     assert_eq!(parse_csv("\r\n\r\nName;Email\r\nAnn;ann@x.org"), want);
+    let cr = parse_csv("\rName,City\rAda,Paris");
+    assert_eq!(cr, vec![vec!["Name", "City"], vec!["Ada", "Paris"]]);
 }
 
 /// Field types ignore case (ECMA-376 Part 1, 17.16.1), and `MERGEFIELDX` is another field.

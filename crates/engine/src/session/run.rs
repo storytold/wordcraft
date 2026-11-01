@@ -31,12 +31,14 @@ struct ElsewhereContext {
 
 impl Session {
     fn leave_math_for_command(&mut self, id: &str) {
+        self.math_left = false;
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
             && let Some(m) = self.math.take()
         {
             let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
             self.sel = Selection::caret(Pos { off, ..m.at });
+            self.math_left = true;
         }
     }
 
@@ -387,8 +389,10 @@ impl Session {
         // Outline view: collapsed headings follow edits; the caret stays where it shows.
         crate::cmd::outline::after_command(self, sel_before, self.rev != rev_before);
         // Extra selected objects last until something else is edited or selected; formatting
-        // them keeps them selected, as in Word.
-        if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != *sel_before) {
+        // or aligning them keeps them selected, as in Word.
+        if !matches!(id, "select.addObject" | "arrange.ungroup" | "arrange.align" | "shape.fill" | "shape.effects")
+            && (spec.mutates || self.sel != *sel_before)
+        {
             self.also_selected.clear();
         }
         self.note_typing(id, before_doc.as_ref().map(|b| &b.0), sel_before);

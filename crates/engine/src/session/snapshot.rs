@@ -144,6 +144,7 @@ impl Session {
             editing_lang: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
+            math_left: _,
             math_latex: _,
             math_normal_text: _,
             // The save password, like the file path: not an edit to the document.

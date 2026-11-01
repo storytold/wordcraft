@@ -522,6 +522,9 @@ fn enter_finishes_a_word_for_autocorrect() {
 fn autocorrect_finds_the_word_after_a_wide_space() {
     let s = typed("a\u{a0}teh x\u{3000}teh ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{a0}the x\u{3000}the ");
+    // A narrow no-break space and a figure space too.
+    let s = typed("a\u{202f}teh x\u{2007}teh ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{202f}the x\u{2007}the ");
     let s = typed("end.\u{a0}hello end.\u{3000}world ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "End.\u{a0}Hello end.\u{3000}World ");
     let s = typed("the\u{a0}1st and\u{3000}22nd ");
@@ -831,6 +834,47 @@ fn a_tracked_border_line_is_a_deletion_and_a_formatting_change() {
 }
 
 #[test]
+fn a_tracked_border_line_at_the_top_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers the characters' paragraph; Ben's Enter gives it the border. The formatting
+    // change is Ben's and holds Ana's centered paragraph without a border.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((Some(Align::Center), false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
+}
+
+/// The border line at the top records its formatting change before the split, so the new
+/// paragraph does not copy a revision that is missing the earlier formatting.
+#[test]
+fn a_tracked_border_line_in_a_centred_empty_paragraph_keeps_the_centring_on_reject() {
+    use wordcraft_doc::props::Align;
+    let mut s = typed("");
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "---\n");
+    assert_eq!(texts(&s), ["", ""]);
+    // Only the characters' paragraph carries the formatting revision, not the one typing continues in.
+    let tracked = |s: &Session, i| s.doc.para_at(&Pos::body(i, 0)).is_some_and(|p| p.props.fmt_change.is_some());
+    assert!(tracked(&s, 0) && !tracked(&s, 1));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), (Some(Align::Center), false));
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.fmt_change.is_none()), "{:?}", s.doc.revisions);
+}
+
+#[test]
 fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     let mut s = typed("+--+------+");
     run(&mut s, "review.trackChanges", json!({"value": true}));
@@ -845,6 +889,67 @@ fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "review.rejectAll", json!({}));
     assert!(s.doc.body.get(1).and_then(|b| b.as_para()).is_some_and(|p| p.text == "+--+------+"));
+    // The table was inserted untracked, so Reject All keeps it before the characters.
+    assert_eq!(s.doc.body.len(), 2, "{:?}", paras(&s));
+    assert!(matches!(s.doc.body.first().map(|b| &**b), Some(wordcraft_doc::Block::Table(_))));
+}
+
+#[test]
+fn a_border_line_at_the_top_with_formatting_markup_off_is_not_a_formatting_change() {
+    // Track Changes on with formatting left out of the markup: the characters are still marked
+    // deleted, the border is not a formatting change, and Reject All keeps it.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.prefs.markup.track_formatting = false;
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    assert!(p.props.fmt_change.is_none(), "{:?}", p.props.fmt_change);
+    assert!(all_deleted(&s, 0, "---"), "{:?}", paras(&s));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "---");
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+}
+
+#[test]
+fn a_border_line_at_the_top_keeps_the_authors_own_earlier_formatting_change() {
+    // Ana centers the characters' paragraph, then her Enter gives it the border: the paragraph
+    // keeps Ana's one formatting change, which holds the paragraph from before both.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let rev = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.fmt_change.as_deref()).map(|c| c.rev);
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.map(|c| c.rev), rev);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((None, false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), ("---", None, false));
+}
+
+#[test]
+fn a_border_line_the_content_control_locks_refuse_to_delete_stays_as_backspace_leaves_it() {
+    // "---" inside an editable rich text control that sits in one locked against editing:
+    // Backspace can't delete its characters, so Enter is refused too, untracked, and the line
+    // stays as it is.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("A\nB\n---\nC\nD"));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(4, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "outer"}));
+    s.sel = crate::Selection { anchor: Pos::body(1, 0), focus: Pos::body(3, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "inner"}));
+    run(&mut s, "developer.properties", json!({"control": "outer", "lockEdit": true}));
+    let before = s.doc.clone();
+    for key in ["text.backspace", "text.newParagraph"] {
+        s.sel = crate::Selection::caret(Pos::body(2, 3));
+        assert!(s.run(key, &json!({})).is_err(), "{key}");
+        assert_eq!(s.doc, before, "{key}");
+    }
+    assert!(s.doc.para_at(&Pos::body(2, 0)).is_some_and(|p| p.text == "---" && p.props.borders.is_none()));
 }
 
 #[test]
@@ -1029,6 +1134,36 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
 }
 
 #[test]
+fn with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell() {
+    let mut s = typed("+--+--+\nA");
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((0, 1)));
+    let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
+    let a = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!((a.text.as_str(), a.props.indent_left, a.props.indent_first), ("A", None, None));
+}
+
+#[test]
+fn with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it() {
+    // The paragraph's own left indent, in points or in characters, doesn't stop the join.
+    for chars in [false, true] {
+        let mut s = typed("One\nTwo");
+        let second = Pos::body(1, 0);
+        let p = s.doc.para_mut(StoryRef::Body, &second.path).unwrap();
+        if chars {
+            p.props.indent_left_chars = Some(6.0);
+        } else {
+            p.props.indent_left = Some(36.0);
+        }
+        s.sel = crate::Selection::caret(second);
+        typ(&mut s, "\u{8}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "OneTwo", "indent in characters: {chars}");
+    }
+}
+
+#[test]
 fn plus_and_hyphen_line_becomes_a_table() {
     let mut s = typed("+--+------+\nA");
     let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
@@ -1075,6 +1210,10 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     let s = with_heading_styles("One two three four five\n\n");
     assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Heading1"));
     assert_eq!(styled(&with_heading_styles("Introduction\nText")), [h("Introduction", None), h("Text", None)]);
+}
+
+#[test]
+fn a_line_that_is_not_a_short_line_of_body_text_stays_as_it_is() {
     // Not a heading: six words, a closing punctuation mark, three tabs, a list item, a style.
     for keys in ["One two three four five six\n\n", "Dear Sir,\n\n", "Is it?\n\n", "\t\t\tDeep\n\n", "* Item\n\n"] {
         let s = with_heading_styles(keys);
@@ -1098,9 +1237,20 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     }
     typ(&mut q, "Item\n\n");
     assert!(styled(&q).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&q));
-    // Off by default.
+    // A line with an outline level stays; the body-text level (9 and above) is no outline level.
+    for (level, style) in [(0, None), (8, None), (9, Some("Heading1")), (u8::MAX, Some("Heading1"))] {
+        let mut q = with_heading_styles("Title\n");
+        q.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.outline_level = Some(level);
+        typ(&mut q, "\n");
+        assert_eq!(styled(&q).first().and_then(|(_, st)| st.as_deref()), style, "outline level {level}");
+    }
+}
+
+#[test]
+fn built_in_heading_styles_are_off_by_default() {
     let s = typed("Introduction\n\n");
-    assert_eq!(styled(&s), [h("Introduction", None), h("", None), h("", None)]);
+    let h = |t: &str| (t.to_string(), None);
+    assert_eq!(styled(&s), [h("Introduction"), h(""), h("")]);
 }
 
 #[test]
@@ -1117,6 +1267,18 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
 
 #[test]
 fn a_tracked_heading_autoformat_can_be_rejected() {
+    // Enter in the empty paragraph turns a zero-tab line into Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("Title".to_string(), None)));
+
     // With Track Changes on, the tab is marked deleted and the style change is a formatting
     // revision, so Reject All brings the line back as it was.
     let mut s = with_heading_styles("\tMethods\n");
@@ -1151,6 +1313,64 @@ fn a_tracked_heading_autoformat_can_be_rejected() {
 }
 
 #[test]
+fn a_tracked_heading_autoformat_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers a zero-tab line; Ben's Enter makes it Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ben"));
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+
+    // Ana centers the line; Ben types a tab before it and makes it Heading 2. Ben's tab is
+    // removed, and the heading's formatting change is Ben's, holding Ana's centered Normal line.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading2")));
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    // Rejecting it brings back Ana's centered Normal line.
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+    // The author's own earlier change keeps the formatting before it.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    assert_eq!(ch.map(|c| c.old.style.as_deref()), Some(None));
+    assert!(ch.is_some_and(|c| c.old.align != Some(Align::Center)), "{ch:?}");
+}
+
+#[test]
 fn a_locked_heading_style_is_not_applied_as_you_type() {
     let mut s = s();
     run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
@@ -1159,6 +1379,25 @@ fn a_locked_heading_style_is_not_applied_as_you_type() {
     let st = styled(&s);
     assert_eq!(st.first(), Some(&("Locked".to_string(), None)), "{st:?}");
     assert!(st.contains(&("Open".to_string(), Some("Heading2".to_string()))), "{st:?}");
+}
+
+#[test]
+fn enter_in_an_editable_region_after_a_protected_short_line_breaks_the_paragraph() {
+    // Read only, with an editable region from the end of "Title" to the start of "End.": Enter
+    // twice in the region breaks the paragraph and leaves the protected line Normal text, and a
+    // border line typed there goes under the paragraph above it, inside the region.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Title\nX\nEnd."));
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 5), focus: Pos::body(2, 0) };
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    run(&mut s, "select.text", json!({"text": "X"}));
+    typ(&mut s, "\n\n");
+    assert_eq!(s.doc.body.len(), 5, "{:?}", styled(&s));
+    assert!(styled(&s).iter().all(|(_, st)| st.is_none()), "{:?}", styled(&s));
+    typ(&mut s, "---\n");
+    assert!(s.doc.para_at(&Pos::body(2, 0)).and_then(|p| p.props.borders).and_then(|b| b.bottom).is_some());
+    assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Title\n\n\n\nEnd.");
 }
 
 #[test]
@@ -1735,6 +1974,102 @@ fn shift_right_at_the_end_of_a_cell_selects_the_cell_first() {
     let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(empty), off: 0 };
     run(&mut s, "caret.set", json!({"pos": pos}));
     assert_eq!(shift_right(&mut s), Some(((1, 1), (0, 0))));
+}
+
+/// Left or Right as the canvas sends it: while an equation is edited the arrows move inside it
+/// (`equation.move`, as ui-egui's `equation_key` does); otherwise they run the command bound to the
+/// key, with Shift extending the selection.
+fn arrow(s: &mut Session, key: &str) {
+    if s.math.is_some() {
+        run(s, "equation.move", json!({"dir": if key == "Left" { "left" } else { "right" }}));
+        return;
+    }
+    let (key, extend) = key.strip_prefix("Shift+").map_or((key, false), |k| (k, true));
+    let id = s.registry.by_shortcut(key).map(|c| c.id).unwrap_or_else(|| panic!("nothing bound to {key}"));
+    run(s, id, if extend { json!({"extend": true}) } else { json!({}) });
+}
+
+/// The equation being edited and the caret in it.
+fn editing(s: &Session) -> Option<(Pos, wordcraft_doc::math_edit::MathPos)> {
+    s.math.as_ref().map(|m| (m.at.clone(), m.pos.clone()))
+}
+
+/// Presses `key` until the caret is out of the equation (at most 10 times).
+fn arrow_out(s: &mut Session, key: &str) {
+    for _ in 0..10 {
+        if s.math.is_none() {
+            return;
+        }
+        arrow(s, key);
+    }
+    panic!("{key} didn't leave the equation");
+}
+
+/// "a", an equation `x+y`, "b"; or with `n` equations side by side.
+fn equations_between_a_and_b(n: usize) -> Session {
+    let mut s = typed("ab");
+    for _ in 0..n {
+        run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+        run(&mut s, "insert.equation", json!({"linear": "x+y", "edit": false}));
+    }
+    s
+}
+
+#[test]
+fn left_and_right_keys_step_into_and_out_of_an_equation() {
+    use wordcraft_doc::math_edit::{MathPos, units};
+    let e = wordcraft_doc::para::OBJ.len_utf8();
+    let end = MathPos::new(Vec::new(), units(&wordcraft_doc::math::parse_linear("x+y")));
+    let mut s = equations_between_a_and_b(1);
+    // Right from "a|" opens the equation at its start; leaving it past its end puts the caret
+    // after it, so the next Right goes on over "b".
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1), MathPos::default())));
+    arrow_out(&mut s, "Right");
+    assert_eq!(s.sel.focus, Pos::body(0, 1 + e));
+    arrow(&mut s, "Right");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 2 + e)));
+    // Left over "b", then into the equation at its end; out past its start, then on over "a".
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 1 + e)));
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1), end)));
+    arrow_out(&mut s, "Left");
+    assert_eq!(s.sel.focus, Pos::body(0, 1));
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.focus.clone()), (None, Pos::body(0, 0)));
+    // Shift+Right selects over the equation as one character, as before.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Shift+Right");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1 + e)));
+    // With text selected, Left and Right only collapse the selection, even when its moving end is
+    // next to the equation.
+    arrow(&mut s, "Left");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1)));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    arrow(&mut s, "Shift+Right");
+    arrow(&mut s, "Right");
+    assert_eq!((editing(&s), s.sel.anchor.clone(), s.sel.focus.clone()), (None, Pos::body(0, 1), Pos::body(0, 1)));
+}
+
+#[test]
+fn right_out_of_an_equation_steps_into_the_one_beside_it() {
+    let e = wordcraft_doc::para::OBJ.len_utf8();
+    let mut s = equations_between_a_and_b(2);
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1)), "into the first one");
+    arrow_out(&mut s, "Right");
+    assert_eq!(s.sel.focus, Pos::body(0, 1 + e), "between the two equations");
+    arrow(&mut s, "Right");
+    assert_eq!(editing(&s), Some((Pos::body(0, 1 + e), wordcraft_doc::math_edit::MathPos::default())), "into the second one");
+    arrow_out(&mut s, "Right");
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1 + e)), "Left goes back into the second one");
+    arrow_out(&mut s, "Left");
+    arrow(&mut s, "Left");
+    assert_eq!(editing(&s).map(|(at, _)| at), Some(Pos::body(0, 1)), "then into the first");
 }
 
 #[test]

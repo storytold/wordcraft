@@ -1511,14 +1511,15 @@ mod tests {
 
     #[test]
     fn address_after_a_wide_space_is_an_internet_token() {
-        // A web or e-mail address after a no-break space or an ideographic space is skipped,
-        // as it is after a plain space.
-        let t = "see\u{a0}https://xyzq.example/blorp and\u{3000}www.qwirpy.example or\u{a0}zxq@mail.example wugwug";
+        // A web or e-mail address after a no-break space, a narrow no-break space, a figure space
+        // or an ideographic space is skipped, as it is after a plain space.
+        let t = "see\u{a0}https://xyzq.example/blorp and\u{3000}www.qwirpy.example or\u{a0}zxq@mail.example \
+                 at\u{202f}https://frobq.example/zibb by\u{2007}snorf@mail.example wugwug";
         let bad: Vec<&str> = check_spelling(t).iter().map(|i| &t[i.start..i.end]).collect();
         assert_eq!(bad, vec!["wugwug"]);
         let opts = Options { ignore_internet: false, ..Options::default() };
         let bad: Vec<&str> = check_spelling_with(t, &opts).iter().map(|i| &t[i.start..i.end]).collect();
-        assert!(["xyzq", "blorp", "qwirpy", "zxq", "wugwug"].iter().all(|w| bad.contains(w)), "{bad:?}");
+        assert!(["xyzq", "blorp", "qwirpy", "zxq", "frobq", "zibb", "snorf", "wugwug"].iter().all(|w| bad.contains(w)), "{bad:?}");
     }
 
     #[test]
