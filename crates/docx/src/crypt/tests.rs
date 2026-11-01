@@ -232,6 +232,59 @@ fn standard_key_matches_an_independent_derivation() {
     assert!(ecb(&k128, &pt[..15], false).is_err());
 }
 
+/// The SHA-512 spin hashes for the password "Password1234_" and the salt 00 01 … 0F: agile
+/// encryption's (iterator first) and write protection's (iterator last). The expected values were
+/// computed outside WordCraft (Python's hashlib; spins 0 and 1 again with openssl).
+#[test]
+fn spin_hashes_match_an_independent_derivation() {
+    let salt: Vec<u8> = (0..16).collect();
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    const H0: &str =
+        "eb02a8627498a82c60d89e680d92571d283fb2ee335ce552bfdbd20c6091171ab90758739892f48bf340cc67aa3ce77460f611ff6a6a8605429e36aab263ed49";
+    assert_eq!(hex(&iterate(Hash::Sha512, &salt, "Password1234_", 0)), H0);
+    assert_eq!(hex(&iterate_appended(Hash::Sha512, &salt, "Password1234_", 0)), H0);
+    assert_eq!(
+        hex(&iterate(Hash::Sha512, &salt, "Password1234_", 1)),
+        "8a5df7ca08974846adeaaba95d933fac743a6c44957148c22c96f3d98208bef365fbb5d835fede4d4ec97ce6008d6fe789fd56eaea06092a42d62006cd2c0c01"
+    );
+    assert_eq!(
+        hex(&iterate_appended(Hash::Sha512, &salt, "Password1234_", 1)),
+        "df527ac5e26491582955df59583f59d7ccb9c8261750bd930057d42486ca0311bc6de2ba1cf423a2a41fde680b09361dad05ef5430112a06198a8864a6bf9abc"
+    );
+    assert_eq!(
+        hex(&iterate(Hash::Sha512, &salt, "Password1234_", 100_000)),
+        "1154708599656ec9fff5342f72c700ee6d5a0d7ea340f6701f29a7e6159615113d72f0c919cc783d1aee8a570737908f74baf2d342d38d0397984163cfe29fed"
+    );
+    assert_eq!(
+        hex(&iterate_appended(Hash::Sha512, &salt, "Password1234_", 100_000)),
+        "0efc250717c4430e09845ab0feb8346a079656e9f9ed432244a5c4339c04658a1a9cea310c09b6876fc2d511a3fcbbb69e5417c2c1dc55bb30d9557b752f252a"
+    );
+}
+
+/// The UTF-16 password, the legacy key's input and a derived key are each allocated once, at their
+/// final size: growing one would move it and leave the old copy in freed memory, uncleared. Each
+/// ends with the capacity reserved for it (the code these replace ended with a different capacity
+/// for every case here).
+#[test]
+fn secret_buffers_are_allocated_at_their_final_size() {
+    for pw in ["Password1234_", "pässwörd", "\u{1F600} smile"] {
+        let b = utf16le(pw);
+        let want: Vec<u8> = pw.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(b.as_slice(), want.as_slice(), "{pw}");
+        assert_eq!(b.capacity(), pw.len() * 2, "{pw}");
+    }
+    let b = legacy_bytes("abcdefghijklmnopqrst");
+    assert_eq!(b.as_slice(), b"abcdefghijklmno");
+    assert_eq!(b.capacity(), 15);
+    for (hash, len) in [(Hash::Sha1, 24), (Hash::Sha1, 32), (Hash::Sha512, 16)] {
+        let k = derive_key(hash, b"hn", b"bk", len);
+        let mut want = hash.hash(&[b"hn", b"bk"]);
+        want.resize(len, 0x36);
+        assert_eq!(k.as_slice(), want.as_slice(), "{hash:?} {len}");
+        assert_eq!(k.capacity(), len, "{hash:?} {len}");
+    }
+}
+
 /// Standard encryption (Word 2007's AES-ECB method) opens with the right password, for each
 /// AES key size, and says when the password is missing or wrong — as agile files do.
 #[test]

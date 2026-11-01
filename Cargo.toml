@@ -72,7 +72,7 @@ cfb = "0.15"
 encoding_rs = "0.8"
 chardetng = "1"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
-aes = "0.9"
+aes = { version = "0.9", features = ["zeroize"] } # wipes the key schedule on drop
 sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
