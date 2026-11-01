@@ -414,3 +414,68 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
 }
+
+/// #5019: the Results list shows 500 results at most; once the arrows go past them, it shows the
+/// 500 around the current result, so that result is listed, marked and scrolled to.
+#[test]
+fn the_results_list_always_holds_the_current_result() {
+    use super::nav::results_window;
+    assert_eq!(results_window(30, None), 0..30);
+    assert_eq!(results_window(30, Some(29)), 0..30);
+    assert_eq!(results_window(2000, None), 0..500);
+    assert_eq!(results_window(2000, Some(499)), 0..500, "the list doesn't move while the result is in the first 500");
+    assert_eq!(results_window(2000, Some(500)), 250..750);
+    assert_eq!(results_window(2000, Some(1200)), 950..1450);
+    assert_eq!(results_window(2000, Some(1999)), 1500..2000, "the last result: the last 500");
+    for (len, current) in [(501, 500), (2000, 777), (usize::MAX, usize::MAX - 1)] {
+        let w = results_window(len, Some(current));
+        assert!(w.contains(&current) && w.len() <= 500, "{len}, {current}: {w:?}");
+    }
+}
+
+/// #5019: the Navigation pane counts the search result the selection is on, and its arrows, and
+/// Enter / Shift+Enter in its search box, go to the next and previous results, round at the ends.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_arrows_and_enter_step_through_the_search_results() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app =
+        crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("cat dog cat bird cat")), crate::Services::default());
+    // Find selects the first match. Ctrl+F then focuses the pane's search box once the page has
+    // settled, and searches for the selection from after it, so the second match is current.
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app.run("edit.find", serde_json::json!({"text": "cat"})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().canvas.want_focus = false;
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused(), "the search box has the keyboard");
+    let start = |h: &egui_kittest::Harness<'static, crate::WordApp>| h.state().session.sel.ordered().0.off;
+    assert_eq!(start(&h), 8);
+    h.get_by_label("Result 2 of 3");
+    // Enter in the search box, which keeps the keyboard.
+    press(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(start(&h), 17);
+    h.get_by_label("Result 3 of 3");
+    press(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(start(&h), 0, "Enter past the last result goes round to the first");
+    h.get_by_label("Result 1 of 3");
+    press(&mut h, egui::Key::Enter, egui::Modifiers::SHIFT);
+    assert_eq!(start(&h), 17, "Shift+Enter goes back, round to the last");
+    h.get_by_label("Result 3 of 3");
+    assert!(h.ctx.text_edit_focused(), "the box keeps the keyboard");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "cat dog cat bird cat", "Enter typed nothing");
+    // The arrow buttons.
+    h.get_by_label("Previous result").click();
+    h.run_steps(2);
+    assert_eq!(start(&h), 8);
+    h.get_by_label("Next result").click();
+    h.run_steps(2);
+    assert_eq!(start(&h), 17);
+    h.get_by_label("Result 3 of 3");
+    // A search with no match greys the arrows out.
+    h.state_mut().session.find.results.clear();
+    h.run_steps(2);
+    h.get_by_label("No results");
+    assert!(h.get_by_label("Next result").accesskit_node().is_disabled());
+}
