@@ -260,6 +260,17 @@ impl SmartArtSpec {
             it.level = it.level.min(most);
             prev = Some(it.level);
         }
+        // An item with no shape of its own (text inside another item's shape) has nothing to
+        // colour: a colour left from when it was a top-level item is dropped. Items the style
+        // gives a shape (Hierarchy, Radial) keep theirs.
+        if self.has_custom_colors() {
+            let bare: Vec<usize> = (0..self.items.len()).filter(|&i| self.style_accent(i).is_none()).collect();
+            for i in bare {
+                if let Some(it) = self.items.get_mut(i) {
+                    it.color = None;
+                }
+            }
+        }
     }
 
     /// Whether any item has its own colour.
@@ -331,6 +342,18 @@ pub fn clean_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_drops_colours_of_items_without_a_shape_of_their_own() {
+        let c = Some(crate::props::Rgb(1, 2, 3));
+        let item = |level: u8| SmartArtItem { color: c, ..SmartArtItem::new("x", level) };
+        let list = SmartArtSpec { layout: SmartArtLayout::BasicList, items: vec![item(0), item(1)], ..Default::default() }.sanitized();
+        assert_eq!((list.items[0].color, list.items[1].color), (c, None), "a sub-item has no shape to colour");
+        let tree = SmartArtSpec { layout: SmartArtLayout::Hierarchy, items: vec![item(0), item(1)], ..Default::default() }.sanitized();
+        assert_eq!((tree.items[0].color, tree.items[1].color), (c, c), "every Hierarchy item has a shape");
+        let radial = SmartArtSpec { layout: SmartArtLayout::Radial, items: vec![item(0), item(1), item(2)], ..Default::default() }.sanitized();
+        assert_eq!((radial.items[1].color, radial.items[2].color), (c, None), "a spoke keeps its colour, what is under it does not");
+    }
 
     #[test]
     fn sanitize_caps_items_text_and_levels() {
