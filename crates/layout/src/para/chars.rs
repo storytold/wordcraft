@@ -120,34 +120,10 @@ pub(crate) fn remap_range(map_starts: &[usize], orig_of: &[usize], orig_len: usi
     (s.min(e), s.max(e))
 }
 
-/// Word draws a font that isn't installed in Cambria when the document's font table classes it
-/// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
-pub(super) const MISSING_ROMAN_FONT: &str = "Cambria";
-
-/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
-/// A missing Thai font keeps its name: it is drawn in a Thai face, not in Cambria (#1549).
-/// A font with substitutes of its own keeps them: Times New Roman is roman in every font table,
-/// and where it isn't installed Liberation Serif has its metrics; Word never meets it missing.
-pub(super) fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
-    let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman
-        && !wordcraft_fonts::word::is_thai_family(font)
-        && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
-        && !wordcraft_fonts::word::has_named_substitutes(font)
-        && !db.has_family(font)
-        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
-    {
-        MISSING_ROMAN_FONT
-    } else {
-        font
-    }
-}
-
 /// One face for a run in a Thai font that isn't installed (#1549): Word substitutes one font
 /// (Cordia New) for the whole run, so the Latin letters, digits and ฿ keep the Thai letters' face
-/// and size. `None` unless `font` is a Thai family, it was substituted, and its substitute
-/// `primary` lacks some of the run's Thai or Latin characters; then the first face covering all of
+/// and size. `None` unless `font` is a Thai family, it was substituted (or drawn in its font
+/// table alternate), and its stand-in `primary` lacks some of the run's Thai or Latin characters; then the first face covering all of
 /// them, if one does. Other families keep Latin text in their own substitute, as Word does.
 pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, text: &str, bold: bool, italic: bool) -> Option<FaceRef> {
     if !substituted || !wordcraft_fonts::word::is_thai_family(font) {
@@ -164,4 +140,46 @@ pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, tex
 /// and punctuation.
 fn thai_or_latin(c: char) -> bool {
     matches!(u32::from(c), 0x0021..=0x024F | 0x0E00..=0x0E7F) && !c.is_whitespace() && !c.is_control() && c != SOFT_HYPHEN
+}
+
+/// The family to look the document's `font` up as: Word draws a font that isn't installed in the
+/// font table's alternate name for it, or in Cambria when the table classes it as roman (measured
+/// in Word; see [`wordcraft_fonts::word::document_family`]). A symbol font keeps its name: its
+/// characters are drawn as their Unicode equivalents. The roman rule also spares a missing Thai
+/// font, drawn in a Thai face (#1549), and a font with substitutes of its own: Times New Roman is
+/// roman in every font table, and where it isn't installed Liberation Serif has its metrics; Word
+/// never meets it missing.
+pub fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    if wordcraft_doc::symbol_fonts::is_symbol_font(font) {
+        return font;
+    }
+    let alt = alt_name(doc, font);
+    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font))
+        && !wordcraft_fonts::word::is_thai_family(font)
+        && !wordcraft_fonts::word::has_named_substitutes(font);
+    if alt.is_none() && !roman {
+        return font;
+    }
+    wordcraft_fonts::word::document_family(font, alt, roman, wordcraft_fonts::word::available)
+}
+
+/// The family to look `font` up as by the font table's alternate name alone: the alternate when
+/// `font` isn't installed and the alternate is ([`wordcraft_fonts::word::document_family`]), else
+/// `font`, never the roman fallback; a symbol font keeps its name. For a run's East Asian font
+/// (Word draws a missing roman East Asian font in its own East Asian face, not Cambria), a
+/// bullet's private-use code, and text outside a paragraph's runs (normal text in equations,
+/// chart and diagram text, watermarks), which never took the roman fallback.
+pub fn lookup_alternate<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    if wordcraft_doc::symbol_fonts::is_symbol_font(font) {
+        return font;
+    }
+    match alt_name(doc, font) {
+        Some(alt) => wordcraft_fonts::word::document_family(font, Some(alt), false, wordcraft_fonts::word::available),
+        None => font,
+    }
+}
+
+/// The font table's alternate name for `font` (`w:altName`; names match in any case, as in Word).
+fn alt_name<'f>(doc: &'f Document, font: &str) -> Option<&'f str> {
+    doc.settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, a)| a.as_str())
 }

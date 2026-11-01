@@ -48,9 +48,11 @@ impl Reader<'_> {
         }
     }
 
-    /// The fonts the font table classes as roman (`w:font/w:family w:val="roman"`).
+    /// The fonts the font table classes as roman (`w:font/w:family w:val="roman"`), and their
+    /// alternate names (`w:font/w:altName`).
     pub(super) fn read_font_families(&mut self, path: &str) {
         let Ok(Some(table)) = self.xml(path) else { return };
+        let name_ok = |n: &&str| !n.trim().is_empty() && n.len() <= MAX_FONT_NAME;
         self.doc.settings.roman_fonts = table
             .children("w:font")
             .filter(|f| f.child("w:family").and_then(|v| v.attr("w:val")) == Some("roman"))
@@ -58,6 +60,12 @@ impl Reader<'_> {
             .filter(|n| !n.is_empty() && n.len() <= MAX_FONT_NAME)
             .take(MAX_TABLE_FONTS)
             .map(str::to_string)
+            .collect();
+        self.doc.settings.font_alt_names = table
+            .children("w:font")
+            .filter_map(|f| Some((f.attr("w:name").filter(name_ok)?, f.child("w:altName")?.attr("w:val").filter(name_ok)?)))
+            .take(MAX_TABLE_FONTS)
+            .map(|(n, a)| (n.to_string(), a.trim().to_string()))
             .collect();
     }
 

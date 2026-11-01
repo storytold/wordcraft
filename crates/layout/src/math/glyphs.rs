@@ -13,7 +13,7 @@ pub(super) struct TextAtom<'a> {
     pub(super) k0: usize,
 }
 
-impl Ctx {
+impl Ctx<'_> {
     pub(super) fn scale(&self, level: u8) -> f32 {
         let (s1, s2) = match &self.t {
             Some(t) => (t.script_percent, t.script_script_percent),

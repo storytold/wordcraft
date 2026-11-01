@@ -329,8 +329,8 @@ fn stored_name(name: &str, sfnt: &[u8]) -> String {
 }
 
 impl FontDb {
-    /// A counter that changes whenever user fonts are added or removed: a UI caching the font
-    /// list or a layout redraws when it moves.
+    /// A counter that changes whenever fonts are added or removed or the installed fonts are
+    /// scanned again: a UI caching the font list or a layout redraws when it moves.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
@@ -458,7 +458,7 @@ impl FontDb {
     }
 
     /// Forget cached fallback choices and tell watchers ([`FontDb::generation`]).
-    fn fonts_changed(&self) {
+    pub(super) fn fonts_changed(&self) {
         self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
         self.generation.fetch_add(1, Ordering::AcqRel);
     }

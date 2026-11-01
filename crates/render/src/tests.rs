@@ -125,6 +125,28 @@ fn renders_text_dark_pixels() {
     assert!(!img.to_png().is_empty());
 }
 
+/// The watermark's font, missing: drawn in the font table's alternate when it is installed,
+/// else in the font's own substitute, as before; never in the roman fallback (Cambria).
+#[test]
+fn a_watermark_in_a_missing_roman_font_takes_only_the_font_tables_alternate() {
+    const MISSING: &str = "No Such Roman Watermark Font";
+    let pixels = |font: &str, roman: bool, alt: Option<&str>| {
+        let mut d = Document::new();
+        d.settings.watermark = Some(wordcraft_doc::Watermark { text: "COPY".into(), font: font.into(), diagonal: false, ..Default::default() });
+        if roman {
+            d.settings.roman_fonts = vec![font.into()];
+        }
+        d.settings.font_alt_names = alt.map(|a| vec![(font.to_string(), a.to_string())]).unwrap_or_default();
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        render_page(&d, &l.pages[0], 0.5, &RenderOptions::default()).pixels
+    };
+    let missing = pixels(MISSING, false, None);
+    assert!(pixels("Cambria", false, None) != missing, "Cambria draws the watermark differently");
+    assert!(pixels(MISSING, true, None) == missing, "roman, no alternate: the font's own substitute");
+    assert!(pixels(MISSING, true, Some("Also Not Installed")) == missing, "roman, a missing alternate: the font's own substitute");
+    assert!(pixels(MISSING, true, Some("JetBrains Mono")) == pixels("JetBrains Mono", false, None), "roman, an installed alternate: the alternate");
+}
+
 /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the
 /// cell, not across it.
 #[test]

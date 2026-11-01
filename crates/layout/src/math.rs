@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::Document;
 use wordcraft_doc::math::{
     Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MClass, MNode, MRun, MScr, MSty, MathProps, ScriptKind, is_integral, math_alnum,
     parse_linear,
@@ -199,8 +200,8 @@ fn split_number(row: &[MNode]) -> Option<(Arg, Arg, usize)> {
 /// wrap to it as `props` says); `counter` counts the document's automatic equation numbers so far
 /// and advances past this equation's.
 pub fn layout_equation(
-    math: &wordcraft_doc::math::Math,
-    linear: &str,
+    doc: &Document,
+    (math, linear): (&wordcraft_doc::math::Math, &str),
     rc: &ResolvedChar,
     display: bool,
     avail: f32,
@@ -221,12 +222,13 @@ pub fn layout_equation(
     };
     let base = rc.draw_size().clamp(1.0, 1638.0);
     let mut cx = Ctx {
+        doc,
         face,
         t: table,
         upem: face.upem.max(1.0) as f32,
         base,
         color,
-        text_font: rc.font.clone(),
+        text_font: crate::para::lookup_alternate(doc, &rc.font).to_string(),
         nodes: 0,
         path: Vec::new(),
         node_stack: Vec::new(),

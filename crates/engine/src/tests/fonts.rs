@@ -192,3 +192,90 @@ fn a_subset_font_word_embeds_lays_out_text_set_in_its_table_name() {
     let x = end_x(&docx_embedding(FAMILY, Some((&subset, "{6A0E3B57-1C2D-4E8F-9A7B-3D5C1E0F2B64}")), TEXT));
     assert!((x - mono).abs() < 0.01, "measured with the embedded subset: {x} vs {mono} (missing {missing})");
 }
+
+/// A .docx with paragraphs `body`, font table entries `fonts`, the docDefaults' and a `Body`
+/// paragraph style's run properties `defaults` and `style`, and a theme whose minor font is `minor`.
+fn docx_with_font_table(body: &str, fonts: &str, defaults: &str, style: &str, minor: &str) -> Vec<u8> {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const PR: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    const CT: &str = "application/vnd.openxmlformats-officedocument";
+    let rels = |items: &[(&str, &str)]| {
+        let list: String = items.iter().map(|(t, g)| format!(r#"<Relationship Id="rId{t}" Type="{R}/{t}" Target="{g}"/>"#)).collect();
+        format!(r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="{PR}">{list}</Relationships>"#)
+    };
+    let types = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="{CT}.wordprocessingml.document.main+xml"/><Override PartName="/word/fontTable.xml" ContentType="{CT}.wordprocessingml.fontTable+xml"/><Override PartName="/word/styles.xml" ContentType="{CT}.wordprocessingml.styles+xml"/><Override PartName="/word/theme/theme1.xml" ContentType="{CT}.theme+xml"/></Types>"#
+    );
+    let files = [
+        ("[Content_Types].xml", types),
+        ("_rels/.rels", rels(&[("officeDocument", "word/document.xml")])),
+        ("word/_rels/document.xml.rels", rels(&[("fontTable", "fontTable.xml"), ("styles", "styles.xml"), ("theme", "theme/theme1.xml")])),
+        ("word/document.xml", format!(r#"<w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>"#)),
+        ("word/fontTable.xml", format!(r#"<w:fonts xmlns:w="{W}">{fonts}</w:fonts>"#)),
+        (
+            "word/styles.xml",
+            format!(
+                r#"<w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr>{defaults}</w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Body"><w:name w:val="Body"/><w:basedOn w:val="Normal"/><w:rPr>{style}</w:rPr></w:style></w:styles>"#
+            ),
+        ),
+        (
+            "word/theme/theme1.xml",
+            format!(
+                r#"<a:theme xmlns:a="{A}" name="T"><a:themeElements><a:fontScheme name="T"><a:majorFont><a:latin typeface="{minor}"/></a:majorFont><a:minorFont><a:latin typeface="{minor}"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#
+            ),
+        ),
+    ];
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in files {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, text.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// Measured in Word: a font it doesn't have is drawn in the font table's `w:altName` (when it
+/// has that font) whether a run, the theme (`w:asciiTheme`), the document defaults or a
+/// paragraph style names it; a font it has is drawn in itself, whatever the alternate. Once the
+/// font is installed it is drawn in itself, not the alternate.
+#[test]
+fn a_missing_font_lays_out_in_the_font_tables_alternate_wherever_it_is_named() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "Altfont Sans3";
+    let rfonts = |f: &str| format!(r#"<w:rFonts w:ascii="{f}" w:hAnsi="{f}"/>"#);
+    let entry = |alt: &str| {
+        let alt = if alt.is_empty() { String::new() } else { format!(r#"<w:altName w:val="{alt}"/>"#) };
+        format!(r#"<w:font w:name="{FAMILY}">{alt}<w:family w:val="roman"/></w:font>"#)
+    };
+    let run = |rpr: &str| format!(r#"<w:r><w:rPr>{rpr}</w:rPr><w:t>{TEXT}</w:t></w:r>"#);
+    let end_x = |s: &mut Session| s.layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let open = |bytes: &[u8]| Session::new(crate::io::open_bytes("alt.docx", bytes).unwrap());
+    let direct = format!("<w:p>{}</w:p>", run(&rfonts(FAMILY)));
+    let x_in = |family: &str| end_x(&mut open(&docx_with_font_table(&format!("<w:p>{}</w:p>", run(&rfonts(family))), "", "", "", "Source Serif 4")));
+    let (mono, sans, cambria) = (x_in("JetBrains Mono"), x_in("Source Sans 3"), x_in("Cambria"));
+    let named = [
+        ("a run", direct.clone(), String::new(), String::new()),
+        (
+            "the theme",
+            format!("<w:p>{}</w:p>", run(r#"<w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/>"#)),
+            String::new(),
+            String::new(),
+        ),
+        ("the defaults", format!("<w:p>{}</w:p>", run("")), rfonts(FAMILY), String::new()),
+        ("a style", format!(r#"<w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr>{}</w:p>"#, run("")), String::new(), rfonts(FAMILY)),
+    ];
+    for (place, body, defaults, style) in &named {
+        let x = |alt: &str| end_x(&mut open(&docx_with_font_table(body, &entry(alt), defaults, style, FAMILY)));
+        assert!((x("JetBrains Mono") - mono).abs() < 0.01, "{place}: drawn in the alternate");
+        assert!((x("") - cambria).abs() < 0.01, "{place}: no alternate, a roman font is drawn in Cambria");
+        assert!((x("Not Installed Either") - cambria).abs() < 0.01, "{place}: an alternate that is missing too counts as none");
+    }
+    let mut s = open(&docx_with_font_table(&direct, &entry("JetBrains Mono"), "", "", FAMILY));
+    assert!((end_x(&mut s) - mono).abs() < 0.01);
+    let data = base64_encode(&renamed("SourceSans3-Regular.ttf", "Source Sans 3", FAMILY));
+    s.run("font.add", &json!({"data": data, "name": "AltfontSans3-Regular.ttf"})).unwrap();
+    assert!((end_x(&mut s) - sans).abs() < 0.01, "measured with the installed font, not its alternate");
+    s.run("font.remove", &json!({"family": FAMILY})).unwrap();
+    assert!((end_x(&mut s) - mono).abs() < 0.01, "removed again: the alternate");
+}

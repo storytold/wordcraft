@@ -282,7 +282,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     }
     let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
     let size = size.clamp(1.0, 400.0);
-    let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
+    let resolved = wordcraft_fonts::word::resolve(crate::para::lookup_alternate(doc, family), *bold, false);
     let primary = resolved.face;
     let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
     let runs: Vec<_> = face_runs(text, primary, *bold)

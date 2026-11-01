@@ -1332,6 +1332,241 @@ fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
     assert_eq!(para.styles[first.style as usize].face, wordcraft_fonts::word::resolve("Times New Roman", false, false).face);
 }
 
+/// Measured in Word: a font it doesn't have is drawn in the font table's `w:altName` when it
+/// has that font (`HelveticaNeue` → Arial, `DIN-Regular` → Calibri or Georgia, in bold and
+/// italic too), whatever the table's family class; a font it has stays itself (Georgia with
+/// altName Courier New); an alternate it doesn't have, or a list of names, counts as none.
+#[test]
+fn a_missing_font_is_drawn_in_the_font_tables_alternate_as_in_word() {
+    const MISSING: &str = "No Such Brand Font";
+    let run = |font: &str, alt: &str, roman: bool, bold: bool, italic: bool| {
+        let mut d = Document::from_text("Hamburgefonstiv 0123456789 WWWiii");
+        d.settings.font_alt_names = vec![(font.to_ascii_uppercase(), alt.into())];
+        if roman {
+            d.settings.roman_fonts = vec![font.into()];
+        }
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some(font.into());
+        p.runs[0].props.bold = Some(bold);
+        p.runs[0].props.italic = Some(italic);
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        (para.styles[first.style as usize].face, para.clusters.iter().map(|c| c.adv).sum::<f32>())
+    };
+    let set_in = |family: &str, bold: bool, italic: bool| run(family, "", false, bold, italic);
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        let sans = set_in("Source Sans 3", bold, italic);
+        assert_eq!(run(MISSING, "Source Sans 3", false, bold, italic), sans, "bold {bold} italic {italic}");
+        assert_eq!(run(MISSING, "source sans 3", true, bold, italic), sans, "bold {bold} italic {italic}");
+    }
+    let mono = set_in("JetBrains Mono", false, false);
+    let serif = set_in("Source Serif 4", false, false);
+    let missing = set_in(MISSING, false, false);
+    assert_eq!(run(MISSING, "JetBrains Mono", false, false, false), mono);
+    assert_ne!(missing, mono);
+    assert_eq!(run("Source Serif 4", "JetBrains Mono", false, false, false), serif);
+    assert_eq!(run(MISSING, "Also Not Installed", false, false, false), missing);
+    assert_eq!(run(MISSING, "JetBrains Mono,Source Serif 4", false, false, false), missing);
+    let cambria = run(MISSING, "", true, false, false);
+    assert_eq!(cambria.0, wordcraft_fonts::word::resolve("Cambria", false, false).face);
+    assert_eq!(run(MISSING, "Also Not Installed", true, false, false), cambria);
+}
+
+/// Measured in Word for Mac: `ArialMT` and `TimesNewRomanPSMT` (PostScript names) with altName
+/// Courier New are drawn in Courier New, `ArialMT` without one in Arial; `Arial Bold` (a full
+/// name) stays Arial Bold with altName Courier New.
+#[test]
+fn a_font_named_by_its_postscript_name_takes_the_font_tables_alternate() {
+    let face = |font: &str, alt: &str| {
+        let mut d = Document::from_text("Hamburgefonstiv");
+        d.settings.font_alt_names = vec![(font.into(), alt.into())];
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some(font.into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        para.styles[first.style as usize].face
+    };
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    assert!(wordcraft_fonts::FontDb::global().has_family("SourceSerif4-Regular"));
+    assert_eq!(face("SourceSerif4-Regular", "JetBrains Mono"), resolve("JetBrains Mono"));
+    assert_eq!(face("SourceSerif4-Regular", ""), resolve("Source Serif 4"));
+    assert_eq!(face("JetBrains Mono Regular", "Source Serif 4"), resolve("JetBrains Mono"));
+}
+
+/// Without an alternate, or with one that isn't installed either, a font is found as on `main`,
+/// by its PostScript name too: an installed font named so isn't missing, so the roman rule leaves
+/// it alone. With an installed alternate Word takes the alternate.
+#[test]
+fn a_roman_font_named_by_its_postscript_name_stays_itself_without_an_alternate() {
+    let face = |alt: &str| {
+        let mut d = Document::from_text("Hamburgefonstiv");
+        d.settings.roman_fonts = vec!["SourceSerif4-Regular".into()];
+        if !alt.is_empty() {
+            d.settings.font_alt_names = vec![("SourceSerif4-Regular".into(), alt.into())];
+        }
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some("SourceSerif4-Regular".into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        para.styles[first.style as usize].face
+    };
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    assert_eq!(face(""), resolve("Source Serif 4"));
+    assert_eq!(face("Also Not Installed"), resolve("Source Serif 4"));
+    assert_eq!(face("JetBrains Mono"), resolve("JetBrains Mono"));
+}
+
+/// Measured in Word: normal text (`m:nor`) in an equation set in a missing font is drawn in the
+/// font table's altName (Courier New) whether the equation's run names the font or the
+/// paragraph's style does.
+#[test]
+fn normal_text_in_equations_takes_the_font_tables_alternate() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    const MISSING: &str = "No Such Equation Font";
+    let text_face = |named_by_run: bool, alt: &str| {
+        let mut d = Document::from_text("x ");
+        d.settings.font_alt_names = vec![(MISSING.into(), alt.into())];
+        let run = MRun { text: "Hamburgefonstiv".into(), nor: true, font: named_by_run.then(|| MISSING.to_string()), ..Default::default() };
+        let math = Math { nodes: vec![MNode::Run(run)], ..Default::default() };
+        let props = CharProps { font: (!named_by_run).then(|| MISSING.to_string()), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(1, InlineObject::Equation { linear: String::new(), display: false, math }, &props).unwrap();
+        let l = lay(&d);
+        let b = l.equation_box(&Pos::body(0, 1), 0).expect("an equation");
+        let face = b.math.items.iter().find_map(|i| if let math::MItem::Glyphs { face, .. } = i { Some(*face) } else { None });
+        (face.expect("glyphs"), b.math.width)
+    };
+    let mono = wordcraft_fonts::word::resolve("JetBrains Mono", false, false).face;
+    for named_by_run in [true, false] {
+        let (face, width) = text_face(named_by_run, "JetBrains Mono");
+        assert_eq!(face, mono, "named by the run: {named_by_run}");
+        let (missing, missing_width) = text_face(named_by_run, "");
+        assert_ne!(missing, mono, "named by the run: {named_by_run}");
+        assert!((width - missing_width).abs() > 1.0, "named by the run: {named_by_run}: {width} vs {missing_width}");
+    }
+}
+
+/// Equation text never took the roman fallback (Cambria): without an alternate it stays in the
+/// missing font's own substitute, as before, with one it takes the alternate.
+#[test]
+fn normal_text_in_equations_in_a_missing_roman_font_keeps_its_substitute_without_an_alternate() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    const MISSING: &str = "No Such Roman Equation Font";
+    let text_face = |named_by_run: bool, alt: Option<&str>| {
+        let mut d = Document::from_text("x ");
+        d.settings.roman_fonts = vec![MISSING.into()];
+        d.settings.font_alt_names = alt.map(|a| vec![(MISSING.to_string(), a.to_string())]).unwrap_or_default();
+        let run = MRun { text: "Hamburgefonstiv".into(), nor: true, font: named_by_run.then(|| MISSING.to_string()), ..Default::default() };
+        let math = Math { nodes: vec![MNode::Run(run)], ..Default::default() };
+        let props = CharProps { font: (!named_by_run).then(|| MISSING.to_string()), ..Default::default() };
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(1, InlineObject::Equation { linear: String::new(), display: false, math }, &props).unwrap();
+        let l = lay(&d);
+        let b = l.equation_box(&Pos::body(0, 1), 0).expect("an equation");
+        b.math.items.iter().find_map(|i| if let math::MItem::Glyphs { face, .. } = i { Some(*face) } else { None }).expect("glyphs")
+    };
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    assert_ne!(resolve(MISSING), resolve("Cambria"));
+    for named_by_run in [true, false] {
+        assert_eq!(text_face(named_by_run, None), resolve(MISSING), "named by the run: {named_by_run}");
+        assert_eq!(text_face(named_by_run, Some("Also Not Installed")), resolve(MISSING), "named by the run: {named_by_run}");
+        assert_eq!(text_face(named_by_run, Some("JetBrains Mono")), resolve("JetBrains Mono"), "named by the run: {named_by_run}");
+    }
+}
+
+/// Chart and diagram text in a missing font, named by the item or the theme's body font: in
+/// the font table's alternate when it is installed, else in the font's own substitute, as
+/// before; never in the roman fallback (Cambria).
+#[test]
+fn chart_text_in_a_missing_roman_font_takes_only_the_font_tables_alternate() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    const MISSING: &str = "No Such Roman Chart Font";
+    let text_face = |named_by_item: bool, alt: Option<&str>| {
+        let mut d = Document::from_text("Chart");
+        d.settings.roman_fonts = vec![MISSING.into()];
+        d.settings.font_alt_names = alt.map(|a| vec![(MISSING.to_string(), a.to_string())]).unwrap_or_default();
+        if !named_by_item {
+            d.settings.minor_font = MISSING.into();
+        }
+        let text = GraphicItem::Text {
+            rect: [0.0, 100.0, 216.0, 20.0],
+            text: "Q1".into(),
+            size: 10.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: named_by_item.then(|| MISSING.to_string()),
+        };
+        let graphic = Graphic { kind: GraphicKind::Chart, items: vec![text], ..Default::default() };
+        let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+        d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+        let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+        draws.iter().find_map(|x| if let display::Draw::Glyphs { text, face, .. } = x { (text == "Q1").then_some(*face) } else { None }).expect("Q1")
+    };
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face;
+    assert_ne!(resolve(MISSING), resolve("Cambria"));
+    for named_by_item in [true, false] {
+        assert_eq!(text_face(named_by_item, None), resolve(MISSING), "named by the item: {named_by_item}");
+        assert_eq!(text_face(named_by_item, Some("Also Not Installed")), resolve(MISSING), "named by the item: {named_by_item}");
+        assert_eq!(text_face(named_by_item, Some("JetBrains Mono")), resolve("JetBrains Mono"), "named by the item: {named_by_item}");
+    }
+}
+
+/// Measured in Word: a missing `w:cs` font is drawn in its altName (Tahoma, Courier New; Arial
+/// without one), a missing `w:eastAsia` font too (MS Mincho, MS Gothic; Yu Gothic without one).
+#[test]
+fn missing_complex_script_and_east_asian_fonts_take_the_font_tables_alternate() {
+    const MISSING: &str = "No Such Script Font";
+    let faces = |text: &str, set: &dyn Fn(&mut CharProps), alt: &str| {
+        let mut d = Document::from_text(text);
+        d.settings.font_alt_names = vec![(MISSING.into(), alt.into())];
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| set(c)).unwrap();
+        let l = lay(&d);
+        let para =
+            l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        para.clusters
+            .iter()
+            .filter(|c| text.get(c.start..c.end).is_some_and(|s| !s.trim().is_empty()))
+            .map(|c| para.styles[c.style as usize].face.id())
+            .collect::<Vec<_>>()
+    };
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false).face.id();
+    let cs = |c: &mut CharProps| {
+        c.cs = Some(true);
+        c.font = Some("Source Serif 4".into());
+        c.font_cs = Some(MISSING.into());
+    };
+    assert!(faces("Complex", &cs, "JetBrains Mono").iter().all(|f| *f == resolve("JetBrains Mono")));
+    assert!(faces("Complex", &cs, "").iter().all(|f| *f != resolve("JetBrains Mono")));
+
+    let fallback = wordcraft_fonts::FontDb::global().fallback_for('你', 0).map(|f| f.family.clone());
+    let mut fonts: Vec<String> = wordcraft_fonts::FontDb::global()
+        .east_asian_families()
+        .into_iter()
+        .filter(|f| {
+            let r = wordcraft_fonts::word::resolve(f, false, false);
+            !r.substituted && r.face.covers('你') && r.face.covers('好')
+        })
+        .collect();
+    fonts.sort_by_key(|f| Some(f) == fallback.as_ref());
+    let Some(asian) = fonts.first().cloned() else {
+        eprintln!("skipped: no Chinese font installed");
+        return;
+    };
+    let ea = |c: &mut CharProps| {
+        c.font = Some("Source Serif 4".into());
+        c.font_ea = Some(MISSING.into());
+    };
+    assert_eq!(faces("你好", &ea, &asian), [resolve(&asian); 2]);
+    if fallback.as_ref() != Some(&asian) {
+        assert!(faces("你好", &ea, "").iter().all(|f| *f != resolve(&asian)));
+    }
+}
+
 #[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
     use wordcraft_doc::section::SectionProps;
@@ -2040,6 +2275,35 @@ fn private_use_bullet_no_font_draws_shows_the_levels_default_bullet() {
     let label = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.clone() } else { None }).unwrap();
     assert_eq!(label.text, "\u{25CB}");
     assert_eq!(label.glyphs.len(), 1);
+}
+
+/// A bullet level whose font isn't installed takes the font table's alternate name like any
+/// text: when the alternate has the private-use code (U+E0A0 in JetBrains Mono) the bullet is
+/// drawn from it; without an alternate it shows the level's default bullet (#1683).
+#[test]
+fn a_private_use_bullet_in_a_missing_font_is_drawn_from_its_alternate() {
+    const MISSING: &str = "No Such Bullet Font";
+    let label = |alt: &str| {
+        let mut d = Document::from_text("one");
+        d.settings.font_alt_names = vec![(MISSING.into(), alt.into())];
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        for a in &mut d.numbering.abstracts {
+            if let Some(l) = a.levels.get_mut(0) {
+                l.text = "\u{E0A0}".into();
+                l.chr.font = Some(MISSING.into());
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
+        let label = para.label.clone().expect("a label");
+        let face = label.runs.first().and_then(|r| para.styles.get(r.style as usize)).map(|s| s.face).expect("a face");
+        (label.text, face, label.glyphs.first().map(|g| g.gid))
+    };
+    let mono = wordcraft_fonts::word::resolve("JetBrains Mono", false, false).face;
+    assert!(mono.covers('\u{E0A0}'));
+    assert_eq!(label("JetBrains Mono"), ("\u{E0A0}".to_string(), mono, Some(mono.glyph_for('\u{E0A0}'))));
+    assert_eq!(label("").0, "\u{2022}");
 }
 
 #[test]

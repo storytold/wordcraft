@@ -2,7 +2,7 @@ use super::bx::{Bx, Cls, St, hcat};
 use super::state::wide_accent;
 use super::{Arg, C, ColJc, Ctx, FracKind, MItem, MNode, glyph_bounds};
 
-impl Ctx {
+impl Ctx<'_> {
     /// Limits under and over `base` (centred), spaced as for big operators (`big`) or as
     /// accents-like limits.
     pub(super) fn limits(&self, base: Bx, under: Option<Bx>, over: Option<Bx>, ic: f32, st: St, big: bool) -> Bx {

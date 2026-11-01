@@ -29,11 +29,10 @@ mod tabs;
 
 pub use bidi::{bidi_levels, visual_order};
 pub(crate) use builder::left_out;
-#[cfg(test)]
-use chars::{MISSING_ROMAN_FONT, lookup_family};
 pub(crate) use chars::{caps_char, push_caps};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
+pub use chars::{lookup_alternate, lookup_family};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
@@ -446,6 +445,6 @@ mod tests {
         for family in ["Symbol (PCL6)", "Wingdings"] {
             assert_eq!(lookup_family(&d, family), family);
         }
-        assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
+        assert_eq!(lookup_family(&d, "No Such Roman Font"), "Cambria");
     }
 }

@@ -6,7 +6,7 @@ fn rc() -> ResolvedChar {
 }
 
 fn lay(lin: &str, display: bool) -> MathLayout {
-    layout_equation(&Math::default(), lin, &rc(), display, 400.0, &MathProps::default(), &mut 0)
+    layout_equation(&Document::new(), (&Math::default(), lin), &rc(), display, 400.0, &MathProps::default(), &mut 0)
 }
 
 /// The glyphs of a laid-out equation by line: (baseline, [(x, text)]), top line first.
@@ -30,7 +30,7 @@ fn lines(m: &MathLayout) -> Vec<(f32, Vec<(f32, String)>)> {
 }
 
 fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> MathLayout {
-    layout_equation(math, lin, &rc(), display, avail, mp, &mut 0)
+    layout_equation(&Document::new(), (math, lin), &rc(), display, avail, mp, &mut 0)
 }
 
 #[test]
@@ -203,7 +203,15 @@ fn every_structure_lays_out() {
         MNode::Run(MRun { text: "R".into(), scr: MScr::DoubleStruck, ..Default::default() }),
     ];
     for n in nodes {
-        let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let m = layout_equation(
+            &Document::new(),
+            (&Math { nodes: vec![n.clone()], ..Default::default() }, ""),
+            &rc(),
+            true,
+            400.0,
+            &MathProps::default(),
+            &mut 0,
+        );
         assert!(m.width > 0.0 && m.ascent + m.descent > 0.0, "{n:?} → {m:?}");
         for it in &m.items {
             if let MItem::Glyphs { glyphs, .. } = it {
@@ -231,7 +239,15 @@ fn characters_the_math_font_lacks_fall_back() {
     ];
     for display in [false, true] {
         for n in &nodes {
-            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), display, 400.0, &MathProps::default(), &mut 0);
+            let m = layout_equation(
+                &Document::new(),
+                (&Math { nodes: vec![n.clone()], ..Default::default() }, ""),
+                &rc(),
+                display,
+                400.0,
+                &MathProps::default(),
+                &mut 0,
+            );
             for it in &m.items {
                 if let MItem::Glyphs { glyphs, .. } = it {
                     assert!(glyphs.iter().all(|g| g.0 != 0), "{c:?} drew a missing glyph in {n:?}");
@@ -245,7 +261,7 @@ fn characters_the_math_font_lacks_fall_back() {
 fn caret_slots_cover_every_position() {
     use wordcraft_doc::math_edit::{MathPos, move_right, units};
     let math = Math { nodes: wordcraft_doc::math::parse_linear("x=(-b±√(b^2-4ac))/2a+■(a&b@c&d)"), ..Default::default() };
-    let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let m = layout_equation(&Document::new(), (&math, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     // Walking the caret through the equation, every position has a slot.
     let mut p = MathPos::default();
     let mut seen = 0;
@@ -269,7 +285,7 @@ fn caret_slots_cover_every_position() {
 #[test]
 fn an_arguments_extent_spans_its_caret_positions() {
     let math = Math { nodes: wordcraft_doc::math::parse_linear("y=(a+b)/c"), ..Default::default() };
-    let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let m = layout_equation(&Document::new(), (&math, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     let (nx0, nx1, nup, ndown) = m.arg_extent(&[(1, 0)]).unwrap();
     let (dx0, dx1, dup, ddown) = m.arg_extent(&[(1, 1)]).unwrap();
     // The numerator sits above the baseline and the denominator below it, both inside the equation.
@@ -286,17 +302,17 @@ fn an_arguments_extent_spans_its_caret_positions() {
 #[test]
 fn empty_slots_show_placeholders_on_screen_only() {
     let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
-    let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let m = layout_equation(&Document::new(), (&math, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     assert!(m.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_) | MItem::Rect { .. })), "{:?}", m.items);
     assert!(m.slots.iter().any(|s| s.path == vec![(0, 0)] && s.off == 0));
-    let empty = layout_equation(&Math::default(), "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let empty = layout_equation(&Document::new(), (&Math::default(), ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     assert!(empty.width > 10.0 && empty.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_))));
 }
 
 #[test]
 fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
     let math = Math { nodes: wordcraft_doc::math::parse_linear("E=mc^2#(1)"), ..Default::default() };
-    let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let m = layout_equation(&Document::new(), (&math, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     assert!((m.width - 400.0).abs() < 0.01, "{}", m.width);
     let xs: Vec<f32> = m.items.iter().filter_map(|i| if let MItem::Glyphs { glyphs, .. } = i { glyphs.first().map(|g| g.1) } else { None }).collect();
     let max = xs.iter().cloned().fold(0.0f32, f32::max);
@@ -306,7 +322,7 @@ fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
     // Automatic numbers count.
     let auto = Math { nodes: wordcraft_doc::math::parse_linear("a=b#"), ..Default::default() };
     let mut n = 4;
-    let _ = layout_equation(&auto, "", &rc(), true, 400.0, &MathProps::default(), &mut n);
+    let _ = layout_equation(&Document::new(), (&auto, ""), &rc(), true, 400.0, &MathProps::default(), &mut n);
     assert_eq!(n, 5);
     assert_eq!(auto_numbers(&auto, true), 1);
 }
@@ -368,7 +384,7 @@ fn hostile_trees_never_panic() {
     for _ in 0..500 {
         n = vec![MNode::Frac { kind: FracKind::Bar, num: n.clone(), den: Vec::new() }];
     }
-    let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let _ = layout_equation(&Document::new(), (&Math { nodes: n, ..Default::default() }, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     // Empty everything.
     let empty = vec![
         MNode::Nary { chr: '\0', lim_loc: None, grow: true, sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
@@ -377,14 +393,14 @@ fn hostile_trees_never_panic() {
         MNode::EqArr { rows: vec![] },
         MNode::Run(MRun { text: String::new(), size: Some(f32::NAN), ..Default::default() }),
     ];
-    let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+    let m = layout_equation(&Document::new(), (&Math { nodes: empty, ..Default::default() }, ""), &rc(), true, 400.0, &MathProps::default(), &mut 0);
     assert!(m.width.is_finite() && m.ascent.is_finite());
     // Breaks everywhere, odd wrap settings, no room at all.
     let runs: Vec<MNode> = (0..2000).map(|i| MNode::Run(MRun { brk: (i % 3 == 0).then_some((i % 256) as u8), ..MRun::new("−+=") })).collect();
     for avail in [0.0, f32::NAN, 1e9] {
         for brk_bin in [BrkBin::Before, BrkBin::After, BrkBin::Repeat] {
             let mp = MathProps { brk_bin, brk_bin_sub: BrkBinSub::PlusMinus, wrap_indent: f32::INFINITY, wrap_right: avail == 0.0 };
-            let m = layout_equation(&Math { nodes: runs.clone(), ..Default::default() }, "", &rc(), true, avail, &mp, &mut 0);
+            let m = layout_equation(&Document::new(), (&Math { nodes: runs.clone(), ..Default::default() }, ""), &rc(), true, avail, &mp, &mut 0);
             assert!(m.width.is_finite() && m.descent.is_finite());
         }
     }

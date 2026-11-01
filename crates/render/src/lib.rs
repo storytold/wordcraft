@@ -295,7 +295,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {
-        draw_watermark(&mut ctx, view, page, wm, opts);
+        draw_watermark(&mut ctx, view, page, doc, wm, opts);
     }
     // A dimmed layer is drawn whole, then faded once, so its overlaps don't darken.
     for (alpha, items) in page_layers(doc, page, &opts.display) {
@@ -424,8 +424,8 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
     Rendered { width: w16 as u32, height: h16 as u32, pixels }
 }
 
-fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
-    let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
+fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, doc: &Document, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
+    let r = wordcraft_fonts::word::resolve(wordcraft_layout::para::lookup_alternate(doc, &wm.font), false, false);
     let face = r.face;
     let glyphs = wordcraft_fonts::shape(&face, &wm.text, &[], |c| c);
     let upem = face.upem.max(1.0);

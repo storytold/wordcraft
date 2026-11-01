@@ -177,6 +177,60 @@ fn wordart_is_inserted_styled_and_bent() {
     run(&mut s, "wordArt.transform", json!({"preset": "none"}));
 }
 
+/// The body font is missing and the font table names an alternate: the text is drawn in the
+/// alternate, so the box is sized with it too, as wide as with the alternate as the body font.
+#[test]
+fn a_new_wordart_box_fits_its_text_in_the_font_it_is_drawn_in() {
+    const MISSING: &str = "No Such WordArt Font";
+    let width = |font: &str, alt: Option<&str>| {
+        let mut d = Document::new();
+        d.styles.default_chr.font = Some(font.into());
+        d.settings.font_alt_names = alt.map(|a| vec![(font.to_string(), a.to_string())]).unwrap_or_default();
+        let mut s = Session::new(d);
+        run(&mut s, "insert.wordArt", json!({"text": "illicit"}));
+        let obj = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.object_at(0)).cloned();
+        match obj {
+            Some(InlineObject::Shape { w, .. }) => w,
+            other => panic!("no WordArt box: {other:?}"),
+        }
+    };
+    let mono = width("JetBrains Mono", None);
+    assert_eq!(width(MISSING, Some("JetBrains Mono")), mono);
+    assert!((width(MISSING, None) - mono).abs() > 1.0, "the substitute measures differently");
+}
+
+/// The body font is missing, classed roman, without an alternate: the box's text is laid out
+/// like any paragraph's, in the roman fallback (Cambria), so the box is sized in Cambria too.
+#[test]
+fn a_new_wordart_box_in_a_missing_roman_font_fits_its_text_in_cambria() {
+    const MISSING: &str = "No Such Roman WordArt Font";
+    let insert = |font: &str, roman: bool| {
+        let mut d = Document::new();
+        d.styles.default_chr.font = Some(font.into());
+        if roman {
+            d.settings.roman_fonts = vec![font.into()];
+        }
+        let mut s = Session::new(d);
+        run(&mut s, "insert.wordArt", json!({"text": "illicit"}));
+        let w = match s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.object_at(0)).cloned() {
+            Some(InlineObject::Shape { w, .. }) => w,
+            other => panic!("no WordArt box: {other:?}"),
+        };
+        let l = s.layout();
+        let face = l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { story: StoryRef::Part(_), para, .. } => {
+                para.clusters.first().and_then(|c| para.styles.get(c.style as usize)).map(|st| st.face)
+            }
+            _ => None,
+        });
+        (w, face.expect("the box's text"))
+    };
+    let cambria = insert("Cambria", false);
+    assert_eq!(cambria.1, wordcraft_fonts::word::resolve("Cambria", true, false).face);
+    assert!((insert(MISSING, false).0 - cambria.0).abs() > 1.0, "the substitute measures differently");
+    assert_eq!(insert(MISSING, true), cambria, "the box and its text as in Cambria");
+}
+
 #[test]
 fn wordart_reflection_and_outline_none_options() {
     let mut s = Session::new(Document::new());

@@ -112,7 +112,18 @@ impl FontDb {
     /// Is `family` available (loaded, or installed on the system)? English and localized family
     /// names and exact full or PostScript face names count.
     pub fn has_family(&self, family: &str) -> bool {
-        if self.is_loaded(family) {
+        self.has_named(family, true)
+    }
+
+    /// [`FontDb::has_family`] without PostScript names: Word for Mac treats a font named only by
+    /// its PostScript name (`ArialMT`) as missing when the font table gives it an alternate.
+    pub fn has_family_but_postscript(&self, family: &str) -> bool {
+        self.has_named(family, false)
+    }
+
+    fn has_named(&self, family: &str, postscript: bool) -> bool {
+        let face_named = |f: &FontFace| if postscript { f.named(family) } else { f.named_but_postscript(family) };
+        if self.read_faces().iter().any(|f| face_named(f)) {
             return true;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -120,7 +131,7 @@ impl FontDb {
             c.family.eq_ignore_ascii_case(family)
                 || c.legacy.eq_ignore_ascii_case(family)
                 || c.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
-                || c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+                || (postscript && c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family)))
         }) {
             return true;
         }

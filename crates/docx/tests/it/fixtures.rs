@@ -3724,6 +3724,52 @@ fn roman_fonts_are_read_from_the_font_table() {
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
 }
 
+/// A font table entry's `w:name` is the name runs refer to: it is kept as written for the entry's
+/// alternate as for its roman class and for a run's `w:rFonts`, so an alternate applies to exactly
+/// the runs the roman class does. The alternate itself is a font to look up, trimmed.
+#[test]
+fn a_font_tables_name_is_kept_as_written_for_its_alternate_as_for_its_roman_class() {
+    let fonts = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts {W_NS}><w:font w:name=" Spaced Font "><w:altName w:val=" Arial "/><w:family w:val="roman"/></w:font></w:fonts>"#
+    );
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii=" Spaced Font " w:hAnsi=" Spaced Font "/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let rels = [("rId9", "fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx(body, &rels, &[("word/fontTable.xml", &fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, [" Spaced Font "]);
+    assert_eq!(d.settings.font_alt_names, [(" Spaced Font ".to_string(), "Arial".to_string())]);
+    assert_eq!(paras(&d)[0].runs[0].props.font.as_deref(), Some(" Spaced Font "));
+}
+
+/// The font table's alternate names: Word draws a font it doesn't have in its `w:altName`.
+#[test]
+fn font_alt_names_are_read_from_the_font_table_and_kept_on_save() {
+    let font = |name: &str, alt: Option<&str>| {
+        let alt = alt.map(|a| format!(r#"<w:altName w:val="{a}"/>"#)).unwrap_or_default();
+        format!(r#"<w:font w:name="{name}">{alt}<w:panose1 w:val="000000000000000000"/><w:family w:val="swiss"/></w:font>"#)
+    };
+    let long = "x".repeat(300);
+    let table = [
+        font("HelveticaNeue", Some("Arial")),
+        font("DIN-Regular", Some(" Calibri ")),
+        font("Brand Sans", None),
+        font("Empty Alt", Some("")),
+        font("Blank Alt", Some("  ")),
+        font("Too Long", Some(&long)),
+        font("Two Names", Some("Courier New,Georgia")),
+        r#"<w:font><w:altName w:val="Arial"/></w:font>"#.to_string(),
+    ]
+    .concat();
+    let fonts = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts {W_NS}>{table}</w:fonts>"#);
+    let rels = [("rId9", "fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", &fonts)])).unwrap();
+    let expected = [("HelveticaNeue", "Arial"), ("DIN-Regular", "Calibri"), ("Two Names", "Courier New,Georgia")];
+    let expected: Vec<(String, String)> = expected.iter().map(|(f, a)| (f.to_string(), a.to_string())).collect();
+    assert_eq!(d.settings.font_alt_names, expected);
+    let saved = wordcraft_docx::write(&d).unwrap();
+    assert!(text(&unzip(&saved), "word/fontTable.xml").contains(r#"<w:altName w:val="Arial"/>"#));
+    assert_eq!(wordcraft_docx::read(&saved).unwrap().settings.font_alt_names, expected);
+}
+
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
 #[test]
 fn html_auto_spacing_off_is_read_and_kept() {

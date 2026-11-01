@@ -3,7 +3,7 @@ use super::glyphs::TextAtom;
 use super::state::{MAX_NODES, class_of};
 use super::{C, Ctx, FaceRef, FontDb, LimLoc, MAX_DEPTH, MItem, MNode, MRun, MScr, MSty, Rgb, ScriptKind, is_integral, math_alnum};
 
-impl Ctx {
+impl Ctx<'_> {
     pub(super) fn arg(&mut self, a: &[MNode], st: St, depth: usize) -> Bx {
         let atoms = self.row(a, st, depth, 0);
         let em = self.em(st);
@@ -121,14 +121,18 @@ impl Ctx {
         let color = r.color.unwrap_or(self.color);
         if r.nor {
             // Normal text: the text font, upright unless asked.
-            let fam = r.font.clone().filter(|f| !f.eq_ignore_ascii_case("Cambria Math")).unwrap_or_else(|| self.text_font.clone());
+            let fam = r
+                .font
+                .as_deref()
+                .filter(|f| !f.eq_ignore_ascii_case("Cambria Math"))
+                .map_or(self.text_font.as_str(), |f| crate::para::lookup_alternate(self.doc, f));
             let (bold, italic) = match r.sty {
                 Some(MSty::Bold) => (true, false),
                 Some(MSty::Italic) => (false, true),
                 Some(MSty::BoldItalic) => (true, true),
                 _ => (false, false),
             };
-            let rs = wordcraft_fonts::word::resolve(&fam, bold, italic);
+            let rs = wordcraft_fonts::word::resolve(fam, bold, italic);
             let mut b = self.text_atom(TextAtom {
                 face: rs.face,
                 text: &r.text,

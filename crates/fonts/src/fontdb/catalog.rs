@@ -114,9 +114,14 @@ impl FontDb {
     }
 
     /// Add a user font (TTF/OTF/TTC bytes). Returns the number of faces added (0 if unparseable or
-    /// every face was already present).
+    /// every face was already present). Lookups made while its family was missing are forgotten
+    /// ([`FontDb::generation`]).
     pub fn add_font(&self, bytes: Vec<u8>) -> usize {
-        self.add_fonts(vec![(bytes, None)])
+        let added = self.add_fonts(vec![(bytes, None)]);
+        if added > 0 {
+            self.fonts_changed();
+        }
+        added
     }
 
     /// Add the faces of several font files at once: lookups see all of them or none, never a
@@ -176,13 +181,18 @@ impl FontDb {
 
     /// Scan the font folders again (fonts installed or removed since), cataloging the faces
     /// found (native only). Font data is loaded when a cataloged family is first resolved.
-    /// Returns the number of faces cataloged.
+    /// Returns the number of faces cataloged. A rescan forgets lookups made before it
+    /// ([`FontDb::generation`]); the first scan has none to forget, as lookups wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_system_fonts(&self) -> usize {
         // The first scan, or a rescan once it is done (never both at once).
         let mut first = None;
         self.cataloged.get_or_init(|| first = Some(self.scan_font_dirs()));
-        first.unwrap_or_else(|| self.scan_font_dirs())
+        first.unwrap_or_else(|| {
+            let n = self.scan_font_dirs();
+            self.fonts_changed();
+            n
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]

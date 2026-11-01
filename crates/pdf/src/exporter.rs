@@ -317,7 +317,7 @@ impl Exporter<'_> {
     /// the baseline) on the box's bottom; the box centred on the margins (`area`, else the page)
     /// and, when diagonal, turned 45° counterclockwise.
     fn watermark(&mut self, s: &mut Surface, wm: &wordcraft_doc::Watermark, w: f32, h: f32, area: Rect) {
-        let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
+        let r = wordcraft_fonts::word::resolve(wordcraft_layout::para::lookup_alternate(self.doc, &wm.font), false, false);
         let face = r.face;
         let text: String = wm.text.chars().take(200).collect();
         let shaped = wordcraft_fonts::shape(&face, &text, &[], |c| c);

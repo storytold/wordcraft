@@ -290,10 +290,13 @@ impl FontFace {
     }
     /// Is `family` this face's typographic, legacy, full or PostScript name?
     pub fn named(&self, family: &str) -> bool {
+        self.named_but_postscript(family) || self.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+    }
+    /// Is `family` this face's typographic, legacy or full name?
+    pub(super) fn named_but_postscript(&self, family: &str) -> bool {
         self.family.eq_ignore_ascii_case(family)
             || self.legacy_family.eq_ignore_ascii_case(family)
             || self.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
-            || self.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
     }
     /// Does the face map `c` to a glyph?
     pub fn covers(&self, c: char) -> bool {

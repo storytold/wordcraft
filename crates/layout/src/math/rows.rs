@@ -2,7 +2,7 @@ use super::bx::{Bx, Cls, RunPart, St, classes, compose, finalize, gaps_between, 
 use super::state::op_char;
 use super::{Arg, BrkBin, BrkBinSub, Ctx, MNode, MRun, MSty, MathProps, split_number};
 
-impl Ctx {
+impl Ctx<'_> {
     /// Rows stacked and centred on the math axis; `gap`: least space between rows, `min_skip`:
     /// least baseline-to-baseline distance.
     pub(super) fn stack_rows(&self, rows: Vec<(Bx, f32)>, st: St, gap: f32, min_skip: f32) -> (Bx, Vec<f32>) {

@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, strong_rtl, visual_order};
 use super::chars::{
-    SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range, thai_run_face,
-    upper_char,
+    SegKey, caps_expands, context_digit_dirs, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_alternate, lookup_family, remap_range,
+    thai_run_face, upper_char,
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
@@ -163,7 +163,11 @@ impl<'a> Builder<'a> {
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
-        let resolved = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let family = lookup_family(self.env.doc, &rc.font);
+        let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+        // The run's font is missing when it was substituted, or when another family stands in for
+        // it: its font table alternate, which may itself be installed.
+        let requested_missing = resolved.substituted || !family.eq_ignore_ascii_case(&rc.font);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
@@ -175,7 +179,7 @@ impl<'a> Builder<'a> {
             .font_ea
             .as_ref()
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
+            .map(|f| wordcraft_fonts::word::resolve(lookup_alternate(self.env.doc, f), rc.bold, rc.italic))
             .filter(|r| !r.substituted)
             .map(|r| r.face);
         // The levels by byte of `text`, from `lbase` on.
@@ -189,7 +193,7 @@ impl<'a> Builder<'a> {
         // A missing Thai font: one face for the run's Thai and Latin text (#1549). A run with its
         // own complex-script font keeps that font for the Thai letters.
         let run_face: Option<FaceRef> = if primary_cs.is_none_or(|f| f.id() == primary.id()) {
-            thai_run_face(&rc.font, resolved.substituted, primary, text, rc.bold, rc.italic)
+            thai_run_face(&rc.font, requested_missing, primary, text, rc.bold, rc.italic)
         } else {
             None
         };

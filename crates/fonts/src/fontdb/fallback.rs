@@ -362,7 +362,7 @@ impl FontDb {
                 data = read_fallback_file(&file.path);
             }
             if let Some(data) = data
-                && self.add_font(data) > 0
+                && self.add_fonts(vec![(data, None)]) > 0
                 && covered(self)
             {
                 return true;

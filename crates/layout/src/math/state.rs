@@ -1,7 +1,9 @@
 use super::bx::{Bx, Cls};
-use super::{Arc, C, FaceRef, MClass, MItem, MathTable, Rgb};
+use super::{Arc, C, Document, FaceRef, MClass, MItem, MathTable, Rgb};
 
-pub(super) struct Ctx {
+pub(super) struct Ctx<'d> {
+    /// The document, for the fonts its font table names (see [`crate::para::lookup_alternate`]).
+    pub(super) doc: &'d Document,
     pub(super) face: FaceRef,
     pub(super) t: Option<Arc<MathTable>>,
     pub(super) upem: f32,

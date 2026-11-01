@@ -135,6 +135,19 @@ fn rescanning_finds_fonts_installed_since() {
     assert!(db.has_family(FAMILY) && has(&db.families(), FAMILY));
 }
 
+/// A rescan moves [`FontDb::generation`], so lookups cached by it ([`crate::word::resolve`],
+/// [`crate::word::available`]) find fonts installed or removed since. The first scan doesn't:
+/// lookups wait for it, so nothing is cached before it.
+#[test]
+fn rescanning_drops_lookups_cached_before_it() {
+    let dir = font_dir("rescan-generation");
+    let db = FontDb::with_font_dirs(vec![dir]);
+    assert!(db.has_family(FAMILY));
+    assert_eq!(db.generation(), 0);
+    assert_eq!(db.load_system_fonts(), 2);
+    assert!(db.generation() > 0);
+}
+
 #[test]
 fn a_background_scan_serves_the_first_lookup() {
     let dir = font_dir("background");
