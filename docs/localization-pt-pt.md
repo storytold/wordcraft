@@ -1,6 +1,6 @@
 # European Portuguese interface and proofing
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** minor (pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-11-01 · **Change:** trivial (the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
 
 ## Proofing
 
@@ -9,12 +9,14 @@ Text tagged `pt-PT`, or one of the regions that write like Portugal (`pt-AO`, `p
 `pt` and any other region stay `ProofLang::Pt`. European text is spelled against the Hunspell
 `pt_PT` dictionary installed on the system, found in the same places as the other dictionaries
 ([spelling-dictionaries.md](spelling-dictionaries.md)), LibreOffice's `dict-pt-PT` extension
-included. The dictionary is not bundled (it is GPL/LGPL/MPL). Without a `pt_PT` dictionary,
+included. The dictionary is not bundled and WordCraft doesn't download it (its README lists GPL 2,
+LGPL 2.1 and MPL 1.1). Without a `pt_PT` dictionary,
 European text is checked with the Brazilian one, as it was before the two spellings were told
 apart; with neither, there are no spelling marks and the status bar says
 *Portuguese (Portugal) (no dictionary)*.
 
-With the dictionary of the Natura project (Universidade do Minho, the one LibreOffice ships) the
+With the dictionary of the Natura project (Departamento de Informática, Universidade do Minho,
+<http://natura.di.uminho.pt/>, the one LibreOffice ships) the
 affix engine reads all 42,642 stems and 1,290 rules: `facto`, `equipa`, `ecrã`, `ficheiro` and
 `económico` are words, `econômico`, `ônibus` and `direcção` are flagged, and suggestions come from
 the same dictionary (`economico` → `económico`, `tambem` → `também`, `coraçao` → `coração`).
@@ -83,5 +85,6 @@ derive (`fê-lo`), and a review of the catalog by a second native speaker, which
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | The `pt_PT` dictionary's source and licences, from its README; not bundled, not downloaded |
 | 2026-10-24 | minor | Rebased on the craft-i18n cutover: the catalog goes to storytold/craft-i18n; pt-PT proofing next to the Spanish, Italian, Croatian and Turkish ones |
 | 2026-10-12 | minor | European Portuguese catalog (2,061 entries), terminology, pt-PT proofing against the installed `pt_PT` dictionary, and regression checks |
