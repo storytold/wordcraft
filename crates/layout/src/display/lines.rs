@@ -644,15 +644,7 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(ch) = leader.char() else { continue };
         let gid = style.face.glyph_for(ch);
         let advance = leader_pitch(style.face.advance(gid) as f32, style.face.upem as f32, style.size);
-        // On the page's grid of that pitch, from the first place after the text before the tab
-        // to the last glyph that ends before the text after it, as Word draws them.
-        let (left, right) = (ctx.x + left, ctx.x + right);
-        let mut gx = (left / advance - 0.001).ceil() * advance;
-        let mut glyphs = Vec::new();
-        while gx + advance <= right + 0.001 && glyphs.len() < 2000 {
-            glyphs.push((gid, gx, ctx.base));
-            gx += advance;
-        }
+        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, ctx.base)).collect();
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,
@@ -668,6 +660,19 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             x_scale: 1.0,
         });
     }
+}
+
+/// Where a tab leader's glyphs go between page x `left` (the end of the text before the tab) and
+/// `right` (the start of the text after it), `pitch` apart: on the page's grid of that pitch, from
+/// the first place at or after `left` to the last glyph that ends by `right`, as Word draws them.
+/// Each place is worked out from its grid index, so a long leader doesn't drift and lose its last
+/// glyph to rounding.
+pub(crate) fn leader_xs(left: f32, right: f32, pitch: f32) -> Vec<f32> {
+    if !(left.is_finite() && right.is_finite() && pitch.is_finite() && pitch > 0.0) {
+        return Vec::new();
+    }
+    let first = (left / pitch - 0.001).ceil() as i64;
+    (first..first + 2000).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + 0.001).collect()
 }
 
 /// How far apart a tab leader's glyphs are drawn, as measured in Word: the glyph's advance (`units`

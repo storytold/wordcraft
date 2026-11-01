@@ -1621,6 +1621,12 @@ fn leader_dots_are_spaced_and_placed_as_in_word() {
     {
         assert!((got - want).abs() < 1e-4, "pitch {got}, not {want}");
     }
+    // A leader across most of the page keeps its last dot: from 72 to 528 pt at 2.64 pt the dots
+    // go from 73.92 to 525.36, the last ending on 528, each place worked out from its grid index.
+    let xs = display::leader_xs(72.0, 528.0, pitch(162.0, 1000.0, 16.0));
+    assert_eq!(xs.len(), 172, "{} dots, from {:?} to {:?}", xs.len(), xs.first(), xs.last());
+    assert!((xs[0] - 73.92).abs() < 1e-3 && (xs[171] - 525.36).abs() < 1e-3, "{:?} to {:?}", xs.first(), xs.last());
+    assert!(display::leader_xs(72.0, 528.0, f32::NAN).is_empty() && display::leader_xs(72.0, 528.0, 0.0).is_empty());
     // Labels of several lengths and stops at several places: the text before the tab and the
     // number after it end and start anywhere against the grid.
     for label in ["E", "Entr", "Entry one", "Entry number two"] {
