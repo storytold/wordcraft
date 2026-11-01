@@ -261,8 +261,7 @@ pub(crate) fn recipient_list(
     if !editing {
         filter.editing = None;
     }
-    let merged_only = egui::Checkbox::new(&mut filter.only_merged, tl!("Show only records that will be merged"));
-    ui.add_enabled(order.is_some(), merged_only);
+    ui.add_enabled_ui(order.is_some(), |ui| ui.checkbox(&mut filter.only_merged, tl!("Show only records that will be merged")));
     let visible = ui
         .horizontal(|ui| {
             ui.label(tl!("Find in list:"));
@@ -284,7 +283,7 @@ pub(crate) fn recipient_list(
     let mut x_w = X_W;
     let mut focused = None;
     egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
                 for (i, f) in fields.iter_mut().enumerate() {
@@ -424,7 +423,7 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
         });
     };
     let mut remove = None;
-    egui::Grid::new("recipient_filter").num_columns(5).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("recipient_filter").num_columns(5).spacing(vec2(6.0, 4.0)), |ui| {
         ui.label("");
         ui.label(egui::RichText::new(tl!("Field")).weak());
         ui.label(egui::RichText::new(tl!("Comparison")).weak());
@@ -466,7 +465,7 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
         }
     });
     ui.add_space(4.0);
-    egui::Grid::new("recipient_sort").num_columns(3).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("recipient_sort").num_columns(3).spacing(vec2(6.0, 4.0)), |ui| {
         for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
             ui.label(tl!(if i == 0 { "Sort by" } else { "Then by" }));
             field_combo(ui, ("rs_field", i), field, true);

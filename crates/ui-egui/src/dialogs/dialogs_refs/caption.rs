@@ -105,7 +105,7 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
     });
     ui.add_space(6.0);
     let mut then = None;
-    egui::Grid::new("cap_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cap_opts").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let label_label = ui.label(tl!("Label:"));
         let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
         let combo = craft_ui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
@@ -150,7 +150,7 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
 /// Draws the caption numbering format, chapter-number toggle and chapter level and separator
 /// controls, returning to the caption dialog with the edited or original form.
 pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) -> Next {
-    egui::Grid::new("cap_num").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cap_num").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let format_label = ui.label(tl!("Format:"));
         let opts: Vec<(String, &str)> = NUMBER_FORMATS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
         choice(ui, "cap_fmt", &mut f.format, &opts, &format_label);
@@ -158,7 +158,7 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
     });
     ui.checkbox(&mut f.chapter, tl!("Add the chapter number"));
     ui.add_enabled_ui(f.chapter, |ui| {
-        egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
             let chapter_label = ui.label(tl!("Chapters begin at:"));
             let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
             let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();

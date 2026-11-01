@@ -106,7 +106,7 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
         });
         combo.response.labelled_by(label.id);
     });
-    egui::Grid::new("ps_paper").num_columns(4).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("ps_paper").num_columns(4), |ui| {
         use wordcraft_engine::cmd::page::{MAX_PAGE_SIDE, MIN_PAGE_SIDE};
         let range = MIN_PAGE_SIDE / ppu..=MAX_PAGE_SIDE / ppu;
         let width_label = ui.label(tl!(l.width));

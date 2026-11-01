@@ -316,7 +316,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
     let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
         ui.set_width(620.0);
-        done = body(ui, &mut b, &t);
+        done = crate::rtl::root(ui, |ui| body(ui, &mut b, &t));
     });
     if shown.is_some_and(|s| crate::window_close::show(ctx, &s.response, &t)) {
         done = Some(None);
@@ -385,9 +385,21 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 2.0, t.hover);
                     }
-                    let icon = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(18.0, 18.0));
+                    let rtl = crate::rtl::on();
+                    let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &e.name, regular(13.0), t.text);
+                    // A long name keeps its beginning and ends in an ellipsis inside the row, from the
+                    // side reading starts from; the whole name is the row's tooltip then.
+                    let mut job = egui::text::LayoutJob::simple_singleline(crate::i18n::isolate(&e.name), regular(13.0), t.text);
+                    job.wrap.max_width = (r.width() - 36.0).max(0.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job);
+                    let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                    let at = pos2(if rtl { text_x - galley.size().x } else { text_x }, r.center().y - galley.size().y / 2.0);
+                    let elided = galley.elided;
+                    ui.painter().galley(at, galley, t.text);
+                    let resp = if elided { resp.on_hover_text(&e.name) } else { resp };
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());
@@ -459,7 +471,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (ok, cancelb) =
                 crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
             cancel |= cancelb.clicked();

@@ -5,7 +5,7 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     group(ui, "Table Style Options", None, app, |ui, app| {
         let Some(l) = look else { return };
-        egui::Grid::new("look").show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("look"), |ui| {
             for (row, items) in [
                 [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
                 [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
@@ -37,14 +37,16 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
             .map(|s| (s.builtin, s.id.clone(), crate::i18n::style_name(s)))
             .collect();
         styles.sort_by_key(|(builtin, _, _)| *builtin);
-        egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for (_, id, name) in styles {
-                    if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
-                        let _ = app.run("table.style", json!({"style": id}));
+        crate::rtl::island(ui, |ui| {
+            egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (_, id, name) in styles {
+                        if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
+                            let _ = app.run("table.style", json!({"style": id}));
+                        }
                     }
-                }
-            });
+                });
+            })
         });
         stack(ui, |ui| {
             let current = look.and_then(|_| {
@@ -287,7 +289,7 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Alignment", None, app, |ui, app| {
-        egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)), |ui| {
             for row in [
                 [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
                 [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],

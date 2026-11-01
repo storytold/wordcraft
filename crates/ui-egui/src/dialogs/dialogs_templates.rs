@@ -181,8 +181,8 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
     let mut rename = false;
     let mut browse = false;
     let left_builtin = mine.iter().find(|x| s(x, "id") == f.left).is_none_or(|x| x.get("builtIn").and_then(Value::as_bool).unwrap_or(true));
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Document")).font(semibold(12.5)));
             list_frame(ui, "organizer_mine", &mut |ui| {
                 for st in &mine {
@@ -194,14 +194,14 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
                 }
             });
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.add_space(60.0);
             let w = vec2(96.0, 0.0);
             copy = ui.add_enabled(!f.right.is_empty(), egui::Button::new(format!("◀ {}", tl!("Copy"))).min_size(w)).clicked();
             delete = ui.add_enabled(!left_builtin, egui::Button::new(tl!("Delete")).min_size(w)).clicked();
             rename = ui.add_enabled(!left_builtin, egui::Button::new(tl!("Rename…")).min_size(w)).clicked();
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             let name = std::path::Path::new(&f.file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "—".into());
             ui.label(egui::RichText::new(name).font(semibold(12.5))).on_hover_text(f.file.as_str());
             list_frame(ui, "organizer_other", &mut |ui| {
@@ -254,7 +254,7 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
     ui.add_space(8.0);
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
         });
     });

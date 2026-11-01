@@ -469,7 +469,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         .collect();
     let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
     let mut rebased = false;
-    egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let name_label = ui.label(tl!("Name:"));
         ui.text_edit_singleline(name).labelled_by(name_label.id);
         ui.end_row();
@@ -567,7 +567,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
-            egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new("tstyle_align").spacing(vec2(1.0, 1.0)), |ui| {
                 for (i, ((n, v, h), tip)) in CELL_ALIGNS.iter().zip(ALIGN_TIPS).enumerate() {
                     let on = r.align == *n;
                     if align_button(ui, (*v, *h), on, tl!(tip)).clicked() {

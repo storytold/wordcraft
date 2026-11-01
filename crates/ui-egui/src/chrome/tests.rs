@@ -307,3 +307,14 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The AutoSave knob is at the right when the switch is on and at the left when it is off; a
+/// right-to-left interface mirrors that.
+#[test]
+fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
+    let track = Rect::from_min_max(egui::pos2(100.0, 0.0), egui::pos2(130.0, 16.0));
+    assert_eq!(autosave_knob_x(false, true, track), 122.0, "left to right, on: right");
+    assert_eq!(autosave_knob_x(false, false, track), 108.0, "left to right, off: left");
+    assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
+    assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
+}

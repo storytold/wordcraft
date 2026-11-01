@@ -1189,3 +1189,99 @@ fn the_flatpak_manifest_pins_the_craft_i18n_rev() {
     assert_eq!(commit.trim().trim_matches(['\'', '"']), rev);
     assert!(manifest.contains("CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n"), "the build embeds the catalogs");
 }
+
+/// A right-to-left test language whose catalog is `source`, selected as the current language.
+fn arabic_fixture(source: &'static str) -> Lang {
+    let ar = fixture_lang("ar", source);
+    set_current(ar);
+    ar
+}
+
+#[test]
+fn arabic_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let Some(ar) = Lang::from_code("ar") else {
+        eprintln!("skipped: the embedded catalogs have no Arabic");
+        return;
+    };
+    for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant", "ar-Arab-AE"] {
+        assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+    }
+    assert_eq!(first_supported(["xx-XX", "ar-MA", "en-US"]), Some(ar));
+    assert_eq!(normalize_pref("AR"), Some("ar"));
+    assert!(ar.rtl());
+    assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+    assert!(!ar.uses_cjk());
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "AR"})).unwrap();
+    assert_eq!(result["effective"], "ar");
+    assert_eq!(app.ui.language, "ar");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), ar);
+    assert!(app.run("ui.language", serde_json::json!({"value": "ar-unknown"})).is_err());
+    assert_eq!(app.ui.language, "ar", "invalid preferences must keep the saved language");
+}
+
+/// Arabic comes back from the lookups exactly as the catalog has it, in typing order: egui's text
+/// layout orders the words of each line itself, so nothing here reverses them. Placeholders are
+/// filled in place and text for the document stays as typed.
+#[test]
+fn arabic_lookups_keep_typing_order() {
+    let ar = arabic_fixture(concat!(
+        "\tTable of Contents\tجدول المحتويات\n",
+        "\tPaste Special…\tلصق خاص…\n",
+        "\tAbout WordCraft\tحول WordCraft\n",
+        "\tPassword:\tكلمة المرور:\n",
+        "\tTable of\\nContents\tجدول\\nالمحتويات\n",
+        "\tPage {page} of {pages}\tالصفحة {page} من {pages}\n",
+        "\tExported {path}\tتم التصدير إلى {path}\n",
+        "preview\tTitle\tالعنوان\n",
+        "\tHome\tالرئيسية\n",
+        "\tFont\tالخط\n",
+    ));
+    assert!(ar.rtl());
+    assert_eq!(tr(ar, "Table of Contents"), "جدول المحتويات");
+    assert_eq!(tr(ar, "Paste Special…"), "لصق خاص…");
+    assert_eq!(tr(ar, "About WordCraft"), "حول WordCraft");
+    assert_eq!(tr(ar, "Password:"), "كلمة المرور:");
+    // A two-line ribbon label keeps its two lines.
+    assert_eq!(tr(ar, "Table of\nContents"), "جدول\nالمحتويات");
+    // Placeholders are filled in place; inserted text is never touched, and the text for the
+    // document is the same string.
+    let page = fmt_plain(tr(ar, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]);
+    assert_eq!(page, "الصفحة 3 من 9");
+    assert_eq!(fmt_plain(tr(ar, "Exported {path}"), &[("path", "draft-{words}.docx")]), "تم التصدير إلى draft-{words}.docx");
+    // The preview context is looked up the same way.
+    assert_eq!(trc(ar, "preview", "Title"), "العنوان");
+    // A string without a translation stays English, untouched.
+    assert_eq!(tr(ar, "unknown future label"), "unknown future label");
+    set_current(ar);
+    // A ribbon location reads from the right: the tab first, the mark pointing left.
+    assert_eq!(location("Home › Font"), "الرئيسية ‹ الخط");
+    // A search query typed in reading order is a plain substring of the label.
+    assert!(lowercase(t("Table of Contents")).contains("جدول المحتويات"));
+    set_current(Lang::EN);
+    assert_eq!(location("Home › Font"), "Home › Font");
+}
+
+/// File names and paths shown in a right-to-left line are set apart and marked: the name in its
+/// own isolate with its extension kept left to right, a path as a left-to-right isolate with a
+/// mark after every separator so neighbouring Arabic folders do not swap. Other languages get
+/// the text untouched.
+#[test]
+fn names_and_paths_are_isolated_in_a_right_to_left_interface() {
+    set_current(Lang::EN);
+    assert_eq!(isolate("تقرير 2.docx"), "تقرير 2.docx");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "C:/ملفات/تقرير.docx");
+    let ar = fixture_lang("ar", "\tHome\tالرئيسية\n");
+    set_current(ar);
+    assert_eq!(isolate("تقرير 2.docx"), "\u{2068}تقرير 2\u{200E}.docx\u{2069}");
+    assert_eq!(isolate("ملاحظات"), "\u{2068}ملاحظات\u{2069}", "no extension, no mark");
+    assert_eq!(isolate("v1.2 تقرير"), "\u{2068}v1.2 تقرير\u{2069}", "a dot that is not an extension");
+    assert_eq!(isolate_path(r"C:\ملفات\تقرير.docx"), "\u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "\u{2066}C:/\u{200E}ملفات/\u{200E}تقرير\u{200E}.docx\u{2069}");
+    set_current(Lang::EN);
+}

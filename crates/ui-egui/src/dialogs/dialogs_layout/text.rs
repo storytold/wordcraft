@@ -50,7 +50,7 @@ impl LineNumbersForm {
 pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> bool {
     ui.checkbox(&mut f.on, tl!("Add line numbering"));
     ui.add_enabled_ui(f.on, |ui| {
-        egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
             ui.label(tl!("Start at:"));
             ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767));
             ui.end_row();
@@ -112,7 +112,7 @@ impl HyphenationForm {
 pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut HyphenationForm) -> bool {
     ui.checkbox(&mut f.auto, tl!("Automatically hyphenate document"));
     ui.checkbox(&mut f.caps, tl!("Hyphenate words in CAPS"));
-    egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Hyphenation zone:"));
         ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2));
         ui.end_row();
@@ -236,7 +236,7 @@ pub(super) fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> b
     ui.add_space(8.0);
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }

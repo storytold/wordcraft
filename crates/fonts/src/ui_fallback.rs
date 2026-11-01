@@ -218,6 +218,36 @@ pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Opti
     find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, Region::from_hans(hans))
 }
 
+/// Arabic font files to look for, relative to a font folder, best first.
+fn arabic_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["segoeui.ttf", "tahoma.ttf", "arial.ttf"]
+    } else if cfg!(target_os = "macos") {
+        &["SFArabic.ttf", "GeezaPro.ttc", "Supplemental/GeezaPro.ttc", "Supplemental/Arial Unicode.ttf", "Supplemental/Arial.ttf"]
+    } else {
+        &[
+            "noto/NotoSansArabic-Regular.ttf",
+            "truetype/noto/NotoSansArabic-Regular.ttf",
+            "google-noto/NotoSansArabic-Regular.ttf",
+            "google-noto-sans-arabic-vf-fonts/NotoSansArabic[wght].ttf",
+            "noto/NotoNaskhArabic-Regular.ttf",
+            "truetype/noto/NotoNaskhArabic-Regular.ttf",
+            "google-noto/NotoNaskhArabic-Regular.ttf",
+            "vazirmatn/Vazirmatn-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "TTF/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// An installed font with Arabic letters, for an Arabic interface in a build whose craft-fonts
+/// input has no Arabic face. Reads at most one font file per candidate; never panics on damaged
+/// files.
+pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
+    find_ui_font(&crate::system_font_dirs(), arabic_candidates(), &['ع'], Region::Other)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`
@@ -424,6 +454,9 @@ mod tests {
         // No file maps every needed character: the one mapping the most is used.
         let found = find_ui_font(&dirs, &["sub/good.ttf", "PingFang.ttc"], &['A', '页'], Region::Hans).unwrap();
         assert_eq!(found.family, "Source Sans 3");
+        // The bundled Latin face has no Arabic letters, so it is never taken for an Arabic interface.
+        assert!(find_ui_font(std::slice::from_ref(&dir), &names, &['ع'], Region::Other).is_none());
+        assert!(!arabic_candidates().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

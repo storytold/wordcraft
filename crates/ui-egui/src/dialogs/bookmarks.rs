@@ -31,8 +31,8 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
     let marks = bookmark_names(&app.session.doc, *by_location, *hidden);
     let t = Tokens::get(ui.ctx());
     let (mut add, mut delete, mut go_to) = (false, false, false);
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             let name_label = ui.label(tl!("Bookmark name:"));
             ui.add(egui::TextEdit::singleline(name).desired_width(240.0)).labelled_by(name_label.id);
             egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).inner_margin(4).show(ui, |ui| {
@@ -51,7 +51,7 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
                 });
             });
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.add_space(18.0);
             let listed = marks.iter().any(|n| n == name.trim());
             let w = vec2(90.0, 0.0);
@@ -61,9 +61,9 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
         });
     });
     ui.add_space(6.0);
-    ui.horizontal_top(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
         ui.label(tl!("Sort by:"));
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.radio_value(by_location, false, tl!("Name"));
             ui.radio_value(by_location, true, tl!("Location"));
         });
@@ -84,7 +84,7 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
     ui.add_space(8.0);
     let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             close |= ui.button(if *deleted { tl!("Close") } else { tl!("Cancel") }).clicked();
         });
     });

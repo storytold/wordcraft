@@ -114,6 +114,24 @@ pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
 /// A pane's place and size: Styles' from `view.stylesPaneDock` and its own preferences, the
 /// others' from `panePlaces`.
 pub(super) fn pane_state(app: &WordApp, pane: Pane) -> PaneState {
+    let mut state = unmirrored_state(app, pane);
+    state.place = mirrored(state.place);
+    state
+}
+
+/// A place seen from the interface's reading direction: in a right-to-left language the pane
+/// host's start edge is the window's right side, so a pane saved as docked "left" (the side
+/// reading starts from) is drawn at the right, and the reverse. Applying it twice gives the
+/// place back, so it also turns a requested place into the saved one.
+pub(super) fn mirrored(place: Place) -> Place {
+    match place {
+        Place::Docked(Edge::Start) if crate::rtl::on() => Place::Docked(Edge::End),
+        Place::Docked(Edge::End) if crate::rtl::on() => Place::Docked(Edge::Start),
+        other => other,
+    }
+}
+
+fn unmirrored_state(app: &WordApp, pane: Pane) -> PaneState {
     if pane == Pane::Styles {
         return styles_state(app);
     }

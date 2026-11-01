@@ -388,7 +388,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
         ui.horizontal(|ui| {
             let name = f.selected.map(|c| format!("U+{:04X}", c as u32)).unwrap_or_default();
             ui.label(egui::RichText::new(name).font(semibold(12.0)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                 ui.label(tl!("from Unicode (hex)"));
                 let resp = ui.add(egui::TextEdit::singleline(&mut f.code).desired_width(70.0).font(egui::TextStyle::Monospace));
                 if resp.changed() {
@@ -427,7 +427,7 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
 fn special_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm, insert: &mut Option<(Value, String, String)>, t: &Tokens) -> bool {
     let mut double = false;
     egui::ScrollArea::vertical().id_salt("special_chars").max_height(CELL * GRID_ROWS as f32 + 60.0).auto_shrink([false, false]).show(ui, |ui| {
-        egui::Grid::new("special_grid").num_columns(3).striped(true).spacing(vec2(14.0, 4.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("special_grid").num_columns(3).striped(true).spacing(vec2(14.0, 4.0)), |ui| {
             ui.label(egui::RichText::new(tl!("Character")).font(semibold(12.0)));
             ui.label("");
             ui.label(egui::RichText::new(tl!("Shortcut key:")).font(semibold(12.0)));

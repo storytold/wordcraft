@@ -148,7 +148,7 @@ impl PaneContent<Pane> for Content<'_> {
 
     fn body(&mut self, ui: &mut Ui, pane: &Pane) {
         let app = &mut *self.app;
-        match pane {
+        crate::rtl::root(ui, |ui| match pane {
             Pane::SmartArtText => crate::dialogs_smart_art::text_pane(app, ui),
             Pane::Navigation => nav(app, ui),
             Pane::Clipboard => clipboard(app, ui),
@@ -161,7 +161,7 @@ impl PaneContent<Pane> for Content<'_> {
             }
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
             Pane::Comments => comments(app, ui),
-        }
+        })
     }
 
     fn default_state(&self, pane: &Pane) -> PaneState {

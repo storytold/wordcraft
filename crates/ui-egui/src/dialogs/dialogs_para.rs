@@ -196,7 +196,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
     let u = unit();
     let k = u.pt_per_unit();
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(tl!("New")).clicked() {
                     f.new_stop();
@@ -283,7 +283,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                                         f.set_leader(i, l);
                                         pick = Some(i);
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                                         ui.add_space(10.0); // clear of the scrollbar
                                         if ui.add(egui::Button::new("×").small().frame(false)).on_hover_text(tl!("Clear")).clicked() {
                                             remove = Some(i);
@@ -320,7 +320,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
             }
         });
         ui.add_space(12.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_min_width(130.0);
             let default_label = ui.label(tl!("Default tab stops:"));
             ui.add(egui::DragValue::new(&mut f.default_tab).speed(0.05).range(1.0 / k..=1584.0 / k).measure(u).max_decimals(2))
@@ -617,8 +617,8 @@ impl From<bool> for Target {
 /// Setting, style, colour and width on the left; the preview with its side toggles on the right.
 fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rgb>, target: Target) {
     let between = target == Target::Paragraph;
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Setting:")).font(semibold(12.5)));
             for (s, label) in
                 [(Setting::None, "None"), (Setting::Box, "Box"), (Setting::Shadow, "Shadow"), (Setting::ThreeD, "3-D"), (Setting::Custom, "Custom")]
@@ -629,7 +629,7 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
             }
         });
         ui.add_space(8.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Style:"));
             let current = STYLES.iter().find(|(s, _)| *s == l.style).map(|(_, n)| *n).unwrap_or("Single");
             craft_ui::ComboBox::from_id_salt((id, "style")).selected_text(tl!(current)).width(120.0).show_ui(ui, |ui| {
@@ -650,7 +650,7 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
                 });
         });
         ui.add_space(8.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Preview")).font(semibold(12.5)));
             if let Some(side) = preview(ui, l, fill, target) {
                 l.toggle(side);

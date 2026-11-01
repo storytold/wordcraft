@@ -24,7 +24,10 @@ pub use kurbo::BezPath;
 pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk, ui_uncovered_cjk};
+pub use ui_fallback::{
+    SystemUiFont, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk,
+    ui_uncovered_cjk,
+};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).
@@ -96,6 +99,18 @@ pub fn ui_cjk_fonts_for(prefer_hans: bool, prefer_korean: bool) -> Vec<&'static 
     } else {
         ja.chain(zh).chain(ko).collect()
     }
+}
+
+/// The craft-fonts faces for Arabic script (`"Arab"`), in manifest order: the document fallback
+/// for Arabic text. Empty without craft-fonts.
+pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab"))
+}
+
+/// The craft-fonts faces for Arabic script (`"Arab"`), Regular styles only: the interface's
+/// fallback for an Arabic interface and for Arabic file names. Empty without craft-fonts.
+pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
+    arabic_fonts().filter(|f| f.style == "Regular").collect()
 }
 
 /// The bundled serif used when a document asks for nothing better.
@@ -512,6 +527,31 @@ mod tests {
         let latin = db.face(DEFAULT_FAMILY, "Regular");
         let fb = db.fallback_for('語', latin.id()).unwrap();
         assert!(fb.family.contains("Mincho"), "{fb:?}");
+    }
+
+    /// Arabic text in a document needs no system font: the craft-fonts Arabic face is the
+    /// fallback (the browser build has no other), and its letters join when shaped.
+    #[test]
+    fn craft_fonts_arabic_face_is_the_document_fallback_for_arabic() {
+        if arabic_fonts().next().is_none() {
+            eprintln!("skipped: built without a craft-fonts Arabic face (set CRAFT_FONTS_DIR to a checkout)");
+            return;
+        }
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let latin = db.face(DEFAULT_FAMILY, "Regular");
+        for ch in "ابتثجحخدذرزسشصضطظعغفقكلمنهويءآأإةى،؛؟٠١٢٣٤٥٦٧٨٩ًٌٍَُِّْ".chars() {
+            assert!(!latin.covers(ch), "the bundled serif has no Arabic");
+            let fb = db.fallback_for(ch, latin.id()).unwrap_or_else(|| panic!("no fallback for {ch}"));
+            assert!(fb.family.contains("Arabic"), "{ch}: {}", fb.family);
+        }
+        let face = db.fallback_for('ع', latin.id()).unwrap();
+        // Joined forms: the same letter gets a different glyph alone and inside a word.
+        let alone = shape(&face, "ع", &[], |c| c);
+        let joined = shape(&face, "ععع", &[], |c| c);
+        assert_eq!((alone.len(), joined.len()), (1, 3));
+        assert!(joined.iter().all(|g| g.gid != 0));
+        assert!(joined.iter().any(|g| g.gid != alone[0].gid), "letters take their joining forms");
     }
 
     #[test]
