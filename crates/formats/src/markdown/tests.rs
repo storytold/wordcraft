@@ -558,6 +558,25 @@ fn ordered_list_keeps_start_number() {
     assert_eq!(export(&import("5. a\n6. b")).trim_end(), "5. a\n6. b");
 }
 
+/// A list inside a block quote stays in the quote: its items were imported as quoted list
+/// paragraphs but written back without `>`, so the list moved out of the quote.
+#[test]
+fn a_list_inside_a_quote_stays_quoted() {
+    let src = "> Intro\n>\n> - one\n> - two\n>   - nested\n> 1. first\n\nAfter.\n";
+    let want = "> Intro\n\n> - one\n> - two\n>     - nested\n> 1. first\n\nAfter.";
+    let md = export(&import(src));
+    assert_eq!(md.trim_end(), want);
+    assert_eq!(export(&import(&md)).trim_end(), want, "and stays so when read back");
+    // An item's continuation line is quoted too.
+    assert_eq!(export(&import("> - a\\\n>   b\n")).trim_end(), "> - a\\\n>   b");
+    // A list outside a quote is unchanged.
+    assert_eq!(export(&import("- one\n- two\n")).trim_end(), "- one\n- two");
+    // A list after a quoted list stays outside the quote.
+    let md = export(&import("> - a\n\n2. b\n"));
+    assert_eq!(md.trim_end(), "> - a\n\n2. b");
+    assert_eq!(export(&import(&md)).trim_end(), "> - a\n\n2. b", "and stays so when read back");
+}
+
 #[test]
 fn lines_after_line_break_stay_in_paragraph() {
     use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
