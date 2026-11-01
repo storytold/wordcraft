@@ -596,7 +596,7 @@ impl Dialog {
                     font_ea_was: font_ea.clone(),
                     font_ea,
                     asian,
-                    size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
+                    size: st.get("size").and_then(Value::as_f64).map(|v| crate::font_sizes::label(v, crate::i18n::current())).unwrap_or_default(),
                     bold: b("bold"),
                     italic: b("italic"),
                     underline: b("underline"),
