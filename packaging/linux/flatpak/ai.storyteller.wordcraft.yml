@@ -18,6 +18,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: wordcraft
 finish-args:
+  - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
@@ -25,18 +26,71 @@ finish-args:
   - --share=ipc
   # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
   - --device=dri
+  # Printing: lpstat/lp (the cups-client module) reach the host's CUPS through its socket and
+  # find driverless network printers through Avahi (`lpstat -e`). Without these the Print
+  # dialog lists no printers.
+  - --socket=cups
+  - --system-talk-name=org.freedesktop.Avahi
+  # The user's CUPS settings, read-only: their default printer and saved options (lpoptions)
+  # and a print server named in their client.conf, which lp reaches over the network.
+  - --filesystem=~/.cups:ro
   # Open/Save dialogs go through the file-chooser portal (rfd's xdg-portal backend) and
   # drag-and-drop through the document portal, so picked files work anywhere without broad
   # filesystem access. Documents and Pictures are granted so files passed by path (the command
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-documents
   - --filesystem=xdg-pictures
-  # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.wordcraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Network: update checks reach GitHub. Shared host network namespace, so the optional
+  # --control server's 127.0.0.1 listener is reachable from the host as well.
+  - --share=network
+  # Deliberately not granted: home/host filesystem access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
 modules:
+  # CUPS client tools for craft-print: the runtime has libcups but not lpstat/lp/lpoptions.
+  # Linked statically against this release's libcups, so a runtime update can't break them;
+  # the socket path matches the host's, which --socket=cups mounts.
+  - name: cups-client
+    buildsystem: simple
+    build-commands:
+      - ./configure --prefix=/app --sysconfdir=/etc --localstatedir=/var --with-rundir=/run/cups
+        --with-domainsocket=/run/cups/cups.sock --disable-shared --with-components=libcups
+        --with-dnssd=avahi --with-tls=gnutls --disable-pam --disable-dbus
+      - make -C cups libs
+      - make -C systemv lp lpoptions lpstat
+      - install -Dm755 -t /app/libexec/cups systemv/lp systemv/lpoptions systemv/lpstat
+      - for tool in lp lpoptions lpstat; do install -Dm755 cups-socket.sh "/app/bin/$tool"; done
+      - install -Dm644 -t /app/share/licenses/cups LICENSE NOTICE
+    sources:
+      - type: archive
+        url: https://github.com/OpenPrinting/cups/releases/download/v2.4.20/cups-2.4.20-source.tar.gz
+        sha256: ab4d9cd7f3e58060091d2b24972223d6401675f11c49b65abf4f6ef31dea22ff
+      # Runs each tool. Flatpak mounts the host's CUPS socket at /var/run/cups/cups.sock, choosing
+      # it as flatpak-run-cups.c does from the host's CUPS_SERVER, else the first line spelled
+      # exactly `ServerName /path` in ~/.cups/client.conf, else the default; it mounts nothing
+      # when that socket is missing. CUPS reads the keyword in any case and takes the last
+      # ServerName. When CUPS' socket from client.conf is the one Flatpak chose, it is pointed at
+      # the mount; when it isn't, the tool fails rather than reach a different server. A
+      # CUPS_SERVER is left alone: one set by `flatpak run --env` may not be what was mounted.
+      - type: script
+        dest-filename: cups-socket.sh
+        commands:
+          - 'conf="$HOME/.cups/client.conf"'
+          - 'if [ -z "${CUPS_SERVER:-}" ] && [ -r "$conf" ]; then'
+          - '  server=$(sed -n ''s/^[[:space:]]*[Ss][Ee][Rr][Vv][Ee][Rr][Nn][Aa][Mm][Ee][[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p'' "$conf" | tail -n 1)'
+          - '  case "$server" in'
+          - '    /*)'
+          - '      mounted=$(sed -n ''s/^[[:space:]]*ServerName \(.*\)$/\1/p'' "$conf" | sed ''s/^[[:space:]]*//'' | grep -m 1 ''^/[^:]*$'')'
+          - '      if [ "$mounted" = "$server" ]; then'
+          - '        export CUPS_SERVER=/var/run/cups/cups.sock'
+          - '      else'
+          - '        echo "${0##*/}: ~/.cups/client.conf names the CUPS socket $server, but Flatpak gave this app ${mounted:-a different one}; give each socket one ServerName line, spelled ServerName" >&2'
+          - '        exit 1'
+          - '      fi'
+          - '      ;;'
+          - '  esac'
+          - 'fi'
+          - 'exec "/app/libexec/cups/${0##*/}" "$@"'
   - name: wordcraft
     buildsystem: simple
     build-options:
