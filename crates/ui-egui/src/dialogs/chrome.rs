@@ -48,12 +48,43 @@ const DIALOG_CENTRED_FRAMES: u8 = 2;
 /// the bottom edge and the tab strip stays under the mouse (#507). It is no longer anchored after
 /// that, so dragging the title bar moves it (#732). egui keeps it on screen if it grows past the
 /// bottom.
+///
+/// When that centre is off screen (the window is partly past a monitor's edge), the dialog is
+/// centred on the part of the window that is on screen instead, and a window too far off screen
+/// to hold it there moves back once, as it opens (#4842).
 fn place_dialog<'a>(ctx: &egui::Context, id: egui::Id, w: egui::Window<'a>) -> egui::Window<'a> {
     let w = w.pivot(egui::Align2::CENTER_TOP);
-    match ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())) {
-        Some((open, frames)) if open == id && frames >= DIALOG_CENTRED_FRAMES => w,
-        _ => w.anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0)),
+    let frames = match ctx.data(|d| d.get_temp::<(egui::Id, u8)>(dialog_top_key())) {
+        Some((open, frames)) if open == id => frames,
+        _ => 0,
+    };
+    if frames >= DIALOG_CENTRED_FRAMES {
+        return w;
     }
+    let offset = vec2(0.0, -40.0);
+    let Some(placement) = on_screen_placement(ctx, id, offset) else {
+        return w.anchor(egui::Align2::CENTER_CENTER, offset);
+    };
+    // The frame after the measuring one: the size is known, and this is the frame it is
+    // placed on. Move the window once, there.
+    if frames == DIALOG_CENTRED_FRAMES - 1
+        && placement.window_shift != egui::Vec2::ZERO
+        && let Some(outer) = ctx.input(|i| i.viewport().outer_rect)
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(outer.min + placement.window_shift));
+    }
+    w.anchor(egui::Align2::CENTER_CENTER, offset + placement.dialog_shift)
+}
+
+/// Where the dialog `id` goes when its usual place (centred, `offset` from the centre) is off
+/// screen: `None` while its size isn't measured yet, where the window's position or the
+/// monitors aren't known (Wayland, the web, tests), and while that place is on screen.
+fn on_screen_placement(ctx: &egui::Context, id: egui::Id, offset: egui::Vec2) -> Option<crate::window_geometry::DialogPlacement> {
+    let size = ctx.memory(|m| m.area_rect(id))?.size();
+    let content = ctx.input(|i| i.viewport().inner_rect)?;
+    let monitors = crate::window_geometry::monitors_in_points(ctx);
+    let local = egui::Align2::CENTER_CENTER.align_size_within_rect(size, ctx.content_rect()).translate(offset);
+    crate::window_geometry::place_dialog_on_screen(content, &monitors, local.translate(content.min.to_vec2()))
 }
 
 /// After a frame of a dialog: counts the frames it has been centred for.

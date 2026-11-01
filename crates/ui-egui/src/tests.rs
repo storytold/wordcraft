@@ -2876,6 +2876,64 @@ fn a_direct_close_keeps_unsaved_changes_unless_forced() {
     assert!(!a.has_document() && !a.quit_requested);
 }
 
+/// #4842: closing a window that is partly off screen asks on the part of it that is on screen,
+/// and a window almost all off screen moves back far enough to show the prompt. A window on
+/// screen (a monitor left of the primary one included) shows it centred as before.
+#[test]
+fn the_close_prompt_opens_on_the_visible_part_of_the_window() {
+    let primary = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0));
+    let left = egui::Rect::from_min_size(egui::pos2(-1920.0, 0.0), egui::vec2(1920.0, 1080.0));
+    let size = egui::vec2(1440.0, 900.0);
+    let id = egui::Id::unique(("dialog", "WordCraft"));
+    // Opens the prompt in a window at `at` and returns its rect (in the window) and the window
+    // moves asked for while it opened.
+    let open = |at: egui::Pos2, monitors: Vec<egui::Rect>| {
+        let mut h = harness(typed());
+        let window = egui::Rect::from_min_size(at, size);
+        if let Some(v) = h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT) {
+            v.inner_rect = Some(window);
+            v.outer_rect = Some(window);
+        }
+        crate::window_geometry::set_monitors(&h.ctx, monitors);
+        h.step();
+        assert!(!h.state_mut().close_requested(), "the window's close button asks first");
+        let mut moves = Vec::new();
+        for _ in 0..6 {
+            h.step();
+            let commands = h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+            moves.extend(commands.into_iter().filter_map(|c| match c {
+                egui::ViewportCommand::OuterPosition(p) => Some(p),
+                _ => None,
+            }));
+        }
+        assert_eq!(prompt(h.state()), Some("saveChanges"));
+        (h.ctx.memory(|m| m.area_rect(id)).expect("the prompt is open"), moves)
+    };
+    let (centred, moves) = open(egui::pos2(200.0, 100.0), vec![primary]);
+    assert!(moves.is_empty());
+    assert!((centred.center().x - size.x / 2.0).abs() < 1.0, "on screen it is centred: {centred:?}");
+    assert_eq!(open(egui::pos2(-1700.0, 100.0), vec![left, primary]), (centred, vec![]), "on the left monitor too");
+    assert_eq!(open(egui::pos2(200.0, 100.0), vec![]).0, centred, "no monitors known: centred");
+
+    // 700 of the window's 1440 points past the left edge: centred on the 740 that show.
+    let at = egui::pos2(-700.0, 100.0);
+    let (r, moves) = open(at, vec![primary]);
+    assert!(moves.is_empty(), "{moves:?}");
+    let on_screen = r.translate(at.to_vec2());
+    assert!(primary.contains_rect(on_screen), "{on_screen:?}");
+    assert!((on_screen.center().x - 370.0).abs() < 1.0, "{on_screen:?}");
+    assert_eq!(r.top(), centred.top(), "only across");
+
+    // Only 40 points on screen: the prompt goes to the window's right edge and the window
+    // comes on screen just far enough to show it.
+    let at = egui::pos2(-1400.0, 100.0);
+    let (r, moves) = open(at, vec![primary]);
+    let [to] = moves[..] else { panic!("one move: {moves:?}") };
+    assert_eq!(to.y, at.y);
+    let after = r.translate(to.to_vec2());
+    assert!(primary.contains_rect(after) && after.left() < 1.0, "{after:?}");
+}
+
 /// The window's close button quit at once; now it asks (the host cancels the close on false).
 #[test]
 fn window_close_asks_first() {
