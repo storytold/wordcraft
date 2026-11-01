@@ -67,7 +67,8 @@ pub(crate) use reading::turn_read_page;
 #[cfg(test)]
 use reading::{READ_NAV_BAR, RESIZE_SETTLE, place_read_pages};
 use reading::{
-    Settle, read_wheel_turns, reading_anchor_page, reading_animation_step, reading_page_start, reading_size, reading_viewport, web_layout_width,
+    Settle, read_touch_turns, read_wheel_turns, reading_anchor_page, reading_animation_step, reading_page_start, reading_size, reading_viewport,
+    web_layout_width,
 };
 use rulers::rulers;
 #[cfg(test)]
@@ -190,6 +191,8 @@ pub struct CanvasState {
     pub(crate) ink_ui: crate::ink::InkUi,
     /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
     pub(crate) wheel: crate::scroll::CanvasScroll,
+    /// One-finger touch gestures: pan, tap and long-press selection (#1503, #2155).
+    pub(crate) touch: crate::touch::TouchDrag,
     /// Middle-click scrolling (#1065).
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
@@ -314,6 +317,17 @@ impl CanvasState {
         self.unit_drag = None;
     }
 
+    /// The press belongs to a finger: no pointer drag it started may go on — not text
+    /// selection, an object move or crop, or a table border or selection-area drag (#1503,
+    /// #2155). A web press is cleaned here when its `Touch Start` adopts it a frame later.
+    pub(crate) fn cancel_pointer_drags(&mut self) {
+        self.cancel_text_drag();
+        self.obj_drag = None;
+        self.crop_drag = None;
+        self.table_resize = None;
+        self.table_drag = None;
+    }
+
     /// The object a drag has taken off its page: which page, and which object. `None` unless an
     /// object is being **moved** (resizing and turning show the object itself where it is).
     ///
@@ -402,6 +416,7 @@ impl Default for CanvasState {
             alt_code: String::new(),
             alt_code_echo: None,
             wheel: Default::default(),
+            touch: Default::default(),
             auto_scroll: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
@@ -606,16 +621,53 @@ fn update_caret_scroll(app: &mut WordApp, view: &CanvasView) -> Option<Rect> {
 
 struct ScrollMotion {
     wheel: egui::Vec2,
+    touch: egui::Vec2,
     auto: egui::Vec2,
     middle: egui::Vec2,
 }
 
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
+    // Touch first: a finger produces pointer events, not wheel events. eframe's web runner also
+    // runs a frame inside pointerdown, before touchstart, so adopt a press when the finger's
+    // Touch Start arrives a frame later (#1503).
+    let touch_start = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    if let Some(pos) = touch_start
+        && app.canvas.touch.adopt(pos, ui.input(|i| i.time))
+    {
+        // The pointerdown frame may have started a text, object or table drag: the finger owns
+        // the gesture now (#1503, #2155).
+        app.canvas.cancel_pointer_drags();
+    }
+    let reading = app.session.view.read_mode;
+    let long_press = ui.ctx().options(|o| o.input_options.max_click_duration);
+    let mut touch_delta = ui.input(|i| app.canvas.touch.advance(i, i.unstable_dt, long_press, !reading));
+    if let Some(before) = app.canvas.touch.take_restore() {
+        app.session.sel = before;
+        // A pan (or a pinch) is not the first tap of a double-tap.
+        app.canvas.last_press = None;
+    }
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
     let wheel_delta = if app.session.view.read_mode {
+        // A finger's horizontal travel turns reading columns like a touchpad's — but a dialog
+        // owns the pointer, and a swipe must not turn the page behind it.
+        if app.dialog.is_some() {
+            app.canvas.touch.cancel();
+            touch_delta = egui::Vec2::ZERO;
+        } else if touch_delta != egui::Vec2::ZERO {
+            let turns = read_touch_turns(touch_delta.x, &mut app.canvas.read_wheel_accum);
+            for _ in 0..turns.unsigned_abs() {
+                turn_read_page(app, turns.signum() as f32);
+            }
+            touch_delta = egui::Vec2::ZERO;
+        }
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {
             turn_read_page(app, turns.signum() as f32);
@@ -661,15 +713,20 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
     // Middle-click scrolling (#1065): Print Layout and the other editing views, not Read Mode.
     let middle_delta = if app.session.view.read_mode || app.dialog.is_some() {
         app.canvas.auto_scroll.cancel();
+        if app.dialog.is_some() {
+            // A modal dialog owns the pointer; a finger that was panning must not scroll the
+            // document behind it.
+            app.canvas.touch.cancel();
+        }
         egui::Vec2::ZERO
     } else {
         app.canvas.auto_scroll.update(ui, view.area)
     };
-    ScrollMotion { wheel: wheel_delta, auto: auto_delta, middle: middle_delta }
+    ScrollMotion { wheel: wheel_delta, touch: touch_delta, auto: auto_delta, middle: middle_delta }
 }
 
 fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> egui::ScrollArea {
-    let delta = motion.wheel + motion.auto + motion.middle;
+    let delta = motion.wheel + motion.touch + motion.auto + motion.middle;
     // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
     // momentum, wheel notches eased in (or all at once with animation effects off). Applied
     // before drawing, so it shows this frame. In reading mode, wheel and touchpad events turn
@@ -693,8 +750,9 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
             None if app.session.view.read_mode => snapped.clamp(egui::Vec2::ZERO, app.canvas.scroll_max),
             None => clamped_scroll(before, delta, app.canvas.scroll_max),
         };
-        if after == before && motion.wheel != egui::Vec2::ZERO {
+        if after == before && (motion.wheel != egui::Vec2::ZERO || motion.touch != egui::Vec2::ZERO) {
             app.canvas.wheel.hit_edge();
+            app.canvas.touch.cancel_momentum();
         }
         if motion.auto != egui::Vec2::ZERO && after != before {
             // The scroll keeps going without new input.
@@ -702,7 +760,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
         }
         scroll_area = scroll_area.scroll_offset(after);
     }
-    if app.canvas.wheel.is_animating() {
+    if app.canvas.wheel.is_animating() || app.canvas.touch.is_animating() {
         ui.ctx().request_repaint();
     }
     scroll_area

@@ -1,6 +1,6 @@
 # Hardware parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-30 · **Change:** trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-01 · **Change:** trivial (Touch screens and touchpads: tap, one-finger pan with inertia, long-press selection, pinch zoom, touchpad inertial scroll | ✅ | ✅ one-finger pan with inertia, tap, long-press selection (#1503, #2155) and pinch (#179); touchpad inertia (#252). Synthetic pointer/touch events; a physical-screen pass is); previously trivial (only the PDF sent to the printer has no link annotations; Save these pages as PDF keeps them, #4734); previously trivial (a document with links prints: the print job's PDF has no link annotations, #4734; previously trivial: Pen / stylus row: two-stroke and closed-head arrows; previously trivial: Pen / stylus row: ink, eraser and Ink to Shape incl. arrows landed; previously trivial: a window too big for its screen shrinks to fit when it opens, #1215; previously trivial: 32-bit Windows starts on OpenGL; previously major: first version) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4 and Word for Windows
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
@@ -18,7 +18,7 @@ pens, microphones (Dictate) and speakers (Read Aloud), and displays.
 | Multiple monitors, per-monitor DPI, remembered window position, a window that fits its screen | ✅ | ✅ (#38, #76, #1215) | ✅ (winit DPI fix pending, #155) | ✅ | — | 85% | 1 |
 | Microphone: Dictate | ✅ (cloud speech service) | ❌ | ❌ | ❌ | ❌ | 0% | 8–15 + owner (speech model choice) |
 | Speakers: Read Aloud | ✅ | ✅ system speech, speed, sentence skip (#190) | ✅ | 🟡 | 🟡 | 75% | 1–2 |
-| Touch screens and touchpads: pinch zoom, inertial scroll | ✅ | ✅ pinch (#179) | ✅ | ✅ inertial scroll (#252) | ✅ | 85% | 0–1 |
+| Touch screens and touchpads: tap, one-finger pan with inertia, long-press selection, pinch zoom, touchpad inertial scroll | ✅ | ✅ one-finger pan with inertia, tap, long-press selection (#1503, #2155) and pinch (#179); touchpad inertia (#252). Synthetic pointer/touch events; a physical-screen pass is still owed | ✅ same | ✅ same | ✅ same | 90% | 0–1 |
 | Scanners/cameras (Insert from device / Continuity Camera on Mac) | ✅ | ❌ | ❌ | ❌ | ❌ | 0% | 2–4 |
 
 ## Revision history
@@ -27,6 +27,7 @@ pens, microphones (Dictate) and speakers (Read Aloud), and displays.
 |---|---|---|
 | 2026-10-30 | trivial | Only the PDF sent to the printer leaves out link annotations; Save these pages as PDF (`file.printPdf`) keeps them (#4734) |
 | 2026-10-29 | trivial | A document with links prints: the print job's PDF leaves out link annotations, which the spooler refused to fit to the paper (#4734) |
+| 2026-10-18 | minor | Touch screens: a one-finger drag pans the page 1:1 and coasts, a tap places the caret, a long press starts a selection and a pinch zooms without selecting (#1503, #2155). Tested with synthetic pointer/touch events; a physical-screen pass is still owed |
 | 2026-10-15 | trivial | Pen / stylus row: Ink to Shape also makes two-stroke arrows and arrows with a closed triangle head |
 | 2026-10-17 | minor | File › Print's Scale to paper size (#2108): pick Letter, Legal, A4 or any Layout › Size paper and every page is scaled to it and centred, the paper turned to each page's orientation, in the preview, the print job (with the spooler's media) and Save these pages as PDF; the document keeps its page size. `paper` param on `ui.print`/`file.printPdf` |
 | 2026-10-14 | trivial | Pen / stylus row corrected: ink, eraser and Ink to Shape (with arrows) work; pressure and Ink to Math missing |

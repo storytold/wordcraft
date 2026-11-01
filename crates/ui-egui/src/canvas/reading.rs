@@ -174,3 +174,19 @@ pub(super) fn read_wheel_turns(events: &[egui::Event], hovered: bool, accum: &mu
     }
     turns.clamp(-5, 5)
 }
+
+/// A finger's horizontal travel turns reading columns like a touchpad's pixels: 55 points a
+/// column, discarding the excess so a long swipe doesn't turn several at once on the next move.
+pub(super) fn read_touch_turns(dx: f32, accum: &mut f32) -> i32 {
+    if !dx.is_finite() {
+        return 0;
+    }
+    *accum = (*accum + dx).clamp(-300.0, 300.0);
+    if accum.abs() >= 55.0 {
+        let turns = -accum.signum() as i32;
+        *accum = 0.0;
+        turns
+    } else {
+        0
+    }
+}
