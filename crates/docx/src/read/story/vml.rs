@@ -296,10 +296,24 @@ impl Reader<'_> {
         let kind = kind?;
         let mut extra = ShapeExtra { cap, ..Default::default() };
         if kind == ShapeKind::Line {
-            // Arrowheads (`v:stroke` startarrow / endarrow): any but `none` is drawn.
-            let arrow = |name: &str| shape.child("v:stroke").and_then(|s| s.attr(name)).is_some_and(|v| v != "none");
-            extra.arrow_start = arrow("startarrow");
-            extra.arrow_end = arrow("endarrow");
+            // Arrowheads (`v:stroke` startarrow / endarrow, with their width and length): any but
+            // `none` is drawn.
+            use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+            let stroke = shape.child("v:stroke");
+            let arrow = |end: &str| {
+                let s = stroke?;
+                let kind = s.attr(&format!("{end}arrow")).filter(|v| *v != "none")?;
+                let size = |what: &str| ArrowSize::from_vml(s.attr(&format!("{end}arrow{what}")).unwrap_or("medium"));
+                Some(ArrowStyle { kind: ArrowKind::from_vml(kind), width: size("width"), length: size("length") })
+            };
+            if let Some(style) = arrow("start") {
+                extra.arrow_start = true;
+                extra.start_style = style;
+            }
+            if let Some(style) = arrow("end") {
+                extra.arrow_end = true;
+                extra.end_style = style;
+            }
         }
         if shape.local() == "line" {
             // A line runs `from` → `to` (points, offsets from where its style places it). A preset
