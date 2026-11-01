@@ -178,12 +178,29 @@ impl Temporary {
         self.file.as_mut().ok_or_else(|| io::Error::other("save temporary file is closed"))
     }
 
-    fn commit(mut self, destination: &Path) -> io::Result<()> {
+    fn commit(self, destination: &Path) -> io::Result<()> {
+        self.commit_with(destination, |from, to| fs::rename(from, to))
+    }
+
+    fn commit_with(mut self, destination: &Path, rename: impl Fn(&Path, &Path) -> io::Result<()>) -> io::Result<()> {
         // Close before replacement, including on Windows.
         drop(self.file.take());
-        fs::rename(&self.path, destination)?;
+        let replacing = fs::symlink_metadata(destination).is_ok();
+        let Err(failed) = rename(&self.path, destination) else {
+            self.committed = true;
+            return Ok(());
+        };
+        if !replacing || fs::symlink_metadata(destination).is_ok() {
+            return Err(failed);
+        }
+        // A share can delete the destination and then fail (#4931), so this is the only copy on
+        // disk. Nothing is in the way now; if the move still fails, the file stays where it is.
         self.committed = true;
-        Ok(())
+        if rename(&self.path, destination).is_ok() {
+            return Ok(());
+        }
+        let why = format!("The file is no longer in its folder, and a complete copy is at {}.", self.path.display());
+        Err(guided(failed, &why))
     }
 }
 
@@ -256,6 +273,86 @@ mod tests {
         second.commit(&path).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"Second complete save.");
         assert_eq!(fs::read_dir(&d.0).unwrap().count(), 1);
+    }
+
+    /// A prepared temporary file holding `bytes`, ready to replace `path`.
+    fn prepared(path: &Path, bytes: &[u8]) -> Temporary {
+        let mut temp = Temporary::create(path, true).unwrap();
+        temp.file().unwrap().write_all(bytes).unwrap();
+        temp
+    }
+
+    fn busy() -> io::Error {
+        io::Error::from_raw_os_error(16)
+    }
+
+    /// The temporary files left in `dir`.
+    fn leftovers(dir: &Path) -> Vec<PathBuf> {
+        let names = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path());
+        names.filter(|p| p.extension().is_some_and(|e| e == "tmp")).collect()
+    }
+
+    /// #4931: a replace that deletes the destination and then fails leaves the temporary file as
+    /// the only copy on disk. It stays, and the error says where it is.
+    #[test]
+    fn a_failed_replace_that_took_the_destination_keeps_the_only_copy() {
+        let d = Scratch::new();
+        let path = d.target();
+        fs::write(&path, b"Original bytes.").unwrap();
+        let err = prepared(&path, b"New bytes.")
+            .commit_with(&path, |_, to| {
+                let _ = fs::remove_file(to);
+                Err(busy())
+            })
+            .unwrap_err();
+        assert!(!path.exists());
+        let [kept] = leftovers(&d.0).try_into().unwrap();
+        assert_eq!(fs::read(&kept).unwrap(), b"New bytes.");
+        assert_eq!(err.raw_os_error(), None, "worded, as `guided` errors are");
+        assert_eq!(err.kind(), busy().kind());
+        assert!(err.to_string().contains(&kept.display().to_string()), "{err}");
+    }
+
+    /// With the destination gone, a plain move has nothing in its way, so the save still finishes.
+    #[test]
+    fn a_replace_that_took_the_destination_is_retried_as_a_move() {
+        let d = Scratch::new();
+        let path = d.target();
+        fs::write(&path, b"Original bytes.").unwrap();
+        prepared(&path, b"New bytes.")
+            .commit_with(&path, |from, to| {
+                if to.exists() {
+                    let _ = fs::remove_file(to);
+                    return Err(busy());
+                }
+                fs::rename(from, to)
+            })
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"New bytes.");
+        assert!(leftovers(&d.0).is_empty());
+    }
+
+    /// The bind mount case in #4931: the original is intact, so the temporary file isn't needed.
+    #[test]
+    fn a_failed_replace_that_left_the_destination_removes_the_temporary_file() {
+        let d = Scratch::new();
+        let path = d.target();
+        fs::write(&path, b"Original bytes.").unwrap();
+        let err = prepared(&path, b"New bytes.").commit_with(&path, |_, _| Err(busy())).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(16), "the plain error, with no copy to point at");
+        assert_eq!(fs::read(&path).unwrap(), b"Original bytes.");
+        assert!(leftovers(&d.0).is_empty());
+    }
+
+    /// A first save has no earlier version to lose, and the document is still open.
+    #[test]
+    fn a_failed_first_save_leaves_nothing() {
+        let d = Scratch::new();
+        let path = d.target();
+        let err = prepared(&path, b"New bytes.").commit_with(&path, |_, _| Err(busy())).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(16));
+        assert!(!path.exists());
+        assert!(leftovers(&d.0).is_empty());
     }
 
     /// Exports (`write_file`) replace the destination instead of truncating it in place: another

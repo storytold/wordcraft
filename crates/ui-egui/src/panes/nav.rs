@@ -23,7 +23,11 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
         app.ui.nav_tab = "results".into();
         ui.data_mut(|d| d.insert_temp(qid, q.clone()));
         if !q.is_empty() {
+            let before = app.session.sel.clone();
             let _ = app.session.run("edit.find", &json!({"text": q}));
+            if app.session.sel != before {
+                crate::mini_toolbar::put_away(app);
+            }
         } else {
             app.session.find.results.clear();
         }
@@ -67,6 +71,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 job.wrap.max_width = ui.available_width();
                 if ui.add(egui::Button::new(job).frame(false)).clicked() {
                     let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
+                    crate::mini_toolbar::put_away(app);
                 }
                 ui.separator();
             }
