@@ -515,7 +515,7 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
 /// F9 fills a body REF to a bookmark in a header, footer, footnote, endnote, comment or text box
 /// with the bookmarked text, and a PAGEREF with the page Word gives (measured in Word for
 /// Windows, every result stored as "stale"): a text box's anchor's page, a note's reference
-/// mark's page (the endnote is referred to on page 1, the footnote on page 3), and 1 for a
+/// mark's page (the endnote is referred to on page 2, the footnote on page 3), and 1 for a
 /// header, footer or comment.
 #[test]
 fn update_fields_finds_bookmarks_outside_the_body() {
@@ -536,8 +536,9 @@ fn update_fields_finds_bookmarks_outside_the_body() {
         r##"<w:r><w:pict><v:shape type="#_x0000_t202" style="position:absolute;margin-left:300pt;width:150pt;height:30pt"><v:textbox><w:txbxContent><w:p>{}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"##,
         mark("BOX", 6)
     );
-    body.push_str(r#"<w:p><w:r><w:t xml:space="preserve">Endnote </w:t></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>"#);
-    body.push_str(&format!("{page_break}<w:p><w:r><w:t>Two</w:t></w:r></w:p>{page_break}"));
+    body.push_str(&format!(
+        r#"{page_break}<w:p><w:r><w:t xml:space="preserve">Two </w:t></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>{page_break}"#
+    ));
     body.push_str(&format!(
         r#"<w:p>{}{text_box}<w:r><w:footnoteReference w:id="1"/></w:r><w:commentRangeStart w:id="0"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
         mark("BODY3", 7)
@@ -575,7 +576,7 @@ fn update_fields_finds_bookmarks_outside_the_body() {
     assert_eq!(s.layout().pages.len(), 3);
     update_fields(&mut s).unwrap();
     let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
-    let pages = ["1", "1", "3", "1", "1", "3", "3"];
+    let pages = ["1", "1", "3", "2", "1", "3", "3"];
     let expected: Vec<String> = names.iter().zip(pages).flat_map(|(n, p)| [format!("Target {n}"), p.to_string()]).collect();
     assert_eq!(got, expected);
 }
