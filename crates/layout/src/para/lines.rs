@@ -81,8 +81,11 @@ struct Scan {
     last_break: Option<usize>,
     /// The last non-hyphen break and the x after it.
     last_plain: Option<(usize, f32)>,
-    /// Where the space before the current word starts.
+    /// Where the spaces before the current word start.
     word_from: f32,
+    /// Where the current run of spaces starts; a zero-width marker in it (a bookmark, hidden
+    /// text) doesn't end it.
+    space_from: f32,
     /// After `hyph_limit` hyphenated lines in a row this one may not end with a hyphen.
     hyph_ok: bool,
     end: LineEnd,
@@ -95,17 +98,6 @@ struct Scan {
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
-}
-
-/// How wide the run of spaces ending with cluster `j` is, back to `c0` at most. A zero-width
-/// marker in it (a bookmark, hidden text) doesn't end the run.
-fn space_run(pl: &ParaLayout, c0: usize, j: usize) -> f32 {
-    (c0..=j)
-        .rev()
-        .map_while(|k| pl.clusters.get(k).filter(|c| matches!(c.kind, ClKind::Space | ClKind::Marker)))
-        .filter(|c| c.kind == ClKind::Space)
-        .map(|c| c.adv)
-        .sum()
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -283,6 +275,7 @@ impl<'e> Breaker<'e> {
             last_break: None,
             last_plain: None,
             word_from: left,
+            space_from: left,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
             end: LineEnd::Para,
             j: self.i,
@@ -834,6 +827,10 @@ impl Scan {
             return true;
         }
         self.xs.push(self.x);
+        let blank = |c: &Cluster| matches!(c.kind, ClKind::Space | ClKind::Marker);
+        if blank(c) && !(j > c0 && pl.clusters.get(j - 1).is_some_and(blank)) {
+            self.space_from = self.x;
+        }
         self.x += c.adv;
         if c.kind == ClKind::Space {
             self.space_w += c.adv;
@@ -895,7 +892,7 @@ impl Scan {
             self.last_plain = Some((j, self.x));
             // From the start of the spaces before the word, all of them: Word lets a word after a
             // run of spaces ("terms      and") overrun as far as the word and the run allow.
-            self.word_from = if matches!(c.kind, ClKind::Space | ClKind::Marker) { self.x - space_run(pl, self.c0, j) } else { self.x };
+            self.word_from = if matches!(c.kind, ClKind::Space | ClKind::Marker) { self.space_from } else { self.x };
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
             && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01
