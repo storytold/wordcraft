@@ -10324,7 +10324,9 @@ fn a_rejected_comparison_keeps_the_current_versions() {
     let end = s.doc.end_of(StoryRef::Body);
     s.doc.insert_object(&end, InlineObject::PermEnd { id: 1 }, &CharProps::default()).unwrap();
     let start = s.doc.start_of(StoryRef::Body);
-    s.doc.insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: s.author.clone() }, &CharProps::default()).unwrap();
+    s.doc
+        .insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: s.author.clone(), cols: None }, &CharProps::default())
+        .unwrap();
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
     let before = s.doc.clone();
 
@@ -10348,7 +10350,9 @@ fn a_mailing_result_beside_a_protected_document_keeps_its_file_identity() {
     let end = s.doc.end_of(StoryRef::Body);
     s.doc.insert_object(&end, InlineObject::PermEnd { id: 1 }, &CharProps::default()).unwrap();
     let start = s.doc.start_of(StoryRef::Body);
-    s.doc.insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: s.author.clone() }, &CharProps::default()).unwrap();
+    s.doc
+        .insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: s.author.clone(), cols: None }, &CharProps::default())
+        .unwrap();
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
     let before = s.doc.clone();
     let before_id = s.document_id();

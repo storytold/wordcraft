@@ -135,6 +135,20 @@ impl Reader<'_> {
         sc.pending.clear();
     }
 
+    /// The model id for an editing exception's file id `w:id`: the one it already has, or the
+    /// next free one. Bounded: a hostile file can't grow the map without end.
+    fn perm_id(&mut self, id: String) -> Option<u32> {
+        if let Some(n) = self.perms.get(&id) {
+            return Some(*n);
+        }
+        if self.perms.len() >= 100_000 {
+            return None;
+        }
+        let n = self.perms.len() as u32;
+        self.perms.insert(id, n);
+        Some(n)
+    }
+
     pub(super) fn marker(&mut self, e: &El) -> Option<InlineObject> {
         let id = e.attr("w:id").map(str::trim).unwrap_or("").to_string();
         match e.name.as_str() {
@@ -157,20 +171,18 @@ impl Reader<'_> {
                 .map(|name| InlineObject::BookmarkEnd { name }),
             "w:commentRangeStart" => self.comment_id(&id).map(|id| InlineObject::CommentStart { id }),
             "w:permStart" => {
-                // Bounded: a hostile file can't grow the map without end.
-                if self.perms.len() >= 100_000 {
-                    return None;
-                }
-                let n = self.perms.len() as u32;
-                let id = *self.perms.entry(id).or_insert(n);
+                let id = self.perm_id(id)?;
                 let text = |a: &str| e.attr(a).filter(|v| v.len() <= 256).unwrap_or("").to_string();
                 let (group, editor) = (text("w:edGrp"), text("w:ed"));
                 if group.is_empty() && editor.is_empty() {
                     return None;
                 }
-                Some(InlineObject::PermStart { id, group, editor })
+                Some(InlineObject::PermStart { id, group, editor, cols: perm_cols(e) })
             }
-            "w:permEnd" => self.perms.get(&id).map(|id| InlineObject::PermEnd { id: *id }),
+            // An end nothing started yet (an orphan, or one before its start) still gets an id,
+            // so it is kept and saved again; the model pairs only a start with a later end, so
+            // it opens nothing.
+            "w:permEnd" => self.perm_id(id).map(|id| InlineObject::PermEnd { id }),
             "w:commentRangeEnd" => {
                 let cid = self.comment_id(&id)?;
                 self.comments_ended.insert(cid);
@@ -291,6 +303,36 @@ impl Reader<'_> {
 
     // ---- tables ----
 
+    /// The range markers that come before `el` among its parent's children: they start the
+    /// content `el` holds, so they wait for its first paragraph.
+    fn pend_markers(&mut self, sc: &mut StoryCtx, marks: &[(&El, Vec<&El>)], el: &El) {
+        let Some((_, before)) = marks.iter().find(|(k, _)| std::ptr::eq(*k, el)) else { return };
+        for m in before {
+            if let Some(o) = self.marker(m) {
+                sc.pending.push(o);
+            }
+        }
+    }
+
+    /// The range markers after a row's last cell (or a table's last row): they end at the end
+    /// of that cell. With no cell to take them they wait for the next paragraph.
+    fn close_markers(&mut self, sc: &mut StoryCtx, tail: &[&El], cell: Option<&mut Cell>) {
+        if tail.is_empty() {
+            return;
+        }
+        let mut held = std::mem::take(&mut sc.pending);
+        for m in tail {
+            if let Some(o) = self.marker(m) {
+                sc.pending.push(o);
+            }
+        }
+        if let Some(cell) = cell {
+            self.flush_pending(sc, &mut cell.blocks);
+        }
+        held.append(&mut sc.pending);
+        sc.pending = held;
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
@@ -309,7 +351,12 @@ impl Reader<'_> {
         }
         let mut rows = Vec::new();
         collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
+        // Range markers between the rows (and between the cells, below) belong to the content
+        // that follows them, or — after the last row or cell — to the content before (#5075).
+        let (row_marks, table_tail) = range_markers(t, "w:tr");
         for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
+            self.pend_markers(sc, &row_marks, tr);
+            let (cell_marks, row_tail) = range_markers(tr, "w:tc");
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
             if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
@@ -319,6 +366,7 @@ impl Reader<'_> {
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
             for (tc, cell_controls) in tcs.into_iter().take(MAX_COLS) {
+                self.pend_markers(sc, &cell_marks, tc);
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
@@ -336,10 +384,12 @@ impl Reader<'_> {
                 self.flush_pending(sc, &mut blocks);
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
+            self.close_markers(sc, &row_tail, row.cells.last_mut());
             if !row.cells.is_empty() {
                 table.rows.push(row);
             }
         }
+        self.close_markers(sc, &table_tail, table.rows.last_mut().and_then(|r| r.cells.last_mut()));
         if table.rows.is_empty() {
             return None;
         }
@@ -349,4 +399,35 @@ impl Reader<'_> {
         }
         Some(table)
     }
+}
+
+/// A range's table columns (`w:colFirst`, `w:colLast`, §17.13.7.2), zero-based. One of the two
+/// alone limits the range to that one column; a pair in the wrong order is put right; a value
+/// that isn't a number is ignored. Clamped to the columns a table can have.
+fn perm_cols(e: &El) -> Option<[u32; 2]> {
+    let col = |a: &str| e.attr(a).and_then(|v| v.trim().parse::<u64>().ok()).map(|v| v.min(MAX_COLS as u64) as u32);
+    match (col("w:colFirst"), col("w:colLast")) {
+        (Some(a), Some(b)) => Some([a.min(b), a.max(b)]),
+        (Some(a), None) | (None, Some(a)) => Some([a, a]),
+        (None, None) => None,
+    }
+}
+
+/// The range markers (bookmarks, comment ranges, editing exceptions) among `parent`'s direct
+/// children: those before each `child` element, and those after the last one.
+fn range_markers<'a>(parent: &'a El, child: &str) -> (Vec<(&'a El, Vec<&'a El>)>, Vec<&'a El>) {
+    const MARKERS: [&str; 6] = ["w:bookmarkStart", "w:bookmarkEnd", "w:commentRangeStart", "w:commentRangeEnd", "w:permStart", "w:permEnd"];
+    let mut out = Vec::new();
+    let mut run: Vec<&El> = Vec::new();
+    for k in parent.els() {
+        if MARKERS.contains(&k.name.as_str()) {
+            // Bounded: a hostile row can't pile markers up without end.
+            if run.len() < 10_000 {
+                run.push(k);
+            }
+        } else if k.name == child && !run.is_empty() {
+            out.push((k, std::mem::take(&mut run)));
+        }
+    }
+    (out, run)
 }

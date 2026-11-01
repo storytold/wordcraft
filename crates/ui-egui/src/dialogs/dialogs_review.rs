@@ -739,16 +739,11 @@ fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str
         _ => "Only the allowed styles can be applied.",
     };
     ui.label(egui::RichText::new(tl!(what)).small());
-    let regions = app.session.doc.perm_ranges().iter().filter(|r| r.everyone() || r.editor.eq_ignore_ascii_case(&app.session.author)).count();
-    let fields = app.session.doc.fillable_controls() as u64;
-    if regions > 0 || fields > 0 {
+    // The engine's command decides whether there is a region to find (`review.nextEditableRegion`).
+    if app.session.why_disabled("review.nextEditableRegion").is_none() {
         ui.add_space(6.0);
-        if ui.button(tl!("Find Next Editable Region")).clicked() {
-            let from = app.session.sel.ordered().1;
-            if let Some((a, b)) = wordcraft_engine::cmd::protect::next_region(&app.session, &from) {
-                app.session.sel = wordcraft_engine::Selection { anchor: a, focus: b };
-                app.canvas.want_focus = true;
-            }
+        if ui.button(tl!("Find Next Editable Region")).clicked() && app.run("review.nextEditableRegion", json!({})).is_ok() {
+            app.canvas.want_focus = true;
         }
     }
     ui.add_space(10.0);

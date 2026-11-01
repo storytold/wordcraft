@@ -922,3 +922,318 @@ fn legacy_password_is_verified_and_unknown_forms_refused() {
     assert!(e.to_string().contains(super::UNSUPPORTED_PASSWORD));
     assert!(super::enforced(&s.doc));
 }
+
+// ---- #5075: permitted regions (`w:permStart`/`w:permEnd`) in files ----
+
+const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+
+/// A DOCX package with `body`, a header `header` (when not empty) referenced from the body's
+/// section, and `w:documentProtection` set to `mode`, enforced.
+fn protected_docx(body: &str, header: &str, mode: &str) -> Vec<u8> {
+    use std::io::Write;
+    const RELS: &str = r#"xmlns="http://schemas.openxmlformats.org/package/2006/relationships""#;
+    const TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let sect =
+        if header.is_empty() { String::new() } else { r#"<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr>"#.to_string() };
+    let mut parts = vec![
+        ("word/document.xml", format!(r#"<w:document {W_NS}><w:body>{body}{sect}</w:body></w:document>"#)),
+        ("word/settings.xml", format!(r#"<w:settings {W_NS}><w:documentProtection w:edit="{mode}" w:enforcement="1"/></w:settings>"#)),
+        (
+            "word/_rels/document.xml.rels",
+            format!(
+                r#"<Relationships {RELS}><Relationship Id="rIdS" Type="{TYPE}/settings" Target="settings.xml"/><Relationship Id="rIdH" Type="{TYPE}/header" Target="header1.xml"/></Relationships>"#
+            ),
+        ),
+        (
+            "_rels/.rels",
+            format!(r#"<Relationships {RELS}><Relationship Id="main" Type="{TYPE}/officeDocument" Target="word/document.xml"/></Relationships>"#),
+        ),
+    ];
+    if !header.is_empty() {
+        parts.push(("word/header1.xml", format!(r#"<w:hdr {W_NS}>{header}</w:hdr>"#)));
+    }
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, value) in parts {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(value.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// The text of part `name` in a DOCX package.
+fn part_text(bytes: &[u8], name: &str) -> String {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = String::new();
+    zip.by_name(name).unwrap().read_to_string(&mut out).unwrap();
+    out
+}
+
+fn para(inner: &str) -> String {
+    format!("<w:p>{inner}</w:p>")
+}
+
+fn run(text: &str) -> String {
+    format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+}
+
+/// A read-only file with an exception for everyone, one for a named editor, one limited to the
+/// second column of a table (its markers between the table's cells, as the schema allows), and
+/// one in the header.
+fn regions_file() -> Vec<u8> {
+    let cell = |t: &str| format!("<w:tc>{}</w:tc>", para(&run(t)));
+    let body = [
+        para(&run("Locked intro.")),
+        para(&format!(r#"<w:permStart w:id="907" w:edGrp="everyone"/>{}<w:permEnd w:id="907"/>"#, run("Open text."))),
+        para(&format!(r#"<w:permStart w:id="12" w:ed="alice@example.com"/>{}<w:permEnd w:id="12"/>"#, run("Alice only."))),
+        format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:permStart w:id="5" w:edGrp="everyone" w:colFirst="1" w:colLast="1"/>{}{}</w:tr><w:tr>{}{}<w:permEnd w:id="5"/></w:tr></w:tbl>"#,
+            cell("Aone"),
+            cell("Bone"),
+            cell("Atwo"),
+            cell("Btwo")
+        ),
+        para(&run("Locked end.")),
+    ]
+    .concat();
+    let header = para(&format!(r#"<w:permStart w:id="40" w:edGrp="everyone"/>{}<w:permEnd w:id="40"/>"#, run("Header open.")));
+    protected_docx(&body, &header, "readOnly")
+}
+
+/// What a range says about itself, for comparing before and after a save.
+fn describe(doc: &Document) -> Vec<(String, String, Option<[u32; 2]>, String)> {
+    doc.perm_ranges()
+        .iter()
+        .map(|r| {
+            let text = range_text(doc, &r.start, &r.end);
+            (r.group.clone(), r.editor.clone(), r.cols, text)
+        })
+        .collect()
+}
+
+#[test]
+fn permitted_regions_and_protection_round_trip_through_docx() {
+    let doc = crate::io::open_bytes("regions.docx", &regions_file()).unwrap();
+    assert_eq!(doc.settings.protection.as_deref(), Some("readOnly"));
+    let ranges = describe(&doc);
+    assert_eq!(ranges.len(), 4, "{ranges:?}");
+    assert!(ranges.contains(&("everyone".into(), String::new(), None, "Open text.".into())), "{ranges:?}");
+    assert!(ranges.contains(&(String::new(), "alice@example.com".into(), None, "Alice only.".into())), "{ranges:?}");
+    assert!(ranges.contains(&("everyone".into(), String::new(), None, "Header open.".into())), "{ranges:?}");
+    assert!(ranges.iter().any(|r| r.2 == Some([1, 1])), "the column range keeps its columns: {ranges:?}");
+    // Saved and opened again: the same protection and the same ranges.
+    let bytes = crate::io::save_bytes("regions.docx", &doc).unwrap();
+    let again = crate::io::open_bytes("regions.docx", &bytes).unwrap();
+    assert_eq!(again.settings.protection.as_deref(), Some("readOnly"));
+    assert_eq!(describe(&again), ranges);
+    let xml = part_text(&bytes, "word/document.xml");
+    assert!(xml.contains(r#"w:ed="alice@example.com""#), "{xml}");
+    assert!(xml.contains(r#"w:colFirst="1""#) && xml.contains(r#"w:colLast="1""#), "{xml}");
+    assert!(part_text(&bytes, "word/settings.xml").contains(r#"w:edit="readOnly""#));
+    // And still enforced after the round trip.
+    let mut s = Session::new(again);
+    select(&mut s, "Locked intro");
+    assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+    select(&mut s, "Open");
+    s.run("text.insert", &json!({"text": "Opened"})).unwrap();
+}
+
+/// Under read-only protection the file's regions decide what can change: the everyone range,
+/// a named range only for that user name, and a column range only in its own column's cells —
+/// the other column's cells between its ends stay protected.
+#[test]
+fn a_protected_file_lets_only_its_permitted_regions_change() {
+    let doc = crate::io::open_bytes("regions.docx", &regions_file()).unwrap();
+    let mut s = Session::new(doc.clone());
+    s.author = "Bob".into();
+    for (text, editable) in [
+        ("Locked intro", false),
+        ("Open", true),
+        ("Alice", false),
+        ("Aone", false),
+        ("Bone", true),
+        ("Atwo", false),
+        ("Btwo", true),
+        ("Locked end", false),
+    ] {
+        select(&mut s, text);
+        let before = s.doc.clone();
+        let r = s.run("text.insert", &json!({"text": "Z"}));
+        assert_eq!(r.is_ok(), editable, "{text}: {r:?}");
+        if !editable {
+            assert_eq!(s.doc, before, "{text}");
+        }
+    }
+    // The named editor may edit their range (the user name, ignoring case).
+    let mut s = Session::new(doc);
+    s.author = "Alice@Example.com".into();
+    select(&mut s, "Alice");
+    s.run("text.insert", &json!({"text": "Alicia"})).unwrap();
+    select(&mut s, "Locked end");
+    assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+}
+
+/// Backspace, Delete, paste and selections at and across a range's edges.
+#[test]
+fn edits_at_and_across_an_exceptions_edges() {
+    let mut s = Session::new(Document::from_text("Locked intro.\nFill in here.\nLocked end."));
+    select(&mut s, "Fill in here.");
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    let range = s.doc.perm_ranges()[0].clone();
+    let before = s.doc.clone();
+    // Backspace at the start and Delete at the end would take something outside.
+    s.sel = Selection::caret(range.start.clone());
+    assert!(s.run("text.backspace", &json!({})).is_err());
+    s.sel = Selection::caret(range.end.clone());
+    assert!(s.run("text.delete", &json!({})).is_err());
+    assert_eq!(s.doc, before);
+    // A selection reaching outside: deleting, typing over or pasting over it is refused.
+    s.sel = Selection { anchor: Pos { off: range.end.off - 2, ..range.end.clone() }, focus: Pos::body(2, 3) };
+    for (id, v) in [("text.delete", json!({})), ("text.insert", json!({"text": "x"})), ("edit.paste", json!({"text": "pasted"}))] {
+        assert!(s.run(id, &v).is_err(), "{id}");
+        assert_eq!(s.doc, before, "{id}");
+    }
+    // Inside: Delete before the end, Backspace after the start, and paste all work.
+    s.sel = Selection::caret(Pos { off: range.start.off + 1, ..range.start.clone() });
+    s.run("text.backspace", &json!({})).unwrap();
+    let end = s.doc.perm_ranges()[0].end.clone();
+    s.sel = Selection::caret(Pos { off: end.off - 1, ..end });
+    s.run("text.delete", &json!({})).unwrap();
+    select(&mut s, "here");
+    s.run("edit.paste", &json!({"text": "there"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).replace(OBJ, "").contains("ill in there\n"), "{:?}", s.doc.plain_text(StoryRef::Body));
+    // Pasting outside is refused.
+    select(&mut s, "intro");
+    assert!(s.run("edit.paste", &json!({"text": "pasted"})).is_err());
+}
+
+/// Damaged ranges in a file open without a panic and make nothing editable: a start that never
+/// ends (it must not open the rest of the document), an end nothing started, an end before its
+/// start, a huge id, a missing id, a group WordCraft can't place the user in, no group at all,
+/// a pair split between the body and a header, column numbers that aren't numbers, and a pile
+/// of nested starts with one end (only the innermost pair is a range).
+#[test]
+fn damaged_ranges_in_a_file_open_nothing_to_editing() {
+    let nested: String = (0..500).map(|_| r#"<w:permStart w:id="10" w:edGrp="everyone"/>"#).collect();
+    let body = [
+        para(&format!(r#"{}<w:permStart w:id="1" w:edGrp="everyone"/>{}"#, run("Before."), run("Orphan start."))),
+        para(&format!(r#"<w:permEnd w:id="2"/>{}"#, run("Orphan end."))),
+        para(&format!(r#"<w:permEnd w:id="3"/><w:permStart w:id="3" w:edGrp="everyone"/>{}"#, run("End first."))),
+        para(&format!(r#"<w:permStart w:id="99999999999999999999999999999999" w:edGrp="everyone"/>{}"#, run("Huge id."))),
+        para(&format!(r#"<w:permStart w:edGrp="everyone"/><w:permStart w:id="7" w:edGrp="editors"/>{}<w:permEnd w:id="7"/>"#, run("Group."))),
+        para(&format!(r#"<w:permStart w:id="8"/>{}<w:permEnd w:id="8"/>"#, run("No group."))),
+        para(&format!(r#"<w:permStart w:id="9" w:edGrp="everyone"/>{}"#, run("To header."))),
+        para(&format!(r#"{nested}{}<w:permEnd w:id="10"/>"#, run("Nested."))),
+        para(&format!(r#"<w:permStart w:id="11" w:edGrp="everyone" w:colFirst="abc" w:colLast="-4"/>{}<w:permEnd w:id="11"/>"#, run("Bad columns."))),
+        para(&run("Locked end.")),
+    ]
+    .concat();
+    let header = para(&format!(r#"<w:permEnd w:id="9"/>{}"#, run("Header.")));
+    let doc = crate::io::open_bytes("damaged.docx", &protected_docx(&body, &header, "readOnly")).unwrap();
+    let mut s = Session::new(doc);
+    let editable: Vec<String> = describe(&s.doc).into_iter().filter(|r| r.0 == "everyone" || !r.1.is_empty()).map(|(_, _, _, text)| text).collect();
+    assert_eq!(editable, ["Nested.", "Bad columns."], "only the matched pairs for everyone");
+    assert_eq!(state(&s)["exceptions"], 2);
+    for (text, ok) in [
+        ("Before", false),
+        ("Orphan start", false),
+        ("Orphan end", false),
+        ("End first", false),
+        ("Huge id", false),
+        ("Group", false),
+        ("No group", false),
+        ("To header", false),
+        ("Nested", true),
+        ("Bad columns", true),
+        ("Locked end", false),
+    ] {
+        select(&mut s, text);
+        let before = s.doc.clone();
+        let r = s.run("text.insert", &json!({"text": "Z"}));
+        assert_eq!(r.is_ok(), ok, "{text}: {r:?}");
+        if !ok {
+            assert_eq!(s.doc, before, "{text}");
+        }
+    }
+    // The damaged markers are kept (the file says what it says) and still open nothing.
+    let bytes = crate::io::save_bytes("damaged.docx", &s.doc).unwrap();
+    // The paragraph of `xml` holding `text`.
+    fn para_with<'a>(xml: &'a str, text: &str) -> &'a str {
+        let at = xml.find(text).unwrap_or_else(|| panic!("{text} in {xml}"));
+        let start = xml[..at].rfind("<w:p>").into_iter().chain(xml[..at].rfind("<w:p ")).max().unwrap();
+        &xml[start..at + xml[at..].find("</w:p>").unwrap()]
+    }
+    let xml = part_text(&bytes, "word/document.xml");
+    assert!(para_with(&xml, "Orphan end.").contains("<w:permEnd "), "an end nothing started is saved again: {xml}");
+    let first = para_with(&xml, "End first.");
+    let (end, start) = (first.find("<w:permEnd ").unwrap(), first.find("<w:permStart ").unwrap());
+    assert!(end < start, "an end before its start stays before it: {first}");
+    let names: Vec<String> = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap().file_names().map(str::to_string).collect();
+    let header = names.iter().find(|n| n.starts_with("word/header")).map(|n| part_text(&bytes, n)).unwrap();
+    assert!(para_with(&header, "Header.").contains("<w:permEnd "), "the header's end is saved again: {header}");
+    let again = crate::io::open_bytes("damaged.docx", &bytes).unwrap();
+    assert_eq!(describe(&again), describe(&s.doc), "the same matched pairs, no more");
+    let mut t = Session::new(again);
+    for text in ["Orphan start", "Orphan end", "End first", "Locked end", "To header"] {
+        select(&mut t, text);
+        let before = t.doc.clone();
+        assert!(t.run("text.insert", &json!({"text": "Z"})).is_err(), "{text}");
+        assert_eq!(t.doc, before, "{text}");
+    }
+}
+
+/// An unmatched start made in the model (a damaged document, a stray marker) leaves the
+/// document as locked as it was, greyed out like one without exceptions; Remove All clears it,
+/// and a new exception's id is one no marker uses yet.
+#[test]
+fn an_unmatched_start_keeps_the_document_locked() {
+    let mut s = Session::new(Document::from_text("Alpha beta.\nGamma."));
+    let at = Pos::body(0, 6);
+    s.doc
+        .insert_object(&at, InlineObject::PermStart { id: 3, group: "everyone".into(), editor: String::new(), cols: None }, &CharProps::default())
+        .unwrap();
+    assert!(s.doc.perm_ranges().is_empty());
+    assert_eq!(s.doc.next_perm_id(), 4);
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    assert!(s.why_disabled("text.insert").is_some(), "no exception: edits grey out");
+    assert!(s.why_disabled("review.nextEditableRegion").is_some());
+    select(&mut s, "Gamma");
+    assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+    select(&mut s, "beta");
+    assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+    s.run("review.restrict", &json!({"stop": true})).unwrap();
+    s.run("review.restrict", &json!({"exception": "removeAll"})).unwrap();
+    assert!(!s.doc.plain_text(StoryRef::Body).contains(OBJ), "the stray marker is gone");
+}
+
+/// Find Next Region I Can Edit is a command: it selects each region in turn, wrapping round,
+/// and is unavailable when there is none.
+#[test]
+fn find_next_region_is_a_command() {
+    let mut s = Session::new(Document::from_text("One.\nTwo.\nThree.\nFour."));
+    assert!(s.run("review.nextEditableRegion", &json!({})).is_err());
+    select(&mut s, "Two.");
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    select(&mut s, "Four.");
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    assert!(s.why_disabled("review.nextEditableRegion").is_none());
+    s.sel = Selection::caret(Pos::body(0, 0));
+    let mut found = Vec::new();
+    for _ in 0..3 {
+        s.run("review.nextEditableRegion", &json!({})).unwrap();
+        let (a, b) = s.sel.ordered();
+        found.push(range_text(&s.doc, &a, &b));
+    }
+    assert_eq!(found, ["Two.", "Four.", "Two."]);
+    assert!(s.registry.get("review.nextEditableRegion").is_some_and(|c| !c.mutates));
+}
+
+/// The visible text between `a` and `b` in one paragraph; across paragraphs, the paths.
+fn range_text(doc: &Document, a: &Pos, b: &Pos) -> String {
+    if a.story != b.story || a.path != b.path {
+        return format!("{:?}..{:?}", a.path, b.path);
+    }
+    doc.para(a.story, &a.path).and_then(|p| p.text.get(a.off..b.off)).unwrap_or_default().replace(OBJ, "")
+}
