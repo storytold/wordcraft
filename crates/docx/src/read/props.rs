@@ -10,7 +10,7 @@ use wordcraft_doc::props::{
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
-    PageVAlign, SectionProps, SectionStart,
+    PageBorderDisplay, PageBorderOffset, PageBorderOptions, PageBorderZOrder, PageVAlign, SectionProps, SectionStart,
 };
 
 use super::drawing_color::adjust_lum;
@@ -780,7 +780,51 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(borders(k)),
+            _ if k.local() == "pgBorders" => {
+                let b = borders(k);
+                let display = match k.attr("w:display").or_else(|| k.attr("display")).map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+                    Some("firstpage") => PageBorderDisplay::FirstPage,
+                    Some("notfirstpage") => PageBorderDisplay::NotFirstPage,
+                    _ => PageBorderDisplay::AllPages,
+                };
+                let offset_from_val = k
+                    .attr("w:offsetFrom")
+                    .or_else(|| k.attr("offsetFrom"))
+                    .or_else(|| e.attr("w:offsetFrom"))
+                    .or_else(|| e.attr("offsetFrom"))
+                    .or_else(|| k.els().find_map(|c| c.attr("w:offsetFrom").or_else(|| c.attr("offsetFrom"))));
+                let offset_from = match offset_from_val.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+                    Some("page") => PageBorderOffset::Page,
+                    _ => PageBorderOffset::Text,
+                };
+                let z_order = match k.attr("w:zOrder").or_else(|| k.attr("zOrder")).map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+                    Some("back") => PageBorderZOrder::Back,
+                    _ => PageBorderZOrder::Front,
+                };
+                let align_with_boundary =
+                    k.attr("w:alignWithBoundary").or_else(|| k.attr("alignWithBoundary")).is_some_and(|v| !matches!(v, "0" | "false" | "off"));
+                let surround_header =
+                    k.attr("w:surroundHeader").or_else(|| k.attr("surroundHeader")).is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+                let surround_footer =
+                    k.attr("w:surroundFooter").or_else(|| k.attr("surroundFooter")).is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+                let margin_top = b.top.as_ref().map_or(24.0, |x| x.space);
+                let margin_bottom = b.bottom.as_ref().map_or(24.0, |x| x.space);
+                let margin_left = b.left.as_ref().map_or(24.0, |x| x.space);
+                let margin_right = b.right.as_ref().map_or(24.0, |x| x.space);
+                s.page_borders = Some(b);
+                s.page_border_options = Some(PageBorderOptions {
+                    display,
+                    offset_from,
+                    z_order,
+                    align_with_boundary,
+                    margin_top,
+                    margin_bottom,
+                    margin_left,
+                    margin_right,
+                    surround_header,
+                    surround_footer,
+                });
+            }
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {

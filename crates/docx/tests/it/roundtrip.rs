@@ -372,6 +372,13 @@ fn sections_headers_footers_round_trip() {
         page_num_format: NumFormat::UpperRoman,
         valign: PageVAlign::Center,
         page_borders: Some(Borders::box_(Border::single(1.0))),
+        page_border_options: Some(wordcraft_doc::section::PageBorderOptions {
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+            ..Default::default()
+        }),
         line_numbers: Some(LineNumbering { count_by: 5, start: 1, distance: 18.0, restart: LineNumberRestart::Section }),
         gutter: 18.0,
         // #391: a line and character grid (Word writes `w:docGrid` even without a grid).
