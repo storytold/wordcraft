@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -88,6 +88,13 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop: write the app's current preferences out now, not only at exit (#2716): a
+    /// document taken off the recent list should survive the app being killed before a normal
+    /// close. `Ok(true)`: written; `Ok(false)`: nothing written because the host keeps no
+    /// preferences (switched off, no settings folder); an error is the reason the write failed.
+    /// The recent commands report these as `saved` true / null / false. `None` (web, tests) keeps
+    /// the change to this run and reports `saved: null`.
+    pub save_prefs: Option<Box<dyn Fn(&WordApp) -> Result<bool, String>>>,
     /// Desktop: the app's own user templates folder (`Templates` in the settings folder, #2852),
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.

@@ -5,6 +5,8 @@ use super::{
     zotero,
 };
 
+use crate::i18n;
+
 impl WordApp {
     /// A file that wouldn't open (#1103): log it, and say on the status bar which file and why,
     /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
@@ -17,6 +19,23 @@ impl WordApp {
 
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
+    }
+
+    /// Write the current preferences out through the host's hook, if it has one (#2716). The
+    /// desktop app saves them at exit; a change that should survive a crash, like taking a
+    /// document off the recent list, needs a save at the moment of the change. `None`: the host
+    /// has no hook or wrote nothing; `Some(Err)`: the write failed, and the status line says so.
+    pub(super) fn save_prefs_now(&mut self) -> Option<Result<(), String>> {
+        let save = self.services.save_prefs.as_ref()?;
+        match save(self) {
+            Ok(true) => Some(Ok(())),
+            // The host wrote nothing (preferences switched off): same as having no hook.
+            Ok(false) => None,
+            Err(e) => {
+                self.status(i18n::fmt(tl!("Could not save the preferences: {error}"), &[("error", &e)]));
+                Some(Err(e))
+            }
+        }
     }
 
     /// Document title for the title bar (and the suggested file name). An untitled document is
