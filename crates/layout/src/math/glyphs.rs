@@ -232,8 +232,9 @@ impl Ctx {
     }
 
     /// A delimiter (or separator) glyph covering `a`/`d` around the axis (or the content exactly
-    /// with `exact`).
-    pub(super) fn delimiter(&self, c: char, a: f32, d: f32, st: St, grow: bool, exact: bool) -> Bx {
+    /// with `exact`). `step` asks for a size larger than the content: nested brackets grow a level
+    /// at a time, as Word's do.
+    pub(super) fn delimiter(&self, c: char, a: f32, d: f32, st: St, grow: bool, exact: bool, step: f32) -> Bx {
         let size = self.size(st);
         let axis = self.axis(st);
         let mut glyph = self.char_glyphs(c, size, 0);
@@ -241,7 +242,7 @@ impl Ctx {
         if !grow {
             return glyph;
         }
-        let target = if exact { a + d } else { 2.0 * (a - axis).max(d + axis) };
+        let target = if exact { a + d } else { 2.0 * (a - axis).max(d + axis) + step };
         // Small content keeps the plain glyph where it sits.
         if glyph.a + glyph.d >= target - size * 0.02 {
             return glyph;
