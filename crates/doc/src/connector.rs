@@ -362,6 +362,43 @@ mod tests {
         assert!(near(corner_radius(Some(10_000), -5.0, 100.0), 0.0));
     }
 
+    /// One rerouting case: the free end settles and the attached end keeps its site.
+    fn assert_transformed_reroute(kind: ShapeKind, rot: f32, flip_h: bool, flip_v: bool, free: Option<ConnEnd>, free_start: bool) {
+        let attached = Some(ConnEnd { id: 7, site: 3 });
+        let (start, end) = if free_start { (free, attached) } else { (attached, free) };
+        let mut obj = shape(kind, 40.0, 20.0, ShapeExtra { start, end, ..Default::default() });
+        let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+        float.rot = rot;
+        float.flip_h = flip_h;
+        float.flip_v = flip_v;
+        // Frame (10, 30, 40, 20), centre (30, 40): mirror, then rotate
+        // clockwise in y-down group space. Do not use the routing transform
+        // to compute the expectation.
+        let sign = if free_start { -1.0 } else { 1.0 };
+        let dx = sign * if flip_h { -20.0 } else { 20.0 };
+        let dy = sign * if flip_v { -10.0 } else { 10.0 };
+        let (sin, cos) = rot.to_radians().sin_cos();
+        let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
+        let kids = vec![
+            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { x: 10.0, y: 30.0, obj },
+        ];
+        let mut group = group(kids);
+        assert!(reroute_group(&mut group));
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+        let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        let (free, attached) = if free_start { (start, end) } else { (end, start) };
+        assert!(
+            (free.0 - expected.0).abs() < 0.001 && (free.1 - expected.1).abs() < 0.001,
+            "{kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {free:?} != {expected:?}"
+        );
+        assert_eq!(attached, (140.0, 210.0));
+        assert_eq!(float.rot, 0.0);
+        assert!(!reroute_group(&mut group), "rerouting must settle");
+    }
+
     #[test]
     fn rerouting_preserves_transformed_free_and_unresolved_ends() {
         for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector] {
@@ -369,43 +406,7 @@ mod tests {
                 for (flip_h, flip_v) in [(false, false), (true, false), (false, true), (true, true)] {
                     for free in [None, Some(ConnEnd { id: 404, site: 0 }), Some(ConnEnd { id: 7, site: 99 })] {
                         for free_start in [false, true] {
-                            let attached = Some(ConnEnd { id: 7, site: 3 });
-                            let (start, end) = if free_start { (free, attached) } else { (attached, free) };
-                            let mut obj = shape(kind, 40.0, 20.0, ShapeExtra { start, end, ..Default::default() });
-                            let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
-                            float.rot = rot;
-                            float.flip_h = flip_h;
-                            float.flip_v = flip_v;
-                            // Frame (10, 30, 40, 20), centre (30, 40): mirror, then rotate
-                            // clockwise in y-down group space. Do not use the routing transform
-                            // to compute the expectation.
-                            let sign = if free_start { -1.0 } else { 1.0 };
-                            let dx = sign * if flip_h { -20.0 } else { 20.0 };
-                            let dy = sign * if flip_v { -10.0 } else { 10.0 };
-                            let (sin, cos) = rot.to_radians().sin_cos();
-                            let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
-                            let kids = vec![
-                                GroupChild {
-                                    x: 100.0,
-                                    y: 200.0,
-                                    obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }),
-                                },
-                                GroupChild { x: 10.0, y: 30.0, obj },
-                            ];
-                            let mut group = group(kids);
-                            assert!(reroute_group(&mut group));
-                            let InlineObject::Group { children, .. } = &group else { panic!() };
-                            let c = &children[1];
-                            let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
-                            let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
-                            let (free, attached) = if free_start { (start, end) } else { (end, start) };
-                            assert!(
-                                (free.0 - expected.0).abs() < 0.001 && (free.1 - expected.1).abs() < 0.001,
-                                "{kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {free:?} != {expected:?}"
-                            );
-                            assert_eq!(attached, (140.0, 210.0));
-                            assert_eq!(float.rot, 0.0);
-                            assert!(!reroute_group(&mut group), "rerouting must settle");
+                            assert_transformed_reroute(kind, rot, flip_h, flip_v, free, free_start);
                         }
                     }
                 }

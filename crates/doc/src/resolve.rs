@@ -270,7 +270,12 @@ impl ResolvedPara {
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
             drop_cap_distance: p.drop_cap_distance.filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_DROP_CAP_DISTANCE),
             drop_cap_font: p.drop_cap_font.clone().filter(|f| !f.trim().is_empty()),
-            frame: p.frame.clone().filter(|_| p.drop_cap.unwrap_or(0) == 0),
+            // Explicit zero dimensions cancel a frame; omitted dimensions still fit its text.
+            frame: p.frame.clone().filter(|f| p.drop_cap.unwrap_or(0) == 0 && (f.w != Some(0.0) || f.h != Some(0.0))).map(|mut f| {
+                f.w = f.w.filter(|v| *v != 0.0);
+                f.h = f.h.filter(|v| *v != 0.0);
+                f
+            }),
             suppress_hyphens: p.suppress_hyphens.unwrap_or(false),
             suppress_line_numbers: p.suppress_line_numbers.unwrap_or(false),
             kinsoku: p.kinsoku.unwrap_or(true),
@@ -295,8 +300,12 @@ impl StyleSheet {
         self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
     }
 
-    /// The paragraph style chain of `style` applied over `pp` / `cp`.
+    /// The paragraph style chain of `style` applied over `pp` / `cp`. A style the document doesn't
+    /// define is the default paragraph style, Normal, as in Word: a footer naming a `Footer` style
+    /// that `styles.xml` leaves out is formatted as Normal, not with the document defaults alone
+    /// (#5077).
     fn para_style_props_over(&self, style: &str, mut pp: ParaProps, mut cp: CharProps) -> (ParaProps, CharProps) {
+        let style = if self.get(style).is_some() { style } else { "Normal" };
         for s in self.chain(style) {
             if s.kind == StyleKind::Paragraph {
                 let mut sp = s.para.clone();
@@ -393,6 +402,31 @@ mod tests {
         assert_ne!(s.resolve_char(None, &CharProps::default()).font, "Wingdings");
         let direct = CharProps { sym_font: Some("Wingdings".into()), ..Default::default() };
         assert_eq!(s.resolve_char(None, &direct).font, "Wingdings");
+    }
+
+    /// #5077: a paragraph naming a style the document doesn't define is formatted as Normal,
+    /// paragraph and run alike, not with the document defaults alone.
+    #[test]
+    fn an_undefined_paragraph_style_is_normal() {
+        let mut s = StyleSheet::builtin();
+        s.default_para.space_after = Some(10.0);
+        if let Some(n) = s.get_mut("Normal") {
+            n.para.space_after = Some(2.0);
+            n.chr.size = Some(13.0);
+        }
+        let undefined = ParaProps { style: Some("NoSuchStyle".into()), ..Default::default() };
+        let normal = s.resolve_para(&ParaProps::default());
+        let p = s.resolve_para(&undefined);
+        assert_eq!(p.space_after, 2.0);
+        assert_eq!(p.space_after, normal.space_after);
+        assert_eq!(p.line_spacing, normal.line_spacing);
+        assert_eq!(s.resolve_char(Some("NoSuchStyle"), &CharProps::default()).size, 13.0);
+        // The paragraph keeps the style it names; direct formatting still wins.
+        assert_eq!(p.style, "NoSuchStyle");
+        let direct = ParaProps { space_after: Some(7.0), ..undefined };
+        assert_eq!(s.resolve_para(&direct).space_after, 7.0);
+        // A defined style is unchanged.
+        assert_eq!(s.resolve_para(&ParaProps { style: Some("Heading1".into()), ..Default::default() }).space_after, 4.0);
     }
 
     #[test]

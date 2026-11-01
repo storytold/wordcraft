@@ -8,17 +8,23 @@
 
 pub mod catalog;
 pub mod cmd;
+pub(crate) mod doc_state;
 pub mod file_access;
+pub(crate) mod ime;
 pub mod io;
 mod io_ext;
 pub mod keymap;
+pub(crate) mod locale;
 pub mod math_gallery;
+pub(crate) mod prefs;
 pub mod print;
 pub mod recovery;
 pub mod ribbon;
 pub mod sample;
 mod session;
+pub(crate) mod snapshot;
 pub mod speech;
+pub(crate) mod view;
 
 use std::collections::HashMap;
 
@@ -186,6 +192,11 @@ pub mod p {
     pub fn u64(v: &Value, k: &str) -> Option<u64> {
         v.get(k).and_then(|x| x.as_u64().or_else(|| x.as_f64().filter(|f| *f >= 0.0 && f.is_finite()).map(|f| f as u64)))
     }
+    /// A 1-based page parameter as a 0-based index. A value that cannot fit in
+    /// `usize` (32-bit and wasm) saturates instead of wrapping to page 1.
+    pub fn page_index(page: u64) -> usize {
+        usize::try_from(page.max(1)).unwrap_or(usize::MAX).saturating_sub(1)
+    }
     pub fn bool(v: &Value, k: &str) -> Option<bool> {
         v.get(k).and_then(Value::as_bool)
     }
@@ -197,17 +208,3 @@ pub mod p {
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_bidi;
-#[cfg(test)]
-mod tests_documents;
-#[cfg(test)]
-mod tests_fonts;
-#[cfg(test)]
-mod tests_ime_noop;
-#[cfg(test)]
-mod tests_revision_checks;
-#[cfg(test)]
-mod tests_typing;
-#[cfg(test)]
-mod tests_wordart;
