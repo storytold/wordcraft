@@ -1014,7 +1014,7 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
-source = "git+https://github.com/benandez/craft-libs?rev=630e42f42c49eb8514fd14a780061afe2e8ed7cb#630e42f42c49eb8514fd14a780061afe2e8ed7cb"
+source = "git+https://github.com/benandez/craft-libs?rev=d342a50635e25ad5d7e91b009ebf232ce0adb2ee#d342a50635e25ad5d7e91b009ebf232ce0adb2ee"
 dependencies = [
  "rustix 1.1.5",
 ]
@@ -1022,7 +1022,7 @@ dependencies = [
 [[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
-source = "git+https://github.com/benandez/craft-libs?rev=630e42f42c49eb8514fd14a780061afe2e8ed7cb#630e42f42c49eb8514fd14a780061afe2e8ed7cb"
+source = "git+https://github.com/benandez/craft-libs?rev=d342a50635e25ad5d7e91b009ebf232ce0adb2ee#d342a50635e25ad5d7e91b009ebf232ce0adb2ee"
 dependencies = [
  "fontique",
  "skrifa 0.47.0",
@@ -1033,7 +1033,7 @@ dependencies = [
 [[package]]
 name = "craft-font-store"
 version = "0.1.0"
-source = "git+https://github.com/benandez/craft-libs?rev=630e42f42c49eb8514fd14a780061afe2e8ed7cb#630e42f42c49eb8514fd14a780061afe2e8ed7cb"
+source = "git+https://github.com/benandez/craft-libs?rev=d342a50635e25ad5d7e91b009ebf232ce0adb2ee#d342a50635e25ad5d7e91b009ebf232ce0adb2ee"
 dependencies = [
  "craft-atomic",
  "craft-font-catalog",
@@ -1046,6 +1046,7 @@ dependencies = [
  "skrifa 0.47.0",
  "tar",
  "thiserror 2.0.21",
+ "toml",
  "ureq",
 ]
 
@@ -1102,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/benandez/craft-libs?rev=6ae4f03c7f031312f2fd25d633c89ccbe7d414b5#6ae4f03c7f031312f2fd25d633c89ccbe7d414b5"
+source = "git+https://github.com/benandez/craft-libs?rev=6e8eb65e4d758bba4c8d5d97bf62c1031d325030#6e8eb65e4d758bba4c8d5d97bf62c1031d325030"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",

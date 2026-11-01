@@ -28,9 +28,9 @@ wordcraft-pdf = { path = "crates/pdf" }
 # stacked on storytold/craft-libs#482), the font store's `language-pack` kind is
 # feat/font-store-language-packs (CP4.1). Move both to storytold/craft-libs merge commits once
 # merged.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/benandez/craft-libs", rev = "6ae4f03c7f031312f2fd25d633c89ccbe7d414b5", version = "=0.1.0" }
-craft-font-store = { git = "https://github.com/benandez/craft-libs", rev = "630e42f42c49eb8514fd14a780061afe2e8ed7cb", version = "=0.1.0" }
-craft-font-catalog = { git = "https://github.com/benandez/craft-libs", rev = "630e42f42c49eb8514fd14a780061afe2e8ed7cb", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/benandez/craft-libs", rev = "6e8eb65e4d758bba4c8d5d97bf62c1031d325030", version = "=0.1.0" }
+craft-font-store = { git = "https://github.com/benandez/craft-libs", rev = "d342a50635e25ad5d7e91b009ebf232ce0adb2ee", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/benandez/craft-libs", rev = "d342a50635e25ad5d7e91b009ebf232ce0adb2ee", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }

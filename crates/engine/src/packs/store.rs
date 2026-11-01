@@ -110,9 +110,7 @@ impl super::Backend for FontStoreBackend {
     }
 
     fn index_override(&self) -> Option<String> {
-        // TODO(CP4): craft-font-store's `language_pack_index_overridden()` once it lands; the
-        // store reads the same variable.
-        std::env::var(craft_font_store::LANGUAGE_PACK_INDEX_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+        craft_font_store::language_pack_index_overridden()
     }
 
     fn packs_dir(&self) -> Option<PathBuf> {
