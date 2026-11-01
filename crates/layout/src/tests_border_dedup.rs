@@ -1,7 +1,7 @@
 use super::*;
 use crate::{DocLayout, Document, LayoutCache, LayoutOptions, layout};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing, TextFrame, VMerge};
-use wordcraft_doc::{Paragraph, Rgb, Table, para_block};
+use wordcraft_doc::{Block, Paragraph, Rgb, Table, para_block};
 
 const CELL_WIDTH: f32 = 150.0;
 const TABLE_WIDTH: f32 = 2.0 * CELL_WIDTH;

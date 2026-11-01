@@ -12198,8 +12198,6 @@ fn minimum_insets_move_rows() {
     }
 }
 
-
-
 #[test]
 fn split_border_follows_content() {
     use wordcraft_doc::props::{HeightRule, LineSpacing};
