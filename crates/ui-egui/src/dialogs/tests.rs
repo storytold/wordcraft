@@ -734,6 +734,27 @@ fn switching_paragraph_tabs_keeps_the_top_edge() {
     }
 }
 
+/// #5122: a Chinese interface shows the Font dialog's size by its name, and a typed name (in
+/// either script) or number applies that many points.
+#[test]
+fn font_dialog_size_box_takes_chinese_size_names() {
+    crate::i18n::set_current(crate::i18n::fixture_lang("zh-hans", ""));
+    let mut app = app_with("Example");
+    let _ = app.run("select.all", json!({}));
+    let _ = app.run("format.size", json!({"size": 12.0}));
+    app.dialog = Dialog::open("font", &mut app);
+    let Some(d @ Dialog::Font { .. }) = &mut app.dialog else { panic!("no font dialog") };
+    let Dialog::Font { size, .. } = d else { panic!() };
+    assert_eq!(size, "小四");
+    for (typed, pt) in [("小四", 12.0), ("五號", 10.5), ("初号", 42.0), ("13", 13.0), ("八号", 5.0), ("七號", 5.5)] {
+        let Dialog::Font { size, .. } = d else { panic!() };
+        *size = typed.into();
+        assert_eq!(font_props(d).get("size").and_then(Value::as_f64), Some(pt), "{typed}");
+        assert_eq!(preview_size(typed), (pt as f32).clamp(5.0, 72.0), "{typed}");
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
 /// #3663: "NaN" in the Font dialog's Size box parses as a float; the preview draws at 12 pt
 /// instead of a NaN size, which tripped epaint's glyph assertion and closed the app.
 #[test]

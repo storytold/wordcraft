@@ -1,9 +1,9 @@
 use super::{Dialog, Value, WordApp, json};
 
-/// The Font dialog preview's size: the Size box's points between 6 and 72, else 12. `"NaN"` and
+/// The Font dialog preview's size: the Size box's points between 5 (八号, the smallest Chinese size) and 72, else 12. `"NaN"` and
 /// `"inf"` parse as floats too, and a NaN font size trips epaint's glyph assertion (#3663).
 pub(super) fn preview_size(size: &str) -> f32 {
-    size.trim().parse::<f32>().ok().filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
+    crate::font_sizes::parse(size, crate::i18n::current()).map_or(12.0, |pt| pt as f32).clamp(5.0, 72.0)
 }
 
 /// The character properties the Font dialog's fields stand for.
@@ -46,7 +46,7 @@ pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     if !font_ea.trim().is_empty() {
         props.insert("fontEa".into(), json!(font_ea.trim()));
     }
-    if let Ok(s) = size.trim().parse::<f64>() {
+    if let Some(s) = crate::font_sizes::parse(size, crate::i18n::current()) {
         props.insert("size".into(), json!(s));
     }
     if let Some(c) = wordcraft_doc::Rgb::parse(color) {
