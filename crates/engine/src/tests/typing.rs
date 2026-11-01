@@ -3664,6 +3664,16 @@ fn equation_names_finish_where_a_name_cannot_continue() {
         assert_eq!(typed_equation(keys, false), ("√x".to_string(), "\\sqrt{x}".to_string()), "{keys}");
     }
     assert_eq!(typed_equation("\\alpha+\\beta ", false).0, "α+β");
+    assert_eq!(typed_equation("\\alpha+", false).0, "α+");
+    assert_eq!(typed_equation("\\alpha ", false).0, "α");
+    // A name that is the start of a longer one waits for the next character: `\in` then `t` is
+    // `\int`, and `\in` then `fty` is `\infty`.
+    for (keys, linear) in [("\\in ", "∈"), ("\\in+", "∈+"), ("\\int ", "∫"), ("\\int+", "∫+"), ("\\infty ", "∞"), ("\\le+\\leq ", "≤+≤")]
+    {
+        assert_eq!(typed_equation(keys, false).0, linear, "{keys}");
+    }
+    // A name that isn't in the list stays as typed.
+    assert_eq!(typed_equation("\\alp+", false).0, "\\alp+");
     // The backslash of the next name finishes the one before.
     assert_eq!(typed_equation("\\alpha\\beta ", false).0, "αβ");
     // A name followed by a letter or digit is still being typed.
