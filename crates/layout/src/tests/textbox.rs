@@ -321,6 +321,23 @@ fn text_wraps_around_a_box_that_doesnt_wrap_at_the_width_of_its_lines() {
     assert!(clear, "a line starts past the box's right edge, {}", r.right());
 }
 
+#[test]
+fn a_list_label_counts_on_its_own_line_of_a_box_that_doesnt_wrap() {
+    // The label moves the first line along, not a longer line after a line break.
+    let text = format!("x{}A line after the break that is much longer than the label", wordcraft_doc::para::LINE_BREAK);
+    let mut d = Document::from_text("x");
+    let body = TextBody { no_wrap: true, inset: Some([0; 4]), ..Default::default() };
+    let id = text_box(&mut d, 0, &text, 60.0, 60.0, body);
+    float_box(&mut d);
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].text = "Section %1 with a label:".into();
+    let num = d.numbering.try_add_levels(None, levels).unwrap();
+    d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let l = lay(&d);
+    let (r, end) = (frame_of(&l, id), lines_end(&l, id));
+    assert!(r.right() - end < 1.0, "the box {r:?} hugs its longest line, which ends at {end}");
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.
