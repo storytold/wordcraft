@@ -520,6 +520,7 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
     lin_grouped_operand(a, s, depth, ('(', ')'));
 }
 
+/// Write a simple operand bare, otherwise enclose it in the requested grouping characters.
 fn lin_grouped_operand(a: &[MNode], s: &mut String, depth: usize, brackets: (char, char)) {
     let mut inner = String::new();
     lin_arg(a, &mut inner, depth);
@@ -564,6 +565,7 @@ fn lin_script(a: &[MNode], s: &mut String, depth: usize) {
     lin_operand(a, s, depth);
 }
 
+/// Write one bounded-depth math node as UnicodeMath, preserving explicit delimiter nodes.
 fn lin_node(n: &MNode, s: &mut String, depth: usize) {
     match n {
         MNode::Run(r) => s.push_str(&r.text),
@@ -903,6 +905,7 @@ mod tests {
         assert_eq!(rows[0].len(), 2);
     }
 
+    /// Named functions retain explicit delimiters through parsing and linear serialization.
     #[test]
     fn a_function_keeps_its_visible_parentheses() {
         // #4667, UnicodeMath 3.5: a function's parentheses remain visible on build-up.
@@ -919,6 +922,7 @@ mod tests {
         }
     }
 
+    /// Compound function arguments use invisible grouping and retain their parsed structure.
     #[test]
     fn a_function_groups_unparenthesized_arguments_invisibly() {
         for source in ["sin xy", "ln 3x", "sin〖x+1〗", "cos〖(x+1)y〗", "sin〖〗"] {

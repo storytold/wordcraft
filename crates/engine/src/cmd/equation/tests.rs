@@ -446,6 +446,26 @@ fn conversion_refuses_overlong_linear_without_losing_content() {
     }
 }
 
+/// A build-up space keeps every expanded function, and Undo/Redo preserve the complete edit.
+#[test]
+fn typing_space_preserves_overlong_function_sequences() {
+    for latex in [false, true] {
+        let mut s = session();
+        s.run("insert.equation", &json!({"linear": vec!["sin(x)"; 2501].join("+")})).unwrap();
+        s.run("equation.inputFormat", &json!({"format": if latex { "latex" } else { "unicode" }})).unwrap();
+        let before = serde_json::to_value(&s.doc).unwrap();
+        let initial = linear(&s);
+        assert!(initial.chars().count() > 20_000);
+        s.run("equation.type", &json!({"text": " "})).unwrap();
+        assert_eq!(linear(&s), format!("{initial} "), "latex={latex}");
+        let after = serde_json::to_value(&s.doc).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), after);
+    }
+}
+
 /// A later overlong equation must roll back conversions that already succeeded in the same
 /// Convert All command, rather than leaving a partially converted document.
 #[test]

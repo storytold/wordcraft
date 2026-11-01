@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::math::{Arg, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, has_number_mark, merge_runs, to_linear};
+use crate::math::{Arg, LimLoc, MAX_DEPTH, MAX_PARSE_CHARS, MNode, MRun, MScr, MSty, ScriptKind, has_number_mark, merge_runs, to_linear};
 
 /// A caret position inside an equation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -833,7 +833,7 @@ fn unbalanced(nodes: &[MNode], depth: usize) -> bool {
 }
 
 /// Build up the linear text before the caret in its argument (`latex`: read it as LaTeX).
-/// Returns the new caret when the structure changed.
+/// Returns the new caret when the structure changed; overlong regions remain unbuilt.
 pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     let pos = clamp(root, pos);
     let a = arg_at_mut(root, &pos.path)?;
@@ -846,6 +846,11 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
         return None;
     }
     let text = to_linear(&region);
+    // Retained delimiters can expand valid input beyond either parser's cap.
+    if text.chars().nth(MAX_PARSE_CHARS).is_some() {
+        tidy(root);
+        return None;
+    }
     if !latex && !builds(&text) {
         tidy(root);
         return None;
@@ -1202,6 +1207,34 @@ mod tests {
         let p = insert_text(&mut eq, &MathPos::default(), "\\frac{a}{b}", TypeStyle::default());
         assert!(build_up(&mut eq, &p, true).is_some());
         assert!(matches!(eq[0], MNode::Frac { .. }));
+    }
+
+    /// Rebuilding an expanded function sequence must not discard its last term in either mode.
+    #[test]
+    fn build_up_keeps_overlong_function_sequences() {
+        for latex in [false, true] {
+            let mut eq = crate::math_linear::parse(&vec!["sin(x)"; 2501].join("+"));
+            let before = eq.clone();
+            let pos = MathPos::new(Vec::new(), units(&eq));
+            assert!(to_linear(&eq).chars().count() > MAX_PARSE_CHARS);
+            assert_eq!(build_up(&mut eq, &pos, latex), None);
+            assert_eq!(eq, before, "latex={latex}");
+        }
+    }
+
+    /// The complete character limit remains available, including multibyte operands.
+    #[test]
+    fn build_up_accepts_the_full_character_limit() {
+        for latex in [false, true] {
+            let (prefix, suffix) = if latex { (r"\frac{a}{", "}") } else { ("a/", "") };
+            let count = MAX_PARSE_CHARS - prefix.chars().count() - suffix.chars().count();
+            let text = format!("{prefix}{}{suffix}", "π".repeat(count));
+            let mut eq = vec![MNode::Run(MRun::plain(text))];
+            let pos = MathPos::new(Vec::new(), units(&eq));
+            assert!(build_up(&mut eq, &pos, latex).is_some());
+            let [MNode::Frac { den, .. }] = eq.as_slice() else { panic!("fraction was not built") };
+            assert_eq!(to_linear(den).chars().count(), count);
+        }
     }
 
     #[test]

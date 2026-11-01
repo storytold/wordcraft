@@ -504,6 +504,7 @@ impl P {
         self.operand_with_parens(stops, false)
     }
 
+    /// Read a bounded operand, retaining visible parentheses only for function arguments.
     fn operand_with_parens(&mut self, stops: &[char], keep_parens: bool) -> Arg {
         if self.tired() {
             return self.rest();

@@ -27,6 +27,7 @@ enum Tok {
 /// Commands whose `{…}` argument is text, where spaces are part of the content.
 const TEXT_COMMANDS: &[&str] = &["text", "textrm", "mbox", "textnormal", "textbf", "textit"];
 
+/// Tokenize at most the shared character limit, retaining text-command spaces and literal unknown input.
 fn tokenize(s: &str) -> Vec<Tok> {
     let cs: Vec<char> = s.chars().take(MAX_PARSE_CHARS).collect();
     let mut out = Vec::new();
