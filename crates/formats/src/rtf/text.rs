@@ -1,4 +1,4 @@
-use super::state::{Dest, MAX_PICT, St};
+use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 use std::sync::Arc;
 
@@ -190,6 +190,11 @@ impl Reader {
                     return;
                 }
                 let mut f = self.st.fmt.clone();
+                if s.contains([MARK_OPEN, MARK_CLOSE]) {
+                    self.para.push_text(&s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}"), &f);
+                    self.para_has = true;
+                    return;
+                }
                 let r = self.st.rev;
                 if r.ins {
                     f.ins = Some(self.rev_mark(r.auth, r.dttm));
@@ -239,6 +244,11 @@ impl Reader {
                 }
             }
             Dest::Info(_) => self.info_text.push_str(s),
+            Dest::Atn(_) => {
+                if self.atn_text.len() < 256 {
+                    self.atn_text.push_str(s);
+                }
+            }
             Dest::FldInst => {
                 if let Some(f) = self.st.field.and_then(|i| self.fields.get_mut(i))
                     && f.len() < 4096

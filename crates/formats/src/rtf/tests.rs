@@ -1041,6 +1041,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     let mut p = Para { kind: Kind::Code, ..Default::default() };
     p.push_text("x", &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() });
     let mut w = Writer {
+        marks: Vec::new(),
         t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
         lists: Vec::new(),
         authors: None,

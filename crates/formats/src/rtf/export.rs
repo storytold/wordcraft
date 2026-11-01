@@ -1,6 +1,9 @@
 use super::date::{iso_to_dttm, rtf_date};
+use super::state::{MARK_CLOSE, MARK_OPEN, MAX_NOTE_BLOCKS};
 use super::styles::{style_fmt, styled};
-use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
+use super::{
+    Align, Arc, Block, Blocks, Document, FBlock, FTable, Fmt, HashSet, Inline, InlineObject, Kind, Meta, Para, Paragraph, RevMark, Rgb, VAlign, model,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -60,7 +63,30 @@ impl Tables {
     }
 }
 
+/// What a place marker in the exported text stands for (see [`MARK_OPEN`]).
+pub(super) enum Mark {
+    Note {
+        endnote: bool,
+        blocks: Vec<FBlock>,
+    },
+    RangeStart(u32),
+    /// The end of a comment's range; the first end of each comment also carries its annotation.
+    RangeEnd {
+        id: u32,
+        ann: Option<Annotation>,
+    },
+    Done,
+}
+
+pub(super) struct Annotation {
+    author: String,
+    initials: String,
+    date: String,
+    blocks: Vec<FBlock>,
+}
+
 pub(super) struct Writer {
+    pub(super) marks: Vec<Mark>,
     pub(super) t: Tables,
     /// List definitions: per list, the ordered flag per level.
     pub(super) lists: Vec<[bool; 9]>,
@@ -73,6 +99,121 @@ pub(super) struct Writer {
     pub(super) sections: Vec<wordcraft_doc::SectionProps>,
     /// The section being written.
     pub(super) sect_i: usize,
+}
+
+pub(super) fn has_marks(bl: &Blocks, depth: usize) -> bool {
+    bl.iter().any(|b| match &**b {
+        Block::Para(p) => {
+            p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. } | InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }))
+        }
+        Block::Table(t) => depth < 8 && t.rows.iter().any(|r| r.cells.iter().any(|c| has_marks(&c.blocks, depth + 1))),
+    })
+}
+
+/// A copy of `doc` whose note references and comment range ends are place markers in the text
+/// (see [`MARK_OPEN`]), with what each stands for; none when the body has neither.
+fn mark_doc(doc: &Document) -> Option<(Document, Vec<Mark>)> {
+    if !has_marks(&doc.body, 0) {
+        return None;
+    }
+    let mut m = Marker { doc, marks: Vec::new(), annotated: HashSet::new() };
+    let body = m.blocks(&doc.body, None, 0);
+    let mut d = doc.clone();
+    d.body = body;
+    Some((d, m.marks))
+}
+
+/// The story id standing for "inside a note or comment": no nested notes, no comment ranges.
+const IN_STORY: u32 = u32::MAX;
+
+struct Marker<'a> {
+    doc: &'a Document,
+    marks: Vec<Mark>,
+    annotated: HashSet<u32>,
+}
+
+impl Marker<'_> {
+    fn token(&mut self, m: Mark) -> String {
+        self.marks.push(m);
+        self.marks.len().saturating_sub(1).to_string()
+    }
+
+    /// The flow of a story (a note's or comment's text); tables are flattened to their paragraphs.
+    fn story(&mut self, bl: &Blocks, note: u32, depth: usize, out: &mut Vec<FBlock>) {
+        for b in bl.iter().take(MAX_NOTE_BLOCKS) {
+            match &**b {
+                Block::Para(p) => {
+                    let q = self.para(p, Some(note));
+                    out.extend(model::flow_paras(self.doc, &q).into_iter().map(FBlock::Para));
+                }
+                Block::Table(t) if depth < 4 => {
+                    for c in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                        self.story(&c.blocks, note, depth + 1, out);
+                    }
+                }
+                Block::Table(_) => {}
+            }
+        }
+    }
+
+    fn blocks(&mut self, bl: &Blocks, note: Option<u32>, depth: usize) -> Blocks {
+        bl.iter()
+            .map(|b| match &**b {
+                Block::Para(p) if p.objects.is_empty() => b.clone(),
+                Block::Para(p) => Arc::new(Block::Para(self.para(p, note))),
+                Block::Table(t) if depth < 8 => {
+                    let mut t = t.clone();
+                    for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                        c.blocks = self.blocks(&c.blocks, note, depth + 1);
+                    }
+                    Arc::new(Block::Table(t))
+                }
+                Block::Table(_) => b.clone(),
+            })
+            .collect()
+    }
+
+    /// `p` with its note references and comment range ends replaced by place markers. `note` is
+    /// the note being written, when `p` is part of one.
+    fn para(&mut self, p: &Paragraph, note: Option<u32>) -> Paragraph {
+        let mut q = p.clone();
+        for off in p.object_offsets().into_iter().rev() {
+            let Some(obj) = q.object_at(off).cloned() else { continue };
+            let tok = match obj {
+                InlineObject::NoteRef { id, .. } if note == Some(id) => Some(String::from("S")),
+                InlineObject::NoteRef { .. } if note.is_some() => Some(String::new()),
+                InlineObject::NoteRef { id, kind, .. } => self.doc.parts.get(&id).map(|part| {
+                    let mut blocks = Vec::new();
+                    self.story(&part.blocks, id, 0, &mut blocks);
+                    self.token(Mark::Note { endnote: kind == wordcraft_doc::para::NoteKind::Endnote, blocks })
+                }),
+                InlineObject::CommentStart { id } if note.is_none() => Some(self.token(Mark::RangeStart(id))),
+                InlineObject::CommentEnd { id } if note.is_none() => {
+                    let ann = if self.annotated.insert(id) { self.annotation(id) } else { None };
+                    Some(self.token(Mark::RangeEnd { id, ann }))
+                }
+                _ => None,
+            };
+            let Some(tok) = tok else { continue };
+            let end = off + wordcraft_doc::para::OBJ.len_utf8();
+            let text = if tok.is_empty() { tok } else { format!("{MARK_OPEN}{tok}{MARK_CLOSE}") };
+            if q.delete(off, end).is_err() {
+                continue;
+            }
+            if !text.is_empty() && q.insert_text(off, &text, &Default::default()).is_err() {
+                continue;
+            }
+        }
+        q
+    }
+
+    fn annotation(&mut self, id: u32) -> Option<Annotation> {
+        let c = self.doc.comments.get(&id)?;
+        let part = self.doc.parts.get(&c.part)?;
+        let mut blocks = Vec::new();
+        self.story(&part.blocks, IN_STORY, 0, &mut blocks);
+        Some(Annotation { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), blocks })
+    }
 }
 
 /// `\sectd` and a section's formatting, in the words the reader reads back.
@@ -217,7 +358,68 @@ impl Writer {
         s
     }
 
+    /// A run of text; place markers in it become notes and comment ranges.
     fn run(&mut self, t: &str, f: &Fmt, out: &mut String) {
+        if !t.contains(MARK_OPEN) {
+            return self.run_plain(t, f, out);
+        }
+        let mut rest = t;
+        while !rest.is_empty() {
+            let Some((pre, after)) = rest.split_once(MARK_OPEN) else {
+                self.run_plain(rest, f, out);
+                break;
+            };
+            if !pre.is_empty() {
+                self.run_plain(pre, f, out);
+            }
+            let Some((tok, tail)) = after.split_once(MARK_CLOSE) else {
+                self.run_plain(after, f, out);
+                break;
+            };
+            self.mark(tok, out);
+            rest = tail;
+        }
+    }
+
+    /// The RTF for one place marker: `S` is a note's own number, a number indexes `marks`.
+    fn mark(&mut self, tok: &str, out: &mut String) {
+        if tok == "S" {
+            out.push_str("{\\super\\chftn}");
+            return;
+        }
+        let Some(m) = tok.parse::<usize>().ok().and_then(|i| self.marks.get_mut(i)) else { return };
+        match std::mem::replace(m, Mark::Done) {
+            Mark::Note { endnote, blocks } => {
+                out.push_str("{\\super\\chftn}{\\footnote");
+                if endnote {
+                    out.push_str("\\ftnalt");
+                }
+                out.push(' ');
+                self.blocks(&blocks, false, "\\par", out, 0);
+                out.push('}');
+            }
+            Mark::RangeStart(id) => out.push_str(&format!("{{\\*\\atrfstart {id}}}")),
+            Mark::RangeEnd { id, ann } => {
+                out.push_str(&format!("{{\\*\\atrfend {id}}}"));
+                if let Some(a) = ann {
+                    out.push_str(&format!(
+                        "{{\\*\\atnid {}}}{{\\*\\atnauthor {}}}\\chatn{{\\*\\annotation{{\\*\\atnref {id}}}",
+                        esc(&a.initials),
+                        esc(&a.author)
+                    ));
+                    if let Some(d) = rtf_date(&a.date) {
+                        out.push_str(&format!("{{\\*\\atndate {d}}}"));
+                    }
+                    out.push('\n');
+                    self.blocks(&a.blocks, false, "\\par", out, 0);
+                    out.push('}');
+                }
+            }
+            Mark::Done => {}
+        }
+    }
+
+    fn run_plain(&mut self, t: &str, f: &Fmt, out: &mut String) {
         let mut ctl = String::new();
         if let Some(c) = &f.fmt_change {
             // RTF 1.9.1, as Word writes it: the properties the change altered, as they were,
@@ -655,9 +857,15 @@ fn level_def(ordered: bool, l: usize) -> String {
 
 /// RTF text of a document.
 pub fn export(doc: &Document) -> String {
+    let (marked, marks) = match mark_doc(doc) {
+        Some((d, m)) => (Some(d), m),
+        None => (None, Vec::new()),
+    };
+    let doc = marked.as_ref().unwrap_or(doc);
     let flow = model::from_doc_tracked(doc);
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
     let mut w = Writer {
+        marks,
         t: Tables { fonts: vec![base_font], colors: Vec::new() },
         lists: Vec::new(),
         authors: None,

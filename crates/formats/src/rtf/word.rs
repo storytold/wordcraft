@@ -15,6 +15,9 @@ impl Reader {
         if w == "shppict" || self.start_header_footer_word(w) {
             return;
         }
+        if self.start_note_word(w) {
+            return;
+        }
         let dest = self.destination_for_word(w);
         if let Some(d) = dest {
             match d {
@@ -286,6 +289,22 @@ impl Reader {
             // Transparent wrapper: read the nested pict without changing the destination.
             "pict" => Some(Dest::Pict),
             "bkmkstart" => Some(Dest::Bookmark),
+            "atrfstart" | "atrfend" | "atnid" | "atnauthor" | "atndate" | "atntime" | "atnref"
+                if self.marks_on
+                    && self.hf.is_none()
+                    && self.st.dest == Dest::Body
+                    && self.sub.as_ref().is_none_or(|s| s.comment && !w.starts_with("atrf")) =>
+            {
+                self.atn_text.clear();
+                Some(Dest::Atn(match w {
+                    "atrfstart" => 1,
+                    "atrfend" => 2,
+                    "atnid" => 3,
+                    "atnauthor" => 4,
+                    "atndate" | "atntime" => 5,
+                    _ => 6,
+                }))
+            }
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
             | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
             | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
@@ -298,6 +317,32 @@ impl Reader {
             }
             _ => None,
         }
+    }
+
+    /// The words that open a note or comment story of their own (`\footnote`, `\annotation`) and
+    /// the two inside a note: `\ftnalt` (an endnote) and `\chftn` (the note's own number).
+    fn start_note_word(&mut self, word: &str) -> bool {
+        if self.st.dest == Dest::Body {
+            match word {
+                "ftnalt" => {
+                    if let Some(sub) = self.sub.as_mut() {
+                        sub.endnote = true;
+                    }
+                    return true;
+                }
+                "chftn" if self.sub.as_ref().is_some_and(|s| !s.comment) => {
+                    let f = self.st.fmt.clone();
+                    self.push_mark('S', 0, f);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if !matches!(word, "footnote" | "annotation") || !self.marks_on || self.hf.is_some() || self.sub.is_some() || self.st.dest != Dest::Body {
+            return false;
+        }
+        self.start_sub(word == "annotation");
+        true
     }
 
     fn start_header_footer_word(&mut self, word: &str) -> bool {
@@ -389,6 +434,12 @@ impl Reader {
                 self.picture_word(word, value);
                 true
             }
+            Dest::Atn(kind) => {
+                if kind == 5 {
+                    self.record_atn_part(word, value);
+                }
+                !matches!(word, "u" | "uc")
+            }
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(word, "u" | "uc") => true,
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark => false,
             Dest::OldProps(false) if matches!(word, "crauth" | "crdate") => {
@@ -409,6 +460,19 @@ impl Reader {
                 false
             }
             Dest::OldProps(true) | Dest::Body => false,
+        }
+    }
+
+    fn record_atn_part(&mut self, word: &str, value: i32) {
+        let v = value.clamp(0, 9999) as u32;
+        let c = self.atn_parts.get_or_insert((0, 1, 1, 0, 0));
+        match word {
+            "yr" => c.0 = v,
+            "mo" => c.1 = v,
+            "dy" => c.2 = v,
+            "hr" => c.3 = v,
+            "min" => c.4 = v,
+            _ => {}
         }
     }
 
