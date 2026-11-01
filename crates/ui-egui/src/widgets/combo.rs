@@ -39,6 +39,8 @@ pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
     picked
 }
 
+/// A colour grid's square of colour `c`, outlined in the accent colour while hovered and named
+/// by its hex code ("#C00000") for screen readers and its tooltip. True when it is clicked.
 pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::click());
     ui.painter().rect_filled(r, 0.0, Color32::from_rgb(c.0, c.1, c.2));
@@ -49,7 +51,10 @@ pub(crate) fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
         Stroke::new(if resp.hovered() { 1.5 } else { 0.5 }, if resp.hovered() { t.accent } else { t.border_strong }),
         egui::StrokeKind::Inside,
     );
-    resp.on_hover_text(format!("#{}", c.hex())).clicked()
+    // Named by its colour for screen readers, as its tooltip shows it: a swatch is a drawn square.
+    let name = format!("#{}", c.hex());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+    resp.on_hover_text(name).clicked()
 }
 
 /// A ribbon-style text field with a dropdown list. Returns a chosen/typed value; Enter commits

@@ -1693,3 +1693,36 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// Screen readers hear what the dialogs and their drawn controls are. A dialog is a dialog: it was
+/// only a window, so NVDA read none of its text. Its tabs are tabs, the one
+/// shown selected, as Word's ("Indents and Spacing, tab, selected"): they were buttons, read as
+/// pressed or unpressed toggles. A colour field says its label and its colour: its text alone was
+/// the colour's hex digits. Each swatch of the colour grid says its colour: it had no name.
+#[test]
+fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = app_harness(app_with("Lanterns"));
+    h.run_steps(2);
+    h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_role_and_label(Role::Dialog, "Paragraph").is_some(), "Paragraph is a dialog");
+    assert!(h.query_by_role_and_label(Role::Window, "Paragraph").is_none(), "not only a window");
+    let selected =
+        |h: &egui_kittest::Harness<'static, WordApp>, label: &str| h.get_by_role_and_label(Role::Tab, label).accesskit_node().is_selected();
+    assert_eq!(selected(&h, "Indents and Spacing"), Some(true), "the tab shown is selected");
+    assert_eq!(selected(&h, "Line and Page Breaks"), Some(false), "the others aren't");
+    assert!(h.query_by_role_and_label(Role::Button, "Indents and Spacing").is_none(), "no longer a button");
+
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    h.state_mut().run("ui.dialog", json!({"name": "font"})).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "Font color: Automatic").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Button, "#C00000").is_some(), "the swatches say their colour");
+    h.get_by_role_and_label(Role::Button, "#C00000").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Button, "Font color: #C00000").is_some(), "and the field the colour picked");
+}
