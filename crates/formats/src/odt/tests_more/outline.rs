@@ -73,3 +73,16 @@ fn numbered_headings_are_not_written_as_list_items() {
     assert!(!xml.contains("<text:list"), "{xml}");
     assert!(xml.contains(r#"<text:h text:style-name="Heading_20_2" text:outline-level="2">One one</text:h>"#), "{xml}");
 }
+
+#[test]
+fn unnumbered_heading_styles_are_detached_from_the_outline() {
+    // LibreOffice gives a heading style the outline's numbering unless it names no list style;
+    // an unnumbered level then still indented the heading.
+    let xml = crate::odt::tests::styles_of(&export(&open("")).unwrap());
+    let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
+    assert!(h1.contains(r#"style:list-style-name="""#), "{h1}");
+    // A numbered level stays attached.
+    let xml = crate::odt::tests::styles_of(&export(&open(NUMBERED)).unwrap());
+    let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
+    assert!(!h1.contains("style:list-style-name"), "{h1}");
+}

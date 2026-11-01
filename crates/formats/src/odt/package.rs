@@ -46,7 +46,14 @@ fn kind_styles(doc: &Document) -> String {
         if let Some(c) = pp.contextual_spacing {
             para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"")).unwrap_or_default();
+        // A heading level the outline doesn't number names no list style: LibreOffice would
+        // otherwise give it the outline's (unnumbered) level, and its indent.
+        let numbered = pp
+            .numbering
+            .and_then(|r| doc.numbering.level(r.num, r.level))
+            .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
+        let detach = if outline.is_some() && !numbered { " style:list-style-name=\"\"" } else { "" };
+        let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"{detach}")).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
             props_text(&cp)
