@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use wordcraft_doc::fill::Fill;
-use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
@@ -1982,9 +1982,10 @@ fn rotated_ole_objects_round_trip() {
     let body = text(&unzip(&out), "word/document.xml");
     assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
     assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
-    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
-    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
-    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    // 72 × 36 pt turned 90°: Word measures that against the frame turned with it, so a quarter
+    // turn adds no effect extent.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["0"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
     let back = wordcraft_docx::read(&out).unwrap();
     let o = &paras(&back)[0].objects[0];
     assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
@@ -3049,7 +3050,7 @@ fn native_ink_markup_limit_does_not_write_a_dangling_reference() {
 fn native_ink_preserves_inner_transform_and_rotation_padding_on_unrelated_saves() {
     let mut files = unzip(&ink_docx(false, false));
     let body = text(&files, "word/document.xml")
-        .replace("<wp:docPr", r#"<wp:effectExtent l="55468" t="512668" r="55468" b="512668"/><wp:docPr"#)
+        .replace("<wp:docPr", r#"<wp:effectExtent l="512668" t="55468" r="512668" b="55468"/><wp:docPr"#)
         .replace("<q:xfrm>", r#"<q:xfrm rot="2700000">"#)
         .replace(r#"<a:off x="0" y="0"/><a:ext cx="1828800" cy="914400"/>"#, r#"<a:off x="127000" y="254000"/><a:ext cx="914400" cy="457200"/>"#);
     files.insert("word/document.xml".into(), body.into_bytes());
@@ -3936,6 +3937,38 @@ fn zero_effects_stay_zero_rotated() {
             assert!((h + 2.0 * py - expected.1).abs() < 0.001);
         }
     }
+}
+
+/// From 45° up to (not including) 135° Word measures a turned picture's overhang against its frame
+/// with width and height exchanged, so a quarter turn records no effect extent; at 135° it uses the
+/// frame as it is again. Reading must not take the turn for effects room, and saving must not
+/// write the turn's overhang (Word crops a picture by the negative extents that gives).
+#[test]
+fn turned_pictures_keep_words_effect_extent() {
+    // A 254 × 337 pt picture with the effect extents Word saves for it turned 90°, 60° and 135°.
+    for (degrees, ext) in [(90, [6_350, 0, 0, 0]), (60, [520_700, 869_950, 533_400, 857_250]), (135, [1_047_750, 514_350, 1_041_400, 520_700])] {
+        let [l, t, r, b] = ext;
+        let body = format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3225800" cy="4279900"/><wp:effectExtent l="{l}" t="{t}" r="{r}" b="{b}"/><wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="{}"><a:off x="0" y="0"/><a:ext cx="3225800" cy="4279900"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+            degrees * 60_000
+        );
+        let d = wordcraft_docx::read(&docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+        let effect = paras(&d)[0].objects[0].frame().unwrap().2.effect;
+        assert!(effect.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}°: {effect:?}");
+        let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+        let start = xml.find("<wp:effectExtent ").expect("effect extent");
+        let saved = &xml[start..start + xml[start..].find("/>").expect("end")];
+        for (k, want) in ["l", "t", "r", "b"].into_iter().zip(ext) {
+            let at = saved.find(&format!(" {k}=\"")).expect("attribute") + k.len() + 3;
+            let got: i64 = saved[at..at + saved[at..].find('"').expect("quote")].parse().expect("number");
+            assert!((got - want).abs() <= 12_700, "{degrees}°: {saved}");
+        }
+    }
+    // An angle the file rounds to 45° is measured against the exchanged frame, as 45° is.
+    let pad = |rot: f32| Float { rot, ..Float::default() }.effect_spin_pad(254.0, 337.0);
+    let (near, at) = (pad(44.999_996), pad(45.0));
+    assert!((near.0 - at.0).abs() < 0.01 && (near.1 - at.1).abs() < 0.01, "{near:?} against {at:?}");
+    assert!((pad(44.99).0 - at.0).abs() > 1.0);
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).

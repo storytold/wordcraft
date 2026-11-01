@@ -250,6 +250,20 @@ impl Float {
         let (bw, bh) = self.spin().extent(w, h);
         ((bw - w) / 2.0, (bh - h) / 2.0)
     }
+    /// The rotation overhang `wp:effectExtent` records (x, y). From 45° up to 135° and from 225°
+    /// up to 315° Word measures the rotated bounds against the frame with width and height
+    /// exchanged, so a quarter turn records nothing; elsewhere this is [`Float::spin_pad`]. The
+    /// frame is chosen from the angle as a file stores it (60000ths of a degree, ECMA-376
+    /// §20.1.7.6), so an angle that rounds to 45° is measured as Word will read it back.
+    pub fn effect_spin_pad(&self, w: f32, h: f32) -> (f32, f32) {
+        let (w, h) = (wordcraft_geom::finite(w).clamp(0.0, 4000.0), wordcraft_geom::finite(h).clamp(0.0, 4000.0));
+        let spin = self.spin();
+        let (bw, bh) = spin.extent(w, h);
+        let stored = (wordcraft_geom::normalize_degrees(spin.deg) as f64 * 60_000.0).round() as i64 % 21_600_000;
+        let deg = stored as f32 / 60_000.0;
+        let (fw, fh) = if (45.0..135.0).contains(&deg) || (225.0..315.0).contains(&deg) { (h, w) } else { (w, h) };
+        ((bw - fw) / 2.0, (bh - fh) / 2.0)
+    }
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {
         self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
