@@ -3,7 +3,9 @@
 mod bidi;
 mod embed;
 mod glossary;
+mod mail_merge;
 mod settings_merge;
+pub(crate) use mail_merge::keep_rels as mail_merge_rels;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
 mod props;
