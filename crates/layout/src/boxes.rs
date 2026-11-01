@@ -6,8 +6,8 @@ use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
-    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
-    TextDirection, Wrap, WrapText, para, table,
+    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
+    Wrap, WrapText, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -281,7 +281,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         continue;
                     }
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
-                        let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
+                        let page =
+                            PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
@@ -460,15 +461,22 @@ fn box_float_table_rect(
             _ => None,
         }
     };
-    let page_y = |s: &SectionProps| match f.v_rel {
-        Anchor::Page => Some((0.0, s.page_h)),
-        Anchor::Margin => Some((s.margin_top, s.text_height())),
-        _ => None,
+    let page_y = |fr: &PageFrame| {
+        let s = fr.sect;
+        match f.v_rel {
+            Anchor::Page => Some((0.0, s.page_h)),
+            Anchor::Margin => {
+                let mut reference = s.clone();
+                reference.margin_top = fr.margin_top.unwrap_or(s.margin_top);
+                Some((reference.margin_top, reference.text_height()))
+            }
+            _ => None,
+        }
     };
     let h_area = frame.and_then(|fr| page_x(&fr).map(|(a, e)| (a - fr.origin.0, e))).unwrap_or((0.0, width));
     // In a cell an offset from the page or margin has nothing to measure from: the table stands
     // where the text is.
-    let (v_area, y_off) = match frame.and_then(|fr| page_y(fr.sect).map(|(a, e)| (a - fr.origin.1, e))) {
+    let (v_area, y_off) = match frame.and_then(|fr| page_y(&fr).map(|(a, e)| (a - fr.origin.1, e))) {
         Some(area) => (area, f.y),
         None if matches!(f.v_rel, Anchor::Page | Anchor::Margin) => ((y, 0.0), 0.0),
         None => ((y, 0.0), f.y),
