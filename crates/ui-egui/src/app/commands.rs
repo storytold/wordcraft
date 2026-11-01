@@ -769,6 +769,8 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            // File › Options › Agents' Copy buttons.
+            "ui.copyMcpSetup" => return Some(options::copy_mcp_setup(self, p)),
             "ui.caretAnimation" => {
                 // File › Options › Advanced › Animation: `value` true or false turns the caret's
                 // glide and fading blink on or off; no value reads it.
@@ -1054,6 +1056,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
+            | "ui.copyMcpSetup"
             | "ui.caretAnimation"
             | "ui.startScreen"
             | "ui.checkForUpdates"

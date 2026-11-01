@@ -270,6 +270,94 @@ fn options_panes_open_and_change_settings() {
     assert!(h.query_by_label("Measurement units:").is_some());
 }
 
+fn agents_harness(mcp_command: Option<Vec<String>>) -> egui_kittest::Harness<'static, WordApp> {
+    let services = Services { mcp_command, ..Default::default() };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.run("file.options", json!({"pane": "agents"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// File › Options › Agents shows this installation's MCP server command set up for each kind of
+/// AI app, and Copy puts exactly that snippet on the clipboard.
+#[test]
+fn agents_pane_offers_this_installations_mcp_command() {
+    let mut h = agents_harness(Some(vec!["/usr/bin/wordcraft-cli".into(), "mcp".into()]));
+    let claude = "claude mcp add --scope user wordcraft -- /usr/bin/wordcraft-cli mcp";
+    assert!(h.query_by_label(claude).is_some());
+    assert!(h.query_by_label("codex mcp add wordcraft -- /usr/bin/wordcraft-cli mcp").is_some());
+    assert!(h.query_by_label_contains(r#""command": "/usr/bin/wordcraft-cli""#).is_some());
+    assert!(h.query_by_label("WordCraft releases").is_none(), "the CLI was found");
+    assert!(h.query_by_label_contains("Choose a model that supports tools").is_some(), "the local-model note");
+    h.get_by_label("Copy Claude Code").click();
+    let mut copied = Vec::new();
+    for _ in 0..3 {
+        h.step();
+        copied.extend(h.output().platform_output.commands.iter().filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        }));
+    }
+    assert_eq!(copied, [claude]);
+    assert!(h.query_by_label("Copied Claude Code").is_some());
+    assert!(h.query_by_label("Copy Codex").is_some(), "only the copied one says Copied");
+}
+
+/// Without a command-line tool beside the app (the macOS app), the pane links to the download
+/// and shows the setup for a wordcraft-cli on the PATH.
+#[test]
+fn agents_pane_without_a_cli_points_to_the_download() {
+    let h = agents_harness(None);
+    assert!(h.query_by_label("WordCraft releases").is_some());
+    assert!(h.query_by_label("claude mcp add --scope user wordcraft -- wordcraft-cli mcp").is_some());
+}
+
+/// `ui.copyMcpSetup` copies one of the pane's setups by name and nothing else.
+#[test]
+fn copy_mcp_setup_copies_only_the_named_setups() {
+    let services = Services { mcp_command: Some(vec!["/usr/bin/wordcraft-cli".into(), "mcp".into()]), ..Default::default() };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    let r = a.run("ui.copyMcpSetup", json!({"client": "codex"})).unwrap();
+    assert_eq!(r["text"], "codex mcp add wordcraft -- /usr/bin/wordcraft-cli mcp");
+    let r = a.run("ui.copyMcpSetup", json!({"client": "json"})).unwrap();
+    assert!(r["text"].as_str().unwrap().contains("\"mcpServers\""));
+    for junk in [json!({}), json!({"client": "bash"}), json!({"client": 5}), json!({"text": "anything"})] {
+        assert!(a.run("ui.copyMcpSetup", junk.clone()).is_err(), "{junk}");
+    }
+}
+
+#[test]
+fn shell_lines_quote_what_a_shell_would_split() {
+    let line = |a: &[&str], windows| super::shell_line(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), windows);
+    assert_eq!(line(&["/usr/bin/wordcraft-cli", "mcp"], false), "/usr/bin/wordcraft-cli mcp");
+    assert_eq!(line(&["/home/u/My Apps/WordCraft.AppImage", "--cli", "mcp"], false), "'/home/u/My Apps/WordCraft.AppImage' --cli mcp");
+    assert_eq!(line(&["/home/o'brien/WordCraft.AppImage"], false), r"'/home/o'\''brien/WordCraft.AppImage'");
+    assert_eq!(line(&["$HOME/wordcraft-cli", ""], false), "'$HOME/wordcraft-cli' ''");
+    assert_eq!(
+        line(&["flatpak", "run", "--command=wordcraft-cli", "ai.storyteller.wordcraft", "mcp"], false),
+        "flatpak run --command=wordcraft-cli ai.storyteller.wordcraft mcp"
+    );
+    assert_eq!(line(&[r"C:\Program Files\WordCraft\wordcraft-cli.exe", "mcp"], true), r#""C:\Program Files\WordCraft\wordcraft-cli.exe" mcp"#);
+    assert_eq!(line(&[r"D:\Apps\wordcraft-cli.exe", "mcp"], true), r"D:\Apps\wordcraft-cli.exe mcp");
+}
+
+#[test]
+fn the_json_config_names_the_program_and_its_arguments() {
+    let config: serde_json::Value = serde_json::from_str(&super::mcp_json(&["/opt/Word Craft/wordcraft-cli".into(), "mcp".into()])).unwrap();
+    assert_eq!(config, json!({"mcpServers": {"wordcraft": {"command": "/opt/Word Craft/wordcraft-cli", "args": ["mcp"]}}}));
+    let text = super::mcp_json(&["wordcraft-cli".into(), "mcp".into()]);
+    assert!(text.find("\"command\"") < text.find("\"args\""), "command comes first: {text}");
+    assert_eq!(super::mcp_json(&[]), "");
+}
+
 /// File › Options › Save › Privacy (#1062): the checkboxes are the document's
 /// `file.privacyOptions` settings, and an undoable change like any other.
 #[test]
