@@ -60,7 +60,7 @@ page or column break waiting for the next block.
 | `styles.rs` | the default style, named paragraph and character styles with `based on`, automatic paragraph and text styles, tab stops, borders |
 | `pages.rs` | the page layout of the section: size, orientation, margins, gutter, columns, page number format |
 | `text.rs` | blocks, paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
-| `lists.rs` | lists as the `Flow` writer wrote them: a generated list style per list, bullets or `1.`/`a.`/`i.` per level |
+| `lists.rs` | lists as the `Flow` writer wrote them: a generated list style per list, bullets or `1.`/`a.`/`i.` per level; each item keeps Word's number (`text:start-value` on the item where ODF would count another) |
 | `tables.rs` | tables as the `Flow` writer wrote them: grid widths, header rows, spans, cell shading and vertical alignment, a thin border on every cell. Only rows marked as header rows (`w:tblHeader`) repeat; the table style's first-row look (`w:firstRow`) doesn't, as in Word (the `Flow` writer repeated it) |
 
 As the exchange-flow writer does, hidden text is left out of the package (with the breaks and
@@ -101,5 +101,9 @@ same.
   Every package is checked as an ODF package (`mimetype` first and stored, the manifest listing
   exactly the files there are); with `ODF_JING` (a jing jar) and `ODF_SCHEMA_DIR` (the OASIS ODF
   1.3 RelaxNG schemas, not vendored) set, every part is also validated against the schema.
+- `numbering_through_libreoffice` (ignored by default; needs `soffice` or `WORDCRAFT_SOFFICE`,
+  passes with a note without it) opens a list document in LibreOffice and checks that its
+  plain-text export shows every item with the label the model gives it: a list continued after
+  other paragraphs, nested levels starting again, a restarted list, a second list right after.
 - The round trips in `crates/formats/src/tests.rs` and the reader's tests pass through whichever
   writer `can_write` picks.
