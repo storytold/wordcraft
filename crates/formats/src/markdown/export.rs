@@ -386,7 +386,11 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         let line = if p.kind == Kind::Quote { format!("> {}", line.replace('\n', "\n> ")) } else { line };
                         out.push(line);
                         prev_list = true;
-                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
+                        // A list going into or out of a block quote is a new block: without the
+                        // blank line, an unquoted item would be read back into the quote.
+                        let quoted = |k: Kind| k == Kind::Quote;
+                        let next_is_list =
+                            matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some() && quoted(q.kind) == quoted(p.kind));
                         if !next_is_list {
                             out.push(String::new());
                         }
