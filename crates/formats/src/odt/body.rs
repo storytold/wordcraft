@@ -3,7 +3,8 @@ use super::limits::{MAX_COMMENTS, MAX_FIELD_RESULT, MAX_INFO_CHARS, MAX_OPEN_INS
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{
-    Cell, FBlock, FComment, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
+    Borders, Cell, FBlock, FComment, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img,
+    model,
 };
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
@@ -108,6 +109,70 @@ pub(super) fn balance_comments(blocks: &mut [FBlock]) {
     });
 }
 
+/// Give each edge two cells share the line either cell draws: LibreOffice gives a shared edge to
+/// one of them only (the left cell's right side is `none`, the right cell's left side draws it),
+/// while WordCraft's cells each draw their own four sides. The cell below is the one in the next
+/// row starting at the same column.
+fn share_edges(rows: &mut [Vec<Cell>]) {
+    let visible = |b: Option<wordcraft_doc::props::Border>| b.filter(|b| b.is_visible());
+    for r in 0..rows.len() {
+        let starts: Vec<usize> = rows
+            .get(r)
+            .map(|row| {
+                row.iter()
+                    .scan(0usize, |g, c| {
+                        let s = *g;
+                        *g += c.colspan.max(1) as usize;
+                        Some(s)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for k in 0..starts.len() {
+            // The cell to the right.
+            if let Some(row) = rows.get_mut(r)
+                && let [Some(a), Some(b)] = [k, k + 1].map(|i| row.get(i).map(|c| c.borders))
+                && (a.is_some() || b.is_some())
+            {
+                let (a, b) = (a.unwrap_or_default(), b.unwrap_or_default());
+                let line = visible(a.right).or(visible(b.left));
+                if let Some(line) = line {
+                    if let Some(c) = row.get_mut(k) {
+                        c.borders = Some(Borders { right: Some(line), ..a });
+                    }
+                    if let Some(c) = row.get_mut(k + 1) {
+                        c.borders = Some(Borders { left: Some(line), ..b });
+                    }
+                }
+            }
+            // The cell below.
+            let start = starts.get(k).copied().unwrap_or(0);
+            let below = rows.get(r + 1).and_then(|row| {
+                let mut g = 0;
+                row.iter().position(|c| {
+                    let s = g;
+                    g += c.colspan.max(1) as usize;
+                    s == start
+                })
+            });
+            let (Some(j), Some(a)) = (below, rows.get(r).and_then(|row| row.get(k)).map(|c| c.borders)) else { continue };
+            let Some(b) = rows.get(r + 1).and_then(|row| row.get(j)).map(|c| c.borders) else { continue };
+            if a.is_none() && b.is_none() {
+                continue;
+            }
+            let (a, b) = (a.unwrap_or_default(), b.unwrap_or_default());
+            if let Some(line) = visible(a.bottom).or(visible(b.top)) {
+                if let Some(c) = rows.get_mut(r).and_then(|row| row.get_mut(k)) {
+                    c.borders = Some(Borders { bottom: Some(line), ..a });
+                }
+                if let Some(c) = rows.get_mut(r + 1).and_then(|row| row.get_mut(j)) {
+                    c.borders = Some(Borders { top: Some(line), ..b });
+                }
+            }
+        }
+    }
+}
+
 struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Vec<Cell>,
@@ -121,7 +186,12 @@ impl TableB {
     fn finish(self) -> FTable {
         // A column without a width leaves the whole grid to the equal split.
         let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { Vec::new() };
-        FTable { rows: self.rows, widths, borderless: false }
+        let mut rows = self.rows;
+        share_edges(&mut rows);
+        // A table whose cells all say "no line" draws none.
+        let stated = rows.iter().flatten().filter(|c| !c.covered).all(|c| c.borders.is_some());
+        let borderless = stated && rows.iter().flatten().all(|c| !c.borders.is_some_and(|b| b.any_visible()));
+        FTable { rows, widths, borderless }
     }
 }
 
@@ -768,10 +838,12 @@ impl Body<'_> {
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
                 let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
+                let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
+                let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
                 }
-                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, ..Default::default() });
+                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, ..Default::default() });
                 self.containers.push(Vec::new());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
             }

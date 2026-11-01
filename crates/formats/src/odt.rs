@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
-use wordcraft_doc::props::VAlign;
+use wordcraft_doc::props::{Borders, VAlign};
 use wordcraft_doc::section::{Columns, SectionStart};
 use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 

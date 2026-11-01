@@ -1,7 +1,7 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 use crate::model::Spacing;
-use wordcraft_doc::props::{LineSpacing, TabAlign, TabLeader, TabStop, Underline};
+use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing, TabAlign, TabLeader, TabStop, Underline};
 use wordcraft_doc::section::NumFormat;
 
 // ---------------------------------------------------------------------------------------------
@@ -165,6 +165,10 @@ struct StyleInfo {
     cell_background: Option<Rgb>,
     /// `style:vertical-align` of a table-cell style's `style:table-cell-properties`.
     cell_valign: Option<VAlign>,
+    /// `fo:border*` of a table-cell style: each side as stated (`none` an explicit no line).
+    cell_borders: Option<Borders>,
+    /// `fo:padding*` of a table-cell style (top, left, bottom, right), each as stated.
+    cell_padding: [Option<f32>; 4],
     /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
     column_width: Option<f32>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
@@ -290,6 +294,56 @@ pub(super) struct ParaLook {
     pub(super) spacing: Spacing,
     /// Tab stops, from where the document measures them.
     pub(super) tabs: Option<Vec<TabStop>>,
+}
+
+/// An ODF border (`0.5pt solid #000000`, `none`; ODF 1.3 §20.183): width, style and colour in any
+/// order. `none` and `hidden` are an explicit no line; `None` when nothing in it reads.
+pub(super) fn parse_border(v: &str) -> Option<Border> {
+    let mut b = Border { style: BorderStyle::Single, width: 0.75, color: None, space: 0.0 };
+    let mut any = false;
+    for t in v.split_whitespace() {
+        let t = t.to_ascii_lowercase();
+        match t.as_str() {
+            "none" | "hidden" => return Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }),
+            "solid" | "groove" | "ridge" | "inset" | "outset" => b.style = BorderStyle::Single,
+            "double" => b.style = BorderStyle::Double,
+            "dotted" => b.style = BorderStyle::Dotted,
+            "dashed" => b.style = BorderStyle::Dashed,
+            "dot-dash" | "dot-dot-dash" => b.style = BorderStyle::DotDash,
+            "wave" => b.style = BorderStyle::Wave,
+            "thin" => b.width = 0.5,
+            "medium" => b.width = 1.0,
+            "thick" => b.width = 2.0,
+            _ => {
+                if let Some(c) = model::parse_color(&t) {
+                    b.color = Some(c);
+                } else if let Some(w) = length(&t).filter(|w| w.is_finite()) {
+                    b.width = w.clamp(0.0, 12.0);
+                } else {
+                    continue;
+                }
+            }
+        }
+        any = true;
+    }
+    any.then_some(b)
+}
+
+/// A table-cell style's `fo:border*` and `fo:padding*` (a side's own value wins over the
+/// shorthand) into `s`.
+fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
+    let all = get(a, "fo:border").and_then(parse_border);
+    let side = |k: &str| get(a, k).and_then(parse_border).or(all);
+    let (top, left, bottom, right) = (side("fo:border-top"), side("fo:border-left"), side("fo:border-bottom"), side("fo:border-right"));
+    if top.is_some() || left.is_some() || bottom.is_some() || right.is_some() {
+        s.cell_borders = Some(Borders { top, left, bottom, right, ..Default::default() });
+    }
+    let pad = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, MAX_LEN));
+    let every = pad("fo:padding");
+    let sides = [pad("fo:padding-top"), pad("fo:padding-left"), pad("fo:padding-bottom"), pad("fo:padding-right")];
+    if every.is_some() || sides.iter().any(Option::is_some) {
+        s.cell_padding = sides.map(|v| v.or(every));
+    }
 }
 
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
@@ -535,6 +589,7 @@ impl Styles {
                         if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
                             s.cell_background = Some(c);
                         }
+                        cell_borders_and_padding(&a, s);
                         if let Some(va) = get(&a, "style:vertical-align") {
                             s.cell_valign = match va.trim() {
                                 "top" => Some(VAlign::Top),
@@ -664,6 +719,18 @@ impl Styles {
     /// Background colour of a table-cell style (whole chain).
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+    }
+
+    /// Borders of a table-cell style (whole chain).
+    pub(super) fn cell_borders(&self, name: &str) -> Option<Borders> {
+        self.chain(name).iter().find_map(|(_, s)| s.cell_borders)
+    }
+
+    /// Padding of a table-cell style (top, left, bottom, right; whole chain), when it gives all
+    /// four sides; missing sides of a partial one are 0, as LibreOffice reads them.
+    pub(super) fn cell_padding(&self, name: &str) -> Option<[f32; 4]> {
+        let p = self.chain(name).iter().map(|(_, s)| s.cell_padding).find(|p| p.iter().any(Option::is_some))?;
+        Some(p.map(|v| v.unwrap_or(0.0)))
     }
 
     /// Vertical alignment of a table-cell style (whole chain).

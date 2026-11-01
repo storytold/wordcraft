@@ -1,5 +1,5 @@
 use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
-use wordcraft_doc::props::LineSpacing;
+use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -101,7 +101,7 @@ pub(super) struct Writer {
     /// The page the block being written starts.
     master: Option<SecStart>,
     /// Cell styles by (shading, vertical-alignment).
-    cell_styles: Vec<(Option<Rgb>, Option<VAlign>)>,
+    cell_styles: Vec<String>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
     /// `text:changed-region` elements written so far.
     pub(super) regions: Vec<String>,
@@ -310,6 +310,86 @@ fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> String {
     }
     s.push_str("</style:tab-stops>");
     s
+}
+
+/// Word's default cell margins (top, left, bottom, right), points.
+const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
+/// The cell of `row` that starts at grid column `g`.
+fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<&model::Cell> {
+    let mut s = 0usize;
+    row.iter().find(|x| {
+        let here = s == g;
+        s += x.colspan.clamp(1, 63) as usize;
+        here
+    })
+}
+
+/// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
+fn odf_border(b: Option<Border>) -> String {
+    let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
+    let style = match b.style {
+        BorderStyle::Double | BorderStyle::Triple => "double",
+        BorderStyle::Dotted => "dotted",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::DotDash => "dot-dash",
+        _ => "solid",
+    };
+    let color = b.color.unwrap_or(Rgb(0, 0, 0)).hex().to_ascii_lowercase();
+    format!("{} {style} #{color}", pt(b.width.clamp(0.05, 12.0)))
+}
+
+/// The `style:table-cell-properties` attributes of cell `c` of row `ri` of `t`, starting at grid
+/// column `g0` of `cols`: its padding, shading, vertical alignment and borders. Each edge two
+/// cells share is written once, as LibreOffice writes it (every cell its left and bottom, the
+/// first row its top, the last column its right), so lines don't double; a side the cell
+/// doesn't state gets the table's grid line, or none in a table without lines.
+fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
+    let grid = (!t.borderless).then_some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0, 0, 0)), space: 0.0 });
+    let line = |c: &model::Cell, pick: fn(&Borders) -> Option<Border>| match c.borders.as_ref().and_then(pick) {
+        Some(b) => Some(b).filter(|b| b.is_visible()),
+        None => grid,
+    };
+    let row = t.rows.get(ri).map(Vec::as_slice).unwrap_or(&[]);
+    let left_cell = g0.checked_sub(1).and_then(|g| {
+        let mut s = 0usize;
+        row.iter().find(|x| {
+            let end = s + x.colspan.clamp(1, 63) as usize;
+            let hit = s <= g && g < end;
+            s = end;
+            hit
+        })
+    });
+    let below = t.rows.get(ri + 1).and_then(|r| cell_starting_at(r, g0));
+    let left = line(c, |b| b.left).or_else(|| left_cell.and_then(|l| line(l, |b| b.right)));
+    let bottom = line(c, |b| b.bottom).or_else(|| below.and_then(|b| line(b, |x| x.top)));
+    let top = if ri == 0 { line(c, |b| b.top) } else { None };
+    let right = if g0 + c.colspan.clamp(1, 63) as usize >= cols { line(c, |b| b.right) } else { None };
+    let m = c.margins.filter(|m| m.iter().all(|v| v.is_finite())).unwrap_or(WORD_CELL_MARGINS);
+    let mut p = format!(
+        " fo:padding-top=\"{}\" fo:padding-left=\"{}\" fo:padding-bottom=\"{}\" fo:padding-right=\"{}\"",
+        pt(m[0].max(0.0)),
+        pt(m[1].max(0.0)),
+        pt(m[2].max(0.0)),
+        pt(m[3].max(0.0))
+    );
+    p.push_str(&format!(
+        " fo:border-left=\"{}\" fo:border-right=\"{}\" fo:border-top=\"{}\" fo:border-bottom=\"{}\"",
+        odf_border(left),
+        odf_border(right),
+        odf_border(top),
+        odf_border(bottom)
+    ));
+    if let Some(bg) = c.shading {
+        p.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
+    }
+    p.push_str(match c.valign {
+        Some(VAlign::Top) => " style:vertical-align=\"top\"",
+        Some(VAlign::Center) => " style:vertical-align=\"middle\"",
+        Some(VAlign::Bottom) => " style:vertical-align=\"bottom\"",
+        None => "",
+    });
+    p
 }
 
 fn parent_style(k: Kind) -> &'static str {
@@ -858,12 +938,12 @@ impl Writer {
         }
     }
 
-    fn cell_style(&mut self, shading: Option<Rgb>, valign: Option<VAlign>) -> String {
-        let key = (shading, valign);
-        let k = match self.cell_styles.iter().position(|s| *s == key) {
+    /// The automatic style of a cell with `props` (its `style:table-cell-properties` attributes).
+    fn cell_style(&mut self, props: String) -> String {
+        let k = match self.cell_styles.iter().position(|s| *s == props) {
             Some(k) => k,
             None => {
-                self.cell_styles.push(key);
+                self.cell_styles.push(props);
                 self.cell_styles.len() - 1
             }
         };
@@ -901,7 +981,7 @@ impl Writer {
                     }
                     continue;
                 }
-                let st = self.cell_style(c.shading, c.valign);
+                let st = self.cell_style(cell_props(t, ri, g - span, c, cols));
                 let mut attrs = format!(" table:style-name=\"{st}\" office:value-type=\"string\"");
                 if span > 1 {
                     attrs.push_str(&format!(" table:number-columns-spanned=\"{span}\""));
@@ -1010,16 +1090,9 @@ impl Writer {
                 ));
             }
         }
-        for (i, (sh, va)) in self.cell_styles.iter().enumerate() {
-            let bg = sh.map(|c| format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase())).unwrap_or_default();
-            let va_str = match va {
-                Some(VAlign::Top) => " style:vertical-align=\"top\"",
-                Some(VAlign::Center) => " style:vertical-align=\"middle\"",
-                Some(VAlign::Bottom) => " style:vertical-align=\"bottom\"",
-                None => "",
-            };
+        for (i, props) in self.cell_styles.iter().enumerate() {
             s.push_str(&format!(
-                "<style:style style:name=\"{}Cell{}\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"4pt\" fo:border=\"0.5pt solid #000000\"{bg}{va_str}/></style:style>",
+                "<style:style style:name=\"{}Cell{}\" style:family=\"table-cell\"><style:table-cell-properties{props}/></style:style>",
                 self.prefix,
                 i + 1
             ));

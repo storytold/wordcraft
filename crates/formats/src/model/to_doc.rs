@@ -565,6 +565,7 @@ impl<'a> Builder<'a> {
                         vmerge,
                         shading: c.shading,
                         borders: c.borders,
+                        margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
                         valign: c.valign,
                         ..Default::default()
                     },

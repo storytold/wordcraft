@@ -424,6 +424,9 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
     out
 }
 
+/// Word's default cell margins (top, left, bottom, right), points.
+const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
 fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTable {
     let mut rows = Vec::new();
     for (ri, r) in t.rows.iter().enumerate() {
@@ -450,6 +453,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 shading: c.props.shading,
                 borders: c.props.borders,
                 valign: c.props.valign,
+                // Formats that keep cell padding get each cell's, its table's or Word's default.
+                margins: tracked.paras.then(|| c.props.resolved_margins(t.props.cell_margins.unwrap_or(WORD_CELL_MARGINS))),
             });
         }
         rows.push(cells);
