@@ -114,7 +114,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
   styles, and Draw Table and Eraser (#303) landed on 2026-10-10. Paste from other programs keeps
   their formatting (system clipboard HTML/RTF), Merge Formatting keeps emphasis, Paste Special lists
   what the system clipboard holds, and Linux/Wayland clipboard pictures paste (#687, #833);
-- **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
+- **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78; native GNOME Wayland windows, `WORDCRAFT_WAYLAND=1`, now get Adwaita minimize, maximize and close buttons, without a title or the desktop's button layout); File ›
   still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
   HTML beside the text on the clipboard, so other programs keep the formatting (#1523), with
   equations as MathML (#816), and a lone equation also in the MathML clipboard formats on
@@ -170,6 +170,7 @@ Recipient label generation (#4880) now includes all selected recipients across a
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |
 | 2026-10-17 | trivial | Gap 9 narrowed: Standard (Word 2007, AES-ECB) encrypted packages open with a password under any Word extension; AES headers in Word 97-2003 files are outside the public spec and refused with a clear message; estimate 3–5 → 0 h, since the remaining AES-in-`.doc` case is refused by design |
 | 2026-10-25 | trivial | Small follow-ups from the field, table and AutoFormat batch (#4232) |
+| 2026-10-26 | trivial | UI/UX gaps: #78 narrowed: native GNOME Wayland windows (`WORDCRAFT_WAYLAND=1`) get Adwaita caption buttons (storytold/egui#3); title text and the desktop's button layout remain |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
 | 2026-10-24 | trivial | Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). |
