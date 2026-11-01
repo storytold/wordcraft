@@ -218,7 +218,25 @@ pub(super) fn custom_prop(name: &str, t: Option<&str>, v: &str) -> Option<wordcr
         Some("date") => "filetime",
         _ => "lpwstr",
     };
-    let value: String = v.chars().filter(|c| !c.is_control() || *c == '\n').take(MAX_PROP_VALUE).collect();
+    let mut value: String = v.chars().filter(|c| !c.is_control() || *c == '\n').take(MAX_PROP_VALUE).collect();
+    let mut kind = kind;
+    if kind == "filetime" {
+        // A date and time in UTC, as Word's `filetime` holds it: a bare date at midnight; one
+        // that isn't a date is kept as text.
+        let v = value.trim();
+        let date_ok = v.len() >= 10
+            && v.is_char_boundary(10)
+            && v.get(..10).is_some_and(|d| d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }));
+        value = match (date_ok, v.get(10..)) {
+            (true, Some("")) => format!("{v}T00:00:00Z"),
+            (true, Some(rest)) if rest.ends_with('Z') || rest.contains('+') || rest.rfind('-').is_some() => v.to_string(),
+            (true, Some(_)) => format!("{v}Z"),
+            _ => {
+                kind = "lpwstr";
+                v.to_string()
+            }
+        };
+    }
     Some(wordcraft_doc::CustomProp { name, kind: kind.into(), value, link_target: None })
 }
 

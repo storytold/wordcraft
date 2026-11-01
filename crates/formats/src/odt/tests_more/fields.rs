@@ -190,3 +190,16 @@ fn custom_properties_and_user_fields_are_docproperty_fields() {
     assert!(c.contains(r#"<text:user-defined text:name="Owner">Ada</text:user-defined>"#), "{c}");
     assert_eq!(crate::odt::import(&saved).unwrap().custom_props.len(), 3);
 }
+
+#[test]
+fn custom_date_properties_are_full_utc_dates() {
+    for (v, kind, want) in [
+        ("2026-11-01", "filetime", "2026-11-01T00:00:00Z"),
+        ("2026-11-01T10:30:00", "filetime", "2026-11-01T10:30:00Z"),
+        ("2026-11-01T10:30:00Z", "filetime", "2026-11-01T10:30:00Z"),
+        ("soon", "lpwstr", "soon"),
+    ] {
+        let p = crate::odt::fields::custom_prop("When", Some("date"), v).unwrap();
+        assert_eq!((p.kind.as_str(), p.value.as_str()), (kind, want), "{v}");
+    }
+}
