@@ -9763,8 +9763,12 @@ fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
     near(starts(table(0, [40.0, 10.0, 10.0, 40.0])), of(468.0));
     near(starts(table(1, [40.0, 10.0, 10.0, 40.0])), of(468.0));
     near(starts(table(0, [20.0, 5.0, 5.0, 20.0])), of(468.0));
+    // A fixed table without a width of its own keeps its grid's 460.3 pt; 100% wide, it takes
+    // the text width.
     let mut fixed = table(0, [40.0, 10.0, 10.0, 40.0]);
     fixed.props.fixed = true;
+    near(starts(fixed.clone()), of(460.3));
+    fixed.props.width_pct = Some(100.0);
     near(starts(fixed), of(468.0));
     let mut full = table(0, [40.0, 10.0, 10.0, 40.0]);
     full.props.width_pct = Some(100.0);
@@ -9788,6 +9792,23 @@ fn percentage_cell_widths_size_the_columns_whichever_rows_ask() {
     let over = starts(table(0, [60.0, 20.0, 20.0, 60.0]));
     let lost = [0.6 * 468.0 - over[1], 0.2 * 468.0 - (over[2] - over[1]), 0.2 * 468.0 - (over[3] - over[2])];
     assert!(lost[0] > 1.0 && lost.iter().all(|l| (l - lost[0]).abs() < 0.01), "columns start at {over:?}");
+    // A fixed table gives the last column 2 pt and clips its text to the cell instead.
+    let mut fixed_over = table(0, [60.0, 20.0, 20.0, 60.0]);
+    fixed_over.props.fixed = true;
+    for row in &mut fixed_over.rows {
+        row.cells[3].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Lorem ipsum", Default::default()))];
+    }
+    near(starts(fixed_over.clone()), [0.0, 0.6, 0.8, 1.0].map(|f| f * 460.3));
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(fixed_over)).unwrap();
+    let l = lay(&d);
+    let cells: Vec<(usize, f32, bool)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Cell { cell, rect, clip, row: 0, .. } = i { Some((*cell, rect.w, *clip)) } else { None })
+        .collect();
+    assert!(cells.iter().any(|&(c, w, clip)| c == 3 && (w - 2.0).abs() < 0.01 && clip), "the last cell is 2 pt and clipped: {cells:?}");
+    assert!(cells.iter().all(|&(c, _, clip)| c == 3 || !clip), "only the last cell is clipped: {cells:?}");
     // A column no cell sizes, percentages that disagree, a span over two columns and an absolute
     // width alongside keep the grid.
     let grid = [0.0, 107.3, 144.5, 176.45];

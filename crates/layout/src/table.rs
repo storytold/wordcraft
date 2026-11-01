@@ -732,6 +732,9 @@ struct TableRows<'a> {
     total: f32,
 }
 
+/// Place the laid-out cells of every row: vertical alignment, turned text, borders and the cell
+/// rectangles, clipped where the row's exact height or a fixed table's column is too small for
+/// the cell's text.
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
     let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
@@ -856,7 +859,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 row: ri,
                 cell: ci,
                 story,
-                clip: exact && c.h > span_h + 0.01,
+                // A fixed table's cell too narrow for any text (its lines are laid out 4 pt wide)
+                // clips them, as Word does, rather than letting them run past its edges.
+                clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end });
@@ -1350,8 +1355,8 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 /// Word sizes each column by the percentage its cells ask for, whichever rows ask: cells without a
 /// preferred width take no part, so a header row of percentages sizes the automatic rows below it.
 /// The percentages are shares of the table's width, scaled up when they come short of 100%; past
-/// 100% the last column takes what is left; a table without a width of its own takes `avail`.
-/// Measured in Word, autofit and fixed alike.
+/// 100% the last column takes what is left, 2 pt at least in a fixed table. A table without a
+/// width of its own takes `avail` when autofit and its grid's width when fixed. Measured in Word.
 /// Columns some cell leaves unsized, conflicting percentages, spans and absolute widths keep the
 /// grid.
 fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
@@ -1378,8 +1383,9 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
     let Some(pcts) = pcts.into_iter().collect::<Option<Vec<f32>>>() else { return };
     let sum: f32 = pcts.iter().sum();
     let own_width = t.props.width_pct.is_some_and(|p| p > 0.0) || t.props.width.is_some_and(|w| w > 0.0);
-    // A table with its own width is scaled to it afterwards; any positive total will do.
-    let total = if own_width { grid.iter().sum() } else { avail };
+    // A table with its own width is scaled to it afterwards; any positive total will do. A fixed
+    // table without one keeps its grid's width.
+    let total = if own_width || t.props.fixed { grid.iter().sum() } else { avail };
     if !sum.is_finite() || sum <= 0.0 || !total.is_finite() || total <= 0.0 {
         return;
     }
@@ -1389,16 +1395,21 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         }
         return;
     }
-    // Over 100%, every column but the last takes its share and the last gives up the overflow,
-    // down to nothing; autofit then widens it to its longest word at the others' expense.
+    // Over 100%, every column but the last takes its share and the last gives up the overflow:
+    // in an autofit table down to nothing, then autofit widens it to its longest word at the
+    // others' expense; in a fixed table down to 2 pt, its text clipped to the cell.
     let mut used = 0.0;
     let last = grid.len() - 1;
     for (w, p) in grid[..last].iter_mut().zip(&pcts) {
         *w = total * p / 100.0;
         used += *w;
     }
-    grid[last] = (total - used).max(0.0);
+    grid[last] = (total - used).max(if t.props.fixed { FIXED_PCT_MIN_COLUMN } else { 0.0 });
 }
+
+/// The narrowest a fixed table's last column gets when the percentages before it fill the table
+/// (measured in Word: 2 pt, with or without a table width).
+const FIXED_PCT_MIN_COLUMN: f32 = 2.0;
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
 /// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
