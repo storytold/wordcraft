@@ -503,7 +503,7 @@ impl<'a> Flow<'a> {
         pb.para_end = Some((pb.pages.len(), pb.col, end));
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
-            page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
+            page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
             col: (x, self.width),
             para_y: if pb.web { y } else { self.anchor_y },
             table_chr: None,
@@ -800,7 +800,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
     let mut items = Vec::new();
     push_para(&mut items, (StoryRef::Body, &[block as u32]), &pl, (0, l1), (x, y), width, edges);
     let at = ObjFrame {
-        page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
+        page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
         col: (x, width),
         para_y: y,
         table_chr: None,
