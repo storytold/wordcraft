@@ -405,7 +405,8 @@ impl Writer {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::Shape { .. } => {}
+                | Inline::Shape { .. }
+                | Inline::Group { .. } => {}
             }
         }
     }

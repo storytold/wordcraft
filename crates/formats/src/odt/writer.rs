@@ -442,15 +442,57 @@ fn box_look_attrs(look: &model::BoxLook) -> String {
     a
 }
 
-/// How a frame or shape `w` × `h` is anchored and placed: its `text:anchor-type`, its graphic
-/// style's placement and its `svg:x`/`svg:y` (or `draw:transform` when it is turned); in line
-/// with the text when it doesn't float.
-fn placement(float: Option<&wordcraft_doc::para::Float>, w: f32, h: f32) -> (&'static str, String, String) {
-    match float {
-        Some(f) if f.wrap != wordcraft_doc::para::Wrap::Inline => super::frames::frame_of(f, w, h),
-        f => {
+/// Where a frame or shape is written.
+#[derive(Clone, Copy)]
+enum Place<'a> {
+    /// In the text: anchored and placed as its float says, in line without one.
+    Text(Option<&'a wordcraft_doc::para::Float>),
+    /// A member of a group, at (x, y) from where the group is anchored; its float turns or
+    /// mirrors it.
+    Member(f32, f32, Option<&'a wordcraft_doc::para::Float>),
+}
+
+impl<'a> Place<'a> {
+    /// What turns or mirrors the object, and places it in the text.
+    fn float(self) -> Option<&'a wordcraft_doc::para::Float> {
+        match self {
+            Place::Text(f) | Place::Member(_, _, f) => f,
+        }
+    }
+
+    /// Its top left corner (unturned) from where it is anchored, points.
+    fn origin(self) -> (f32, f32) {
+        let off = |v: f32, aligned: bool| if aligned || !v.is_finite() { 0.0 } else { v.clamp(-1584.0, 1584.0) };
+        match self {
+            Place::Member(x, y, _) => (off(x, false), off(y, false)),
+            Place::Text(f) => f
+                .filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)
+                .map_or((0.0, 0.0), |f| (off(f.x, f.h_align.is_some()), off(f.y, f.v_align.is_some()))),
+        }
+    }
+}
+
+/// How a frame or shape `w` × `h` at `place` is anchored and placed: its `text:anchor-type`
+/// attribute, its graphic style's placement and its `svg:x`/`svg:y` (or `draw:transform` when
+/// it is turned). A group's member has no anchor of its own: it is placed by its position alone.
+fn placement(place: Place<'_>, w: f32, h: f32) -> (String, String, String) {
+    let anchor = |a: &str| format!(" text:anchor-type=\"{a}\"");
+    match place {
+        Place::Text(Some(f)) if f.wrap != wordcraft_doc::para::Wrap::Inline => {
+            let (a, props, xy) = super::frames::frame_of(f, w, h);
+            (anchor(a), props, xy)
+        }
+        Place::Text(f) => {
             let turn = f.filter(|f| super::frames::turned(f)).map(|f| super::frames::transform_attr(0.0, 0.0, w, h, f.rot));
-            ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), turn.unwrap_or_default())
+            (anchor("as-char"), " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), turn.unwrap_or_default())
+        }
+        Place::Member(_, _, f) => {
+            let (x, y) = place.origin();
+            let xy = match f.filter(|f| super::frames::turned(f)) {
+                Some(f) => super::frames::transform_attr(x, y, w, h, f.rot),
+                None => format!(" svg:x=\"{}\" svg:y=\"{}\"", pt(x), pt(y)),
+            };
+            (String::new(), String::new(), xy)
         }
     }
 }
@@ -852,26 +894,11 @@ impl Writer {
                     }
                 }
                 Inline::Image(img) => {
-                    let href = self.picture(img);
-                    let n = self.pictures.len();
-                    // A floating picture: anchored, in a graphic style that places and wraps it.
-                    let (anchor, place) = match img.float.as_deref() {
-                        Some(f) => {
-                            let (anchor, props, xy) = placement(Some(f), img.w, img.h);
-                            (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
-                        }
-                        None => ("as-char", String::new()),
-                    };
-                    out.push_str(&format!(
-                        "<draw:frame draw:name=\"{}Image{n}\"{place} text:anchor-type=\"{anchor}\" svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
-                        self.prefix,
-                        pt(img.w),
-                        pt(img.h)
-                    ));
-                    if !img.alt.is_empty() {
-                        out.push_str(&format!("<svg:desc>{}</svg:desc>", x(&img.alt)));
-                    }
-                    out.push_str("</draw:frame>");
+                    self.image(img, Place::Text(img.float.as_deref()), out);
+                    prev_space = false;
+                }
+                Inline::Group { w, h, float, members } => {
+                    self.group((*w, *h), float.as_deref(), members, out);
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
@@ -884,11 +911,7 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Shape { kind, w, h, float, blocks, look } => {
-                    if *kind == wordcraft_doc::para::ShapeKind::TextBox {
-                        self.text_box((*w, *h), float.as_deref(), look, blocks, out);
-                    } else {
-                        self.shape(*kind, (*w, *h), float.as_deref(), look, blocks, out);
-                    }
+                    self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), look, blocks, out);
                     prev_space = false;
                 }
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
@@ -952,13 +975,92 @@ impl Writer {
         }
     }
 
+    /// A text box or another drawing shape at `place`.
+    fn drawing_shape(
+        &mut self,
+        kind: wordcraft_doc::para::ShapeKind,
+        size: (f32, f32),
+        place: Place<'_>,
+        look: &model::BoxLook,
+        blocks: &[FBlock],
+        out: &mut String,
+    ) {
+        if kind == wordcraft_doc::para::ShapeKind::TextBox {
+            self.text_box(size, place, look, blocks, out);
+        } else {
+            self.shape(kind, size, place, look, blocks, out);
+        }
+    }
+
+    /// A picture (ODF 1.3 §10.4.4 `draw:image` in a `draw:frame`) at `place`: a floating one or a
+    /// group's in a graphic style that places and wraps it.
+    fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {
+        let href = self.picture(img);
+        let n = self.pictures.len();
+        let (anchor, style) = match place {
+            Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
+            _ => {
+                let (anchor, props, xy) = placement(place, img.w, img.h);
+                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
+            }
+        };
+        out.push_str(&format!(
+            "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+            self.prefix,
+            pt(img.w),
+            pt(img.h)
+        ));
+        if !img.alt.is_empty() {
+            out.push_str(&format!("<svg:desc>{}</svg:desc>", x(&img.alt)));
+        }
+        out.push_str("</draw:frame>");
+    }
+
+    /// A group (ODF 1.3 §10.3.15 `draw:g`) of `size`: anchored and wrapping as its float says, in
+    /// line without one; its members at their offsets from its corner.
+    fn group(&mut self, size: (f32, f32), float: Option<&wordcraft_doc::para::Float>, members: &[model::Member], out: &mut String) {
+        let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
+        self.close_ins(out);
+        // The group isn't turned: its members are placed by their own positions.
+        let (anchor, props, _) = placement(Place::Text(float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)), size.0, size.1);
+        let style = self.graphic_style(props);
+        self.boxes += 1;
+        out.push_str(&format!("<draw:g draw:name=\"{}Group{}\" draw:style-name=\"{style}\"{anchor} draw:z-index=\"0\">", self.prefix, self.boxes));
+        let at = Place::Text(float).origin();
+        self.members(members, at, 0, out);
+        out.push_str("</draw:g>");
+        if let Some(m) = reopen {
+            self.open_ins(&m, out);
+        }
+    }
+
+    /// A group's `members`, its corner at `at` from where it is anchored (a group in it `depth`
+    /// deep).
+    fn members(&mut self, members: &[model::Member], at: (f32, f32), depth: usize, out: &mut String) {
+        for m in members {
+            let (x, y) = (at.0 + m.x, at.1 + m.y);
+            match &m.inline {
+                Inline::Shape { kind, w, h, float, blocks, look } => {
+                    self.drawing_shape(*kind, (*w, *h), Place::Member(x, y, float.as_deref()), look, blocks, out)
+                }
+                Inline::Image(img) => self.image(img, Place::Member(x, y, img.float.as_deref()), out),
+                Inline::Group { members, .. } if depth < model::MAX_GROUP_DEPTH => {
+                    out.push_str("<draw:g>");
+                    self.members(members, (x, y), depth + 1, out);
+                    out.push_str("</draw:g>");
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A text box (ODF 1.3 §10.4.3 `draw:text-box` in a `draw:frame`) of `size` (points): in line
     /// with the text, or anchored and placed as it floats, with its fill, line and padding.
-    fn text_box(&mut self, size: (f32, f32), float: Option<&wordcraft_doc::para::Float>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
+    fn text_box(&mut self, size: (f32, f32), place: Place<'_>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let frame = box_look_attrs(look);
-        let (anchor, props, xy) = placement(float, size.0, size.1);
+        let (anchor, props, xy) = placement(place, size.0, size.1);
         let style = self.graphic_style(format!("{props}{frame}"));
         let mut body = self.story(blocks);
         if body.is_empty() {
@@ -973,7 +1075,7 @@ impl Writer {
             (format!(" svg:height=\"{}\"", pt(fit(size.1))), String::new())
         };
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\" svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}>{body}</draw:text-box></draw:frame>",
+            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\"{anchor} svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}>{body}</draw:text-box></draw:frame>",
             self.prefix,
             self.boxes,
             pt(fit(size.0)),
@@ -990,14 +1092,15 @@ impl Writer {
         &mut self,
         kind: wordcraft_doc::para::ShapeKind,
         size: (f32, f32),
-        float: Option<&wordcraft_doc::para::Float>,
+        place: Place<'_>,
         look: &model::BoxLook,
         blocks: &[FBlock],
         out: &mut String,
     ) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
-        let (anchor, props, xy) = placement(float, size.0, size.1);
+        let float = place.float();
+        let (anchor, props, xy) = placement(place, size.0, size.1);
         let style = self.graphic_style(format!("{props}{}", shape_look_attrs(look)));
         let body = self.story(blocks);
         self.boxes += 1;
@@ -1008,8 +1111,7 @@ impl Writer {
                 // A line by its ends: from its box's top left to its bottom right, or bottom left
                 // to top right when it rises.
                 let (w, h) = (len(size.0, 0.0), len(size.1, 0.0));
-                let off = |v: f32, aligned: bool| if aligned || !v.is_finite() { 0.0 } else { v.clamp(-1584.0, 1584.0) };
-                let (x, y) = float.map_or((0.0, 0.0), |f| (off(f.x, f.h_align.is_some()), off(f.y, f.v_align.is_some())));
+                let (x, y) = place.origin();
                 let rises = float.is_some_and(|f| f.flip_v != f.flip_h);
                 let (y1, y2) = if rises { (y + h, y) } else { (y, y + h) };
                 // Turned about its centre: its ends turned with it.
@@ -1035,7 +1137,7 @@ impl Writer {
             })
             .unwrap_or_default();
         out.push_str(&format!(
-            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\"{at} draw:z-index=\"0\">{body}{geometry}</{element}>",
+            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\"{anchor}{at} draw:z-index=\"0\">{body}{geometry}</{element}>",
             self.prefix, self.boxes,
         ));
         if let Some(m) = reopen {

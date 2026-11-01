@@ -228,6 +228,16 @@ struct DelState {
 
 /// A frame being read: its width and height, picture bytes, alt text and the equation read from
 /// an embedded formula object.
+/// A group being read (ODF 1.3 §10.3.15 `draw:g`): its anchor, its style, and its members so far.
+struct OpenGroup {
+    anchor: Option<String>,
+    style: Option<String>,
+    members: Vec<model::Member>,
+}
+
+/// Largest size or offset read in a group, points (22 inches).
+const MAX_LEN: f32 = 1584.0;
+
 type Frame = (Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>);
 
 pub(super) struct Body<'a> {
@@ -291,8 +301,14 @@ pub(super) struct Body<'a> {
     shape_kind: Option<wordcraft_doc::para::ShapeKind>,
     /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
     shape_flip: (bool, bool),
+    /// The turn of a group's member being read, from its `draw:transform`.
+    member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
     group_at: Option<usize>,
+    /// The group being read (its anchor, style and members so far), and where its member being
+    /// read sits (unturned, from where the group is anchored).
+    group: Option<OpenGroup>,
+    member_at: Option<(f32, f32)>,
     /// The note or comment being read.
     note: Option<OpenNote>,
     /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
@@ -408,7 +424,10 @@ impl<'a> Body<'a> {
             frame_look: model::BoxLook::default(),
             shape_kind: None,
             shape_flip: (false, false),
+            member_rot: None,
             group_at: None,
+            group: None,
+            member_at: None,
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
@@ -845,16 +864,22 @@ impl Body<'_> {
             }
             // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
             "rect" | "ellipse" | "line" | "custom-shape"
-                if q.starts_with("draw:")
-                    && self.group_at.is_none()
-                    && self.frame.is_none()
-                    && self.note.is_none()
-                    && self.del.is_none()
-                    && !self.in_tc =>
+                if q.starts_with("draw:") && self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc =>
             {
                 self.start_shape(q, a);
             }
-            "g" if q == "draw:g" && self.group_at.is_none() => self.group_at = Some(self.depth),
+            // A group of shapes and pictures (§10.3.15): read as one object. Groups in it are walked,
+            // their members its own.
+            "g" if q == "draw:g" && self.group_at.is_none() => {
+                self.group_at = Some(self.depth);
+                if self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc {
+                    self.group = Some(OpenGroup {
+                        anchor: get(a, "text:anchor-type").map(String::from),
+                        style: get(a, "draw:style-name").map(String::from),
+                        members: Vec::new(),
+                    });
+                }
+            }
             // Other shapes, and shapes in groups, are left out, with their text. Groups are
             // walked, so the pictures in them are still read.
             "rect" | "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "circle" | "ellipse" | "connector" | "caption" | "measure"
@@ -924,6 +949,7 @@ impl Body<'_> {
                 self.frame = Some((w, h, None, String::new(), None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
+                self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none());
             }
@@ -1437,6 +1463,10 @@ impl Body<'_> {
                     let look = std::mem::take(&mut self.frame_look);
                     // Without a height it grows from nothing to its text.
                     let kind = self.shape_kind.take().unwrap_or(wordcraft_doc::para::ShapeKind::TextBox);
+                    // A shape whose paragraphs are all empty (LibreOffice writes `<text:p/>` in
+                    // each) holds no text.
+                    let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));
+                    let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
                     Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
@@ -1446,15 +1476,64 @@ impl Body<'_> {
                 }),
             };
             if let Some(inline) = inline {
-                if self.para.is_none() {
-                    self.start_para(None, None);
-                }
-                if let Some(p) = &mut self.para {
-                    p.inlines.push(inline);
+                // A group's member goes into the group, at its place in it.
+                if let Some(((x, y), g)) = self.member_at.take().zip(self.group.as_mut().filter(|_| self.note.is_none())) {
+                    if g.members.len() < wordcraft_doc::para::MAX_GROUP_CHILDREN {
+                        g.members.push(model::Member { x, y, inline });
+                    }
+                } else {
+                    self.push_inline(inline);
                 }
             }
         }
         self.frame = None;
+    }
+
+    /// A frame or shape `w` × `h` (attributes `a`) begins: in a group (not in a shape's text), where
+    /// it sits in it, from its `svg:x`/`svg:y` or `draw:transform` (a line's from its ends, `line`).
+    fn member_start(&mut self, a: &Attrs, w: f32, h: f32, line: Option<(Option<f32>, Option<f32>)>) {
+        self.member_rot = None;
+        if self.group.is_none() || self.note.is_some() {
+            return;
+        }
+        let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_LEN, MAX_LEN));
+        let at = match (line, get(a, "draw:transform").and_then(|t| super::frames::transform(t, w, h))) {
+            (Some((x, y)), _) => (x.unwrap_or(0.0), y.unwrap_or(0.0)),
+            (None, Some((x, y, rot))) => {
+                self.member_rot = Some(rot);
+                (x, y)
+            }
+            (None, None) => (len("svg:x").unwrap_or(0.0), len("svg:y").unwrap_or(0.0)),
+        };
+        self.member_at = Some(at);
+    }
+
+    /// The group being read ends: its members, placed from the corner of the box around them,
+    /// become one object anchored where the group is.
+    fn end_group(&mut self) {
+        let Some(g) = self.group.take() else { return };
+        let size = |i: &Inline| match i {
+            Inline::Shape { w, h, .. } => (*w, *h),
+            Inline::Image(img) => (img.w, img.h),
+            Inline::Group { w, h, .. } => (*w, *h),
+            _ => (0.0, 0.0),
+        };
+        let fin = |v: f32| if v.is_finite() { v.clamp(-MAX_LEN, MAX_LEN) } else { 0.0 };
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for m in &g.members {
+            let (w, h) = size(&m.inline);
+            (x0, y0) = (x0.min(fin(m.x)), y0.min(fin(m.y)));
+            (x1, y1) = (x1.max(fin(m.x + w)), y1.max(fin(m.y + h)));
+        }
+        if g.members.is_empty() {
+            return;
+        }
+        let members = g.members.into_iter().map(|m| model::Member { x: fin(m.x) - x0, y: fin(m.y) - y0, ..m }).collect();
+        let graphic = self.styles.shape_graphic(g.style.as_deref());
+        let float = super::frames::float_of(g.anchor.as_deref(), Some(&super::writer::pt(x0)), Some(&super::writer::pt(y0)), &graphic);
+        let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float));
+        let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
+        self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
     }
 
     /// Begin a drawing shape (ODF 1.3 §10.3): its size, placement and look, and its text read
@@ -1472,6 +1551,10 @@ impl Body<'_> {
         };
         float.flip_v = rising;
         self.shape_flip = (false, false);
+        self.member_start(a, w, h, (kind == wordcraft_doc::para::ShapeKind::Line).then_some((x, y)));
+        if let Some(rot) = self.member_rot.take() {
+            float.rot = rot;
+        }
         self.frame_look = g.shape_look(kind);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
@@ -1604,7 +1687,10 @@ impl Body<'_> {
                 self.break_section(next);
             }
             "frame" => self.end_frame(),
-            "g" if self.group_at == Some(self.depth + 1) => self.group_at = None,
+            "g" if self.group_at == Some(self.depth + 1) => {
+                self.group_at = None;
+                self.end_group();
+            }
             _ => {}
         }
     }

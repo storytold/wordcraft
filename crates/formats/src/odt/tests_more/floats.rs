@@ -90,3 +90,13 @@ fn hostile_frame_positions_are_clamped() {
     let f = float(&open(r#"style:wrap="parallel" fo:margin-left="1e30in""#, r#"text:anchor-type="paragraph" svg:x="-1e30in" svg:y="NaNin""#));
     assert!(f.x.is_finite() && f.x.abs() <= 1584.0 && f.y.is_finite() && f.dist.is_finite() && f.dist <= 1584.0, "{f:?}");
 }
+
+#[test]
+fn without_a_wrap_text_runs_on_both_sides() {
+    // ODF 1.3 §20.400 gives no default; LibreOffice wraps text on both sides of a frame, shape or
+    // group whose styles state none.
+    let f = float(&open(r#"style:horizontal-pos="from-left""#, r#"text:anchor-type="paragraph" svg:x="1in""#));
+    assert_eq!((f.wrap, f.wrap_text), (Wrap::Square, WrapText::BothSides));
+    let f = float(&open(r#"style:wrap="biggest""#, r#"text:anchor-type="paragraph""#));
+    assert_eq!((f.wrap, f.wrap_text), (Wrap::Square, WrapText::Largest));
+}

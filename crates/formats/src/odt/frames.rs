@@ -161,10 +161,12 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("left") => (Wrap::Square, WrapText::Left),
         Some("right") => (Wrap::Square, WrapText::Right),
         Some("parallel") => (Wrap::Square, WrapText::BothSides),
-        Some("dynamic") => (Wrap::Square, WrapText::Largest),
+        Some("dynamic") | Some("biggest") => (Wrap::Square, WrapText::Largest),
         Some("run-through") if g.run_through.as_deref() == Some("background") => (Wrap::BehindText, WrapText::BothSides),
         Some("run-through") => (Wrap::InFrontOfText, WrapText::BothSides),
-        _ => (Wrap::TopAndBottom, WrapText::BothSides),
+        Some("none") => (Wrap::TopAndBottom, WrapText::BothSides),
+        // None stated (§20.400 gives no default): both sides, as LibreOffice wraps.
+        _ => (Wrap::Square, WrapText::BothSides),
     };
     let h_rel = match g.hrel.as_deref() {
         Some("page") => Anchor::Page,

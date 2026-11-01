@@ -171,3 +171,11 @@ fn a_shape_keeps_its_size_unless_it_grows_to_its_text() {
     assert!(content_of(&bytes).contains(r#"draw:auto-grow-height="false" draw:auto-grow-width="false""#));
     assert_eq!(fits(&import(&bytes).unwrap()), [false, true]);
 }
+
+#[test]
+fn a_shape_with_only_an_empty_paragraph_has_no_text() {
+    // LibreOffice writes `<text:p/>` in every shape; only the round rectangle holds text.
+    let d = open();
+    let stories: Vec<bool> = d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).map(|o| o.text_box().is_some()).collect();
+    assert_eq!(stories, [false, false, true, false, false, false]);
+}

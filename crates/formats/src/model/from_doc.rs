@@ -1,5 +1,6 @@
 use super::types::{
-    BoxLook, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing,
+    BoxLook, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_GROUP_DEPTH, Member, Meta,
+    Para, RevMark, Spacing,
 };
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
@@ -278,28 +279,8 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             }
         }
         // A text box's content, without notes, comments or boxes of its own.
-        // A drawing shape or text box, with its text but without notes, comments or boxes of its own. A
-        // freeform's paths have no ODF shape here; a connector is a straight line.
-        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, .. }
-            if opts.boxes && *kind != wordcraft_doc::para::ShapeKind::Freeform =>
-        {
-            use wordcraft_doc::para::ShapeKind;
-            let kind = match kind {
-                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
-                k => *k,
-            };
-            let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
-            let part = story.and_then(|id| doc.parts.get(&id));
-            let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
-            let float = kept_float(float);
-            let look = BoxLook {
-                fill: fill.as_ref().filter(|_| kind != ShapeKind::Line).map(wordcraft_doc::fill::Fill::main_color),
-                line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
-                inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
-                auto_fit: part.is_some_and(|p| p.body.auto_fit),
-            };
-            vec![Inline::Shape { kind, w: *w, h: *h, float, blocks, look }]
-        }
+        // A drawing shape, text box or group (pictures have their own place below).
+        InlineObject::Shape { .. } | InlineObject::Group { .. } if opts.boxes => vec![drawing_inline(doc, o, opts, 0, (1.0, 1.0))?],
         InlineObject::Field { instr, result, .. } if opts.fields => {
             vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]
         }
@@ -309,6 +290,61 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
 
 /// Comment `c` (a reply to `parent`) of `doc` as a flow comment: its text holds no comments or
 /// notes of its own.
+/// The flow inline for picture, shape or group `o` of `doc` (a member of groups `depth` deep),
+/// its size scaled by `scale` (a group's members are in its own coordinates). A shape or text
+/// box keeps its text, but not notes, comments or boxes of its own. `None` for what a flow has
+/// no drawing for: a freeform's paths, a picture whose data is missing.
+fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize, scale: (f32, f32)) -> Option<Inline> {
+    use wordcraft_doc::para::ShapeKind;
+    let (sx, sy) = scale;
+    match o {
+        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, .. } if *kind != ShapeKind::Freeform => {
+            // A connector is a straight line.
+            let kind = match kind {
+                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
+                k => *k,
+            };
+            let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
+            let part = story.and_then(|id| doc.parts.get(&id));
+            let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
+            let look = BoxLook {
+                fill: fill.as_ref().filter(|_| kind != ShapeKind::Line).map(wordcraft_doc::fill::Fill::main_color),
+                line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
+                inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
+                auto_fit: part.is_some_and(|p| p.body.auto_fit),
+            };
+            Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look })
+        }
+        InlineObject::Image { media, w, h, alt, float, .. } => {
+            let data = doc.media.get(media)?;
+            let alt = if o.is_decorative() { "" } else { alt.as_str() };
+            Some(Inline::Image(Img {
+                data: data.clone(),
+                ext: media_ext(media, data),
+                w: w * sx,
+                h: h * sy,
+                alt: alt.to_string(),
+                float: kept_float(float),
+            }))
+        }
+        InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
+            let ratio = |outer: f32, inner: f32| {
+                let r = outer / inner;
+                if r.is_finite() && r > 0.0 { r } else { 1.0 }
+            };
+            let inner = (sx * ratio(*w, *ch_w), sy * ratio(*h, *ch_h));
+            let members: Vec<Member> = children
+                .iter()
+                .filter_map(|c| {
+                    drawing_inline(doc, &c.obj, opts, depth + 1, inner).map(|inline| Member { x: c.x * inner.0, y: c.y * inner.1, inline })
+                })
+                .collect();
+            (!members.is_empty()).then(|| Inline::Group { w: w * sx, h: h * sy, float: kept_float(float), members })
+        }
+        _ => None,
+    }
+}
+
 /// The placement a flow keeps for a drawing: when it floats, or turns or mirrors it in line.
 fn kept_float(f: &wordcraft_doc::para::Float) -> Option<Box<wordcraft_doc::para::Float>> {
     let turned = f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999;

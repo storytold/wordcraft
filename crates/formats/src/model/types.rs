@@ -9,6 +9,9 @@ pub const CODE_STYLE: &str = "Code";
 /// Nesting limit for tables in tables (hostile input).
 pub const MAX_DEPTH: usize = 8;
 
+/// Deepest groups in groups kept (hostile files).
+pub const MAX_GROUP_DEPTH: usize = 8;
+
 /// Longest font name the importers keep, in bytes (as the .docx reader); a longer one (no real
 /// font has one) is dropped (#3713).
 pub const MAX_FONT_NAME: usize = 256;
@@ -209,6 +212,25 @@ pub enum Inline {
         blocks: Vec<FBlock>,
         look: BoxLook,
     },
+    /// Drawing shapes, text boxes and pictures grouped into one object: its size in points, its
+    /// placement when it floats, and its members, each at its offset in the group. Only flows
+    /// asked for shapes ([`FlowOpts::boxes`]) hold them.
+    Group {
+        w: f32,
+        h: f32,
+        float: Option<Box<wordcraft_doc::para::Float>>,
+        members: Vec<Member>,
+    },
+}
+
+/// A member of an [`Inline::Group`]: a shape, text box or picture (its placement in the group is
+/// `x`, `y`, points from the group's top left corner; its own float holds only its turn and
+/// mirroring).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Member {
+    pub x: f32,
+    pub y: f32,
+    pub inline: Inline,
 }
 
 /// How a text box or shape looks: its fill, its outline, its inner margins, and whether it
@@ -535,7 +557,8 @@ impl Para {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::Shape { .. } => {}
+                | Inline::Shape { .. }
+                | Inline::Group { .. } => {}
             }
         }
         s
@@ -557,7 +580,8 @@ impl Para {
                 | Inline::Note { .. }
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
-                | Inline::Shape { .. } => {}
+                | Inline::Shape { .. }
+                | Inline::Group { .. } => {}
             }
         }
         s

@@ -240,7 +240,12 @@ impl Writer {
                     o.push_str(&format!("\\textit{{[{}]}}", escape_text(&alt)));
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
-                Inline::Figure(_) | Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) | Inline::Shape { .. } => {}
+                Inline::Figure(_)
+                | Inline::Note { .. }
+                | Inline::Comment { .. }
+                | Inline::CommentEnd(_)
+                | Inline::Shape { .. }
+                | Inline::Group { .. } => {}
                 Inline::Field { result, fmt, .. } => {
                     let s = self.span(result, fmt);
                     push_apart(&mut o, &s);

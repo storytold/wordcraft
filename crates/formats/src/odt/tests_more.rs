@@ -7,6 +7,7 @@ mod equations;
 mod fields;
 mod floats;
 mod fonts;
+mod groups;
 mod headers;
 mod lists;
 mod named_styles;

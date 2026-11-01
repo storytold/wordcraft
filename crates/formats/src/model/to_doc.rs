@@ -1,13 +1,14 @@
 use super::from_doc::uses_kind;
 use super::types::{
-    CODE_STYLE, Cell, Dropped, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, MAX_DEPTH, MAX_RUN_STRINGS, MONO_FONT, Para, RUBY_BASE_SIZE,
-    RevMark, clean_text, dropped, ruby_object,
+    CODE_STYLE, Cell, Dropped, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, MAX_DEPTH, MAX_GROUP_DEPTH, MAX_RUN_STRINGS, MONO_FONT, Para,
+    RUBY_BASE_SIZE, RevMark, clean_text, dropped, ruby_object,
 };
 use super::{
     AbstractNum, Arc, Block, Blocks, Border, BorderStyle, Borders, CellProps, CharProps, Document, InlineObject, Level, ListKind, Num, NumRef, OBJ,
     ParaProps, Paragraph, PropChange, Revision, RevisionKind, Rgb, RowProps, Run, Style, StyleKind, Table, TextColor, Underline, VMerge, VertAlign,
     levels_for, para_block,
 };
+use wordcraft_doc::para::{GroupChild, MAX_GROUP_CHILDREN};
 
 pub fn char_props(f: &Fmt) -> CharProps {
     let on = |b: bool| if b { Some(true) } else { None };
@@ -299,6 +300,79 @@ impl<'a> Builder<'a> {
         Some(InlineObject::NoteRef { kind, id, custom })
     }
 
+    /// The document object for picture, shape or group `i` (members of groups `depth` deep).
+    fn drawing(&mut self, i: &Inline, depth: usize) -> Option<InlineObject> {
+        match i {
+            Inline::Image(img) => {
+                let key = self.doc.add_media(img.data.to_vec(), &img.ext);
+                let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
+                let float = img.float.as_deref().cloned().map(|mut f| {
+                    // Offsets and distances on the page.
+                    let fit = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
+                    (f.x, f.y) = (fit(f.x), fit(f.y));
+                    (f.dist, f.dist_top, f.dist_bottom) = (fit(f.dist).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
+                    f
+                });
+                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole: None })
+            }
+            Inline::Shape { kind, w, h, float, blocks, look } => {
+                // A text box always has its story; a shape only when it holds text.
+                let story = if *kind == wordcraft_doc::para::ShapeKind::TextBox || !blocks.is_empty() {
+                    let story = self.blocks(blocks, 1);
+                    self.doc.try_add_part(wordcraft_doc::PartKind::TextBox, story).ok()
+                } else {
+                    None
+                };
+                if let Some(part) = story.and_then(|id| self.doc.parts.get_mut(&id)) {
+                    let emu = |v: f32| if v.is_finite() { (v.clamp(0.0, 1584.0) * 12_700.0).round() as u32 } else { 0 };
+                    part.body.inset = look.inset.map(|i| i.map(emu));
+                    part.body.auto_fit = look.auto_fit;
+                }
+                let (stroke, stroke_width) = match look.line {
+                    Some((c, w)) if w.is_finite() && w > 0.0 => (Some(c), w.min(12.0)),
+                    _ => (None, 0.0),
+                };
+                // A line may be flat; anything else has some size.
+                let least = if *kind == wordcraft_doc::para::ShapeKind::Line { 0.0 } else { 1.0 };
+                let fit = |v: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
+                let obj = InlineObject::Shape {
+                    kind: *kind,
+                    w: fit(*w),
+                    h: fit(*h),
+                    fill: look.fill.map(wordcraft_doc::fill::Fill::solid),
+                    stroke,
+                    stroke_width,
+                    float: float.as_deref().cloned().unwrap_or_default(),
+                    story,
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: Default::default(),
+                };
+                Some(obj)
+            }
+            Inline::Group { w, h, float, members } if depth < MAX_GROUP_DEPTH => {
+                let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+                let (w, h) = (fit(*w), fit(*h));
+                let off = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
+                let children: Vec<GroupChild> = members
+                    .iter()
+                    .take(MAX_GROUP_CHILDREN)
+                    .filter_map(|m| self.drawing(&m.inline, depth + 1).map(|obj| GroupChild { x: off(m.x), y: off(m.y), obj }))
+                    .collect();
+                (!children.is_empty()).then(|| InlineObject::Group {
+                    w,
+                    h,
+                    float: float.as_deref().cloned().unwrap_or_default(),
+                    ch_w: w,
+                    ch_h: h,
+                    children,
+                    canvas: None,
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn para(&mut self, p: &Para, list_num: Option<u32>) -> Paragraph {
         let mut out = Paragraph::new();
         out.props = para_props(p, list_num);
@@ -344,19 +418,10 @@ impl<'a> Builder<'a> {
                     }
                     append(&mut out, &t, &cp, None);
                 }
-                Inline::Image(img) => {
-                    let key = self.doc.add_media(img.data.to_vec(), &img.ext);
-                    let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
-                    let float = img.float.as_deref().cloned().map(|mut f| {
-                        // Offsets and distances on the page.
-                        let fit = |v: f32| if v.is_finite() { v.clamp(-1584.0, 1584.0) } else { 0.0 };
-                        (f.x, f.y) = (fit(f.x), fit(f.y));
-                        (f.dist, f.dist_top, f.dist_bottom) = (fit(f.dist).max(0.0), fit(f.dist_top).max(0.0), fit(f.dist_bottom).max(0.0));
-                        f
-                    });
-                    let obj =
-                        InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole: None };
-                    append(&mut out, "", &CharProps::default(), Some(obj));
+                Inline::Image(_) | Inline::Shape { .. } | Inline::Group { .. } => {
+                    if let Some(obj) = self.drawing(i, 0) {
+                        append(&mut out, "", &CharProps::default(), Some(obj));
+                    }
                 }
                 Inline::Anchor(name) => {
                     append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkStart { name: name.clone() }));
@@ -375,41 +440,6 @@ impl<'a> Builder<'a> {
                     if let Some(doc_id) = self.comments.get(id) {
                         append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentEnd { id: *doc_id }));
                     }
-                }
-                Inline::Shape { kind, w, h, float, blocks, look } => {
-                    // A text box always has its story; a shape only when it holds text.
-                    let story = if *kind == wordcraft_doc::para::ShapeKind::TextBox || !blocks.is_empty() {
-                        let story = self.blocks(blocks, 1);
-                        self.doc.try_add_part(wordcraft_doc::PartKind::TextBox, story).ok()
-                    } else {
-                        None
-                    };
-                    if let Some(part) = story.and_then(|id| self.doc.parts.get_mut(&id)) {
-                        let emu = |v: f32| if v.is_finite() { (v.clamp(0.0, 1584.0) * 12_700.0).round() as u32 } else { 0 };
-                        part.body.inset = look.inset.map(|i| i.map(emu));
-                        part.body.auto_fit = look.auto_fit;
-                    }
-                    let (stroke, stroke_width) = match look.line {
-                        Some((c, w)) if w.is_finite() && w > 0.0 => (Some(c), w.min(12.0)),
-                        _ => (None, 0.0),
-                    };
-                    // A line may be flat; anything else has some size.
-                    let least = if *kind == wordcraft_doc::para::ShapeKind::Line { 0.0 } else { 1.0 };
-                    let fit = |v: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
-                    let obj = InlineObject::Shape {
-                        kind: *kind,
-                        w: fit(*w),
-                        h: fit(*h),
-                        fill: look.fill.map(wordcraft_doc::fill::Fill::solid),
-                        stroke,
-                        stroke_width,
-                        float: float.as_deref().cloned().unwrap_or_default(),
-                        story,
-                        freeform: None,
-                        effects: Default::default(),
-                        extra: Default::default(),
-                    };
-                    append(&mut out, "", &CharProps::default(), Some(obj));
                 }
                 Inline::Note { endnote, custom, blocks } => {
                     if let Some(obj) = self.note(*endnote, custom, blocks) {
