@@ -1,9 +1,9 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-31 · **Change:** minor (Serbian: `sr_RS` for Cyrillic and `sr_Latn_RS` or `sh_RS` for Latin, each word checked in its own script's dictionary, #4968; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
-Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
+Turkish, Indonesian, Spanish and Serbian spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
 WordCraft reads at runtime. These dictionaries are not bundled: they are large, and several are
 GPL or LGPL licensed. Without one, the language isn't checked. The status bar then shows the
 language with **(no dictionary)**, for example *Português (Brasil) (no dictionary)*.
@@ -34,6 +34,8 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 | Spanish (Mexico) | `es_MX`, `es-MX`, `es_419`, `es-419`, `es_ANY`, `es` | LibreOffice `dict-es` (RLA-ES) |
 | Spanish (Latin America, and the other Spanish regions of the Americas) | `es_419`, `es-419`, `es_ANY`, `es`, `es_US`, `es_MX`, `es_AR`, `es-AR` | LibreOffice `dict-es` (RLA-ES) |
 | Spanish (Uruguay) | `es_UY`, `es-UY`, `es_AR`, `es-AR`, `es_419`, `es-419`, `es_ANY`, `es` | LibreOffice `dict-es` (RLA-ES) |
+| Serbian (Cyrillic) | `sr_RS`, `sr-RS`, `sr_Cyrl_RS`, `sr-Cyrl-RS`, `sr_Cyrl`, `sr-Cyrl`, `sr` | LibreOffice `dict-sr` (`sr`); Debian/Ubuntu `hunspell-sr` |
+| Serbian (Latin) | `sr_Latn_RS`, `sr-Latn-RS`, `sr_Latn`, `sr-Latn`, `sh_RS`, `sh-RS`, `sh` | LibreOffice `dict-sr` (`sr-Latn`); Debian/Ubuntu `hunspell-sr` |
 
 Every Portuguese region uses the same `pt_BR` dictionary, so text marked *Português (Portugal)*
 is checked with it too.
@@ -43,6 +45,15 @@ Spanish has a dictionary per variety: text marked *Español (España)* uses `es_
 Spanish regions of the Americas (Argentina, Colombia, the United States…) the first Latin
 American one found. LibreOffice's `dict-es` has them all. Uruguayan Spanish also accepts the
 `vos` forms of the dictionary's verbs (`tenés`, `vení`, `decime`, `decímelo`).
+
+Serbian has a dictionary per script, and WordCraft checks **each word in the dictionary of its
+own script**, whatever the text is marked as: a Latin word in text marked *Serbian (Cyrillic)* is
+checked in the Latin dictionary, never the Cyrillic one, so a document that mixes the scripts is
+checked word by word. Text marked `sr`, `sr-RS` or `sr-Cyrl-…` is *Serbian (Cyrillic)*; `sr-Latn-…`
+and the older `sh` are *Serbian (Latin)*. With only one of the two installed, words in the other
+script aren't checked, and text marked with that script shows **(no dictionary)**, naming `sr_RS`
+or `sr_Latn_RS`. A file named only for its region (Debian's `sr_ME`) doesn't say its script, so it
+isn't used; copy or link it under one of the names above.
 
 The files may be UTF-8 or the encoding named on the `.aff`'s `SET` line (ISO 8859-1, ISO 8859-2,
 ISO 8859-9, KOI8-R and Windows-1251 are read as well; the original VERO `pt_BR` is ISO 8859-1, older
@@ -117,7 +128,8 @@ curl -fLO https://raw.githubusercontent.com/LibreOffice/dictionaries/master/pt_B
 
 Other languages work the same way: replace `pt_BR` with the language's folder and file names
 from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones are all in
-`es/`, for example `es/es_MX.aff`).
+`es/`, for example `es/es_MX.aff`; the Serbian ones are both in `sr/`: `sr/sr.aff` for Cyrillic
+and `sr/sr-Latn.aff` for Latin, kept under those names).
 
 ## Checking that it works
 
@@ -140,6 +152,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Serbian (#4968): `sr_RS` (Cyrillic) and `sr_Latn_RS` or `sh_RS` (Latin) with their other names, each word checked in its own script's dictionary, and where LibreOffice keeps them |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |

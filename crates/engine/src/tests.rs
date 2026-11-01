@@ -8512,6 +8512,8 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
         // would otherwise force a reload that finds no cs_CZ here and empties it mid-test. Same
         // fixture content either way keeps such a race harmless, as it already does for Polish.
         ("cs_CZ", czech_test_dict::AFF, czech_test_dict::DIC),
+        ("sr_RS", SERBIAN_CYRILLIC_TEST_AFF, SERBIAN_CYRILLIC_TEST_DIC),
+        ("sr_Latn_RS", SERBIAN_LATIN_TEST_AFF, SERBIAN_LATIN_TEST_DIC),
     ] {
         std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
         std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -8624,6 +8626,45 @@ fn indonesian_proofing_through_the_review_commands() {
     assert_eq!(left.len(), 1);
     assert_eq!(left[0]["kind"], "grammar");
     assert_eq!(left[0]["lang"], "id");
+}
+
+// Hand-written synthetic Serbian fixtures in `FLAG num` form, one per script (no system
+// dictionary data).
+const SERBIAN_CYRILLIC_TEST_AFF: &str = "SET UTF-8\nFLAG num\nSFX 120 Y 2\nSFX 120 0 а .\nSFX 120 0 у .\n";
+const SERBIAN_CYRILLIC_TEST_DIC: &str = "4\nград/120\nрачунар/120\nкућа\nје\n";
+const SERBIAN_LATIN_TEST_AFF: &str = "SET UTF-8\nFLAG num\nSFX 120 Y 2\nSFX 120 0 a .\nSFX 120 0 u .\n";
+const SERBIAN_LATIN_TEST_DIC: &str = "4\ngrad/120\nračunar/120\nkuća\nje\n";
+
+/// #4968: Serbian through Review › Language. A run tagged `sr-Latn-RS` is checked in Serbian
+/// Latin and one tagged `sr-Cyrl-RS` in Cyrillic, and each word in the dictionary of its own
+/// script, so a Latin word in the Cyrillic run is never marked just for being Latin.
+#[test]
+fn serbian_proofing_in_both_scripts_through_the_review_commands() {
+    wordcraft_proof::sr::install_dictionary(wordcraft_proof::sr::Script::Cyrillic, SERBIAN_CYRILLIC_TEST_AFF, SERBIAN_CYRILLIC_TEST_DIC).unwrap();
+    wordcraft_proof::sr::install_dictionary(wordcraft_proof::sr::Script::Latin, SERBIAN_LATIN_TEST_AFF, SERBIAN_LATIN_TEST_DIC).unwrap();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Kuća je u gradu racunar.\nКућа је у граду рацунар računar."}));
+    run(&mut s, "select.text", json!({"text": "Kuća je u gradu racunar."}));
+    run(&mut s, "review.language", json!({"lang": "sr_latn_rs"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "sr-Latn-RS");
+    run(&mut s, "select.text", json!({"text": "Кућа је у граду рацунар računar."}));
+    run(&mut s, "review.language", json!({"lang": "sr-Cyrl-RS"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    let words: Vec<&str> = arr.iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
+    assert_eq!(words, ["racunar", "рацунар"], "{issues}");
+    assert!(arr.iter().all(|i| i["lang"] == "sr"), "{issues}");
+    assert_eq!(arr[0]["suggestions"][0], "računar", "{issues}");
+    assert_eq!(arr[1]["suggestions"][0], "рачунар", "{issues}");
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "racunar");
+    run(&mut s, "review.applySuggestion", json!({"text": "računar"}));
+    assert!(text(&s).starts_with("Kuća je u gradu računar."), "{}", text(&s));
+    let left = run(&mut s, "review.issues", json!({}));
+    assert_eq!(left.as_array().unwrap().iter().filter_map(|i| i["text"].as_str()).collect::<Vec<_>>(), ["рацунар"], "{left}");
+    // Both rows are reported in File › Options › Proofing.
+    let r = run(&mut s, "file.options", json!({}));
+    assert_eq!(r["dictionaries"].as_array().unwrap().iter().filter(|d| d["language"] == "sr").count(), 2, "{r}");
 }
 
 /// The spelling issues of the document: each word with its first suggestion.

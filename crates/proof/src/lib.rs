@@ -39,6 +39,10 @@
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
 //!   and generic checks plus the opening `¿`/`¡` with Spanish messages. Hyphenation uses the
 //!   existing English fallback.
+//! - **Serbian** ([`ProofLang::Sr`] for Cyrillic, [`ProofLang::SrLatn`] for Latin script, module
+//!   [`sr`]): the installed Hunspell `sr_RS` and `sr_Latn_RS` (or `sh_RS`) dictionaries (not
+//!   bundled), each word checked in the dictionary of its own script, dictionary-driven
+//!   suggestions; no grammar rules. Hyphenation uses the existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
@@ -65,6 +69,7 @@ pub mod patterns;
 pub mod pl;
 pub mod pt;
 pub mod ru;
+pub mod sr;
 pub mod tr;
 pub mod vi;
 
@@ -171,6 +176,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     cs::reload_dictionary();
     id::reload_dictionary();
     es::reload_dictionary();
+    sr::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -190,6 +196,8 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::EsMx, es::installed_path(ProofLang::EsMx)),
         (ProofLang::Es419, es::installed_path(ProofLang::Es419)),
         (ProofLang::EsUy, es::installed_path(ProofLang::EsUy)),
+        (ProofLang::Sr, sr::installed_path(sr::Script::Cyrillic)),
+        (ProofLang::SrLatn, sr::installed_path(sr::Script::Latin)),
     ]
 }
 
@@ -205,6 +213,7 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
         ProofLang::Tr => "tr_TR",
         ProofLang::Id => "id_ID",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::dictionary_name(lang),
+        ProofLang::Sr | ProofLang::SrLatn => sr::script_of(lang).dictionary_name(),
         _ => return None,
     };
     hunspell::load_error(key).map(|(_, reason)| reason)
@@ -448,6 +457,8 @@ fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
         ProofLang::Cs => cs::has_dictionary(),
         ProofLang::Id => id::has_dictionary(),
         l if l.is_spanish() => es::has_dictionary(l),
+        // The dictionary of the row's own script (a Serbian Latin run needs the Latin one).
+        l if l.is_serbian() => sr::has_dictionary(sr::script_of(l)),
         _ => return None,
     })
 }
@@ -466,6 +477,7 @@ fn dictionary_needed(lang: ProofLang, installed: bool) -> Option<&'static str> {
         ProofLang::Cs => Some("cs_CZ"),
         ProofLang::Id => Some("id_ID"),
         l if l.is_spanish() => Some(es::dictionary_name(l)),
+        l if l.is_serbian() => Some(sr::script_of(l).dictionary_name()),
         _ => None,
     }
 }
@@ -749,6 +761,8 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Cs => "Možná pravopisná chyba",
         ProofLang::Id => "Kemungkinan salah eja",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "Posible error ortográfico",
+        ProofLang::Sr => "Могућа правописна грешка",
+        ProofLang::SrLatn => "Moguća pravopisna greška",
         _ => "Possible spelling mistake",
     };
     Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
@@ -787,6 +801,8 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
+        // Each word in the dictionary of its own script, whichever script the run's tag names.
+        ProofLang::Sr | ProofLang::SrLatn => accepted_by_options(word, opts) || sr::is_correct_with_options(word, opts),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
     }
 }
@@ -805,6 +821,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
+        ProofLang::Sr | ProofLang::SrLatn => sr::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
@@ -835,7 +852,8 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         ProofLang::Id => id::grammar::check(text),
         // Spanish has no sentence-capital rule either.
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::grammar::check(text, lang),
-        ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
+        // Serbian: spelling only, no grammar rules yet.
+        ProofLang::Sr | ProofLang::SrLatn | ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -1037,6 +1055,9 @@ mod tests {
             (ProofLang::EsMx, "es_MX"),
             (ProofLang::Es419, "es_419"),
             (ProofLang::EsUy, "es_UY"),
+            // #4968: each Serbian script names its own.
+            (ProofLang::Sr, "sr_RS"),
+            (ProofLang::SrLatn, "sr_Latn_RS"),
         ] {
             assert_eq!(dictionary_needed(l, false), Some(name), "{l:?}");
             assert_eq!(dictionary_needed(l, true), None, "{l:?}");
@@ -1060,8 +1081,9 @@ mod tests {
 
     use super::*;
 
-    /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test.
-    static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test,
+    /// and by tests that change the shared user dictionary, so an add can't undo another test's remove.
+    pub(crate) static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// #1063: the dictionaries folder is searched before the system locations; the dictionaries
     /// in it are reported and used, and cached checks are dropped. The folder holds the same test
@@ -1084,6 +1106,8 @@ mod tests {
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_UY", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
+            ("sr_RS", sr::test_dict::CYRILLIC_AFF, sr::test_dict::CYRILLIC_DIC),
+            ("sr_Latn_RS", sr::test_dict::LATIN_AFF, sr::test_dict::LATIN_DIC),
         ] {
             std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
             std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -1096,11 +1120,12 @@ mod tests {
         let before = dictionary_generation();
         set_dictionaries_folder(Some(dir.clone()));
         assert!(dictionary_generation() > before, "cached checks are dropped");
-        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian and the Spanishes follow it.
+        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian, the
+        // Spanishes and the Serbians follow it.
         let found = installed_dictionaries();
         assert_eq!(found.get(4).map(|(lang, _)| *lang), Some(ProofLang::Tr));
         assert_eq!(
-            found[7..],
+            found[7..12],
             [
                 (ProofLang::Id, Some(dir.join("id_ID.dic"))),
                 (ProofLang::Es, Some(dir.join("es_ES.dic"))),
@@ -1109,6 +1134,9 @@ mod tests {
                 (ProofLang::EsUy, Some(dir.join("es_UY.dic"))),
             ]
         );
+        // #4968: one row per Serbian script. Like Czech's, their paths also reflect the sr
+        // module's own tests installing fixtures concurrently, so only the languages are pinned.
+        assert_eq!(found[12..].iter().map(|(lang, _)| *lang).collect::<Vec<_>>(), [ProofLang::Sr, ProofLang::SrLatn], "{found:?}");
         assert_eq!(
             found[..4],
             [
@@ -1859,7 +1887,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Sr, ProofLang::SrLatn, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1912,8 +1940,17 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+        fn serbian_suggestions_never_panic(s in "[a-zčćđšžA-ZČĆĐŠŽабвгдђежзијклљмнњопрстћуфхцчџшАБВГДЂЕЖЗИЈКЛЉМНЊОПРСТЋУФХЦЧЏШ'’ -]{0,14}") {
+            sr::test_dict::install();
+            for lang in [ProofLang::Sr, ProofLang::SrLatn] {
+                let _ = suggest_in(&s, 4, lang);
+                let _ = is_correct_in(&s, lang);
+            }
+        }
+
+        #[test]
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..17), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Sr, ProofLang::SrLatn, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

@@ -1,7 +1,7 @@
 use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 18] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -18,6 +18,8 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("es-MX", "Spanish (Mexico)"),
     ("es-419", "Spanish (Latin America)"),
     ("es-UY", "Spanish (Uruguay)"),
+    ("sr-Cyrl-RS", "Serbian (Cyrillic)"),
+    ("sr-Latn-RS", "Serbian (Latin)"),
 ];
 
 /// The English name of a proofing language tag, as the status bar shows it (no tag: WordCraft's
@@ -36,6 +38,14 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     // The region: the first two-letter or three-digit subtag after the language (and script).
     let region =
         parts.find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
+    // Serbian by its script (`sr`, `sr-RS`, `sh_RS`, `sr_RS@latin`), in Serbia or with no region:
+    // the names the list has. Another region shows by region below.
+    let in_serbia = region.is_none_or(|r| r.eq_ignore_ascii_case("RS"));
+    match wordcraft_engine::proof::ProofLang::from_tag(Some(tag)) {
+        wordcraft_engine::proof::ProofLang::Sr if in_serbia => return "Serbian (Cyrillic)".into(),
+        wordcraft_engine::proof::ProofLang::SrLatn if in_serbia => return "Serbian (Latin)".into(),
+        _ => {}
+    }
     match region {
         // A region the list doesn't have: the language's name without its own region or variant.
         Some(r) => {

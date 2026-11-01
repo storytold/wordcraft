@@ -66,6 +66,16 @@ pub enum ProofLang {
     /// dictionary (else the neighbouring Rioplatense `es_AR`, a Latin American or a generic one),
     /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
     EsUy,
+    /// Serbian in Cyrillic script (`sr`, `sr-RS`, `sr-Cyrl-RS`, `sr-Cyrl-BA`, `sr-ME`…; ISO 639-2
+    /// `srp`): a tag without a script is Cyrillic, BCP 47's default for Serbian. The installed
+    /// Hunspell `sr_RS` dictionary, dictionary-driven suggestions, no grammar rules; hyphenation
+    /// keeps the fallback English patterns. Each word is checked in its own script's dictionary
+    /// ([`crate::sr`]), so a Latin word here goes to the Latin one, never the Cyrillic one.
+    Sr,
+    /// Serbian in Latin script (`sr-Latn`, `sr-Latn-RS`, `sr-Latn-ME`…, and `sh`, the
+    /// Serbo-Croatian code older Serbian Latin dictionaries and documents use): [`ProofLang::Sr`]'s
+    /// tools with the installed `sr_Latn_RS` (or `sh_RS`) dictionary.
+    SrLatn,
     /// German (`de`, `de-DE`, `de-AT`, `de-CH`…): hyphenation by the German patterns (reformed
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
@@ -79,7 +89,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 17] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -95,11 +105,13 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::Sr,
+        ProofLang::SrLatn,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
-    /// counts, and for English and Spanish the region too ([`ProofLang::english`],
-    /// [`ProofLang::spanish`]). No tag (or an empty one) is English, WordCraft's default editing
+    /// counts, for English and Spanish the region too ([`ProofLang::english`],
+    /// [`ProofLang::spanish`]), and for Serbian the script ([`ProofLang::serbian`]). No tag (or an empty one) is English, WordCraft's default editing
     /// language.
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
@@ -126,6 +138,11 @@ impl ProofLang {
             ProofLang::Id
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
+        } else if primary.eq_ignore_ascii_case("sr") || primary.eq_ignore_ascii_case("srp") {
+            ProofLang::serbian(tag)
+        } else if primary.eq_ignore_ascii_case("sh") {
+            // Serbo-Croatian: Hunspell's and older documents' code for Serbian in Latin script.
+            ProofLang::SrLatn
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
         } else {
@@ -156,6 +173,22 @@ impl ProofLang {
         }
     }
 
+    /// The Serbian of a Serbian tag, by its script subtag: `Latn` (or POSIX `@latin`) is
+    /// [`ProofLang::SrLatn`]; `Cyrl`, any other script and no script are [`ProofLang::Sr`]
+    /// (Cyrillic is BCP 47's default script for Serbian).
+    fn serbian(tag: &str) -> ProofLang {
+        let (tag, modifier) = tag.split_once('@').unwrap_or((tag, ""));
+        let tag = tag.split('.').next().unwrap_or("");
+        let latin = modifier.eq_ignore_ascii_case("latin")
+            || tag.split(['-', '_']).skip(1).take_while(|p| p.len() != 1).any(|p| p.eq_ignore_ascii_case("Latn"));
+        if latin { ProofLang::SrLatn } else { ProofLang::Sr }
+    }
+
+    /// Is this one of the Serbians ([`ProofLang::Sr`], [`ProofLang::SrLatn`])?
+    pub fn is_serbian(self) -> bool {
+        matches!(self, ProofLang::Sr | ProofLang::SrLatn)
+    }
+
     /// Is this one of the Englishes ([`ProofLang::En`], [`ProofLang::EnGb`], [`ProofLang::EnCa`])?
     pub fn is_english(self) -> bool {
         matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa)
@@ -167,7 +200,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`, `sr`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -181,6 +214,7 @@ impl ProofLang {
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
+            ProofLang::Sr | ProofLang::SrLatn => "sr",
             ProofLang::De => "de",
             ProofLang::Other => "",
         }
@@ -358,7 +392,64 @@ mod tests {
 
     #[test]
     fn tags_reject_unknown_or_partial_language_codes() {
-        assert_tags(&["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"], ProofLang::Other);
+        assert_tags(
+            &["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "srx", "shx", "srpx", "hbs", "e", "-"],
+            ProofLang::Other,
+        );
+    }
+
+    /// #4968: Serbian is proofed in both scripts, picked by the tag's script subtag: none or
+    /// `Cyrl` is Cyrillic (BCP 47's default for Serbian), `Latn` and the legacy `sh` are Latin.
+    #[test]
+    fn serbian_tags_resolve_by_script() {
+        assert_tags(
+            &[
+                "sr",
+                "SR",
+                "sr-RS",
+                "sr_RS",
+                "sr_RS.UTF-8",
+                " sr-RS ",
+                "sr-Cyrl",
+                "sr-Cyrl-RS",
+                "SR-cyrl-rs",
+                "sr_Cyrl_RS",
+                "sr-Cyrl-BA",
+                "sr-Cyrl-ME",
+                "sr-ME",
+                "sr-BA",
+                "srp",
+                "sr-x-latn",
+            ],
+            ProofLang::Sr,
+        );
+        assert_tags(
+            &[
+                "sr-Latn",
+                "sr-Latn-RS",
+                "SR-latn-rs",
+                "sr_Latn_RS",
+                "sr-Latn-BA",
+                "sr-Latn-ME",
+                "sr-latn-me",
+                "sr_RS@latin",
+                "sr_RS.UTF-8@latin",
+                "srp-Latn",
+                "sh",
+                "sh-RS",
+                "sh_RS",
+                "SH_rs",
+                "sh-BA",
+            ],
+            ProofLang::SrLatn,
+        );
+        for l in [ProofLang::Sr, ProofLang::SrLatn] {
+            assert!(l.is_serbian() && l.is_proofed() && ProofLang::PROOFED.contains(&l), "{l:?}");
+            assert!(!l.is_english() && !l.is_spanish());
+            assert_eq!(l.code(), "sr");
+        }
+        assert!(!ProofLang::Hr.is_serbian() && !ProofLang::Ru.is_serbian() && !ProofLang::Other.is_serbian());
+        assert_eq!(normalize_tag("sr_latn_rs").as_deref(), Some("sr-Latn-RS"));
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and
