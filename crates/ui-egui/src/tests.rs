@@ -3740,7 +3740,8 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
 /// Screen readers read the status bar on request, as in Word (NVDA+End): they find it by its role
 /// or at the window's bottom-left corner, then read the names of its controls. The bottom panel is
 /// that status bar, and the page, word count and language are its controls (the containers between
-/// them are transparent to screen readers).
+/// them are transparent to screen readers). Its name is looked up in the interface catalogs, so it
+/// is read in the interface's language, as Word's ("Barra di stato" in Italian).
 #[test]
 fn screen_readers_find_the_status_bar_and_its_controls() {
     use egui::accesskit::Role;
@@ -3771,6 +3772,15 @@ fn screen_readers_find_the_status_bar_and_its_controls() {
             up = node.parent();
         }
     }
+    // In the pseudo-language every string looked up in the catalogs comes back marked.
+    crate::i18n::pseudo::set(true);
+    h.run_steps(2);
+    let name = h.get(By::new().predicate(|n| n.role() == Role::Status)).accesskit_node().label().unwrap_or_default();
+    crate::i18n::pseudo::set(false);
+    assert!(
+        name.starts_with('⟦') && crate::i18n::pseudo::unmarked(&name).is_empty(),
+        "the status bar's name goes through the interface catalogs: {name:?}"
+    );
 }
 
 /// #2068: fonts applied from the font box or the mini toolbar (`format.font`) and from the
