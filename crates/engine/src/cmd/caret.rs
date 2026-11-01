@@ -445,26 +445,46 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Select the n-th occurrence of `text` in the body (agents: "select the word X").
+/// Select the n-th occurrence of `text` (agents: "select the word X") in the searched stories'
+/// document order - the order `edit.find` reports with no `story` selector (#3270), so an
+/// occurrence number is the same on either side. A `story` parameter searches only that story.
 fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let needle = p::req_str(v, "text")?;
     let n = p::u64(v, "occurrence").unwrap_or(1).max(1) as usize;
     if needle.is_empty() {
         return Err(CmdError::Params("`text` is empty".into()));
     }
+    // The document order of a two-story reach is the body's run first ([`Pos`] orders Body
+    // before any part), so each story's own match count splits the rank. No per-match data is
+    // collected here: every match is two positions and two path clones, and a frequent needle
+    // (a space, a single letter) is only cheap when barely scanned.
+    let mut rank = n;
+    for story in crate::cmd::edit::reach_stories(s, v).into_iter().rev() {
+        let (sel, count) = select_nth_in_story(s, needle, rank, story)?;
+        if let Some(sel) = sel {
+            s.sel = sel;
+            return sel_result(s);
+        }
+        rank -= count;
+    }
+    Err(CmdError::Failed(format!("`{needle}` not found")))
+}
+
+/// The n-th match of `needle` in one story, selected when it exists. With fewer than `n`
+/// matches here, `Ok((None, count))` carries that count over: the caller reduces the rank
+/// across stories in document order.
+fn select_nth_in_story(s: &Session, needle: &str, n: usize, story: StoryRef) -> Result<(Option<Selection>, usize), CmdError> {
     let mut count = 0;
-    let story = super::story_param(s, v);
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
         for (i, _) in p.text.match_indices(needle) {
             count += 1;
             if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
-                return sel_result(s);
+                let anchor = Pos { story, path: path.clone(), off: i };
+                let focus = Pos { story, path, off: i + needle.len() };
+                return Ok((Some(Selection { anchor, focus }), count));
             }
         }
     }
-    let _ = StoryRef::Body;
-    Err(CmdError::Failed(format!("`{needle}` not found")))
+    Ok((None, count))
 }
