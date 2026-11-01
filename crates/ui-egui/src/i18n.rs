@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +126,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Bosnian, Latin script; `bs`, `bs-BA`, `bs_BA.UTF-8` and `bs-Latn-BA` resolve here. Cyrillic
+    // Bosnian (`bs-Cyrl-*`) has no catalog, so it stays in English.
+    LangInfo { code: "bs", prefer_hans: false, editing_lang: None },
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
@@ -304,8 +307,32 @@ fn detect_system_lang() -> Lang {
     if let Some(l) = std::env::var("WORDCRAFT_LANGUAGE").ok().and_then(|v| lang_from_tag(&v)) {
         return l;
     }
+    // sys-locale drops glibc's script modifier (`sr_RS@latin` → `sr-RS`), so read its variables raw.
+    #[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
+    let tags = posix_locale_tags(|k| std::env::var(k).ok());
+    #[cfg(not(all(unix, not(any(target_vendor = "apple", target_os = "android")))))]
     let tags: Vec<String> = sys_locale::get_locales().take(16).collect();
     first_supported(tags.iter().map(String::as_str)).unwrap_or(Lang::EN)
+}
+
+/// The interface languages the Unix locale variables ask for, as gettext reads them, unconverted
+/// so a glibc script modifier picks the script (`sr_RS.UTF-8@latin` is Latin Serbian,
+/// `bs_BA.UTF-8@cyrillic` Cyrillic Bosnian). Only one of `LC_ALL`, `LC_MESSAGES` and `LANG` is in
+/// effect, the first set: a lower one is never a fallback, so it can't cross to another script.
+/// GNU's `LANGUAGE` list, when set, replaces it, except under the `C` locale.
+#[cfg_attr(not(all(unix, not(any(target_vendor = "apple", target_os = "android")))), allow(dead_code))]
+fn posix_locale_tags(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let set = |name| var(name).filter(|v| !v.is_empty());
+    let Some(locale) = ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(set) else {
+        return Vec::new();
+    };
+    if matches!(locale.split(['.', '@']).next(), Some("C" | "POSIX")) {
+        return vec![locale];
+    }
+    match set("LANGUAGE") {
+        Some(list) => list.split(':').filter(|t| !t.is_empty()).take(16).map(str::to_owned).collect(),
+        None => vec![locale],
+    }
 }
 
 /// The system region (#838): it picks the paper File › New starts on, the default measurement
