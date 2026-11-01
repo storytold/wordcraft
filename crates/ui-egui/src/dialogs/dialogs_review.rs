@@ -202,8 +202,9 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
             heading(ui, "Original document");
             ui.radio_value(&mut f.original_current, true, tl!("This document"));
             ui.horizontal(|ui| {
-                ui.radio_value(&mut f.original_current, false, "");
-                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file")));
+                ui.radio_value(&mut f.original_current, false, "").accessible_name(tl!("Another file"));
+                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.original).desired_width(170.0).hint_text(tl!("Another file")))
+                    .accessible_name(tl!("Original document"));
                 if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
                     pick = Some(false);
                 }
@@ -212,14 +213,14 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
         ui.vertical(|ui| {
             heading(ui, "Revised document");
             ui.horizontal(|ui| {
-                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0));
+                ui.add_enabled(browse, egui::TextEdit::singleline(&mut f.revised).desired_width(170.0)).accessible_name(tl!("Revised document"));
                 if ui.add_enabled(browse, egui::Button::new(tl!("Browse…"))).clicked() {
                     pick = Some(true);
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Label changes with:"));
-                ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0));
+                let label = ui.label(tl!("Label changes with:"));
+                ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0)).labelled_by(label.id);
             });
         });
         ui.end_row();
@@ -502,7 +503,7 @@ fn exceptions(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.checkbox(&mut f.options.auto_add_first_letter, tl!("Automatically add words to list (First Letter)"));
         ui.checkbox(&mut f.options.auto_add_initial_caps, tl!("Automatically add words to list (INitial CAps)"));
-        ui.label(tl!("Don't capitalize after:"));
+        let exceptions_label = ui.label(tl!("Don't capitalize after:"));
         let list = f.options.exception_list();
         let mut picked = None;
         egui::ScrollArea::vertical().id_salt("ac_exceptions").max_height(90.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -516,7 +517,7 @@ fn exceptions(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
             f.exception = e;
         }
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut f.exception).desired_width(110.0));
+            ui.add(egui::TextEdit::singleline(&mut f.exception).desired_width(110.0)).labelled_by(exceptions_label.id);
             let known = list.contains(&f.exception.trim().to_lowercase());
             if ui.add_enabled(!f.exception.trim().is_empty() && !known, egui::Button::new(tl!("Add"))).clicked() {
                 let p = json!({"addException": f.exception});

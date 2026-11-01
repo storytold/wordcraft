@@ -630,13 +630,18 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {
-            ui.label(tl!("Style:"));
+            let label = ui.label(tl!("Style:"));
             let current = STYLES.iter().find(|(s, _)| *s == l.style).map(|(_, n)| *n).unwrap_or("Single");
-            craft_ui::ComboBox::from_id_salt((id, "style")).selected_text(tl!(current)).width(120.0).show_ui(ui, |ui| {
-                for (s, n) in STYLES {
-                    ui.selectable_value(&mut l.style, s, tl!(n));
-                }
-            });
+            craft_ui::ComboBox::from_id_salt((id, "style"))
+                .selected_text(tl!(current))
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for (s, n) in STYLES {
+                        ui.selectable_value(&mut l.style, s, tl!(n));
+                    }
+                })
+                .response
+                .labelled_by(label.id);
             ui.label(tl!("Color:"));
             color_menu(ui, theme, &mut l.color);
             ui.label(tl!("Width:"));
@@ -647,7 +652,9 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
                     for w in WIDTHS {
                         ui.selectable_value(&mut l.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
                     }
-                });
+                })
+                .response
+                .accessible_name(tl!("Width:"));
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {

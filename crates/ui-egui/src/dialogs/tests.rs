@@ -144,6 +144,305 @@ fn find_replace_and_go_to_are_one_dialog() {
     }
 }
 
+/// The dialogs `ui.dialog` opens on a document (with a table for the table dialogs).
+const DIALOG_NAMES: &str = "font paragraph asianTypography tabs borders pageBorders shading find replace goto insertTable pageSetup link bookmark wordCount zoom watermark phonetic newStyle manageStyles newTableStyle commands icons tableProperties tableCellMargins enclose pasteSpecial renameDocument about contributors models recipientList newRecipientList insertMergeField findRecipient mergeRecords printRecords fieldCode encryptPassword ruleIf ruleSkipIf matchFields checkErrors defineList trackChangesOptions customizeKeyboard customizeRibbon customizeQuickAccess noteOptions templates organizer customProperties columns symbol specialCharacters field insertSmartArt insertChart dropCap lineNumbers hyphenation manualHyphenation language envelopes labels tableFormula tableSort splitCells textToTable tableToText pageNumbers compare combine autoCorrect caption crossReference index markEntry toc tableOfFigures sourceManager createSource macros";
+
+/// Dialogs whose unnamed boxes open pull requests name, to come off this list as they land:
+/// Insert Table (#4982), Field, Edit Field Code, Encrypt with Password and Password (#5070), Drop
+/// Cap and Line Numbers (#5078).
+const NAMED_IN_OPEN_PRS: [&str; 7] = ["insertTable", "fieldCode", "editFieldCode", "encryptPassword", "password", "dropCap", "lineNumbers"];
+
+/// #3172: every control of the dialogs in [`DIALOG_NAMES`] has a name for screen readers, as Word's
+/// do, as each dialog first appears (first tab, no selection; [`REACHED`] has the rest).
+/// egui_kittest's accessibility check fails on a box, list or check box without one, as a dialog
+/// opens. Many had
+/// none: the label beside them was never linked to them (`labelled_by`), so NVDA said only "combo
+/// box" or "edit", in Borders and Shading, Insert Hyperlink, Footnote and Endnote, Track Changes
+/// Options, the mail merge rules, Envelopes and Labels, the table dialogs and others.
+#[test]
+fn every_dialog_names_its_controls() {
+    let mut problems = Vec::new();
+    for name in DIALOG_NAMES.split_whitespace().filter(|n| !NAMED_IN_OPEN_PRS.contains(n)) {
+        let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut app = app_with("Some words in a paragraph");
+            if name.starts_with("table") || name == "splitCells" {
+                app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+            }
+            let _ = app.run("ui.dialog", json!({"name": name}));
+            let opened = app.dialog.is_some();
+            let mut h = app_harness(app);
+            h.run_steps(4);
+            // `run_steps` doesn't check; building the harness does, but before the dialog's last
+            // frames.
+            h.check_accessibility();
+            opened
+        }));
+        match opened {
+            Ok(true) => {}
+            Ok(false) => problems.push(format!("{name}: did not open")),
+            Err(e) => {
+                let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string())).unwrap_or_default();
+                problems.push(format!("{name}: {why}"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A dialog [`every_dialog_names_its_controls`] does not reach by its name alone: one that opens
+/// on a selected object, from another dialog, on a tab other than its first, or as a question.
+struct Reached {
+    name: &'static str,
+    /// Puts the document in the state the dialog needs and opens it (or its parent).
+    open: fn(&mut WordApp),
+    /// What to click once it shows: the tab, or the button that opens the dialog under test.
+    click: &'static [&'static str],
+}
+
+fn ui_dialog(app: &mut WordApp, name: &str) {
+    let _ = app.run("ui.dialog", json!({"name": name}));
+}
+
+/// Insert › Field showing one kind of field's options (`codes`: Field Codes, the code typed in).
+fn field_dialog(app: &mut WordApp, name: &str, codes: bool) {
+    ui_dialog(app, "field");
+    if let Some(Dialog::Insert(d)) = &mut app.dialog
+        && let crate::dialogs_insert::InsertDialog::Field(f) = d.as_mut()
+    {
+        f.select(name);
+        f.codes = codes;
+    }
+}
+
+fn with_chart(app: &mut WordApp) {
+    app.run("insert.chart", json!({"type": "doughnut"})).unwrap();
+}
+
+/// The dialogs behind a selection, another dialog, a tab or a question.
+const REACHED: &[Reached] = &[
+    Reached { name: "paragraph › Line and Page Breaks", open: |a| ui_dialog(a, "paragraph"), click: &["Line and Page Breaks"] },
+    Reached { name: "colors › Standard", open: |a| ui_dialog(a, "colors"), click: &[] },
+    Reached {
+        name: "colors › Custom",
+        open: |a| {
+            let _ = a.run("ui.dialog", json!({"name": "colors", "tab": "custom"}));
+        },
+        click: &[],
+    },
+    // Each kind of field shows its own options (the Date kind opens by name).
+    Reached { name: "field › a number", open: |a| field_dialog(a, "PAGE", false), click: &[] },
+    Reached {
+        name: "field › a bookmark",
+        open: |a| {
+            a.run("insert.bookmark", json!({"name": "Here"})).unwrap();
+            field_dialog(a, "REF", false);
+        },
+        click: &[],
+    },
+    Reached { name: "field › a sequence", open: |a| field_dialog(a, "SEQ", false), click: &[] },
+    Reached { name: "field › a merge field", open: |a| field_dialog(a, "MERGEFIELD", false), click: &[] },
+    Reached { name: "field › a table of contents", open: |a| field_dialog(a, "TOC", false), click: &[] },
+    Reached { name: "field › a style reference", open: |a| field_dialog(a, "STYLEREF", false), click: &[] },
+    Reached { name: "field › a plain field", open: |a| field_dialog(a, "AUTHOR", false), click: &[] },
+    Reached { name: "field › Field Codes", open: |a| field_dialog(a, "PAGE", true), click: &[] },
+    Reached { name: "captionNumbering", open: |a| ui_dialog(a, "caption"), click: &["Numbering…"] },
+    Reached { name: "newLabel", open: |a| ui_dialog(a, "caption"), click: &["New Label…"] },
+    Reached { name: "tocOptions", open: |a| ui_dialog(a, "toc"), click: &["Options…"] },
+    Reached { name: "tocStyles", open: |a| ui_dialog(a, "toc"), click: &["Modify…"] },
+    Reached {
+        name: "editSource",
+        open: |a| {
+            let source = wordcraft_doc::Source::default();
+            a.dialog = Some(Dialog::Refs(Box::new(crate::dialogs_refs::RefsDialog::Source(Box::new(crate::dialogs_refs::SourceForm::of(
+                source, true, false, true,
+            ))))));
+        },
+        click: &[],
+    },
+    Reached { name: "modifyStyle", open: |a| a.dialog = Dialog::modify_style(a, "Normal"), click: &[] },
+    Reached {
+        name: "modifyTableStyle",
+        open: |a| {
+            a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+            a.run("table.newStyle", json!({"name": "Parts"})).unwrap();
+            ui_dialog(a, "modifyTableStyle");
+        },
+        click: &[],
+    },
+    Reached {
+        name: "pictureSize",
+        open: |a| {
+            let img = image::RgbaImage::from_pixel(20, 10, image::Rgba([200, 30, 30, 255]));
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})).unwrap();
+            ui_dialog(a, "pictureSize");
+        },
+        click: &[],
+    },
+    Reached {
+        name: "chartData",
+        open: |a| {
+            with_chart(a);
+            let _ = a.run("chart.editData", json!({}));
+        },
+        click: &[],
+    },
+    Reached {
+        name: "changeChartType",
+        open: |a| {
+            with_chart(a);
+            let _ = a.run("chart.type", json!({}));
+        },
+        click: &[],
+    },
+    Reached {
+        name: "controlProperties › combo box",
+        open: |a| {
+            a.run("developer.comboBox", json!({"items": ["One", "Two"]})).unwrap();
+            ui_dialog(a, "controlProperties");
+        },
+        click: &[],
+    },
+    Reached {
+        name: "controlProperties › date picker",
+        open: |a| {
+            a.run("developer.datePicker", json!({})).unwrap();
+            ui_dialog(a, "controlProperties");
+        },
+        click: &[],
+    },
+    Reached {
+        name: "controlProperties › check box",
+        open: |a| {
+            a.run("developer.checkBox", json!({})).unwrap();
+            ui_dialog(a, "controlProperties");
+        },
+        click: &[],
+    },
+    Reached {
+        name: "editFieldCode",
+        open: |a| {
+            a.run("insert.field", json!({"instr": "PAGE"})).unwrap();
+            a.run("caret.docStart", json!({})).unwrap();
+            let _ = a.run("fields.setCode", json!({}));
+        },
+        click: &[],
+    },
+    Reached {
+        name: "selectTable",
+        open: |a| {
+            let sheets = vec!["Sheet1".to_string(), "Sheet2".to_string()];
+            a.dialog = Some(Dialog::SelectTable { sheets, selected: 0, headers: true, message: String::new(), params: json!({}) });
+        },
+        click: &[],
+    },
+    Reached {
+        name: "password",
+        open: |a| {
+            a.dialog = Some(Dialog::Password { name: "Locked.docx".into(), params: json!({}), password: Default::default(), message: String::new() })
+        },
+        click: &[],
+    },
+    Reached {
+        name: "saveChanges",
+        open: |a| {
+            let _ = a.run("file.close", json!({}));
+        },
+        click: &[],
+    },
+    Reached { name: "discardRecovery", open: |a| a.dialog = Some(Dialog::DiscardRecovery { id: "copy".into(), name: "Draft".into() }), click: &[] },
+];
+
+/// The interface fonts need not carry the ballot boxes a check box control writes by default
+/// (☒ and ☐, shown in its Properties), and kittest panics on a missing glyph: a stand-in for
+/// exactly those two, as `canvas::tests::kana_test_glyphs` does for kana.
+fn ballot_box_test_glyphs(ctx: &egui::Context) {
+    ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::dialogs::tests::ballot", |req| {
+        let ballot = !req.cluster.is_empty() && req.cluster.chars().all(|c| matches!(c, '☐' | '☒'));
+        ballot.then(|| egui::RasterizedGlyph {
+            bitmap: egui::GlyphBitmap {
+                image: egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                offset_px: egui::vec2(0.0, 0.0),
+                is_color: false,
+            },
+            advance_px: req.font_size_px.max(1.0),
+        })
+    }));
+}
+
+/// #3172: the dialogs [`every_dialog_names_its_controls`] cannot open by their name alone name
+/// their controls too, as each shows.
+#[test]
+fn dialogs_behind_a_selection_or_another_dialog_name_their_controls() {
+    use egui_kittest::kittest::Queryable;
+    let mut problems = Vec::new();
+    for r in REACHED.iter().filter(|r| !NAMED_IN_OPEN_PRS.contains(&r.name)) {
+        let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut app = app_with("Some words in a paragraph");
+            (r.open)(&mut app);
+            let opened = app.dialog.is_some() || app.colors.is_some();
+            let mut h =
+                egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_context_setup(ballot_box_test_glyphs).build_ui_state(
+                    |ui, app: &mut WordApp| {
+                        let ctx = ui.ctx().clone();
+                        app.logic(&ctx);
+                        app.ui(ui);
+                    },
+                    app,
+                );
+            h.run_steps(4);
+            for label in r.click {
+                h.get_by_label(label).click();
+                h.run_steps(4);
+            }
+            // Building the harness checked the dialog as it opened; this checks what the clicks
+            // reached (`run_steps` doesn't check).
+            h.check_accessibility();
+            // The click reached the dialog and the tab under test, not only its parent.
+            let want = r.name.split(" ›").next().unwrap_or_default();
+            let shown = h.state().dialog.as_ref().map(Dialog::name).or(h.state().colors.as_ref().map(|_| "colors"));
+            let tab = match r.name {
+                "paragraph › Line and Page Breaks" => matches!(h.state().dialog, Some(Dialog::Paragraph { tab: 1, .. })),
+                "colors › Standard" => h.state().colors.as_ref().is_some_and(|c| c.tab == crate::colors::ColorsTab::Standard),
+                "colors › Custom" => h.state().colors.as_ref().is_some_and(|c| c.tab == crate::colors::ColorsTab::Custom),
+                _ => true,
+            };
+            opened && shown == Some(want) && tab
+        }));
+        match opened {
+            Ok(true) => {}
+            Ok(false) => problems.push(format!("{}: did not open", r.name)),
+            Err(e) => {
+                let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string())).unwrap_or_default();
+                problems.push(format!("{}: {why}", r.name));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// #3172: Insert › Icons' tiles are named by their icons (the name was only a hover tip), and
+/// the picked one says so (its name also shows under the tiles).
+#[test]
+fn icon_tiles_are_named_by_their_icons() {
+    use egui_kittest::kittest::NodeT;
+    use egui_kittest::kittest::Queryable;
+    let first = wordcraft_render::icon_lib::search("", None).first().map(|i| i.name).unwrap();
+    let mut app = app_with("One");
+    ui_dialog(&mut app, "icons");
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::Button, first).accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, first).click();
+    h.run_steps(2);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::Button, first).accesskit_node().toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "the picked tile"
+    );
+}
+
 /// #4327: View › Macros opens a dialog that runs, deletes and records macros; the command with
 /// a name to run or delete (what scripts send) still acts without one.
 #[test]
