@@ -63,7 +63,6 @@ impl Region {
     /// The region a BCP 47 or POSIX locale tag names (`pl-PL`, `pl_PL.UTF-8@euro`,
     /// `zh-Hans-CN`, `en-US-u-ms-metric`). An empty or unreadable tag, `C` and `POSIX` are
     /// `en-US`; a bare `en` is the United States, any other bare language has no territory.
-    #[must_use]
     pub fn from_tag(tag: &str) -> Region {
         // Locale tags are short; anything long is junk and only its start is read.
         let tag: String = tag.chars().take(64).collect();
@@ -98,7 +97,6 @@ impl Region {
 
     /// This region with another territory (from a platform setting that names only the
     /// territory, like Windows' home location). A value that isn't a territory code is ignored.
-    #[must_use]
     pub fn with_territory(mut self, territory: &str) -> Region {
         let t = territory.trim();
         let ok = (t.len() == 2 && t.chars().all(|c| c.is_ascii_alphabetic())) || (t.len() == 3 && t.chars().all(|c| c.is_ascii_digit()));
@@ -111,7 +109,6 @@ impl Region {
     /// This region with the paper and the measurement system taken from their own locale tags,
     /// when the platform sets them apart (Unix `LC_PAPER`, `LC_MEASUREMENT`): `LANG=pl_PL.UTF-8`
     /// with `LC_PAPER=en_US.UTF-8` writes `2,54 cm` on Letter.
-    #[must_use]
     pub fn with_paper_and_measurement(mut self, paper: Option<&str>, measurement: Option<&str>) -> Region {
         if let Some(t) = paper {
             self.letter = Some(Region::from_tag(t).uses_letter());
@@ -137,25 +134,21 @@ impl Region {
     }
 
     /// Does a new document start on US Letter here (otherwise A4)?
-    #[must_use]
     pub fn uses_letter(&self) -> bool {
         self.letter.unwrap_or_else(|| LETTER.contains(&self.territory.as_str()))
     }
 
     /// The default paper's name and portrait size in points: Letter (612 × 792) or A4.
-    #[must_use]
     pub fn paper(&self) -> (&'static str, f32, f32) {
         if self.uses_letter() { ("Letter", 612.0, 792.0) } else { ("A4", 595.28, 841.89) }
     }
 
     /// The unit lengths are shown in by default: inches in the US, centimetres elsewhere.
-    #[must_use]
     pub fn units(&self) -> Unit {
         if self.inches.unwrap_or_else(|| INCHES.contains(&self.territory.as_str())) { Unit::Inches } else { Unit::Centimeters }
     }
 
     /// The decimal separator numbers are written with here (`,` or `.`).
-    #[must_use]
     pub fn decimal(&self) -> char {
         let lang = self.language.as_str();
         let t = self.territory.as_str();
@@ -167,7 +160,6 @@ impl Region {
     }
 
     /// `pt` in `unit` written the way this region writes numbers (`2,54 cm` in Poland).
-    #[must_use]
     pub fn format(&self, unit: Unit, pt: f32) -> String {
         unit.format_with(pt, self.decimal())
     }

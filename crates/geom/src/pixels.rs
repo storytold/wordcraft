@@ -8,13 +8,11 @@ pub const MAX_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_RASTER_PIXELS: u64 = 100_000_000;
 
 /// Bytes of a `w`×`h` RGBA8 raster, None on overflow.
-#[must_use]
 pub fn rgba_bytes(w: u32, h: u32) -> Option<u64> {
     u64::from(w).checked_mul(u64::from(h))?.checked_mul(4)
 }
 
 /// Whether a `w`×`h` RGBA8 raster fits `budget` bytes.
-#[must_use]
 pub fn rgba_fits(w: u32, h: u32, budget: u64) -> bool {
     w > 0 && h > 0 && rgba_bytes(w, h).is_some_and(|b| b <= budget)
 }
@@ -22,7 +20,6 @@ pub fn rgba_fits(w: u32, h: u32, budget: u64) -> bool {
 /// Whether decoding a `w`×`h` picture fits `budget` bytes at its peak: the decoder's buffer and
 /// the RGBA conversion (or its premultiplied copy) are alive together, so two RGBA buffers. For a
 /// decoder whose buffer isn't four bytes a pixel, see [`decode_peak_fits`].
-#[must_use]
 pub fn decode_fits(w: u32, h: u32, budget: u64) -> bool {
     decode_peak_fits(w, h, 4, budget)
 }
@@ -30,14 +27,12 @@ pub fn decode_fits(w: u32, h: u32, budget: u64) -> bool {
 /// [`decode_fits`] for a decoder that hands back `native` bytes a pixel (8 for 16-bit RGBA, 16 for
 /// float RGBA): its buffer lives alongside the RGBA8 conversion, then the conversion alongside its
 /// premultiplied copy, so the peak is the larger of `native + 4` and `8` bytes a pixel.
-#[must_use]
 pub fn decode_peak_fits(w: u32, h: u32, native: u64, budget: u64) -> bool {
     let per_pixel = native.saturating_add(4).max(8);
     w > 0 && h > 0 && u64::from(w).checked_mul(u64::from(h)).and_then(|p| p.checked_mul(per_pixel)).is_some_and(|b| b <= budget)
 }
 
 /// `w`×`h` shrunk (aspect kept, each side at least 1) until it holds at most `max_pixels`.
-#[must_use]
 pub fn fit_pixels(w: u32, h: u32, max_pixels: u64) -> (u32, u32) {
     let (w, h) = (w.max(1), h.max(1));
     let max_pixels = max_pixels.max(1);
