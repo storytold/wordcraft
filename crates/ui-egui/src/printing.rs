@@ -175,7 +175,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
     }
     let colour = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_color.take() };
     let picture = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_picture.take() };
-    let pdf = app.session.print_pdf(&pdf_params).map_err(|error| error.to_string());
+    let pdf = app.session.print_job_pdf(&pdf_params).map_err(|error| error.to_string());
     if colour.is_some() {
         app.session.doc.settings.page_color = colour;
     }
