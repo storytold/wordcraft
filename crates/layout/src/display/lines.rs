@@ -643,11 +643,13 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
         let Some(ch) = leader.char() else { continue };
         let gid = style.face.glyph_for(ch);
-        let advance = (style.face.advance(gid) as f32 * style.size / style.face.upem.max(1.0) as f32).max(1.0);
-        let (mut gx, end) = (ctx.x + left + advance * 0.5, ctx.x + right - advance * 1.2);
+        let advance = leader_pitch(style.face.advance(gid) as f32, style.face.upem as f32, style.size);
+        // On the page's grid of that pitch, from the first place after the text before the tab
+        // to the last glyph that ends before the text after it, as Word draws them.
+        let (left, right) = (ctx.x + left, ctx.x + right);
+        let mut gx = (left / advance - 0.001).ceil() * advance;
         let mut glyphs = Vec::new();
-        gx = (gx / advance).ceil() * advance;
-        while gx < end && glyphs.len() < 2000 {
+        while gx + advance <= right + 0.001 && glyphs.len() < 2000 {
             glyphs.push((gid, gx, ctx.base));
             gx += advance;
         }
@@ -666,6 +668,18 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             x_scale: 1.0,
         });
     }
+}
+
+/// How far apart a tab leader's glyphs are drawn, as measured in Word: the glyph's advance (`units`
+/// of the font's `upem`) at the font size in whole 600-dpi pixels, rounded to a whole pixel. So a
+/// TH SarabunPSK dot at 16 pt (133 px, 162/1000 em: 21.5 px) is drawn every 22 px, 2.64 pt rather
+/// than 2.59, and a Tahoma one at 22 pt (183 px, 620/2048 em: 55.4 px) every 55 px, 6.6 pt. At
+/// least 1 pt.
+pub(crate) fn leader_pitch(units: f32, upem: f32, size: f32) -> f32 {
+    const DPI: f32 = 600.0;
+    let ppem = (size * DPI / 72.0 + 0.001).floor();
+    let px = (units * ppem / upem.max(1.0)).round();
+    (px * 72.0 / DPI).max(1.0)
 }
 
 fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {

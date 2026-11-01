@@ -1608,6 +1608,57 @@ fn right_tab_whose_text_does_not_fit_moves_to_the_next_line_with_it() {
     }
 }
 
+/// Measured in Word: leader dots are spaced by the dot's advance in whole 600-dpi pixels, sit on
+/// the page's grid of that pitch from the first place after the text before the tab, and stop at
+/// the last one that ends before the text after it.
+#[test]
+fn leader_dots_are_spaced_and_placed_as_in_word() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    // TH SarabunPSK at 16 pt, Tahoma at 22 pt, Times New Roman at 12 pt and Arial at 10 pt.
+    let pitch = |units, upem, size| display::leader_pitch(units, upem, size);
+    for (got, want) in
+        [(pitch(162.0, 1000.0, 16.0), 2.64), (pitch(620.0, 2048.0, 22.0), 6.6), (pitch(512.0, 2048.0, 12.0), 3.0), (pitch(569.0, 2048.0, 10.0), 2.76)]
+    {
+        assert!((got - want).abs() < 1e-4, "pitch {got}, not {want}");
+    }
+    // Labels of several lengths and stops at several places: the text before the tab and the
+    // number after it end and start anywhere against the grid.
+    for label in ["E", "Entr", "Entry one", "Entry number two"] {
+        for k in 0..12 {
+            let pos = 300.0 + 9.7 * k as f32;
+            let mut d = Document::from_text(&format!("{label}\t12"));
+            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+                p.tabs = Some(vec![TabStop { pos, align: TabAlign::Right, leader: TabLeader::Dot }]);
+            })
+            .unwrap();
+            let l = lay(&d);
+            let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+            let dots: Vec<f32> = items
+                .iter()
+                .filter_map(|i| {
+                    if let display::Draw::Glyphs { text, glyphs, .. } = i {
+                        text.is_empty().then(|| glyphs.iter().map(|g| g.1).collect::<Vec<_>>())
+                    } else {
+                        None
+                    }
+                })
+                .next()
+                .expect("a leader");
+            let step = dots[1] - dots[0];
+            let case = format!("{label:?} stop {pos}");
+            assert!(dots.windows(2).all(|w| (w[1] - w[0] - step).abs() < 1e-3), "{case}: evenly spaced: {dots:?}");
+            assert!((step * 600.0 / 72.0 - (step * 600.0 / 72.0).round()).abs() < 1e-3, "{case}: {step} pt is a whole number of 600-dpi pixels");
+            let n = label.len();
+            let (text_end, number) = (l.caret(&Pos::body(0, n)).unwrap().x, l.caret(&Pos::body(0, n + 1)).unwrap().x);
+            let first = (text_end / step - 0.001).ceil() * step;
+            let last = ((number - step) / step + 0.001).floor() * step;
+            assert!((dots[0] - first).abs() < 1e-2, "{case}: the first dot is at {}, not the first grid place after {text_end}: {first}", dots[0]);
+            let end = *dots.last().unwrap();
+            assert!((end - last).abs() < 1e-2, "{case}: the last dot is at {end}, not the last that ends before {number}: {last}");
+        }
+    }
+}
+
 /// A left tab whose only stop is past the right indent wraps; on the next line it still can't
 /// reach that stop, so it takes no room there and its text starts at the indent instead of
 /// going to a line of its own.
