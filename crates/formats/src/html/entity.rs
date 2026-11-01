@@ -3,6 +3,10 @@
 
 /// Decode an entity body (`amp`, `#38`, `#x26`) to its text.
 pub fn decode_entity(name: &str) -> Option<String> {
+    decode_char(name).map(String::from)
+}
+
+fn decode_char(name: &str) -> Option<char> {
     if let Some(num) = name.strip_prefix('#') {
         let (digits, radix) = match num.strip_prefix(['x', 'X']) {
             Some(h) => (h, 16),
@@ -17,7 +21,7 @@ pub fn decode_entity(name: &str) -> Option<String> {
             0x80..=0x9F => crate::txt::cp1252(v as u8),
             _ => char::from_u32(v).unwrap_or('\u{FFFD}'),
         };
-        return Some(c.to_string());
+        return Some(c);
     }
     let c = match name {
         "amp" | "AMP" => '&',
@@ -229,11 +233,54 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "zwnj" => '\u{200C}',
         _ => return None,
     };
-    Some(c.to_string())
+    Some(c)
 }
 
-/// Replace entity references in `s`.
+/// Legacy names HTML5 also decodes without a `;` (only those [`decode_char`] knows), sorted by bytes.
+const BARE_NAMES: &[&str] = &[
+    "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY", "Ccedil", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute",
+    "Icirc", "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde", "Ouml", "QUOT", "REG", "Uacute", "Ucirc", "Ugrave",
+    "Uuml", "Yacute", "aacute", "acirc", "aelig", "agrave", "amp", "aring", "atilde", "auml", "ccedil", "cent", "copy", "curren", "deg", "divide",
+    "eacute", "ecirc", "egrave", "euml", "frac12", "frac14", "frac34", "gt", "iacute", "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt",
+    "micro", "middot", "nbsp", "ntilde", "oacute", "ocirc", "ograve", "oslash", "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg",
+    "sect", "shy", "sup1", "sup2", "sup3", "szlig", "times", "uacute", "ucirc", "ugrave", "uuml", "yacute", "yen", "yuml",
+];
+
+/// A reference written without its `;` at the start of `after` (the text after `&`): a numeric one,
+/// or the longest legacy name. In attribute values a name followed by `=` or an alphanumeric stays text.
+fn bare_reference(after: &str, attr: bool) -> Option<(char, usize)> {
+    if let Some(num) = after.strip_prefix('#') {
+        let hex = num.starts_with(['x', 'X']);
+        let radix = if hex { 16 } else { 10 };
+        let skip = usize::from(hex);
+        let n = num.get(skip..)?.bytes().take_while(|b| char::from(*b).is_digit(radix)).count();
+        if n == 0 {
+            return None;
+        }
+        let len = 1 + skip + n;
+        return decode_char(after.get(..len)?).map(|c| (c, len));
+    }
+    // Legacy names are 2 to 6 ASCII alphanumerics: try the longest prefix first.
+    let run = after.bytes().take(6).take_while(u8::is_ascii_alphanumeric).count();
+    let len = (2..=run).rev().find(|&l| after.get(..l).is_some_and(|p| BARE_NAMES.binary_search(&p).is_ok()))?;
+    let next = after.as_bytes().get(len);
+    if attr && next.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'=') {
+        return None;
+    }
+    decode_char(after.get(..len)?).map(|c| (c, len))
+}
+
+/// Replace entity references in text `s`.
 pub fn unescape(s: &str) -> String {
+    unescape_in(s, false)
+}
+
+/// Replace entity references in an attribute value `s`.
+pub fn unescape_attr(s: &str) -> String {
+    unescape_in(s, true)
+}
+
+fn unescape_in(s: &str, attr: bool) -> String {
     if !s.contains('&') {
         return s.to_string();
     }
@@ -248,10 +295,10 @@ pub fn unescape(s: &str) -> String {
             cut -= 1;
         }
         let end = after.get(..cut).and_then(|w| w.find(';'));
-        match end.and_then(|e| decode_entity(&after[..e]).map(|t| (t, e))) {
-            Some((t, e)) => {
-                out.push_str(&t);
-                rest = &after[e + 1..];
+        match end.and_then(|e| decode_char(&after[..e]).map(|c| (c, e + 1))).or_else(|| bare_reference(after, attr)) {
+            Some((c, e)) => {
+                out.push(c);
+                rest = &after[e..];
             }
             None => {
                 out.push('&');
@@ -287,4 +334,15 @@ pub fn decode(b: &[u8]) -> String {
         return s.to_string();
     }
     crate::txt::decode(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_names_are_sorted_and_known() {
+        assert!(BARE_NAMES.windows(2).all(|w| w[0] < w[1]));
+        assert!(BARE_NAMES.iter().all(|n| (2..=6).contains(&n.len()) && decode_char(n).is_some()));
+    }
 }

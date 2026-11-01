@@ -208,6 +208,21 @@ fn entities() {
     assert_eq!(unescape("&theta; &lambda; &Delta; &nabla; &sum; &radic; &ne; &le; &ge; &hearts;"), "θ λ Δ ∇ ∑ √ ≠ ≤ ≥ ♥");
 }
 
+/// Browsers decode numeric and legacy named references without their `;` in text,
+/// but keep `&name=` and `&nameX` intact inside attribute values (query strings).
+#[test]
+fn references_without_semicolon() {
+    assert_eq!(unescape("&copy 2024 Acme"), "© 2024 Acme");
+    assert_eq!(unescape("&#169 2024 Acme"), "© 2024 Acme");
+    assert_eq!(unescape("&#xA9 2024 &amp &lt"), "© 2024 & <");
+    assert_eq!(unescape("&bogus &# &#x &"), "&bogus &# &#x &");
+    assert_eq!(unescape("&nbsp;x"), "\u{00A0}x");
+    let f = parse("<p><a href=\"/q?a=1&copy=2&reg2=3&amp;b=&lt\">l</a> &copy 2024</p>");
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "l" && f.link.as_deref() == Some("/q?a=1&copy=2&reg2=3&b=<"))));
+    assert!(p.text().ends_with("© 2024"));
+}
+
 #[test]
 fn wbr_word_break_opportunity() {
     let f = parse("<p>Super<wbr>cali<wbr>fragilistic</p>");
