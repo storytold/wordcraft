@@ -572,6 +572,16 @@ pub fn story_param(s: &Session, v: &Value) -> StoryRef {
     v.get("story").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or(s.sel.focus.story)
 }
 
+/// Search and selection accept only an existing explicit story; omission keeps the caret's scope.
+pub fn search_story_param(s: &Session, v: &Value) -> Result<StoryRef, CmdError> {
+    let Some(value) = v.get("story") else { return Ok(s.sel.focus.story) };
+    let story = serde_json::from_value(value.clone()).map_err(|_| CmdError::Params(r#"`story` must be "body" or {"part": n}"#.into()))?;
+    if s.doc.story(story).is_none() {
+        return Err(CmdError::Params("`story` does not exist".into()));
+    }
+    Ok(story)
+}
+
 /// The language (`w:lang`) of a paragraph's text: that of its first run with text (else of the
 /// paragraph mark), through styles and the document defaults. Sorting and number parsing follow it.
 pub fn para_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph) -> Option<String> {
