@@ -129,6 +129,8 @@ pub(super) struct Undo {
     /// The column block or whole cells the selection was (undoing brings the selection back as
     /// it was).
     pub(super) column: Option<ColumnBlock>,
+    /// The list item lead-in being typed, so Undo and Redo take it back with the typing.
+    pub(super) lead_in: Option<crate::cmd::text::LeadIn>,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).

@@ -24,6 +24,7 @@ pub struct WindowView {
     equation_join_next: bool,
     ime_text_join: Option<Selection>,
     typing: Option<TypedWord>,
+    lead_in: Option<crate::cmd::text::LeadIn>,
     math: Option<MathEdit>,
     also_selected: Vec<Pos>,
     column: Option<ColumnBlock>,
@@ -70,6 +71,7 @@ impl Session {
             equation_join_next: take(&mut self.equation_join_next),
             ime_text_join: self.ime_text_join.take(),
             typing: self.typing.take(),
+            lead_in: self.lead_in.take(),
             math: self.math.take(),
             also_selected: take(&mut self.also_selected),
             column: self.column.take(),
@@ -95,6 +97,7 @@ impl Session {
             equation_join_next: false,
             ime_text_join: None,
             typing: None,
+            lead_in: self.lead_in.clone(),
             // An equation editing session is an input method's owner: the new window's is its own.
             math: self.math.clone().and_then(|m| Some(MathEdit { session: next_math_session()?, ..m })),
             also_selected: self.also_selected.clone(),
@@ -109,8 +112,8 @@ impl Session {
     /// Make `v` the active document's view. When the document changed since `v` was taken
     /// (another window edited it, or `v` is of another document), its positions are clamped into
     /// the document, what only made sense for the text it was taken from (a column block, a
-    /// widened table selection, more selected objects, the word being typed) is dropped, and the
-    /// window's typing no longer joins its last undo step.
+    /// widened table selection, more selected objects, the word being typed, a list item's
+    /// lead-in) is dropped, and the window's typing no longer joins its last undo step.
     pub fn put_view(&mut self, v: WindowView) {
         let WindowView {
             sel,
@@ -124,6 +127,7 @@ impl Session {
             equation_join_next,
             ime_text_join,
             typing,
+            lead_in,
             math,
             also_selected,
             column,
@@ -136,6 +140,7 @@ impl Session {
         self.sel = sel;
         self.view = view;
         self.pending = pending;
+        crate::cmd::text::put_back_lead_in(self, lead_in, current);
         self.goal_x = goal_x;
         self.page_hint = page_hint;
         self.column_mode = column_mode;

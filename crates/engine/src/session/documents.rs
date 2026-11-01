@@ -69,6 +69,7 @@ pub struct DocState {
     pub(super) cache: LayoutCache,
     pub(super) layout: LayoutSlots,
     pub(super) typing: Option<TypedWord>,
+    pub(super) lead_in: Option<crate::cmd::text::LeadIn>,
     pub(super) originals: std::collections::HashMap<String, String>,
     pub(super) picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
     pub(super) versions: Vec<(String, String, Document)>,
@@ -123,6 +124,7 @@ impl DocState {
             cache: LayoutCache::new(),
             layout: Default::default(),
             typing: None,
+            lead_in: None,
             originals: Default::default(),
             picture_looks: Default::default(),
             versions: Vec::new(),
@@ -223,6 +225,7 @@ impl Session {
             cache: _,
             layout: _,
             typing: _,
+            lead_in: _,
             originals: _,
             picture_looks: _,
             versions: _,
@@ -312,6 +315,7 @@ impl Session {
             cache,
             layout,
             typing,
+            lead_in,
             originals,
             picture_looks,
             versions,
@@ -359,6 +363,7 @@ impl Session {
         swap(&mut self.cache, cache);
         swap(&mut self.layout, layout);
         swap(&mut self.typing, typing);
+        swap(&mut self.lead_in, lead_in);
         swap(&mut self.originals, originals);
         swap(&mut self.picture_looks, picture_looks);
         swap(&mut self.versions, versions);
