@@ -103,6 +103,31 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
     v
 }
 
+impl Page {
+    /// The lowest point of the body's content (text, fills, pictures, shapes, rules, cells), page
+    /// y in points; 0 for an empty page. Headers and footers are left out.
+    pub fn content_bottom(&self) -> f32 {
+        fn bottom(it: &Placed) -> f32 {
+            let b = match it {
+                // Turned lines (a cell's text direction) take their own page area.
+                Placed::Lines { para, l0, l1, y, .. } => {
+                    it.turned_bounds().map(|r| r.bottom()).or_else(|| item_bottom(*y, para, *l0, *l1)).unwrap_or(0.0)
+                }
+                Placed::Fill { rect, .. }
+                | Placed::Image { rect, .. }
+                | Placed::Shape { rect, .. }
+                | Placed::Graphic { rect, .. }
+                | Placed::Cell { rect, .. }
+                | Placed::Object { rect, .. } => rect.bottom(),
+                Placed::Clip { rect, items, .. } => items.iter().map(bottom).fold(rect.bottom(), f32::max),
+                Placed::Rule { y0, y1, .. } => y0.max(*y1),
+            };
+            if b.is_finite() { b } else { 0.0 }
+        }
+        self.items.iter().map(bottom).fold(0.0, f32::max)
+    }
+}
+
 impl PageBuilder<'_> {
     /// Space footnotes take at the bottom of the page.
     pub(crate) fn notes_h(&self) -> f32 {

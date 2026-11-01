@@ -77,6 +77,7 @@ impl Session {
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.
             pending_move: _,
+            last_paste: _,
             clipboard_text: _,
             clipboard_html: _,
             clip_history: _,
