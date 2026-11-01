@@ -6798,9 +6798,15 @@ fn hostile_chart_formatting_params_are_safe() {
     run(&mut s, "chart.axis", json!({"min": 8, "max": 2}));
     let c = first_chart(&s.doc).unwrap();
     assert!((c.val_axis.min, c.val_axis.max) == (None, None), "an impossible pair of bounds drops both");
-    run(&mut s, "chart.axis", json!({"min": "NaN", "max": 1e308, "title": "\u{0}".repeat(5000), "format": "x".repeat(5000)}));
+    // A bound that is neither a number nor null is refused, and nothing changes.
+    let before = first_chart(&s.doc).unwrap();
+    for bad in [json!({"min": "NaN"}), json!({"max": "abc"}), json!({"min": true}), json!({"max": [1]}), json!({"min": 1, "max": {}})] {
+        assert!(s.run("chart.axis", &bad).is_err(), "{bad} must be refused");
+    }
+    assert_eq!(first_chart(&s.doc).unwrap(), before, "a refused bound changes nothing");
+    run(&mut s, "chart.axis", json!({"max": 1e308, "title": "\u{0}".repeat(5000), "format": "x".repeat(5000)}));
     let c = first_chart(&s.doc).unwrap();
-    assert!((c.val_axis.min, c.val_axis.max) == (None, Some(1e308)), "a string bound is skipped");
+    assert!((c.val_axis.min, c.val_axis.max) == (None, Some(1e308)), "a huge finite bound is kept");
     assert_eq!(c.val_axis.title, None, "a title of only control characters is no title");
     assert!(c.val_axis.fmt.as_deref().is_some_and(|f| f.chars().count() <= MAX_FMT), "the format code is cut");
     for bad in [json!({"index": 999}), json!({"fill": "zzz"}), json!({"line": "red"})] {

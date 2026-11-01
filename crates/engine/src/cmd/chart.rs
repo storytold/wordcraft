@@ -106,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(has_chart),
         CommandSpec::new("chart.axis", "Axis", "Chart Design › Chart Layouts › Add Chart Element", |s, v| {
             let side = side(v)?;
-            let axis = axis_of(v).ok_or_else(|| CmdError::Params("`title` (string), `min`, `max`, `format` (number format code), `gridlines`, `labels` (tick labels), `line` (axis line): bool".into()))?;
+            let axis = axis_of(v)?;
             edit(s, move |c| {
                 let a = side.pick(&mut c.cat_axis, &mut c.val_axis);
                 if let Some(t) = &axis.title {
@@ -235,26 +235,34 @@ struct AxisSet {
     line: Option<bool>,
 }
 
-fn axis_of(v: &Value) -> Option<AxisSet> {
+fn axis_of(v: &Value) -> Result<AxisSet, CmdError> {
     let title = v.get("title").map(|t| match t {
         Value::String(s) => Some(s.clone()),
         Value::Null => None,
         other => Some(other.to_string()),
     });
-    let number_field = |v: &Value, key: &str| match v.get(key)? {
-        Value::Null => Some(None),
-        x => x.as_f64().filter(|f| f.is_finite()).map(Some),
+    // Absent: leave the bound; `null`: Auto; a finite number: set it; anything else is an error.
+    let number_field = |v: &Value, key: &str| -> Result<Option<Option<f64>>, CmdError> {
+        match v.get(key) {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(None)),
+            Some(x) => x
+                .as_f64()
+                .filter(|f| f.is_finite())
+                .map(|f| Some(Some(f)))
+                .ok_or_else(|| CmdError::Params(format!("`{key}`: a number, or null for Auto, not `{x}`"))),
+        }
     };
     let set = AxisSet {
         title,
-        min: number_field(v, "min"),
-        max: number_field(v, "max"),
+        min: number_field(v, "min")?,
+        max: number_field(v, "max")?,
         fmt: v.get("format").and_then(|f| f.as_str()).map(str::to_string),
         gridlines: p::bool(v, "gridlines"),
         labels: p::bool(v, "labels").or_else(|| p::bool(v, "tickLabels")),
         line: p::bool(v, "line"),
     };
-    Some(set)
+    Ok(set)
 }
 
 /// The selected chart's model, when it has one.
