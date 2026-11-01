@@ -4404,6 +4404,37 @@ fn failed_command_leaves_document_unchanged() {
     assert_eq!(text(&s), before);
 }
 
+/// Runs a command on junk; `Session::run` turns a panic into an error, which fails the test.
+fn run_junk(s: &mut Session, id: &str, params: &serde_json::Value) {
+    let r = s.run(id, params);
+    assert!(!caught_panic(&s.registry, &r), "{r:?}");
+}
+
+/// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: the
+/// guard's own `"{id} panicked: "` counts, not an error that echoes those words.
+fn caught_panic(reg: &crate::Registry, r: &Result<serde_json::Value, crate::CmdError>) -> bool {
+    matches!(r, Err(crate::CmdError::Failed(m)) if m.split_once(" panicked: ").is_some_and(|(id, _)| reg.get(id).is_some()))
+}
+
+/// Outline's commands run Paragraph ones, so the inner command's name is in the error (review
+/// of #4207: the fuzz only looked for the outer one's).
+#[test]
+fn caught_panic_counts_a_panic_in_a_command_another_ran() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let boom = crate::CommandSpec::new("test.boom", "Boom", "", |_, _| panic!("boom")).pure();
+    let outer = crate::CommandSpec::new("test.outer", "Outer", "", |s, v| s.run("test.boom", v)).pure();
+    s.registry = std::sync::Arc::new(crate::Registry::new(vec![boom, outer]));
+    let nested = s.run("test.outer", &json!({}));
+    assert!(matches!(&nested, Err(crate::CmdError::Failed(m)) if m.starts_with("test.boom panicked: ")), "{nested:?}");
+    assert!(caught_panic(&s.registry, &nested));
+    assert!(!caught_panic(&s.registry, &Err(crate::CmdError::Failed("no picture".into()))));
+    // A command's own error can quote what it was given.
+    let mut full = Session::new(crate::sample::sample_document());
+    let echoed = full.run("developer.control", &json!({"control": "x panicked: y"}));
+    assert!(matches!(&echoed, Err(crate::CmdError::Failed(m)) if m.contains(" panicked: ")), "{echoed:?}");
+    assert!(!caught_panic(&full.registry, &echoed), "{echoed:?}");
+}
+
 /// Review of #3692: the line cap on typed paragraphs is the engine's, so a control-channel or
 /// CLI `text.insert` is held to it as the MCP tool is. At the cap every line goes in as one undo
 /// step; one line more is refused before anything is typed.
@@ -4456,7 +4487,7 @@ fn hostile_params_never_panic() {
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
             assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
-            let _ = s.run(spec.id, j);
+            run_junk(&mut s, spec.id, j);
             s.clamp_selection();
             let _ = s.layout();
         }
@@ -9352,7 +9383,7 @@ fn outline_level_changes_are_undoable() {
     for spec in cmd::registry().all().iter().filter(|c| c.id.starts_with("outline.")) {
         for j in [json!(null), json!({"block": 99999, "level": "x", "value": 5}), json!({"block": -1, "level": 0})] {
             let mut s = outline_doc();
-            let _ = s.run(spec.id, &j);
+            run_junk(&mut s, spec.id, &j);
             let _ = s.layout();
         }
     }

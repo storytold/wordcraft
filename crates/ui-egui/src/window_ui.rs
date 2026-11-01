@@ -204,6 +204,7 @@ impl WordApp {
             print_document: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
+            read_from: _,
             comment_drafts: _,
             parked: _,
             // Per window.
