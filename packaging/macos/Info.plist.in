@@ -6,6 +6,42 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- UI translations are embedded in the app; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). One entry per `locales/<code>/wordcraft.tsv` in the
+       craft-i18n checkout pinned by craft-i18n.rev (Apple's spelling for zh-Hans, zh-Hant, pt-BR,
+       sr-Latn): keep in sync when that pin moves. AppKit picks the panel language from the macOS
+       preferred languages intersected with this list, not from the language set in Options. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>bg</string>
+    <string>cs</string>
+    <string>da</string>
+    <string>de</string>
+    <string>es</string>
+    <string>et</string>
+    <string>fr</string>
+    <string>hr</string>
+    <string>hu</string>
+    <string>it</string>
+    <string>ja</string>
+    <string>ka</string>
+    <string>ko</string>
+    <string>nl</string>
+    <string>pl</string>
+    <string>pt-BR</string>
+    <string>ro</string>
+    <string>ru</string>
+    <string>sl</string>
+    <string>sr-Latn</string>
+    <string>sr</string>
+    <string>sv</string>
+    <string>tr</string>
+    <string>uk</string>
+    <string>vi</string>
+    <string>zh-Hans</string>
+    <string>zh-Hant</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>WordCraft</string>
   <key>CFBundleName</key>
