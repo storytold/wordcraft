@@ -1726,3 +1726,69 @@ fn dialogs_their_tabs_and_colour_fields_say_what_they_are() {
     h.run_steps(3);
     assert!(h.query_by_role_and_label(Role::Button, "Font color: #C00000").is_some(), "and the field the colour picked");
 }
+
+/// Every kind of colour field says its label and its colour to screen readers, in the interface
+/// language: Font's Font color (Automatic when none), and the colour menus of Borders (Color),
+/// Shading (Fill) and a table style (Font color, Fill color), No Color when none, then the colour
+/// picked. The label and the "none" entry are the words drawn beside and on the field, so they are
+/// translated as those are.
+#[test]
+fn colour_fields_say_their_label_and_colour_in_the_interface_language() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let open = |h: &mut egui_kittest::Harness<'static, WordApp>, name: &str| {
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+        h.state_mut().run("ui.dialog", json!({"name": name})).unwrap();
+        h.run_steps(4);
+    };
+    let mut h = app_harness(app_with("Lanterns"));
+    h.run_steps(2);
+    for (dialog, name) in [("font", "Font color: Automatic"), ("borders", "Color: No Color"), ("shading", "Fill No Color")] {
+        open(&mut h, dialog);
+        assert!(h.query_by_role_and_label(Role::Button, name).is_some(), "{dialog}: the field is {name:?}");
+    }
+    h.get_by_role_and_label(Role::Button, "Fill No Color").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::Button, "#C00000").click();
+    h.run_steps(3);
+    assert!(h.query_by_role_and_label(Role::Button, "Fill #C00000").is_some(), "a colour menu says the colour picked");
+    // A table style's colour menus (its pen's Color is a colour of its own).
+    h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    open(&mut h, "newTableStyle");
+    for name in ["Font color: No Color", "Fill color: No Color"] {
+        assert!(h.query_by_role_and_label(Role::Button, name).is_some(), "newTableStyle: a field is {name:?}");
+    }
+
+    // In a fixture language, with the dialogs drawn alone: the app's frame sets the language from
+    // its setting.
+    crate::i18n::set_current(crate::i18n::fixture_lang(
+        "x-fixture",
+        "\tFont color:\tFont-color-FX:\n\tAutomatic\tAutomatic-FX\n\tFill\tFill-FX\n\tNo Color\tNo-Color-FX\n",
+    ));
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            if fonts {
+                show(app, &ctx);
+            } else {
+                crate::theme::install_fonts_for(&ctx, false);
+                fonts = true;
+            }
+        },
+        app_with("Lanterns"),
+    );
+    let mut found = Vec::new();
+    for (dialog, name) in [("font", "Font-color-FX: Automatic-FX"), ("shading", "Fill-FX No-Color-FX")] {
+        h.state_mut().dialog = Dialog::open(dialog, h.state_mut());
+        h.run_steps(4);
+        found.push((dialog, name, h.query_by_role_and_label(Role::Button, name).is_some()));
+        h.state_mut().dialog = None;
+        h.run_steps(2);
+    }
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    for (dialog, name, found) in found {
+        assert!(found, "{dialog}: the field is {name:?} in the interface language");
+    }
+}
