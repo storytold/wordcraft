@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Read};
 
 use super::{
-    DateKind, Grid, MAX_CELL_CHARS, MAX_CELLS, MAX_COLS, MAX_ENTRY, MAX_SHARED, MAX_SHEETS, MAX_XFS, builtin_date, custom_date, number, serial_date,
+    DateKind, Grid, MAX_CELL_CHARS, MAX_CELLS, MAX_COLS, MAX_ENTRY, MAX_ROWS, MAX_SHARED, MAX_SHEETS, MAX_XFS, TextBudget, builtin_date, custom_date,
+    number, serial_date,
 };
 
 /// The compound-file signature every `.xls` (and `.doc`) starts with.
@@ -37,10 +38,13 @@ const MULRK: u16 = 0x00BD;
 const BOOLERR: u16 = 0x0205;
 const FORMULA: u16 = 0x0006;
 const STRING: u16 = 0x0207;
+const SHRFMLA: u16 = 0x04BC;
+const ARRAY: u16 = 0x0221;
+const TABLE: u16 = 0x0236;
 
 /// Whether `bytes` is a compound file holding an Excel workbook stream.
 pub fn is_xls(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(&MAGIC) {
+    if !bytes.starts_with(&MAGIC) || wordcraft_doc::cfb_guard::check(bytes).is_err() {
         return false;
     }
     let Ok(comp) = cfb::CompoundFile::open(Cursor::new(bytes)) else { return false };
@@ -64,6 +68,7 @@ pub fn read_rows(bytes: &[u8], pick: super::Pick<'_>) -> Result<(Vec<String>, Ve
 }
 
 fn workbook_stream(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    wordcraft_doc::cfb_guard::check(bytes).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     if !comp.is_stream("/Workbook") {
         if comp.is_stream("/Book") {
@@ -300,47 +305,81 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
         Some(kind) => serial_date(x, g.date1904, kind).unwrap_or_else(|| number(x)),
         None => number(x),
     };
-    let mut put = |row: u16, col: u16, v: String, count: &mut usize| {
-        if usize::from(col) >= MAX_COLS || *count >= MAX_CELLS || v.is_empty() {
-            return;
-        }
-        if cells.entry(row).or_default().insert(col, v).is_none() {
+    let mut budget = TextBudget::default();
+    // Whether a cell of `len` bytes at (row, col) fits under the caps; spends its text budget.
+    let mut fits = |cells: &BTreeMap<u16, BTreeMap<u16, String>>, row: u16, col: u16, len: usize, count: usize| {
+        usize::from(col) < MAX_COLS && count < MAX_CELLS && len > 0 && (cells.contains_key(&row) || cells.len() < MAX_ROWS) && budget.take(len)
+    };
+    let mut put = |cells: &mut BTreeMap<u16, BTreeMap<u16, String>>, row: u16, col: u16, v: &str, count: &mut usize| {
+        if fits(cells, row, col, v.len(), *count) && cells.entry(row).or_default().insert(col, v.to_string()).is_none() {
             *count += 1;
         }
     };
-    // A FORMULA with a string result waits for the STRING record after it.
+    // A FORMULA with a string result waits for the STRING record after it (only shared-formula,
+    // array and table records may come between).
     let mut pending: Option<(u16, u16)> = None;
+    let mut depth = 1usize;
     while let Some((kind, d, next)) = record(stream, pos) {
         pos = next;
-        if kind == EOF || kind == BOF {
-            break;
+        if kind == BOF {
+            depth = depth.saturating_add(1);
+            continue;
         }
-        if kind == STRING {
-            if let (Some((r, c)), Some(s)) = (pending.take(), unicode_string(d, 0)) {
-                put(r, c, s, &mut count);
+        if kind == EOF {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                break;
             }
             continue;
+        }
+        if depth > 1 {
+            continue;
+        }
+        if kind == STRING {
+            let mut parts = vec![d];
+            let mut p = pos;
+            while let Some((CONTINUE, cd, n)) = record(stream, p) {
+                parts.push(cd);
+                p = n;
+            }
+            pos = p;
+            if let Some((r, c)) = pending.take() {
+                let cch = usize::from(u16_at(parts[0], 0).unwrap_or(0));
+                let high = parts[0].get(2).is_some_and(|f| f & 1 != 0);
+                if let Some(s) = parts[0].get(3..).and_then(|first| {
+                    let mut all_parts = vec![first];
+                    all_parts.extend_from_slice(&parts[1..]);
+                    Pieces::new(all_parts).chars(cch, high)
+                }) {
+                    put(&mut cells, r, c, &s, &mut count);
+                }
+            }
+            continue;
+        }
+        if !matches!(kind, SHRFMLA | ARRAY | TABLE) {
+            pending = None;
         }
         let (Some(row), Some(col), Some(xf)) = (u16_at(d, 0), u16_at(d, 2), u16_at(d, 4)) else { continue };
         match kind {
             LABELSST => {
+                // Borrowed until it fits: a shared string may be used by millions of cells.
                 if let Some(s) = u32_at(d, 6).and_then(|i| g.sst.get(i as usize)) {
-                    put(row, col, s.clone(), &mut count);
+                    put(&mut cells, row, col, s, &mut count);
                 }
             }
             LABEL | RSTRING => {
                 if let Some(s) = unicode_string(d, 6) {
-                    put(row, col, s, &mut count);
+                    put(&mut cells, row, col, &s, &mut count);
                 }
             }
             NUMBER => {
                 if let Some(x) = f64_at(d, 6) {
-                    put(row, col, num(x, xf), &mut count);
+                    put(&mut cells, row, col, &num(x, xf), &mut count);
                 }
             }
             RK => {
                 if let Some(v) = u32_at(d, 6) {
-                    put(row, col, num(rk(v), xf), &mut count);
+                    put(&mut cells, row, col, &num(rk(v), xf), &mut count);
                 }
             }
             MULRK => {
@@ -349,7 +388,7 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
                 for k in 0..n {
                     let at = 4 + k * 6;
                     if let (Some(x), Some(v)) = (u16_at(d, at), u32_at(d, at + 2)) {
-                        put(row, col.saturating_add(k as u16), num(rk(v), x), &mut count);
+                        put(&mut cells, row, col.saturating_add(k as u16), &num(rk(v), x), &mut count);
                     }
                 }
             }
@@ -362,18 +401,18 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
                 } else {
                     "FALSE".into()
                 };
-                put(row, col, s, &mut count);
+                put(&mut cells, row, col, &s, &mut count);
             }
             FORMULA => {
                 if d.get(12..14) == Some(&[0xFF, 0xFF]) {
                     match d.get(6).copied() {
                         Some(0) => pending = Some((row, col)),
-                        Some(1) => put(row, col, if d.get(8).is_some_and(|b| *b != 0) { "TRUE".into() } else { "FALSE".into() }, &mut count),
-                        Some(2) => put(row, col, error_text(d.get(8).copied().unwrap_or(0x2A)).to_string(), &mut count),
+                        Some(1) => put(&mut cells, row, col, if d.get(8).is_some_and(|b| *b != 0) { "TRUE" } else { "FALSE" }, &mut count),
+                        Some(2) => put(&mut cells, row, col, error_text(d.get(8).copied().unwrap_or(0x2A)), &mut count),
                         _ => {}
                     }
                 } else if let Some(x) = f64_at(d, 6) {
-                    put(row, col, num(x, xf), &mut count);
+                    put(&mut cells, row, col, &num(x, xf), &mut count);
                 }
             }
             _ => {}
@@ -502,6 +541,59 @@ mod tests {
         r.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
     }
 
+    /// #3642: a DIFAT naming one FAT sector thousands of times is refused before `cfb` builds
+    /// a FAT far larger than the file.
+    #[test]
+    fn a_repeating_difat_is_refused_before_cfb_opens_it() {
+        let f = wordcraft_doc::cfb_guard::repeating_difat_sample();
+        assert!(!is_xls(&f));
+        assert!(sheet_names(&f).is_err_and(|e| e.contains("FAT sectors in a file of")));
+    }
+
+    /// #3642 review: valid workbooks pass the guard and open. The repository keeps no files
+    /// Excel made, so these are written by the `cfb` crate in the shape of Excel 97–2003 ones:
+    /// the Workbook stream [`build`] writes with the summary streams Excel adds, in 512-byte
+    /// sectors (version 3, Excel's own) and 4096-byte ones (version 4); and one with an 8 MB
+    /// stream beside it, past what the header's 109 FAT sector slots map in 512-byte sectors, so
+    /// its FAT sectors are listed in a DIFAT chain too, which the guard walks.
+    #[test]
+    fn valid_xls_shaped_compound_files_pass_the_guard_and_open() {
+        use std::io::{Read, Write};
+        let book = build(&[("Sheet1", rows(&[&["a", "1"], &["b", "2"]]))]).unwrap();
+        let mut workbook = Vec::new();
+        cfb::CompoundFile::open(Cursor::new(book.as_slice())).unwrap().open_stream("/Workbook").unwrap().read_to_end(&mut workbook).unwrap();
+        let file = |version: cfb::Version, streams: &[(&str, &[u8])]| {
+            let mut comp = cfb::CompoundFile::create_with_version(version, Cursor::new(Vec::new())).unwrap();
+            for (name, data) in streams {
+                comp.create_stream(format!("/{name}")).unwrap().write_all(data).unwrap();
+            }
+            comp.into_inner().into_inner()
+        };
+        let summary = vec![0xFEu8; 4096];
+        let big: Vec<u8> = (0..8usize << 20).map(|i| (i % 251) as u8).collect();
+        let files = [
+            ("as built", book.clone()),
+            (
+                "version 3",
+                file(
+                    cfb::Version::V3,
+                    &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary), ("\u{5}DocumentSummaryInformation", &summary)],
+                ),
+            ),
+            ("version 4", file(cfb::Version::V4, &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary)])),
+            ("with a DIFAT chain", file(cfb::Version::V3, &[("Workbook", &workbook), ("Ctls", &big)])),
+        ];
+        let difat_sectors = |f: &[u8]| f.get(0x48..0x4C).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        assert!(difat_sectors(&files[3].1) > 0, "the 8 MB file lists FAT sectors past the header's");
+        for (what, f) in &files {
+            assert_eq!(wordcraft_doc::cfb_guard::check(f), Ok(()), "{what}");
+            assert!(is_xls(f), "{what}");
+            assert_eq!(sheet_names(f).unwrap(), vec!["Sheet1"], "{what}");
+            let (_, r) = read_rows(f, Pick::Index(0)).unwrap();
+            assert_eq!(r, rows(&[&["a", "1"], &["b", "2"]]), "{what}");
+        }
+    }
+
     #[test]
     fn reads_a_biff8_workbook() {
         let book = build(&[
@@ -529,6 +621,72 @@ mod tests {
         assert_eq!(p.rich_string().as_deref(), Some("AB中文"));
     }
 
+    /// A worksheet stream from `(kind, data)` records, BOF first and EOF last.
+    fn sheet_stream(recs: &[(u16, Vec<u8>)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut put = |kind: u16, d: &[u8]| {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(d.len() as u16).to_le_bytes());
+            out.extend_from_slice(d);
+        };
+        put(BOF, &[0x00, 0x06, 0x10, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for (k, d) in recs {
+            put(*k, d);
+        }
+        put(EOF, &[]);
+        out
+    }
+
+    fn cell(row: u16, col: u16, rest: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&row.to_le_bytes());
+        d.extend_from_slice(&col.to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(rest);
+        d
+    }
+
+    fn globals_with(sst: Vec<String>) -> Globals {
+        Globals { sheets: Vec::new(), sst, xfs: Vec::new(), date1904: false }
+    }
+
+    /// #1287: one long shared string used by thousands of cells stays under the text budget.
+    #[test]
+    fn shared_strings_cannot_blow_up_memory() {
+        let g = globals_with(vec!["x".repeat(MAX_CELL_CHARS)]);
+        let recs: Vec<_> = (0..4_000u16).map(|r| (LABELSST, cell(r, 0, &0u32.to_le_bytes()))).collect();
+        let rows = sheet_rows(&sheet_stream(&recs), 0, &g).unwrap();
+        let total: usize = rows.iter().flatten().map(String::len).sum();
+        assert!(total <= crate::sheet::MAX_TEXT_BYTES, "{total} bytes of cell text");
+        assert!(rows.len() > 1_000, "the budget still keeps a real list: {}", rows.len());
+    }
+
+    /// #1287: a FORMULA's string result goes only to the STRING record right after it.
+    #[test]
+    fn late_formula_string_does_not_land_in_the_formula_cell() {
+        let mut formula = vec![0u8, 0, 0, 0, 0, 0, 0xFF, 0xFF];
+        formula.extend_from_slice(&[0; 6]);
+        let string = vec![4u8, 0, 0, b'l', b'a', b't', b'e'];
+        let g = globals_with(Vec::new());
+        // Another cell record between them: the string is dropped.
+        let recs = vec![(FORMULA, cell(0, 0, &formula)), (NUMBER, cell(1, 0, &5f64.to_le_bytes())), (STRING, string.clone())];
+        assert_eq!(sheet_rows(&sheet_stream(&recs), 0, &g).unwrap(), rows(&[&["5"]]));
+        // A shared-formula record between them is allowed.
+        let recs = vec![(FORMULA, cell(0, 0, &formula)), (SHRFMLA, vec![0; 10]), (STRING, string)];
+        assert_eq!(sheet_rows(&sheet_stream(&recs), 0, &g).unwrap(), rows(&[&["late"]]));
+    }
+
+    /// #2334: a formula's string result split by a CONTINUE record is read whole.
+    #[test]
+    fn formula_string_continues_in_a_continue_record() {
+        let mut formula = vec![0u8, 0, 0, 0, 0, 0, 0xFF, 0xFF];
+        formula.extend_from_slice(&[0; 6]);
+        let g = globals_with(Vec::new());
+        // cch 4, Latin-1: two characters here, the other two after the CONTINUE's flag byte.
+        let recs = vec![(FORMULA, cell(0, 0, &formula)), (STRING, vec![4u8, 0, 0, b'a', b'b']), (CONTINUE, vec![0u8, b'c', b'd'])];
+        assert_eq!(sheet_rows(&sheet_stream(&recs), 0, &g).unwrap(), rows(&[&["abcd"]]));
+    }
+
     #[test]
     fn hostile_workbooks_fail_cleanly() {
         let book = build(&[("S", rows(&[&["a", "1"]]))]).unwrap();
@@ -552,5 +710,39 @@ mod tests {
         comp.create_stream("/Book").unwrap();
         let old = comp.into_inner().into_inner();
         assert!(sheet_names(&old).unwrap_err().contains("Excel 5.0/95"));
+    }
+
+    #[test]
+    fn embedded_substream_does_not_truncate_sheet() {
+        let mut stream = Vec::new();
+        fn rec(out: &mut Vec<u8>, kind: u16, data: &[u8]) {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            out.extend_from_slice(data);
+        }
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let sheet_offset = 37u32;
+        rec(&mut stream, BOUNDSHEET, &[sheet_offset as u8, 0, 0, 0, 0, 0, 1, 0, b'S']);
+        rec(&mut stream, EOF, &[]);
+        assert_eq!(stream.len(), sheet_offset as usize);
+        // Worksheet BOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x10, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // Cell row 0, col 0 = NUMBER 1.0
+        let mut c1 = vec![0, 0, 0, 0, 0, 0];
+        c1.extend_from_slice(&1.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c1);
+        // Embedded chart substream: BOF(0x0020) ... EOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x20, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        rec(&mut stream, EOF, &[]);
+        // Cell row 1, col 0 = NUMBER 2.0
+        let mut c2 = vec![1, 0, 0, 0, 0, 0];
+        c2.extend_from_slice(&2.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c2);
+        // Worksheet EOF
+        rec(&mut stream, EOF, &[]);
+
+        let g = globals(&stream).unwrap();
+        let rows = sheet_rows(&stream, sheet_offset as usize, &g).unwrap();
+        assert_eq!(rows, vec![vec!["1".to_string()], vec!["2".to_string()]]);
     }
 }

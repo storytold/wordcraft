@@ -1,13 +1,10 @@
-# Contributor names for the About window (craftrules standards/contributors.md).
+# Contributor names for the About window.
 #
 # Everyone who contributes is credited by GitHub username automatically. Anything more is up to
 # you: add YOUR OWN entry below, in your own PR (commit it yourself). Never add someone else; a
 # maintainer may add a person only when that person asked, recording where in consent_source.
 #
-# Easiest: python3 ../../craftrules/scripts/contributors.py --add-me . \
-#            [--real-name "Ada Lovelace"] [--display-name "Ada"] [--sync-github-name]
-#
-# Or copy this block, replacing your-github-username (every field is optional):
+# Copy this block, replacing your-github-username (every field is optional):
 #
 #   [people.your-github-username]
 #   real_name = "Your Name"        # shown when the viewer picks "Real name"
@@ -119,6 +116,7 @@ display_name = "The Legend Of MTS Dev"
 
 [people.dotCooCoo]
 real_name = "Robert Lee"
+sync_github_name = true
 
 [people.rbr48]
 real_name = "M S Rana"
@@ -145,3 +143,47 @@ sync_github_name = true
 real_name = "Marco Arnulfo"
 display_name = "Marco Arnulfo"
 sync_github_name = false
+
+[people.rem5411]
+real_name = "Vivien Janny"
+sync_github_name = true
+
+[people.C00kieMonsta]
+real_name = "Antoine Boxho"
+sync_github_name = true
+
+[people.matteo-andreuzza]
+sync_github_name = true
+
+[people.lucAmbr0]
+sync_github_name = true
+
+[people.maxm11]
+real_name = "Max Murphy"
+
+[people.SlavenDj]
+sync_github_name = true
+
+[people.asystemoffields]
+display_name = "asystemoffields"
+
+[people.dmim2502-commits]
+display_name = "Mulai"
+
+[people.Bortlesboat]
+real_name = "Andrew Barnes"
+
+[people.matstrange]
+sync_github_name = true
+
+[people.pakiat]
+display_name = "OtorO"
+
+[people.TobyWu666]
+display_name = "tobywu"
+
+[people.Bra1nZ]
+sync_github_name = true
+
+[people.dylanmtaylor]
+sync_github_name = true

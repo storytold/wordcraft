@@ -74,7 +74,27 @@ impl Pen<'_> {
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
     let pen = Pen { p, r, c, a: accent, w: 1.25 };
-    let a = accent;
+    if let Some(kind) = name.strip_prefix("shape.")
+        && shape(&pen, kind)
+    {
+        return;
+    }
+    if paint_clipboard_to_insert(&pen, name)
+        || paint_draw_to_review(&pen, name)
+        || paint_view_and_tables(&pen, name)
+        || paint_file_and_tools(&pen, name)
+    {
+        return;
+    }
+    // Fallback: a rounded tile with the first letter.
+    p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
+    let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
+    p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), accent);
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
     let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
     let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
@@ -155,6 +175,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
+        "highlightNoColor" => {
+            pen.fill(&[(5.0, 12.0), (11.0, 4.0), (14.0, 7.0), (8.0, 15.0)], c);
+            pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
+        }
         "fontcolor" => {
             pen.text(10.0, 9.0, 14.0, "A", c, false);
             pen.frect(2.0, 16.5, 18.0, 19.0, red);
@@ -203,15 +227,15 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "pilcrow" => pen.text(10.0, 10.5, 15.0, "¶", c, false),
         "alignLeft" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 3.0, 12.0, &[7.0, 13.0])
+            ().then_lines(pen, 3.0, 12.0, &[7.0, 13.0])
         }
         "alignCenter" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 6.0, 14.0, &[7.0, 13.0])
+            ().then_lines(pen, 6.0, 14.0, &[7.0, 13.0])
         }
         "alignRight" => {
             pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
+            ().then_lines(pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
         // Text direction: lines set from the start edge, an arrow in the reading direction.
@@ -238,6 +262,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
             pen.fcircle(16.5, 13.5, 1.6, a);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
+        }
+        // The Shading buttons draw the last colour as their own bar, so this has no bar of its own.
+        "shadingNoBar" => {
+            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
+            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
+            pen.fcircle(16.5, 13.5, 1.6, a);
         }
         "borders" => {
             for y in [3.0, 10.0, 17.0] {
@@ -323,7 +353,7 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(13.5, 7.0, 1.5, yellow);
         }
         "onlinePicture" => {
-            paint(p, Rect::from_min_size(r.min, r.size() * 0.8), "picture", c, accent);
+            paint(pen.p, Rect::from_min_size(pen.r.min, pen.r.size() * 0.8), "picture", c, a);
             pen.circle(15.0, 15.0, 3.5, a);
         }
         "shapes" => {
@@ -552,6 +582,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         }
         "equation" => pen.text(10.0, 10.0, 17.0, "π", a, false),
         "symbol" => pen.text(10.0, 10.0, 17.0, "Ω", c, false),
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+    let green = Color32::from_rgb(0x2E, 0x8B, 0x57);
+    let orange = Color32::from_rgb(0xE0, 0x7B, 0x1F);
+    match name {
         // Draw
         "pen" => {
             pen.line(&[(4.0, 16.0), (14.0, 6.0), (16.0, 8.0), (6.0, 18.0), (3.5, 18.5), (4.0, 16.0)]);
@@ -849,6 +892,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             let pts: &[(f32, f32)] =
                 if name == "next" || name == "last" { &[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)] } else { &[(13.0, 4.0), (7.0, 10.0), (13.0, 16.0)] };
             pen.line_c(pts, a);
+            // First and Last: a bar at the end the chevron points to.
+            match name {
+                "first" => pen.line_c(&[(5.0, 4.0), (5.0, 16.0)], a),
+                "last" => pen.line_c(&[(15.0, 4.0), (15.0, 16.0)], a),
+                _ => {}
+            }
         }
         "finish" => {
             pen.page(3.0, 2.0, 13.0, 15.0);
@@ -885,7 +934,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         }
         "translate" | "language" => {
             pen.text(6.5, 7.0, 9.0, "A", c, true);
-            pen.text(13.5, 13.5, 9.0, "あ", a, false);
+            // あ drawn as strokes, like the rest of the icon set: the interface fonts need not
+            // carry Japanese (craft-fonts is optional), and a letter without a glyph drew a box.
+            pen.line_c(&[(11.6, 10.8), (15.4, 10.8)], a);
+            pen.line_c(&[(13.5, 8.8), (13.5, 13.9)], a);
+            pen.line_c(&[(11.0, 13.9), (16.2, 13.9)], a);
+            pen.circle(13.5, 16.1, 1.8, a);
+            pen.line_c(&[(15.0, 17.1), (15.8, 18.0)], a);
         }
         "deleteComment" => {
             pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
@@ -945,6 +1000,16 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(3.0, 13.0), (6.0, 8.0), (9.0, 13.0), (12.0, 8.0)], a);
             pen.line(&[(3.0, 3.0), (17.0, 17.0)]);
         }
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    match name {
         // View
         "readMode" => {
             pen.closed(&[(2.0, 4.0), (9.5, 5.0), (9.5, 17.0), (2.0, 16.0)], c);
@@ -1279,6 +1344,17 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        _ => return false,
+    }
+    true
+}
+
+/// Icons of one section of the set; false when `name` is not one of them.
+fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
+    let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+    match name {
         // Open: a folder with its flap lifted.
         "open" => {
             pen.closed(&[(2.5, 5.0), (7.5, 5.0), (9.0, 6.5), (15.5, 6.5), (15.5, 9.0)], c);
@@ -1331,6 +1407,44 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.closed(&[(3.0, 9.5), (10.0, 3.5), (17.0, 9.5)], c);
             pen.closed(&[(5.0, 8.5), (5.0, 17.0), (15.0, 17.0), (15.0, 8.5)], c);
             pen.frect(8.5, 12.0, 11.5, 17.0, a);
+        }
+        // File (Backstage) side menu (#1714). Save As: the save disk with a pencil across its corner.
+        "saveAs" => {
+            pen.closed(&[(2.5, 2.5), (11.5, 2.5), (14.5, 5.5), (14.5, 14.5), (2.5, 14.5)], c);
+            pen.frect(5.0, 2.5, 10.5, 6.0, a);
+            pen.rect(5.0, 9.5, 12.0, 14.5, c);
+            pen.fill(&[(11.0, 17.0), (17.0, 11.0), (18.5, 12.5), (12.5, 18.5)], a);
+            pen.fill(&[(11.0, 17.0), (12.5, 18.5), (10.0, 19.5)], c);
+        }
+        // Export: a page with an arrow leaving it.
+        "export" => {
+            pen.page(2.5, 2.0, 12.5, 18.0);
+            pen.line_c(&[(7.5, 10.0), (18.0, 10.0)], a);
+            pen.line_c(&[(15.0, 7.0), (18.0, 10.0), (15.0, 13.0)], a);
+        }
+        // Options: a gear.
+        "options" => {
+            for k in 0..8 {
+                let t = k as f32 * std::f32::consts::FRAC_PI_4;
+                let at = |radius: f32, dt: f32| (10.0 + radius * (t + dt).cos(), 10.0 + radius * (t + dt).sin());
+                pen.fill(&[at(5.0, -0.28), at(8.2, -0.17), at(8.2, 0.17), at(5.0, 0.28)], c);
+            }
+            pen.circle(10.0, 10.0, 5.5, c);
+            pen.circle(10.0, 10.0, 2.2, a);
+        }
+        // Recover: a page with a turning arrow, a copy brought back.
+        "recover" => {
+            pen.page(2.5, 2.0, 12.5, 15.5);
+            pen.p.add(Shape::line(
+                (0..=14)
+                    .map(|i| {
+                        let t = -std::f32::consts::FRAC_PI_2 + 1.5 * std::f32::consts::PI * i as f32 / 14.0;
+                        pen.pt(13.5 + 4.0 * t.cos(), 13.5 + 4.0 * t.sin())
+                    })
+                    .collect(),
+                pen.stroke(a),
+            ));
+            pen.fill(&[(11.0, 9.5), (14.5, 7.3), (14.5, 11.7)], a);
         }
 
         // Outlining tab: arrows moving a paragraph between outline levels and along the outline.
@@ -1434,13 +1548,102 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
             pen.line(&[(7.0, 13.0), (7.0, 12.0)]);
         }
-        _ => {
-            // Fallback: a rounded tile with the first letter.
-            p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);
-            let ch = name.chars().next().map(|x| x.to_ascii_uppercase().to_string()).unwrap_or_default();
-            p.text(r.center(), egui::Align2::CENTER_CENTER, ch, FontId::proportional(r.height() * 0.45), a);
-        }
+        _ => return false,
     }
+    true
+}
+
+/// The Insert › Shapes menu's icons: each shape kind (`insert.shape` ids) as a small outline.
+fn shape(pen: &Pen, kind: &str) -> bool {
+    let (c, a) = (pen.c, pen.a);
+    let tint = a.linear_multiply(0.25);
+    let solid = |pts: &[(f32, f32)]| {
+        pen.fill(pts, tint);
+        pen.closed(pts, c);
+    };
+    let head = |tip: (f32, f32), from: (f32, f32)| {
+        let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
+        let len = (dx * dx + dy * dy).sqrt().max(0.01);
+        let (ux, uy) = (dx / len, dy / len);
+        let back = (tip.0 - ux * 4.5, tip.1 - uy * 4.5);
+        pen.fill(&[tip, (back.0 - uy * 2.5, back.1 + ux * 2.5), (back.0 + uy * 2.5, back.1 - ux * 2.5)], c);
+    };
+    let ends = |pts: &[(f32, f32)], arrow: bool| {
+        pen.line(pts);
+        if let Some(&first) = pts.first() {
+            pen.fcircle(first.0, first.1, 1.6, a);
+        }
+        if let [.., from, tip] = pts {
+            if arrow {
+                head(*tip, *from);
+            } else {
+                pen.fcircle(tip.0, tip.1, 1.6, a);
+            }
+        }
+    };
+    let curve = || -> Vec<(f32, f32)> {
+        let (p0, p1, p2, p3) = ((4.0, 15.0), (12.0, 15.0), (8.0, 5.0), (16.0, 5.0));
+        (0..=16)
+            .map(|i| {
+                let s = i as f32 / 16.0;
+                let m = 1.0 - s;
+                let w = [m * m * m, 3.0 * m * m * s, 3.0 * m * s * s, s * s * s];
+                (w[0] * p0.0 + w[1] * p1.0 + w[2] * p2.0 + w[3] * p3.0, w[0] * p0.1 + w[1] * p1.1 + w[2] * p2.1 + w[3] * p3.1)
+            })
+            .collect()
+    };
+    match kind {
+        "rectangle" => solid(&[(3.0, 5.0), (17.0, 5.0), (17.0, 15.0), (3.0, 15.0)]),
+        "roundedRectangle" => {
+            let r = Rect::from_min_max(pen.pt(3.0, 5.0), pen.pt(17.0, 15.0));
+            let radius = 3.0 * pen.s();
+            pen.p.rect_filled(r, radius, tint);
+            pen.p.rect_stroke(r, radius, pen.stroke(c), egui::StrokeKind::Middle);
+        }
+        "ellipse" => {
+            let (center, radius) = (pen.pt(10.0, 10.0), vec2(7.5, 5.5) * pen.s());
+            pen.p.add(Shape::ellipse_filled(center, radius, tint));
+            pen.p.add(Shape::ellipse_stroke(center, radius, pen.stroke(c)));
+        }
+        "triangle" => solid(&[(10.0, 3.5), (17.0, 16.5), (3.0, 16.5)]),
+        "diamond" => solid(&[(10.0, 3.0), (17.0, 10.0), (10.0, 17.0), (3.0, 10.0)]),
+        "line" => pen.line(&[(4.0, 16.0), (16.0, 4.0)]),
+        "arrow" => {
+            pen.line(&[(4.0, 16.0), (14.5, 5.5)]);
+            head((16.5, 3.5), (4.0, 16.0));
+        }
+        "star" => {
+            let pts: Vec<(f32, f32)> = (0..10)
+                .map(|i| {
+                    let ang = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+                    let rad = if i % 2 == 0 { 8.0 } else { 3.3 };
+                    (10.0 + rad * ang.cos(), 10.8 + rad * ang.sin())
+                })
+                .collect();
+            // Concave: the tinted core, then the outline.
+            pen.fill(&pts.iter().skip(1).step_by(2).copied().collect::<Vec<_>>(), tint);
+            pen.closed(&pts, c);
+        }
+        "heart" => {
+            let pts: Vec<(f32, f32)> = (0..32)
+                .map(|i| {
+                    let s = i as f32 / 32.0 * std::f32::consts::TAU;
+                    let x = 16.0 * s.sin().powi(3);
+                    let y = 13.0 * s.cos() - 5.0 * (2.0 * s).cos() - 2.0 * (3.0 * s).cos() - (4.0 * s).cos();
+                    (10.0 + x * 0.44, 9.6 - y * 0.44)
+                })
+                .collect();
+            pen.closed(&pts, c);
+        }
+        "straightConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], false),
+        "straightArrowConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], true),
+        "elbowConnector" => ends(&[(4.0, 15.0), (10.0, 15.0), (10.0, 5.0), (16.0, 5.0)], false),
+        "elbowArrowConnector" => ends(&[(4.0, 15.0), (10.0, 15.0), (10.0, 5.0), (16.0, 5.0)], true),
+        "curvedConnector" => ends(&curve(), false),
+        "curvedArrowConnector" => ends(&curve(), true),
+        _ => return false,
+    }
+    true
 }
 
 trait ThenLines {
@@ -1473,5 +1676,35 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
             }
             p.add(Shape::line(pts, stroke));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_default_highlight_bar(name: &str) -> bool {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), name, Color32::BLACK, Color32::BLACK);
+        });
+        let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+        let found = output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == yellow));
+        output.drop_without_applying_deltas();
+        found
+    }
+
+    /// #4087: No Color uses the pen-only icon, not the ordinary icon's yellow fallback bar.
+    #[test]
+    fn no_colour_highlight_icon_has_no_yellow_bar() {
+        assert!(has_default_highlight_bar("highlight"));
+        assert!(!has_default_highlight_bar("highlightNoColor"));
+    }
+
+    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    #[test]
+    fn the_shading_button_icon_has_no_bar_of_its_own() {
+        assert!(has_default_highlight_bar("shading"));
+        assert!(!has_default_highlight_bar("shadingNoBar"));
     }
 }

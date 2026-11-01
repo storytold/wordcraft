@@ -4,6 +4,7 @@ use wordcraft_doc::math::{
     Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, MathProps, ScriptKind, merge_runs,
 };
 use wordcraft_doc::props::Rgb;
+use wordcraft_doc::symbol_fonts;
 
 use crate::xml::El;
 
@@ -232,10 +233,19 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
                 e: sub_arg(k, "m:e", d),
             });
         }
-        // Tracked insertions show; deletions don't.
-        "w:ins" | "w:moveTo" | "w:smartTag" | "w:customXml" | "m:oMath" if depth <= MAX_DEPTH => {
+        // Tracked insertions show; deletions don't. Hyperlinks, simple fields and direction
+        // wrappers (EG_PContentMath, §22.1.2.77) keep their runs (#1273).
+        "w:ins" | "w:moveTo" | "w:smartTag" | "w:customXml" | "w:hyperlink" | "w:fldSimple" | "w:dir" | "w:bdo" | "m:oMath" if depth <= MAX_DEPTH => {
             for c in k.els() {
                 node(c, d, out);
+            }
+        }
+        // Markup compatibility: the math choice (we read math), else the fallback.
+        "mc:AlternateContent" if depth <= MAX_DEPTH => {
+            if let Some(c) = k.child("mc:Choice").or_else(|| k.child("mc:Fallback")) {
+                for c in c.els() {
+                    node(c, d, out);
+                }
             }
         }
         "w:sdt" => {
@@ -249,13 +259,24 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
     }
 }
 
-/// `m:t` (and `w:t`) text of a run.
+/// `m:t` (and `w:t`) text of a run, with symbol characters (`w:sym`) and special hyphens.
+/// Text in a symbol font (Symbol, Wingdings…) becomes its Unicode equivalent: the math font has
+/// no glyphs at those private-use codes (#1273).
 fn run_text(r: &El) -> String {
+    let font = r.child("w:rPr").and_then(|p| p.child("w:rFonts")).and_then(|f| f.attr("w:ascii").or_else(|| f.attr("w:hAnsi"))).unwrap_or("");
     let mut s = String::new();
     for c in r.els() {
         match c.name.as_str() {
-            "m:t" | "w:t" => s.push_str(&c.text()),
+            "m:t" | "w:t" => s.push_str(&symbol_fonts::map_text(font, &c.text())),
             "w:tab" => s.push('\t'),
+            "w:noBreakHyphen" => s.push('\u{2011}'),
+            "w:sym" => {
+                let ch = c.attr("w:char").and_then(|h| u32::from_str_radix(h.trim(), 16).ok()).and_then(char::from_u32).filter(|c| *c as u32 >= 0x20);
+                if let Some(ch) = ch {
+                    let f = c.attr("w:font").unwrap_or(font);
+                    s.push(symbol_fonts::symbol_char(f, ch).unwrap_or(ch));
+                }
+            }
             _ => {}
         }
     }
@@ -308,7 +329,10 @@ fn wrpr(pr: Option<&El>, out: &mut MRun) {
         out.color = Some(c);
     }
     if out.nor {
-        if let Some(f) = pr.child("w:rFonts").and_then(|f| f.attr("w:ascii").or_else(|| f.attr("w:hAnsi"))) {
+        // Symbol-font text was mapped to Unicode: it takes the text font.
+        if let Some(f) =
+            pr.child("w:rFonts").and_then(|f| f.attr("w:ascii").or_else(|| f.attr("w:hAnsi"))).filter(|f| !symbol_fonts::is_symbol_font(f))
+        {
             out.font = Some(f.to_string());
         }
         let bold = pr.child("w:b").is_some_and(crate::units::on_off);
@@ -363,5 +387,110 @@ mod tests {
         assert_eq!((*beg, *end, *sep, elems.len()), (Some('['), None, Some('|'), 2));
         assert!(matches!(m.nodes[2], MNode::Nary { chr: '∫', .. }));
         assert!(matches!(&m.nodes[3], MNode::Matrix { rows, .. } if rows.len() == 1 && rows[0].len() == 2));
+    }
+
+    /// Every run's text in the tree, in reading order.
+    fn texts(m: &mut Math) -> Vec<String> {
+        let mut out = Vec::new();
+        wordcraft_doc::math_edit::each_run_mut(&mut m.nodes, &mut |r| out.push(r.text.clone()));
+        out
+    }
+
+    fn t(s: &str) -> String {
+        format!("<m:r><m:t>{s}</m:t></m:r>")
+    }
+
+    /// #1273: one equation using every Office Math element of ECMA-376 §22.1 (each argument
+    /// holding a distinct marker) keeps every argument's text: nothing is silently dropped.
+    #[test]
+    fn every_omml_element_keeps_its_content() {
+        let parts = [
+            format!("<m:acc><m:accPr><m:chr m:val=\"̃\"/></m:accPr><m:e>{}</m:e></m:acc>", t("A1")),
+            format!("<m:bar><m:barPr><m:pos m:val=\"top\"/></m:barPr><m:e>{}</m:e></m:bar>", t("B1")),
+            format!("<m:box><m:boxPr><m:opEmu m:val=\"1\"/></m:boxPr><m:e>{}</m:e></m:box>", t("C1")),
+            format!("<m:borderBox><m:borderBoxPr><m:strikeH/></m:borderBoxPr><m:e>{}</m:e></m:borderBox>", t("D1")),
+            format!("<m:d><m:dPr><m:begChr m:val=\"[\"/></m:dPr><m:e>{}</m:e><m:e>{}</m:e></m:d>", t("E1"), t("E2")),
+            format!("<m:eqArr><m:e>{}</m:e><m:e>{}</m:e></m:eqArr>", t("F1"), t("F2")),
+            format!("<m:f><m:fPr><m:type m:val=\"skw\"/></m:fPr><m:num>{}</m:num><m:den>{}</m:den></m:f>", t("G1"), t("G2")),
+            format!("<m:func><m:fName>{}</m:fName><m:e>{}</m:e></m:func>", t("H1"), t("H2")),
+            format!("<m:groupChr><m:groupChrPr><m:chr m:val=\"⏞\"/><m:pos m:val=\"top\"/></m:groupChrPr><m:e>{}</m:e></m:groupChr>", t("I1")),
+            format!("<m:limLow><m:e>{}</m:e><m:lim>{}</m:lim></m:limLow>", t("J1"), t("J2")),
+            format!("<m:limUpp><m:e>{}</m:e><m:lim>{}</m:lim></m:limUpp>", t("K1"), t("K2")),
+            format!("<m:m><m:mr><m:e>{}</m:e><m:e>{}</m:e></m:mr><m:mr><m:e>{}</m:e><m:e/></m:mr></m:m>", t("L1"), t("L2"), t("L3")),
+            format!(
+                "<m:nary><m:naryPr><m:chr m:val=\"∑\"/></m:naryPr><m:sub>{}</m:sub><m:sup>{}</m:sup><m:e>{}</m:e></m:nary>",
+                t("M1"),
+                t("M2"),
+                t("M3")
+            ),
+            format!("<m:phant><m:phantPr><m:show m:val=\"0\"/></m:phantPr><m:e>{}</m:e></m:phant>", t("N1")),
+            format!("<m:rad><m:deg>{}</m:deg><m:e>{}</m:e></m:rad>", t("O1"), t("O2")),
+            format!("<m:sPre><m:sub>{}</m:sub><m:sup>{}</m:sup><m:e>{}</m:e></m:sPre>", t("P1"), t("P2"), t("P3")),
+            format!("<m:sSub><m:e>{}</m:e><m:sub>{}</m:sub></m:sSub>", t("Q1"), t("Q2")),
+            format!("<m:sSubSup><m:e>{}</m:e><m:sub>{}</m:sub><m:sup>{}</m:sup></m:sSubSup>", t("R1"), t("R2"), t("R3")),
+            format!("<m:sSup><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup>", t("S1"), t("S2")),
+            // Run-level wrappers allowed in math (EG_PContentMath): hyperlinks, simple fields,
+            // tracked insertions, content controls, markup compatibility.
+            format!("<w:hyperlink w:anchor=\"x\">{}</w:hyperlink>", t("T1")),
+            format!("<w:fldSimple w:instr=\"QUOTE\">{}</w:fldSimple>", t("T2")),
+            format!("<w:ins w:id=\"1\" w:author=\"a\">{}</w:ins>", t("T3")),
+            format!("<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>", t("T4")),
+            format!(
+                "<mc:AlternateContent><mc:Choice Requires=\"m\">{}</mc:Choice><mc:Fallback><w:r><w:t>picture</w:t></w:r></mc:Fallback></mc:AlternateContent>",
+                t("T5")
+            ),
+            "<w:r><w:t>T6</w:t></w:r>".to_string(),
+        ];
+        let x = format!(
+            r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">{}</m:oMath>"#,
+            parts.concat()
+        );
+        let e = crate::xml::parse(x.as_bytes()).unwrap();
+        let mut m = read_omath(&e, MathJc::CenterGroup);
+        let got = texts(&mut m).concat();
+        let markers = [
+            "A1", "B1", "C1", "D1", "E1", "E2", "F1", "F2", "G1", "G2", "H1", "H2", "I1", "J1", "J2", "K1", "K2", "L1", "L2", "L3", "M1", "M2", "M3",
+            "N1", "O1", "O2", "P1", "P2", "P3", "Q1", "Q2", "R1", "R2", "R3", "S1", "S2", "T1", "T2", "T3", "T4", "T5", "T6",
+        ];
+        for k in markers {
+            assert!(got.contains(k), "{k} dropped from {got}");
+        }
+        assert!(!got.contains("picture"), "the math choice wins over the fallback: {got}");
+    }
+
+    /// #1273: deleted text stays out; symbol characters and symbol-font text become Unicode.
+    #[test]
+    fn symbols_and_deletions_in_math() {
+        let e = omath(
+            r#"<m:r><m:t>x</m:t></m:r><w:del w:id="1" w:author="a"><m:r><m:t>gone</m:t></m:r></w:del><m:r><w:sym w:font="Symbol" w:char="F061"/></m:r><m:r><w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr><m:t>&#xF062;</m:t><w:noBreakHyphen/></m:r><w:r><w:rPr><w:rFonts w:ascii="Symbol"/></w:rPr><w:t>&#xF067;</w:t></w:r>"#,
+        );
+        let mut m = read_omath(&e, MathJc::CenterGroup);
+        let got = texts(&mut m).concat();
+        assert_eq!(got, "xαβ\u{2011}γ");
+        let mut font = None;
+        wordcraft_doc::math_edit::each_run_mut(&mut m.nodes, &mut |r| {
+            if r.nor {
+                font = Some(r.font.clone());
+            }
+        });
+        assert_eq!(font, Some(None), "mapped symbol text takes the text font");
+    }
+
+    /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
+    #[test]
+    fn deeply_nested_wrappers_are_bounded() {
+        // Deeper than the math limit, within the XML parser's own depth limit.
+        let n = 120;
+        let inner = format!("{}{}{}", "<w:hyperlink>".repeat(n), t("deep"), "</w:hyperlink>".repeat(n));
+        let e = omath(&inner);
+        let _ = read_omath(&e, MathJc::CenterGroup);
+        let inner = format!(
+            "{}{}{}",
+            "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice Requires=\"m\">".repeat(n),
+            t("deep"),
+            "</mc:Choice></mc:AlternateContent>".repeat(n)
+        );
+        let e = omath(&inner);
+        let _ = read_omath(&e, MathJc::CenterGroup);
     }
 }
