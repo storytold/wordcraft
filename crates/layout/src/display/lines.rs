@@ -416,12 +416,38 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 }
 
 fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    // A list number goes with its paragraph mark: when the mark is a tracked deletion the number
+    // is drawn as deleted text is, in the deletion's colour and with its mark (struck through by
+    // default, a caret, #s, bold…), and not at all where deletions aren't shown (#4828).
+    let m = &ctx.opts.revisions;
+    let mark_del = ctx.para.and_then(|p| p.mark.del);
+    let moved = mark_del.is_some() && ctx.doc.move_name(mark_del).is_some();
+    let hidden = mark_del.is_some() && (!ctx.opts.markup || m.hides_deletion(moved));
+    let deleted = mark_del.filter(|_| ctx.opts.markup && m.insertions_deletions);
+    let del_mark = deleted.map(|_| if moved { m.move_from_mark } else { m.delete_mark });
+    // Moved-away text marked (none) is plain text, and so is its number.
+    let plain_move = moved && del_mark == Some(DeleteMark::None);
+    let del_color =
+        deleted.filter(|_| !plain_move).map(|r| if moved { m.move_from_color } else { m.delete_color }.unwrap_or_else(|| ctx.authors.color(r)));
     if ctx.li == ctx.pl.label_line()
+        && !hidden
         && let Some(label) = &ctx.pl.label
     {
         let gx = ctx.x + label.x;
+        let first = label.runs.first().and_then(|r| ctx.pl.styles.get(r.style as usize));
+        if let (Some(DeleteMark::Caret), Some(color), Some(style)) = (del_mark, del_color, first) {
+            // A caret where the number was, instead of the number.
+            let (h, w, y) = (style.size * 0.3, (style.size / 18.0).max(0.6), ctx.base + 1.0);
+            for (x0, y0, x1, y1) in [(gx - h * 0.6, y, gx, y - h), (gx, y - h, gx + h * 0.6, y)] {
+                out.push(Draw::Line { x0, y0, x1, y1, width: w, color, stroke: Stroke::Solid, alpha: ctx.alpha, text_bg: None });
+            }
+            return draw_hyphen(ctx, out);
+        }
         for run in &label.runs {
             let Some(style) = ctx.pl.styles.get(run.style as usize) else { continue };
+            let color = del_color.unwrap_or_else(|| ctx.ink(&style.rc.color, None));
+            // Each deleted character shows as #.
+            let hash = (del_mark == Some(DeleteMark::Hash)).then(|| style.face.glyph_for('#'));
             out.push(Draw::Glyphs {
                 face: style.face,
                 size: style.size,
@@ -430,12 +456,12 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                     .get(run.glyphs.clone())
                     .into_iter()
                     .flatten()
-                    .map(|g| (g.gid, gx + g.dx, ctx.base - style.shift - g.dy))
+                    .map(|g| (hash.unwrap_or(g.gid), gx + g.dx, ctx.base - style.shift - g.dy))
                     .collect(),
-                color: ctx.ink(&style.rc.color, None),
+                color,
                 alpha: ctx.alpha,
-                synth_bold: style.synth_bold,
-                synth_italic: style.synth_italic,
+                synth_bold: style.synth_bold || del_mark == Some(DeleteMark::Bold),
+                synth_italic: style.synth_italic || del_mark == Some(DeleteMark::Italic),
                 text: run.text.clone(),
                 link: None,
                 ranges: Vec::new(),
@@ -443,7 +469,27 @@ fn draw_label_and_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 x_scale: 1.0,
             });
         }
+        // Struck through or underlined once, across the whole number, in its first run's size.
+        if let (Some(color), Some(mark), Some(style)) = (del_color, del_mark, first) {
+            let strike_y = ctx.base - style.shift - style.size * 0.28;
+            let under_y = ctx.base - style.shift + style.size * 0.12;
+            let line = match mark {
+                DeleteMark::Strikethrough => Some((strike_y, Stroke::Solid)),
+                DeleteMark::DoubleStrikethrough => Some((strike_y, Stroke::Double)),
+                DeleteMark::Underline => Some((under_y, Stroke::Solid)),
+                DeleteMark::DoubleUnderline => Some((under_y, stroke_of(Underline::Double))),
+                _ => None,
+            };
+            if let Some((y, stroke)) = line {
+                let width = (style.size / 18.0).max(0.5);
+                out.push(Draw::Line { x0: gx, y0: y, x1: gx + label.width, y1: y, width, color, stroke, alpha: ctx.alpha, text_bg: None });
+            }
+        }
     }
+    draw_hyphen(ctx, out);
+}
+
+fn draw_hyphen(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     if let Some((style_index, glyph, advance)) = ctx.line.hyphen
         && let Some(style) = ctx.pl.styles.get(style_index as usize)
     {
