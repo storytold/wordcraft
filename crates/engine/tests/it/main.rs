@@ -3,6 +3,7 @@ mod date_fields;
 mod macro_packages;
 mod odt_charts;
 mod odt_fields;
+mod odt_forms;
 mod odt_objects;
 mod odt_password;
 #[cfg(not(target_arch = "wasm32"))]

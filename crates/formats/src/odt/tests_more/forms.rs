@@ -1,0 +1,104 @@
+//! Form controls (ODF 1.3 §13): `office:forms` controls placed by `draw:control`, read as
+//! WordCraft content controls and written back as form controls LibreOffice shows.
+
+use crate::model::Inline;
+use crate::odt::tests::{NS_T, entry, package, paras};
+use crate::odt::{export, import, parse};
+use wordcraft_doc::control::{ControlKind, ListItem};
+
+const NS_F: &str = r#"xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
+
+/// LibreOffice's form controls: a text field, a check box, a list box (Green chosen), a combo
+/// box, a multi-line field, a radio button, a date field, an empty field and a button.
+const FORMS: &str = r#"<office:forms form:automatic-focus="false" form:apply-design-mode="false"><form:form form:name="Form"><form:text form:name="FullName" xml:id="control1" form:id="control1" form:current-value="Ada Lovelace"><form:properties><form:property form:property-name="x" office:value-type="string" office:string-value="y"/></form:properties></form:text><form:checkbox form:name="Subscribe" xml:id="control2" form:id="control2" form:label="Yes please" form:current-state="checked"/><form:listbox form:name="Colour" xml:id="control3" form:id="control3" form:dropdown="true"><form:option form:label="Red"/><form:option form:label="Green" form:current-selected="true" form:selected="true"/><form:option form:label="Blue" form:value="b"/></form:listbox><form:combobox form:name="City" xml:id="control4" form:id="control4" form:current-value="Bergen"><form:item form:label="Oslo"/><form:item form:label="Bergen"/></form:combobox><form:textarea form:name="Notes" xml:id="control5" form:id="control5" form:current-value="Line one"/><form:radio form:name="Size" xml:id="control6" form:id="control6" form:label="Large" form:current-selected="true"/><form:date form:name="When" xml:id="control7" form:id="control7" form:current-value="2026-11-01"/><form:text form:name="Empty" xml:id="control8" form:id="control8"/><form:button form:name="Submit" xml:id="control9" form:id="control9" form:label="Send"/></form:form></office:forms>"#;
+
+fn doc_xml() -> String {
+    let ctl = |id: &str| format!(r#"<draw:control text:anchor-type="as-char" svg:width="1in" svg:height="0.2in" draw:control="{id}"/>"#);
+    let p: String = (1..=9).map(|i| format!("<text:p>Field {i}: {}</text:p>", ctl(&format!("control{i}")))).collect();
+    format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text>{FORMS}{p}<text:p>After {}</text:p></office:text></office:body></office:document-content>"#,
+        ctl("nothing")
+    )
+}
+
+/// Each paragraph's controls: (kind, tag, title, text, showing placeholder).
+fn controls(flow: &crate::model::Flow) -> Vec<(ControlKind, String, String, String, bool)> {
+    paras(flow)
+        .into_iter()
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| match i {
+            Inline::Control { control, text, .. } => {
+                Some((control.kind.clone(), control.tag.clone(), control.title.clone(), text.clone(), control.showing_placeholder))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn form_controls_open_as_content_controls() {
+    let flow = parse(&package(&doc_xml(), None)).unwrap();
+    let got = controls(&flow);
+    assert_eq!(got.len(), 8, "the button and a missing control are left out: {got:?}");
+    assert_eq!(got[0], (ControlKind::Text { multi_line: false }, "FullName".into(), String::new(), "Ada Lovelace".into(), false));
+    assert!(matches!(got[1].0, ControlKind::CheckBox { checked: true, checked_char: '\u{2612}', unchecked_char: '\u{2610}', .. }));
+    assert_eq!((got[1].1.as_str(), got[1].2.as_str(), got[1].3.as_str()), ("Subscribe", "Yes please", "\u{2612}"));
+    let items = vec![
+        ListItem { display: "Red".into(), value: String::new() },
+        ListItem { display: "Green".into(), value: String::new() },
+        ListItem { display: "Blue".into(), value: "b".into() },
+    ];
+    assert_eq!(got[2], (ControlKind::DropDown { items, last_value: "Green".into() }, "Colour".into(), String::new(), "Green".into(), false));
+    assert!(matches!(&got[3].0, ControlKind::ComboBox { items, .. } if items.len() == 2) && got[3].3 == "Bergen");
+    assert_eq!((got[4].0.clone(), got[4].3.as_str()), (ControlKind::Text { multi_line: true }, "Line one"));
+    assert!(matches!(got[5].0, ControlKind::CheckBox { checked: true, checked_char: '\u{25C9}', .. }) && got[5].3 == "\u{25C9}");
+    assert!(matches!(&got[6].0, ControlKind::Date { full_date, .. } if full_date == "2026-11-01T00:00:00Z") && got[6].3 == "2026-11-01");
+    // An empty field shows its placeholder.
+    assert!(got[7].4 && got[7].3 == "Type here.");
+    // The forms' own elements aren't text.
+    assert!(paras(&flow).iter().all(|p| !matches!(p.inlines.first(), Some(Inline::Text(t, _)) if t.contains('y') && t.len() == 1)));
+}
+
+#[test]
+fn content_controls_are_saved_as_form_controls() {
+    let doc = import(&package(&doc_xml(), None)).unwrap();
+    let saved = export(&doc).unwrap();
+    let content = entry(&saved, "content.xml");
+    for want in [
+        r#"<office:forms form:automatic-focus="false" form:apply-design-mode="false"><form:form form:name="Form""#,
+        r#"<form:text form:name="FullName" xml:id="control1" form:id="control1""#,
+        r#"form:current-value="Ada Lovelace""#,
+        r#"<form:checkbox form:name="Subscribe""#,
+        r#"form:label="Yes please" form:current-state="checked""#,
+        r#"<form:option form:label="Green" form:current-selected="true" form:selected="true"/>"#,
+        r#"<form:option form:label="Blue" form:value="b"/>"#,
+        r#"<form:combobox form:name="City""#,
+        r#"<form:textarea form:name="Notes""#,
+        r#"<form:radio form:name="Size""#,
+        r#"<form:date form:name="When""#,
+        r#"form:current-value="2026-11-01""#,
+        r#"draw:control="control1""#,
+    ] {
+        assert!(content.contains(want), "{want} in {content}");
+    }
+    // `office:forms` comes first in the text (§13.2's place for it).
+    assert!(content.contains("<office:text>\n<office:forms"), "{content}");
+    // The empty field is saved empty, not with its placeholder.
+    assert!(content.contains(r#"<form:text form:name="Empty" xml:id="control8" form:id="control8" form:current-value=""/>"#), "{content}");
+    // And they open again the same.
+    assert_eq!(controls(&parse(&saved).unwrap()), controls(&parse(&package(&doc_xml(), None)).unwrap()));
+}
+
+#[test]
+fn hostile_forms_are_bounded() {
+    let many: String = (0..20_000).map(|i| format!(r#"<form:text xml:id="c{i}" form:id="c{i}" form:current-value="v"/>"#)).collect();
+    let items: String = (0..5000).map(|i| format!(r#"<form:option form:label="o{i}"/>"#)).collect();
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form>{many}<form:listbox form:id="big">{items}</form:listbox><form:text/></form:form></office:forms><text:p><draw:control draw:control="big"/><draw:control draw:control="c5"/><draw:control/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, None)).unwrap();
+    let got = controls(&flow);
+    // Ids past the limit aren't read; a list keeps at most its limit of entries.
+    assert!(got.iter().all(|(k, ..)| k.items().is_none_or(|i| i.len() <= 1000)));
+    assert!(got.len() <= 2);
+}

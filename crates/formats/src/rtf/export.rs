@@ -399,7 +399,7 @@ impl Writer {
                 }
                 // RTF keeps no ruby yet: its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
-                Inline::Field { result, fmt, .. } => self.run(result, fmt, out),
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
                 Inline::Figure(_)
                 | Inline::Chart(_)
                 | Inline::Equation { .. }

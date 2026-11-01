@@ -43,6 +43,7 @@ mod crypt;
 mod datastyle;
 mod fields;
 mod flat;
+mod forms;
 mod formula_size;
 mod frames;
 mod import;

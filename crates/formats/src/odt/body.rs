@@ -28,6 +28,8 @@ pub(super) struct Body<'a> {
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
     /// The package's entry names and its manifest's media types, for embedded objects.
     pub(super) entries: &'a [String],
+    /// The form controls of `office:forms`, placed where a `draw:control` names them.
+    forms: super::forms::FormsReader,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
     fmt: Vec<Fmt>,
@@ -122,6 +124,7 @@ impl<'a> Body<'a> {
             styles,
             zip,
             entries: &[],
+            forms: Default::default(),
             manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
@@ -205,6 +208,11 @@ impl<'a> Body<'a> {
 
     pub(super) fn feed(&mut self, ev: Ev) {
         match ev {
+            // `office:forms` is read on its own; a `draw:control` (always empty) is its control.
+            Ev::Start(q, a) if self.forms.start(&q, &a) => {}
+            Ev::End(q) if self.forms.end(&q) => {}
+            Ev::Start(q, a) if q == "draw:control" => self.place_control(&a),
+            Ev::End(q) if q == "draw:control" => {}
             Ev::Start(q, a) => {
                 if self.depth < MAX_XML_DEPTH {
                     self.start(&q, &a);
@@ -738,6 +746,18 @@ impl Body<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A form control (`draw:control`, ODF 1.3 §10.3.13) in the paragraph: the control it names,
+    /// with its text, as a content control. Inside a field or a frame's text it is nothing.
+    fn place_control(&mut self, a: &Attrs) {
+        if self.field.is_some() {
+            return;
+        }
+        if let Some((control, text)) = get(a, "draw:control").and_then(|id| self.forms.controls.get(id)).cloned() {
+            let fmt = self.cur_fmt();
+            self.push_inline(Inline::Control { control: Box::new(control), text, fmt });
         }
     }
 

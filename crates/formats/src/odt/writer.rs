@@ -73,6 +73,7 @@ pub(super) const NS: &str = concat!(
     "xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" ",
     "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" ",
     "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" ",
+    "xmlns:form=\"urn:oasis:names:tc:opendocument:xmlns:form:1.0\" ",
     "xmlns:loext=\"urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0\" ",
     "office:version=\"1.3\""
 );
@@ -150,6 +151,10 @@ pub(super) struct Writer {
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
+    /// Form controls written (`form:*` elements for `office:forms`), and whether this writer's
+    /// text may hold them (the body's; not headers and footers).
+    pub(super) forms: Vec<String>,
+    pub(super) forms_allowed: bool,
     /// The theme's accent colours, which charts' series are drawn in.
     pub(super) accents: Vec<wordcraft_doc::Rgb>,
     /// `text:changed-region` elements written so far.
@@ -405,6 +410,26 @@ impl Writer {
                 Inline::Chart(c) => {
                     self.chart(c, Place::Text(c.float.as_deref()), out);
                     prev_space = false;
+                }
+                // A form control (in the body: forms belong to the text, ODF 1.3 §13.2), placed
+                // here; elsewhere, or of a kind forms don't have, its text.
+                Inline::Control { control, text, fmt } => {
+                    let id = format!("control{}", self.forms.len() + 1);
+                    match super::forms::form_xml(control, text, &id, self.forms.len() + 1).filter(|_| self.forms_allowed) {
+                        Some((xml, w, h)) => {
+                            self.forms.push(xml);
+                            out.push_str(&format!(
+                                "<draw:control text:anchor-type=\"as-char\" draw:z-index=\"0\" svg:width=\"{}\" svg:height=\"{}\" draw:control=\"{id}\"/>",
+                                pt(w),
+                                pt(h)
+                            ));
+                            prev_space = false;
+                        }
+                        None => {
+                            self.plain_inlines(&[Inline::Text(text.clone(), fmt.clone())], out);
+                            prev_space = text.ends_with(' ');
+                        }
+                    }
                 }
             }
         }

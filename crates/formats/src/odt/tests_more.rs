@@ -13,6 +13,7 @@ mod flat;
 mod floats;
 mod fonts;
 mod format_changes;
+mod forms;
 mod groups;
 mod headers;
 mod indexes;

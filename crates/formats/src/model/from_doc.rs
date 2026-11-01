@@ -411,6 +411,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     }
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
+    let mut control = OpenControl::default();
     for (range, props) in p.run_ranges() {
         let Some(text) = p.text.get(range.clone()) else { continue };
         // Deleted objects and page breaks stay out even when tracking: the flow has no marks for them.
@@ -458,6 +459,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             }
             let obj = p.objects.get(k);
             k += 1;
+            control.interrupt(obj, &mut out, &f);
             // Hidden text, or a hidden drawing: not in the copy.
             if hidden || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
                 continue;
@@ -531,14 +533,16 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     }
                     out.inlines.push(Inline::Anchor(name.clone()));
                 }
+                Some(o @ (InlineObject::ControlStart { .. } | InlineObject::ControlEnd)) if control.object(o, opts, &mut buf, &mut out, &f) => {}
                 Some(o) => buf.push_str(o.plain_text()),
                 None => {}
             }
         }
         if !hidden_text {
-            out.push_text(&buf, &f);
+            control.run_end(&buf, &mut out, &f);
         }
     }
+    control.finish(&mut out);
     if tracked {
         let (ins, del) = rev_marks(doc, &p.mark);
         (out.mark_ins, out.mark_del) = (ins.map(Box::new), del.map(Box::new));
@@ -559,6 +563,73 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     out.section.clone_from(&p.section);
     done.push(out);
     done
+}
+
+/// A content control of plain text being read (formats with form controls): it, its text so
+/// far and that text's formatting.
+#[derive(Default)]
+struct OpenControl(Option<(Box<wordcraft_doc::control::ContentControl>, String, Option<Fmt>)>);
+
+impl OpenControl {
+    /// Object `obj` comes: anything but the control's end makes the control its text after all.
+    fn interrupt(&mut self, obj: Option<&InlineObject>, out: &mut Para, f: &Fmt) {
+        if !matches!(obj, Some(InlineObject::ControlEnd))
+            && let Some((_, text, fmt)) = self.0.take()
+        {
+            out.push_text(&text, &fmt.unwrap_or_else(|| f.clone()));
+        }
+    }
+
+    /// A content control starts or ends (`o`): whether it is one read here (a plain-text
+    /// control, in a flow that keeps them).
+    fn object(&mut self, o: &InlineObject, opts: FlowOpts, buf: &mut String, out: &mut Para, f: &Fmt) -> bool {
+        match o {
+            InlineObject::ControlStart { control: c } if opts.boxes && !c.block && plain_control(&c.kind) => {
+                if !buf.is_empty() {
+                    out.push_text(&std::mem::take(buf), f);
+                }
+                self.0 = Some((c.clone(), String::new(), None));
+                true
+            }
+            InlineObject::ControlEnd if self.0.is_some() => {
+                self.close(buf, out, f);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The control ends: it, with its text (the rest in `buf`), goes into `out`.
+    fn close(&mut self, buf: &mut String, out: &mut Para, f: &Fmt) {
+        if let Some((c, mut text, fmt)) = self.0.take() {
+            text.push_str(&std::mem::take(buf));
+            out.inlines.push(Inline::Control { control: c, text, fmt: fmt.unwrap_or_else(|| f.clone()) });
+        }
+    }
+
+    /// A run ends with `buf`: the control's text when one is open, else the paragraph's.
+    fn run_end(&mut self, buf: &str, out: &mut Para, f: &Fmt) {
+        match &mut self.0 {
+            Some((_, text, fmt)) => {
+                text.push_str(buf);
+                fmt.get_or_insert_with(|| f.clone());
+            }
+            None => out.push_text(buf, f),
+        }
+    }
+
+    /// The paragraph ends: a control it doesn't close is its text.
+    fn finish(&mut self, out: &mut Para) {
+        if let Some((_, text, fmt)) = self.0.take() {
+            out.push_text(&text, &fmt.unwrap_or_default());
+        }
+    }
+}
+
+/// A content control that holds plain text, as a form control does.
+fn plain_control(kind: &wordcraft_doc::control::ControlKind) -> bool {
+    use wordcraft_doc::control::ControlKind as K;
+    matches!(kind, K::Text { .. } | K::CheckBox { .. } | K::DropDown { .. } | K::ComboBox { .. } | K::Date { .. })
 }
 
 fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {

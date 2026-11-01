@@ -250,7 +250,7 @@ impl Writer {
                 | Inline::FieldStart(_)
                 | Inline::FieldEnd
                 | Inline::AnchorEnd(_) => {}
-                Inline::Field { result, fmt, .. } => {
+                Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
                     let s = self.span(result, fmt);
                     push_apart(&mut o, &s);
                 }

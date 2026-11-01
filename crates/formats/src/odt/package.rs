@@ -510,6 +510,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let accents = doc.settings.theme_colors.get(4..10).map(<[_]>::to_vec).unwrap_or_default();
     let mut w = Writer::default();
     w.accents.clone_from(&accents);
+    w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
@@ -569,8 +570,9 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         format!("<text:sequence-decls>{d}</text:sequence-decls>")
     };
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{tracked}{decls}{body}</office:text></office:body></office:document-content>\n",
-        w.automatic_styles()
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{decls}{body}</office:text></office:body></office:document-content>\n",
+        w.automatic_styles(),
+        super::forms::forms_xml(&w.forms)
     );
     let mut hw = Writer::with_prefix("M");
     hw.accents = accents;

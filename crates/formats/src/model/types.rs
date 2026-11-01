@@ -197,6 +197,13 @@ pub enum Inline {
     /// A chart WordCraft can edit, `w` × `h` points: only in flows asked for boxes
     /// ([`FlowOpts::boxes`]); others get its alt text as an [`Inline::Figure`].
     Chart(Chart),
+    /// A content control holding plain `text` (a form control in ODT): only in flows asked for
+    /// boxes ([`FlowOpts::boxes`]); others get its text.
+    Control {
+        control: Box<wordcraft_doc::control::ContentControl>,
+        text: String,
+        fmt: Fmt,
+    },
     /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
     /// without equations write `linear` as text.
     Equation {
@@ -641,9 +648,11 @@ impl Para {
         let mut s = String::new();
         for i in &self.inlines {
             match i {
-                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => {
-                    s.push_str(t)
-                }
+                Inline::Text(t, _)
+                | Inline::Equation { linear: t, .. }
+                | Inline::Ruby { base: t, .. }
+                | Inline::Field { result: t, .. }
+                | Inline::Control { text: t, .. } => s.push_str(t),
                 Inline::Image(_)
                 | Inline::Anchor(_)
                 | Inline::Figure(_)
@@ -670,7 +679,10 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
-                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } | Inline::Field { result: t, .. } => s.push_str(t),
+                Inline::Equation { linear: t, .. }
+                | Inline::Ruby { base: t, .. }
+                | Inline::Field { result: t, .. }
+                | Inline::Control { text: t, .. } => s.push_str(t),
                 Inline::Image(_)
                 | Inline::Anchor(_)
                 | Inline::Figure(_)

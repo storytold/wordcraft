@@ -523,6 +523,15 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &cp, Some(obj));
                     }
                 }
+                // A content control around its text.
+                Inline::Control { control, text, fmt } => {
+                    let cp = self.budget(char_props(fmt));
+                    let mut c = control.clone();
+                    c.block = false;
+                    append(&mut out, "", &cp, Some(InlineObject::ControlStart { control: c }));
+                    append(&mut out, &clean_text(text), &cp, None);
+                    append(&mut out, "", &cp, Some(InlineObject::ControlEnd));
+                }
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {
