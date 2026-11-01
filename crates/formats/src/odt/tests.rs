@@ -1221,6 +1221,56 @@ fn paragraph_styles_give_space_before_after_and_line_spacing() {
 }
 
 #[test]
+fn paragraph_margins_in_any_unit_and_the_fo_margin_shorthand() {
+    // `fo:margin-top` / `fo:margin-bottom` in cm, inches and mm become points; the `fo:margin`
+    // shorthand sets both, and an explicit top or bottom on the same element overrides it
+    // A child that sets only the shorthand replaces both inherited values.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Cm" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.423cm" fo:margin-bottom="0.212cm"/></style:style>
+        <style:style style:name="Inch" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.25in" fo:margin-bottom="0.125in"/></style:style>
+        <style:style style:name="Mm" style:family="paragraph"><style:paragraph-properties fo:margin-top="5mm"/></style:style>
+        <style:style style:name="Short" style:family="paragraph"><style:paragraph-properties fo:margin="12pt"/></style:style>
+        <style:style style:name="ShortTop" style:family="paragraph"><style:paragraph-properties fo:margin="12pt" fo:margin-top="3pt"/></style:style>
+        <style:style style:name="ShortBottom" style:family="paragraph"><style:paragraph-properties fo:margin-bottom="1cm" fo:margin="0.5in"/></style:style>
+        <style:style style:name="ShortChild" style:family="paragraph" style:parent-style-name="Inch"><style:paragraph-properties fo:margin="0pt"/></style:style>
+        <style:style style:name="ShortPct" style:family="paragraph" style:parent-style-name="Inch"><style:paragraph-properties fo:margin="50%"/></style:style>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:p text:style-name="Cm">cm</text:p><text:p text:style-name="Inch">in</text:p><text:p text:style-name="Mm">mm</text:p>
+        <text:p text:style-name="Short">shorthand</text:p><text:p text:style-name="ShortTop">top wins</text:p>
+        <text:p text:style-name="ShortBottom">bottom wins</text:p><text:p text:style-name="ShortChild">child</text:p>
+        <text:p text:style-name="ShortPct">percent</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after)).collect();
+    let cm = |v: f32| v * 72.0 / 2.54;
+    let want = [
+        (Some(cm(0.423)), Some(cm(0.212))),
+        (Some(18.0), Some(9.0)),
+        (Some(5.0 * 72.0 / 25.4), None),
+        (Some(12.0), Some(12.0)),
+        (Some(3.0), Some(12.0)),
+        (Some(36.0), Some(cm(1.0))),
+        (Some(0.0), Some(0.0)),
+        // A percentage (in ODF, of the parent style's margin) isn't read, as for fo:margin-top:
+        // the parent's values stay.
+        (Some(18.0), Some(9.0)),
+    ];
+    assert_eq!(got.len(), want.len());
+    let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(a), Some(b)) => (a - b).abs() < 1e-3,
+        (a, b) => a == b,
+    };
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!(close(g.0, w.0) && close(g.1, w.1), "paragraph {i}: got {g:?}, want {w:?}");
+    }
+}
+
+#[test]
 fn own_odt_export_keeps_its_paragraph_spacing_on_reopen() {
     // The writer declares 8pt after in its default style; reading the file back must keep it,
     // not fall to ODF's zero.

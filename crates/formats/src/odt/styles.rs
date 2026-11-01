@@ -182,11 +182,16 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
 /// Reads the vertical spacing of a `style:paragraph-properties` element into `sp`: space
 /// before (`fo:margin-top`) and after (`fo:margin-bottom`) in points, and the line spacing
 /// (`fo:line-height` as a percentage, `normal` or a length; `style:line-height-at-least`).
-/// An attribute that is absent leaves its value alone; one that can't be read, too.
+/// The `fo:margin` shorthand sets both before and after; `fo:margin-top` and `fo:margin-bottom`
+/// override it. An attribute that is absent leaves its value alone; one that can't be read, too.
 fn vertical_spacing(a: &Attrs, sp: &mut model::Spacing) {
     use wordcraft_doc::props::LineSpacing;
     // Nothing past the tallest page (22in) is a document's own.
     let space = |v: &str| length(v).filter(|v| (0.0..=1584.0).contains(v));
+    if let Some(v) = get(a, "fo:margin").and_then(space) {
+        sp.before = Some(v);
+        sp.after = Some(v);
+    }
     if let Some(v) = get(a, "fo:margin-top").and_then(space) {
         sp.before = Some(v);
     }
