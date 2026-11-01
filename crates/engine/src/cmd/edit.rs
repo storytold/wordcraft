@@ -271,7 +271,7 @@ fn spike(s: &mut Session, _: &Value) -> CmdResult {
 /// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
 fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
     let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
-    super::paste::insert(s, frag)?;
+    super::paste::insert_plain(s, frag)?;
     s.building_blocks.remove(SPIKE);
     sel_result(s)
 }
@@ -290,8 +290,12 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
 /// Merge Formatting: the pasted text takes the destination's formatting, keeping its emphasis.
 fn paste_merge(s: &mut Session, v: &Value) -> CmdResult {
     let mut frag = super::paste::paste_fragment(s, v)?;
+    let source = frag.clone();
     super::paste::merge_formatting(s, &mut frag);
-    super::paste::insert(s, frag)?;
+    super::paste::insert_from(s, frag, Some(source))?;
+    if let Some(lp) = s.last_paste.as_mut() {
+        lp.mode = "merge";
+    }
     sel_result(s)
 }
 

@@ -262,6 +262,7 @@ impl NumFormat {
         use crate::cjk_numbers as cjk;
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
+            NumFormat::Hex => format!("{n:X}"),
             NumFormat::UpperRoman => roman(n).to_uppercase(),
             NumFormat::LowerRoman => roman(n),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
@@ -306,7 +307,6 @@ impl NumFormat {
             NumFormat::Chosung => cjk::chosung(n),
             NumFormat::Decimal
             | NumFormat::DecimalHalfWidth
-            | NumFormat::Hex
             | NumFormat::VietnameseCounting
             | NumFormat::Hebrew1
             | NumFormat::Hebrew2
@@ -457,13 +457,21 @@ pub fn cardinal_text(n: u32) -> String {
                 let h = format!("{} hundred", words(n / 100));
                 if n.is_multiple_of(100) { h } else { format!("{h} {}", words(n % 100)) }
             }
-            _ => {
+            1_000..=999_999 => {
                 let th = format!("{} thousand", words(n / 1000));
                 if n.is_multiple_of(1000) { th } else { format!("{th} {}", words(n % 1000)) }
             }
+            1_000_000..=999_999_999 => {
+                let m = format!("{} million", words(n / 1_000_000));
+                if n.is_multiple_of(1_000_000) { m } else { format!("{m} {}", words(n % 1_000_000)) }
+            }
+            _ => {
+                let b = format!("{} billion", words(n / 1_000_000_000));
+                if n.is_multiple_of(1_000_000_000) { b } else { format!("{b} {}", words(n % 1_000_000_000)) }
+            }
         }
     }
-    capitalize(&words(n.min(999_999)))
+    capitalize(&words(n))
 }
 
 /// English ordinal words (`Twenty-First`).
@@ -928,6 +936,17 @@ mod tests {
             assert!(f == NumFormat::Bullet || f == NumFormat::None || !f.format(u32::MAX).is_empty(), "{f:?}");
         }
         assert_eq!(NumFormat::from_ooxml("klingon"), NumFormat::Decimal, "unknown formats are decimal");
+    }
+
+    #[test]
+    fn hex_is_uppercase_and_text_formats_reach_millions() {
+        assert_eq!(NumFormat::Hex.format(10), "A");
+        assert_eq!(NumFormat::Hex.format(15), "F");
+        assert_eq!(NumFormat::Hex.format(16), "10");
+        assert_eq!(NumFormat::Hex.format(255), "FF");
+        assert_eq!(NumFormat::CardinalText.format(1_000_000), "One Million");
+        assert_eq!(NumFormat::OrdinalText.format(1_000_000), "One Millionth");
+        assert_eq!(NumFormat::CardinalText.format(2_000_000_000), "Two Billion");
     }
 
     #[test]

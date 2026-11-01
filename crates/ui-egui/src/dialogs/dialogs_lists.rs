@@ -342,6 +342,301 @@ fn preview(ui: &mut Ui, f: &ListForm) {
     }
 }
 
+/// Define New Number Format (Home › Paragraph › Numbering, #2787): the number style, the number
+/// format (`%1` = the number; none once the number is deleted), the number's font and its
+/// alignment. OK runs one
+/// `para.defineNumber`, so agents get the same list without the dialog.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NumberForm {
+    pub format: String,
+    pub text: String,
+    pub align: String,
+    /// The number's formatting from Font…, in `format.set`'s shape (font, size, bold, colour…).
+    pub props: serde_json::Map<String, Value>,
+    /// The app's Font dialog while Font… has it open over this one.
+    #[serde(skip)]
+    pub font_dialog: Option<Box<crate::dialogs::Dialog>>,
+    /// Where the number stood (a char index of `text`) when it was deleted, so a number style
+    /// picked again puts it back there.
+    #[serde(skip)]
+    pub number_at: Option<usize>,
+}
+
+impl Default for NumberForm {
+    fn default() -> NumberForm {
+        NumberForm {
+            format: "decimal".into(),
+            text: "%1.".into(),
+            align: "left".into(),
+            props: serde_json::Map::new(),
+            font_dialog: None,
+            number_at: None,
+        }
+    }
+}
+
+impl NumberForm {
+    /// What `para.defineNumber` accepts: a number style's format holds the number (`%1`), a
+    /// "none" one holds none, neither holds another level's, and it fits.
+    /// The `n`th label, as the list will show it.
+    fn sample(&self, n: u32) -> String {
+        if self.format == "none" {
+            return wordcraft_doc::numbering::none_label(&self.text);
+        }
+        self.text.replace("%1", &NumFormat::from_ooxml(&self.format).format(n))
+    }
+
+    /// Delete the number from the format (Word then shows the style as none).
+    fn remove_number(&mut self) {
+        if let Some((before, after)) = self.text.split_once("%1") {
+            self.number_at = Some(before.chars().count());
+            self.text = format!("{before}{after}");
+        }
+        self.format = "none".into();
+    }
+
+    /// Pick a style: a number style after none puts the number back where it stood (else at the
+    /// end), none deletes it.
+    fn set_style(&mut self, style: &str) {
+        if style == "none" {
+            self.remove_number();
+            return;
+        }
+        if !self.text.contains("%1") {
+            let at = self.number_at.take().unwrap_or(usize::MAX).min(self.text.chars().count());
+            let byte = self.text.char_indices().nth(at).map_or(self.text.len(), |(i, _)| i);
+            self.text.insert_str(byte, "%1");
+        }
+        self.format = style.to_string();
+    }
+
+    pub fn params(&self) -> Value {
+        json!({"format": self.format, "text": self.text, "align": self.align, "props": self.props})
+    }
+
+    /// The number's bold, italic and colour from its properties (for the preview).
+    fn look(&self) -> (bool, bool, Option<wordcraft_doc::Rgb>) {
+        let b = |k: &str| self.props.get(k).and_then(Value::as_bool).unwrap_or(false);
+        let rgb = self.props.get("color").and_then(|c| c.get("Rgb")).and_then(Value::as_array).and_then(|c| match c.as_slice() {
+            [r, g, b] => Some(wordcraft_doc::Rgb(r.as_u64()? as u8, g.as_u64()? as u8, b.as_u64()? as u8)),
+            _ => None,
+        });
+        (b("bold"), b("italic"), rgb)
+    }
+
+    /// The number's size in the preview: the Font dialog's size, 12 pt without one, kept to what
+    /// the preview's rows have room for.
+    fn preview_size(&self) -> f32 {
+        let size = self.props.get("size").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(12.0);
+        size.clamp(6.0, 20.0) as f32
+    }
+}
+
+/// Number styles Define New Number Format offers: the multilevel list's without bullet (none last).
+fn number_styles() -> impl Iterator<Item = (&'static str, &'static str)> {
+    STYLES.into_iter().filter(|(k, _)| *k != "bullet")
+}
+
+/// The number format box as Word shows it: the text before the number, the number itself (the
+/// style's first value on grey, not typed over), the text after it. Delete or Backspace on the
+/// number, Delete at the end of the text before it or Backspace at the start of the text after it
+/// deletes the number, and the style becomes none: then the box is plain text.
+fn number_format_box(ui: &mut Ui, f: &mut NumberForm) {
+    let t = Tokens::get(ui.ctx());
+    let width = 230.0;
+    if f.format == "none" || !f.text.contains("%1") {
+        let h = ui.spacing().interact_size.y;
+        ui.add(egui::TextEdit::singleline(&mut f.text).char_limit(64).desired_width(width).min_size(vec2(0.0, h)))
+            .accessible_name(tl!("Number format:"));
+        return;
+    }
+    let (mut before, mut after) = f.text.split_once("%1").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_default();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let measure = |ui: &Ui, s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x;
+    let pressed = |ui: &Ui, k: egui::Key| ui.input(|i| i.key_pressed(k));
+    let cursor =
+        |ui: &Ui, id: egui::Id| egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
+    let mut remove = false;
+    // As tall as the Number style box beside it: a field's height less the frame's margin and border.
+    let row = (ui.spacing().interact_size.y - 6.0).max(12.0);
+    egui::Frame::new()
+        .fill(t.input)
+        .stroke(egui::Stroke::new(1.0, t.input_border))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin { left: 2, right: 4, top: 2, bottom: 2 })
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(vec2(width - 8.0, row), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_size(vec2(width - 8.0, row));
+                ui.spacing_mut().item_spacing.x = 1.0;
+                // A text field is at least a field's height (egui's theme floor): these frameless
+                // pieces sit inside the box's frame, so they take the row's.
+                ui.spacing_mut().interact_size.y = row;
+                let id = ui.scope_id().with("dnf_before");
+                let before_id = id;
+                let at = cursor(ui, id);
+                // Empty, it takes no room: the number starts the box, as in Word.
+                let w = if before.is_empty() { 1.0 } else { measure(ui, &before) + 2.0 };
+                let r = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut before)
+                            .id(id)
+                            .frame(egui::Frame::NONE)
+                            .char_limit(30)
+                            .desired_width(w)
+                            .margin(egui::Margin::ZERO),
+                    )
+                    .accessible_name(tl!("Text before the number"));
+                if r.has_focus() && pressed(ui, egui::Key::Delete) && at == Some(before.chars().count()) {
+                    remove = true;
+                }
+                let sample = NumFormat::from_ooxml(&f.format).format(1);
+                let (rect, num) = ui.allocate_exact_size(vec2(measure(ui, &sample) + 8.0, row), Sense::click());
+                num.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Number")));
+                if num.clicked() {
+                    num.request_focus();
+                }
+                // Left and Right are this piece's own (below), not egui's move-focus keys.
+                ui.memory_mut(|m| m.set_focus_lock_filter(num.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+                let fill = if num.has_focus() { t.selection } else { t.ruler_margin };
+                ui.painter().rect_filled(rect, 2.0, fill);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, &sample, font.clone(), t.text);
+                if num.has_focus() && (pressed(ui, egui::Key::Delete) || pressed(ui, egui::Key::Backspace)) {
+                    remove = true;
+                }
+                let id = ui.scope_id().with("dnf_after");
+                // From the number, Left or Home goes to the text before it, Right or End to after.
+                if num.has_focus() {
+                    if pressed(ui, egui::Key::ArrowLeft) || pressed(ui, egui::Key::Home) {
+                        ui.memory_mut(|m| m.request_focus(before_id));
+                    } else if pressed(ui, egui::Key::ArrowRight) || pressed(ui, egui::Key::End) {
+                        ui.memory_mut(|m| m.request_focus(id));
+                    }
+                }
+                let at = cursor(ui, id);
+                let r = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut after)
+                            .id(id)
+                            .frame(egui::Frame::NONE)
+                            .char_limit(30)
+                            .desired_width(f32::INFINITY)
+                            .margin(egui::Margin::ZERO),
+                    )
+                    .accessible_name(tl!("Text after the number"));
+                if r.has_focus() && pressed(ui, egui::Key::Backspace) && at == Some(0) {
+                    remove = true;
+                }
+            });
+        });
+    f.text = format!("{before}%1{after}");
+    if remove {
+        f.remove_number();
+    }
+}
+
+pub fn define_number(app: &mut WordApp, ui: &mut Ui, f: &mut NumberForm) -> bool {
+    // Font… open over this dialog: this one waits, as in Word.
+    if f.font_dialog.is_some() {
+        ui.disable();
+    }
+    ui.label(egui::RichText::new(tl!("Number format")).font(semibold(12.5)));
+    egui::Grid::new("dnf_grid").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        let label = ui.label(tl!("Number style:"));
+        ui.horizontal(|ui| {
+            let current = number_styles().find(|(k, _)| *k == f.format).map(|(_, s)| s).unwrap_or("");
+            let combo = craft_ui::ComboBox::from_id_salt("dnf_style").selected_text(style_label(current)).show_ui(ui, |ui| {
+                for (k, s) in number_styles() {
+                    if ui.selectable_label(f.format == k, style_label(s)).clicked() {
+                        f.set_style(k);
+                    }
+                }
+            });
+            combo.response.labelled_by(label.id);
+            // Word's Font… beside the style: the number's own font, in a dialog over this one.
+            if ui.button(tl!("Font…")).clicked() {
+                f.font_dialog = crate::dialogs::number_font_dialog(app, &f.props).map(Box::new);
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Number format:"));
+        number_format_box(ui, f);
+        ui.end_row();
+        ui.label(tl!("Alignment:"));
+        ui.horizontal(|ui| {
+            for (v, s) in [("right", "Right"), ("center", "Center"), ("left", "Left")] {
+                ui.radio_value(&mut f.align, v.to_string(), tl!(s));
+            }
+        });
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+    number_preview(ui, f);
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    // While Font… is open (the app's Font dialog, over this one), Enter and Escape are its own.
+    if let Some(mut d) = f.font_dialog.take() {
+        match crate::dialogs::show_number_font(app, ui.ctx(), &mut d) {
+            None => f.font_dialog = Some(d),
+            Some(true) => {
+                if let Some(changed) = crate::dialogs::number_font_result(app, &d) {
+                    f.props.extend(changed);
+                }
+            }
+            Some(false) => {}
+        }
+        return false;
+    }
+    if ok {
+        // para.defineNumber checks the format: a refused one keeps the dialog open, with the
+        // reason in the status bar.
+        if let Err(e) = app.run("para.defineNumber", f.params()) {
+            app.status(e);
+            return false;
+        }
+        return true;
+    }
+    cancel
+}
+
+/// A page with three numbered paragraphs in the form's style, format, font and alignment
+/// (numbers aligned at one point, text in grey bars after them), between grey lines of text.
+fn number_preview(ui: &mut Ui, f: &NumberForm) {
+    let t = Tokens::get(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(vec2(300.0, 132.0), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.0, egui::Color32::WHITE);
+    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    let grey = |y: f32| {
+        let r = egui::Rect::from_min_max(egui::pos2(rect.left() + 14.0, y - 2.0), egui::pos2(rect.right() - 14.0, y + 2.0));
+        p.rect_filled(r, 1.0, egui::Color32::from_gray(205));
+    };
+    grey(rect.top() + 14.0);
+    grey(rect.bottom() - 14.0);
+    let at = rect.left() + 66.0;
+    let text_x = rect.left() + 104.0;
+    let (bold, italic, rgb) = f.look();
+    let ink = rgb.map_or(egui::Color32::BLACK, crate::theme::c32);
+    let size = f.preview_size();
+    let font = if bold { semibold(size) } else { egui::FontId::proportional(size) };
+    for i in 0..3u32 {
+        let y = rect.top() + 40.0 + 26.0 * i as f32;
+        let mut job = egui::text::LayoutJob::default();
+        let format = egui::TextFormat { font_id: font.clone(), color: ink, italics: italic, ..Default::default() };
+        job.append(&f.sample(i + 1), 0.0, format);
+        let galley = p.layout_job(job);
+        let w = galley.size().x;
+        let x = match f.align.as_str() {
+            "center" => at - w / 2.0,
+            "right" => at - w,
+            _ => at,
+        };
+        p.galley(egui::pos2(x, y - galley.size().y / 2.0), galley, ink);
+        let bar = egui::Rect::from_min_max(egui::pos2(text_x.max(x + w + 4.0), y - 2.5), egui::pos2(rect.right() - 14.0, y + 2.5));
+        p.rect_filled(bar, 1.0, egui::Color32::from_gray(90));
+    }
+}
+
 /// Track Changes Options (Review › Tracking): what markup shows and how revisions look.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -580,6 +875,154 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// The Define New Number Format dialog on its own: state = (app, form, whether it closed, once
+    /// drawn). The app's fonts go in on the first frame, which draws nothing.
+    fn number_harness(a: WordApp, form: super::NumberForm) -> egui_kittest::Harness<'static, (WordApp, super::NumberForm, Option<bool>)> {
+        egui_kittest::Harness::builder().with_size(egui::vec2(480.0, 520.0)).build_ui_state(
+            |ui, st: &mut (WordApp, super::NumberForm, Option<bool>)| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    crate::theme::install_fonts(ui.ctx());
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                // Once closed it stays closed, as in the app.
+                if st.2 != Some(true) {
+                    st.2 = Some(super::define_number(&mut st.0, ui, &mut st.1));
+                }
+            },
+            (a, form, None),
+        )
+    }
+
+    /// #2787: Define New Number Format opens from the Numbering drop-down's command without
+    /// settings, on `1.`, `2.`; the preview draws the number at the Font dialog's size, within
+    /// what its rows hold.
+    #[test]
+    fn define_new_number_format_opens_on_a_decimal_number() {
+        let mut a = app();
+        assert_eq!(a.run("para.defineNumber", json!({})).unwrap(), json!({"pending": "defineNumber"}));
+        let Some(Dialog::DefineNumber { form }) = &a.dialog else { panic!("dialog") };
+        assert_eq!((form.sample(1), form.sample(2)), ("1.".to_string(), "2.".to_string()));
+        let mut sized = (**form).clone();
+        assert_eq!(sized.preview_size(), 12.0);
+        for (size, want) in [(json!(16.0), 16.0), (json!(400.0), 20.0), (json!(1.0), 6.0), (json!("big"), 12.0)] {
+            sized.props.insert("size".into(), size);
+            assert_eq!(sized.preview_size(), want);
+        }
+    }
+
+    /// #2787: the number in the format box deletes as one piece (style none) and comes back
+    /// where it stood with a number style; Font… opens the app's Font dialog for the number (OK
+    /// keeps its formatting, Escape doesn't, neither formats text); OK numbers the paragraph in
+    /// one step, a none format with its text; Cancel changes nothing.
+    #[test]
+    fn define_new_number_format_dialog_applies_only_a_valid_format() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Clause"})).unwrap();
+        let doc = a.session.doc.clone();
+        // The dialog itself, clicked: state = (app, form, what the dialog returned).
+        let mut form = super::NumberForm { text: "(%1)".into(), ..Default::default() };
+        form.format = "lowerLetter".into();
+        let mut h = number_harness(a, form);
+        h.run();
+        assert_eq!(h.state().1.sample(2), "(b)");
+        // The number in the format box is one piece: Backspace on it deletes it, and the style is
+        // none (Word's "(none)"), the box plain text.
+        h.get_by_label("Number").click();
+        h.run();
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert_eq!((h.state().1.format.as_str(), h.state().1.text.as_str()), ("none", "()"));
+        assert!(h.query_by_label("Number").is_none(), "no number left in the box");
+        assert_eq!(h.state().2, Some(false), "still open");
+        // Picking a number style again puts the number back where it stood.
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Number style:").click();
+        h.run();
+        h.get_by_label("a, b, c, …").click();
+        h.run();
+        assert_eq!((h.state().1.format.as_str(), h.state().1.text.as_str()), ("lowerLetter", "(%1)"));
+        // From the number, Left goes to the text before it: typing lands there.
+        h.get_by_label("Number").click();
+        h.run();
+        h.key_press(egui::Key::ArrowLeft);
+        h.run();
+        h.input_mut().events.push(egui::Event::Text("x".into()));
+        h.run();
+        assert_eq!(h.state().1.text, "(x%1)");
+        h.state_mut().1.text = "(%1)".into();
+        h.state_mut().1.align = "right".into();
+        h.run();
+        // Font… opens the app's Font dialog over this one; Enter there is its OK, the number takes
+        // its formatting and no text is formatted, while this dialog stays open.
+        h.get_by_label("Font…").click();
+        h.run();
+        assert!(h.query_by_label("Size:").is_some(), "the Font dialog is open");
+        h.get_by_label("Bold").click();
+        h.get_by_label("Italic").click();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(h.state().1.font_dialog.is_none(), "Font closed");
+        assert_eq!(h.state().2, Some(false), "Define New Number Format still open");
+        assert_eq!(h.state().1.look(), (true, true, None));
+        assert_eq!(h.state().0.session.doc, doc, "the Font dialog formatted no text");
+        // Font… again, opening on the number's formatting, then Escape: nothing changes.
+        h.get_by_label("Font…").click();
+        h.run();
+        h.get_by_label("Bold").click();
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().1.font_dialog.is_none(), "Font closed");
+        assert_eq!(h.state().1.look(), (true, true, None), "Escape keeps the formatting as it was");
+        assert_eq!(h.state().2, Some(false));
+        h.get_by_label("OK").click();
+        h.run();
+        let st = h.state_mut();
+        assert_eq!(st.2, Some(true), "OK closes it");
+        let got = st.0.session.run("list.get", &json!({})).unwrap();
+        let l = &got["levels"][0];
+        assert_eq!((l["format"].as_str(), l["text"].as_str(), l["align"].as_str()), (Some("lowerLetter"), Some("(%1)"), Some("right")));
+        assert_eq!((l["bold"].as_bool(), l["italic"].as_bool()), (Some(true), Some(true)));
+        st.0.run("edit.undo", json!({})).unwrap();
+        assert_eq!(st.0.session.doc, doc, "one undo step");
+        drop(h);
+        // "(none)": every label is the format's text.
+        let mut c = app();
+        c.run("text.insert", json!({"text": "Clause"})).unwrap();
+        let mut h = number_harness(c, super::NumberForm { format: "none".into(), text: "Note:".into(), ..Default::default() });
+        h.run();
+        assert_eq!(h.state().1.sample(1), "Note:");
+        h.get_by_label("OK").click();
+        h.run();
+        let got = h.state_mut().0.session.run("list.get", &json!({})).unwrap();
+        assert_eq!((got["levels"][0]["format"].as_str(), got["levels"][0]["text"].as_str()), (Some("none"), Some("Note:")));
+        drop(h);
+        // OK on a format without the number: the dialog stays open, the status bar says why.
+        let mut d = app();
+        d.run("text.insert", json!({"text": "Clause"})).unwrap();
+        let doc = d.session.doc.clone();
+        let mut h = number_harness(d, super::NumberForm { text: "Item".into(), ..Default::default() });
+        h.run();
+        h.get_by_label("OK").click();
+        h.run();
+        assert_eq!(h.state().2, Some(false), "still open");
+        assert_eq!(h.state().0.session.doc, doc);
+        assert!(h.state().0.status_msg.as_ref().is_some_and(|(m, _)| m.contains("%1")), "{:?}", h.state().0.status_msg);
+        drop(h);
+        // Cancel: nothing happens.
+        let mut b = app();
+        b.run("text.insert", json!({"text": "Clause"})).unwrap();
+        let doc = b.session.doc.clone();
+        let mut h = number_harness(b, super::NumberForm::default());
+        h.run();
+        h.get_by_label("Cancel").click();
+        h.run();
+        assert_eq!(h.state().2, Some(true));
+        assert_eq!(h.state().0.session.doc, doc);
     }
 
     /// #328: the ribbon opens Define New Multilevel List; OK defines the list and numbers the

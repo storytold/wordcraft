@@ -1630,6 +1630,143 @@ fn props_at(s: &Session, off: usize) -> wordcraft_doc::CharProps {
 /// Paste of another program's formatted copy keeps its formatting (#687); Merge Formatting keeps
 /// only its emphasis, in the destination's font; Keep Text Only drops it all.
 #[test]
+fn paste_options_change_the_last_paste_in_place() {
+    // #1747: after a paste with a choice, Keep Source / Merge / Text Only redo it where it sits.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p><span style=\"font-family:'Courier New';color:#ff0000\">red <b>bold</b></span></p>";
+    run(&mut s, "edit.paste", json!({"text": "red bold", "html": html}));
+    assert_eq!(text(&s), "xred bold");
+    assert_eq!(props_at(&s, 1).font.as_deref(), Some("Courier New"));
+    assert_eq!(wordcraft_engine_paste_options(&s).len(), 4);
+    assert_eq!(crate::cmd::paste::paste_mode(&s), Some("source"), "a paste starts as Keep Source Formatting");
+    run(&mut s, "edit.pasteChange", json!({"mode": "merge"}));
+    assert_eq!(crate::cmd::paste::paste_mode(&s), Some("merge"));
+    assert_eq!(text(&s), "xred bold", "replaced, not added");
+    assert_eq!(props_at(&s, 1).font, None);
+    assert!(bold_at(&s, 0, 5), "emphasis kept");
+    run(&mut s, "edit.pasteChange", json!({"mode": "text"}));
+    assert_eq!(text(&s), "xred bold");
+    assert!(!bold_at(&s, 0, 5), "text only drops the bold");
+    run(&mut s, "edit.pasteChange", json!({"mode": "source"}));
+    assert_eq!(props_at(&s, 1).font.as_deref(), Some("Courier New"), "back to the source");
+    // Picture draws the content as an image, in place, and the options stay to turn it back.
+    run(&mut s, "edit.pasteChange", json!({"mode": "picture"}));
+    assert_eq!(crate::cmd::paste::paste_mode(&s), Some("picture"));
+    assert_eq!(text(&s).trim_start_matches('x').trim(), "", "the words became a picture: {:?}", text(&s));
+    assert!(!s.doc.media.is_empty(), "with the image stored");
+    assert_eq!(wordcraft_engine_paste_options(&s).len(), 4);
+    run(&mut s, "edit.pasteChange", json!({"mode": "source"}));
+    assert_eq!(text(&s), "xred bold", "turned back");
+    // Typing ends the offer.
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    assert!(wordcraft_engine_paste_options(&s).is_empty());
+    assert!(s.run("edit.pasteChange", &json!({"mode": "merge"})).is_err());
+    // Plain text has nothing to choose between.
+    run(&mut s, "edit.paste", json!({"text": "plain"}));
+    assert!(wordcraft_engine_paste_options(&s).is_empty());
+}
+
+#[test]
+fn paste_options_at_the_document_start_take_the_destination_formatting() {
+    // #1747: with nothing before the paste the caret used to read the pasted text's own colour.
+    let mut s = s();
+    let html = "<h2 style=\"color:#1f4e79\">Shopping day</h2><p style=\"color:#1f4e79\">Apples</p>";
+    run(&mut s, "edit.paste", json!({"text": "Shopping day\nApples", "html": html}));
+    assert!(props_at(&s, 0).color.is_some(), "kept the source colour");
+    run(&mut s, "edit.pasteChange", json!({"mode": "text"}));
+    assert_eq!(props_at(&s, 0).color, None, "text only takes the destination's colour");
+    // Back and forth, the destination stays the document's, not the pasted text's.
+    for mode in ["source", "merge", "source", "text"] {
+        run(&mut s, "edit.pasteChange", json!({"mode": mode}));
+    }
+    assert_eq!(props_at(&s, 0).color, None, "still the destination's colour after switching around");
+    assert_eq!(
+        s.doc.para_at(&wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(0), 0)).and_then(|p| p.props.style.clone()),
+        None
+    );
+    assert!(text(&s).starts_with("Shopping day"));
+}
+
+#[test]
+fn keep_text_only_flattens_a_table_to_comma_rows_and_merge_keeps_lists_and_heading_bold() {
+    // #1747, as Word for the web does it.
+    let mut s = s();
+    let table = "<table><tr><th>Item</th><th>Qty</th></tr><tr><td colspan=\"2\">Total</td></tr></table>";
+    run(&mut s, "edit.paste", json!({"text": "Item\tQty\nTotal", "html": table}));
+    run(&mut s, "edit.pasteChange", json!({"mode": "text"}));
+    assert_eq!(text(&s), "Item, Qty\nTotal");
+    let mut s = self::s();
+    let list = "<h2 style=\"font-weight:bold\">Day</h2><ul><li>Apples</li></ul>";
+    run(&mut s, "edit.paste", json!({"text": "Day\nApples", "html": list}));
+    run(&mut s, "edit.pasteChange", json!({"mode": "merge"}));
+    assert!(bold_at(&s, 0, 1), "the heading's bold stays");
+    let p =
+        s.doc.para_at(&wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(1), 0)).map(|p| p.props.numbering.is_some());
+    assert_eq!(p, Some(true), "the bullet stays");
+}
+
+#[test]
+fn pasted_plain_paragraphs_all_take_the_destination_alignment() {
+    // #1747 follow-up: two pasted paragraphs in a centered one are both centered.
+    use wordcraft_doc::Align;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": "First paragraph.\n\nSecond paragraph."}));
+    let paras: Vec<_> = s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+    assert!(paras.len() >= 3, "{paras:?}");
+    assert!(paras.iter().all(|a| *a == Some(Align::Center)), "every pasted paragraph is centered: {paras:?}");
+}
+
+#[test]
+fn pasted_formatted_paragraphs_without_alignment_take_the_destination_alignment() {
+    use wordcraft_doc::Align;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p>First <b>paragraph</b>.</p><p>Second paragraph.</p>";
+    run(&mut s, "edit.paste", json!({"text": "First paragraph.\nSecond paragraph.", "html": html}));
+    let aligns: Vec<_> =
+        s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+    assert!(aligns.len() >= 2, "{aligns:?}");
+    assert!(aligns.iter().all(|a| *a == Some(Align::Center)), "{aligns:?}");
+    // What a browser copies: every paragraph carries the computed `text-align: start`.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p style=\"margin:0 0 1em;text-align:start\">First.</p><p style=\"margin:0 0 1em;text-align: left\">Second.</p>";
+    run(&mut s, "edit.paste", json!({"text": "First.\n\nSecond.", "html": html}));
+    let aligns: Vec<_> =
+        s.doc.body.iter().filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.align) } else { None }).collect();
+    assert!(aligns.iter().all(|a| *a == Some(Align::Center)), "browser-computed left is not a choice: {aligns:?}");
+}
+
+#[test]
+fn only_pastes_offer_paste_options_and_a_failed_command_drops_its_offer() {
+    let mut s = s();
+    let html = "<p style=\"color:#ff0000\">red</p><p>two</p>";
+    // Copy To (a plain insertion) is not a paste.
+    let frag = wordcraft_doc::edit::Fragment::from_text("a\nb");
+    crate::cmd::paste::insert_plain(&mut s, frag).unwrap();
+    assert!(s.last_paste.is_none());
+    run(&mut s, "edit.paste", json!({"text": "red\ntwo", "html": html}));
+    assert!(!wordcraft_engine_paste_options(&s).is_empty());
+    // A paste the failed command made was rolled back with it: no stale offer.
+    s.last_paste = s.last_paste.take().map(|lp| crate::cmd::paste::LastPaste { rev: None, ..lp });
+    assert!(s.run("text.insert", &json!({})).is_err());
+    assert!(s.last_paste.is_none());
+}
+
+fn wordcraft_engine_paste_options(s: &Session) -> Vec<&'static str> {
+    crate::cmd::paste::paste_options(s)
+}
+
+#[test]
 fn paste_keeps_source_formatting_from_other_programs() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "x"}));

@@ -66,6 +66,8 @@ pub struct Session {
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,
+    /// The paste just made, which the Paste Options button can redo another way (#1747).
+    pub last_paste: Option<crate::cmd::paste::LastPaste>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
