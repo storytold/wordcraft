@@ -1,6 +1,20 @@
 use super::{Capture, Command, Host, Resource};
 use serde_json::json;
 
+#[test]
+fn disconnect_clears_published_document_metadata_before_another_account_connects() {
+    let (host, _) = connected();
+    let documents = json!([{"id":"42", "title":"Private account A document", "dirty":true}]);
+    host.publish_documents(documents.clone(), &[42]);
+    assert_eq!(host.snapshot()["documents"], documents, "the regression must start with nonempty metadata");
+    host.disconnect().unwrap();
+    assert!(host.snapshot()["documents"].is_null());
+    host.connect("test".into(), "Test files".into(), "account-two".into()).unwrap();
+    let snapshot = host.snapshot();
+    assert_eq!(snapshot["namespace"], "account-two");
+    assert!(snapshot["documents"].is_null(), "the new account has not received an editor publication");
+}
+
 fn connected() -> (Host, String) {
     let host = Host::default();
     host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();

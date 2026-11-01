@@ -170,6 +170,7 @@ impl Host {
         s.resources.clear();
         s.bindings.clear();
         s.events.clear();
+        s.documents = Value::Null;
         Ok(())
     }
 
