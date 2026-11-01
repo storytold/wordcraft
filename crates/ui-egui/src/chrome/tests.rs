@@ -307,3 +307,46 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Every label in the title bar and the status bar sits on its bar's centre line, to the
+/// half point that an odd text height in an even bar allows, for the standard title bar and the
+/// macOS integrated one at its standard and a taller height.
+#[test]
+fn title_and_status_bar_text_is_vertically_centred() {
+    let mac_tall = MacTitleBar::around_lights(78.0, 18.0, 14.0);
+    for (mac, bar) in [(false, MacTitleBar::default()), (true, MacTitleBar::default()), (true, mac_tall)] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        a.integrated_titlebar = mac;
+        a.mac_titlebar = bar;
+        a.session.prefs.overtype = true;
+        a.session.doc.settings.track_changes = true;
+        a.status("Saved a copy");
+        let ctx = ctx();
+        let screen = Rect::from_min_size(egui::Pos2::ZERO, vec2(1400.0, 800.0));
+        let mut texts = Vec::new();
+        for i in 0..3 {
+            let input = egui::RawInput { time: Some(f64::from(i) / 60.0), screen_rect: Some(screen), ..Default::default() };
+            let out = ctx.run_ui(input, |ui| {
+                title_bar(&mut a, ui);
+                status_bar(&mut a, ui);
+            });
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.galley.rect.translate(t.pos.to_vec2()))),
+                    _ => None,
+                })
+                .collect();
+            out.drop_without_applying_deltas();
+        }
+        for want in ["Search commands and help", "The Open Studio Handbook — Not saved", "Page 1 of 2", "Saved a copy", "100%", "Focus"] {
+            assert!(texts.iter().any(|(s, _)| s == want), "{want} in {texts:?}");
+        }
+        let title = if mac { bar.height } else { TITLE_BAR };
+        for (s, r) in &texts {
+            let centre = if r.center().y < screen.center().y { title / 2.0 } else { screen.max.y - STATUS_BAR / 2.0 };
+            assert!((r.center().y - centre).abs() <= 0.501, "{s:?} at {r:?}, bar centre {centre} (mac {mac}, height {title})");
+        }
+    }
+}
