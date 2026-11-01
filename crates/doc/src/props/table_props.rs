@@ -160,7 +160,7 @@ pub struct TableProps {
     pub bidi_visual: bool,
 }
 
-/// Where a floating table sits; the text after it wraps around it.
+/// Where a floating table sits; the text on its page wraps around it, before it as well as after it.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TableFloat {

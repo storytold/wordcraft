@@ -170,12 +170,15 @@ impl<'e> Breaker<'e> {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
-        let est_h = pl
-            .styles
-            .get(mark_style as usize)
-            .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
-            .unwrap_or(14.0)
-            .max(1.0);
+        let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
+        let natural = pl.styles.get(mark_style as usize).map(|st| st.ascent + st.descent);
+        let snap = |h: f32| grid.as_ref().map_or(h, |g| g.snap_height(h));
+        let est_h = match rp.line_spacing {
+            LineSpacing::Multiple(m) => natural.map_or(14.0, |h| snap(h) * m),
+            LineSpacing::AtLeast(v) => snap(natural.unwrap_or(14.0)).max(v),
+            LineSpacing::Exactly(v) => natural.unwrap_or(14.0).max(v),
+        }
+        .max(1.0);
         Breaker {
             level,
             mark_style,
@@ -192,7 +195,7 @@ impl<'e> Breaker<'e> {
             hyph_limit: settings.consecutive_hyphen_limit as usize,
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
-            grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
+            grid,
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.

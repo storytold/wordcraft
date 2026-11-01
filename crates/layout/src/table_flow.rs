@@ -1,5 +1,6 @@
 use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
+use super::float_before::PlacedFloat;
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
 use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
@@ -107,7 +108,17 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     table::split_row_keeping_cells(laid, room).is_some()
 }
 
-pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
+/// Place table `t` (body block `block`). A floating one goes at `at` when given (where it stood
+/// before the text in front of it was laid out again around it, see [`super::float_before`]); the
+/// floating table placed on a page is returned.
+pub(crate) fn place_table(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder,
+    t: &wordcraft_doc::Table,
+    block: usize,
+    body_top: f32,
+    at: Option<Rect>,
+) -> Option<PlacedFloat> {
     pb.prev = None;
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
@@ -117,8 +128,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
         if h <= pb.uncapped_bottom() - pb.top + 0.01 {
-            place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top);
-            return;
+            return place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top, at);
         }
         // Too tall for a page: Word lets it run across pages like a table in the text, from its
         // own left edge.
@@ -250,31 +260,57 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         place(pb, last);
         table_notes(ctx, pb, &last.items);
     }
+    None
 }
 
-/// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
-/// flow; the text after it wraps around it.
-fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLayout, f: &TableFloat, legacy: f32, block: usize, body_top: f32) {
+/// Place floating table `tl` (`w:tblpPr`): at its own position (or at `at`, its position before
+/// the text in front of it was laid out again around it, with its wrap area already on the page;
+/// not at all when it no longer comes out that size), which takes no room in the text flow; the
+/// text on its page wraps around it (see [`super::float_before`] for the text before it).
+#[allow(clippy::too_many_arguments)]
+fn place_floating_table(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder,
+    tl: &table::TableLayout,
+    f: &TableFloat,
+    legacy: f32,
+    block: usize,
+    body_top: f32,
+    at: Option<Rect>,
+) -> Option<PlacedFloat> {
     let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
     let w = tl.width.clamp(1.0, 100_000.0);
     let [dl, dt, dr, db] = f.dist_from_text();
+    // Measured in Word: no vertical offset (`w:tblpY` 0 or left out) and no alignment puts a table
+    // positioned on the page or margin where the text is, like one positioned on the paragraph.
+    let v_rel = if f.y == 0.0 && f.v_align.is_none() { Anchor::Paragraph } else { f.v_rel };
+    if at.is_some_and(|r| (r.w - w).abs() > 0.01 || (r.h - h).abs() > 0.01) {
+        return None;
+    }
     for attempt in 0..2 {
         let s = pb.sect;
         let h_area = float_table_h_area(pb, f, ctx.mirror);
         // The text a table anchored to it stands in: where the next paragraph starts.
-        let v_area = match f.v_rel {
+        let v_area = match v_rel {
             Anchor::Page => (0.0, s.page_h),
             Anchor::Margin => (s.margin_top, s.text_height()),
             _ => (pb.y, 0.0),
         };
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
-        let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
-        obstacles.extend_from_slice(&pb.float_tables);
-        let r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &obstacles);
+        let r = match at {
+            Some(r) => r,
+            None => {
+                let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
+                obstacles.extend_from_slice(&pb.float_tables);
+                clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &obstacles)
+            }
+        };
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
         // its anchor: one placed relative to the paragraph when it would run off the page, one
         // placed on the page or margin when it would also cover the text already on the page.
-        let moves = if f.v_rel == Anchor::Paragraph {
+        let moves = if at.is_some() {
+            false
+        } else if v_rel == Anchor::Paragraph {
             r.bottom() > pb.bottom + 0.01
         } else {
             let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
@@ -297,10 +333,20 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides, true));
+        let wrap: WrapArea = (area, false, None, WrapText::BothSides, true);
+        if at.is_none() {
+            pb.excl.push(wrap.clone());
+        }
         pb.float_tables.push(area);
-        return;
+        return Some(PlacedFloat {
+            block,
+            page: pb.pages.len().saturating_sub(1),
+            rects: vec![(0, r)],
+            areas: vec![wrap],
+            from_text: !matches!(v_rel, Anchor::Page | Anchor::Margin),
+        });
     }
+    None
 }
 
 fn placed_intersects(item: &Placed, rect: &Rect) -> bool {

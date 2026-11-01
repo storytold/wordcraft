@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
 use super::ctx::{Ctx, Pass, with_pct_base};
+use super::float_before::{self, PlacedFloat};
 use super::floats::{EarlyFloats, WrapArea, early_covered};
 use super::flow::{OutlinePass, place_outline_para, place_para};
 use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_refer_to_pages, marks_key, mirror_even_pages, section_side};
@@ -77,6 +78,7 @@ fn new_ctx<'a>(
         opts,
         hide_deleted: opts.hides_deleted(StoryRef::Body),
         counters: Counters::default(),
+        counters_saved: None,
         fields: FieldCtx {
             page: 1,
             pages: totals.pages,
@@ -179,6 +181,9 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         restart_at: None,
         excl: Vec::new(),
         float_tables: Vec::new(),
+        pending_floats: Vec::new(),
+        fixed_objects: Vec::new(),
+        excl_base: 0,
         line_no: 0,
         page_items_start: 0,
         block_marks: Vec::new(),
@@ -196,6 +201,8 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         early,
         seeded: 0,
         settle,
+        wraps_before: false,
+        walk_from: 0,
         column_lines: None,
     }
 }
@@ -312,30 +319,48 @@ fn prepare_section_end(pb: &mut PageBuilder, sections: &[(usize, &SectionProps)]
     balance
 }
 
-fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass>, block: usize, body_top: f32) {
-    let Some(b) = ctx.doc.body.get(block) else { return };
+/// Place body block `block`; a floating table, or a paragraph's floating objects that text wraps
+/// around, placed on a page is returned (see [`float_before`]).
+fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass>, block: usize, body_top: f32) -> Option<PlacedFloat> {
+    let b = ctx.doc.body.get(block)?;
     match (&**b, outline) {
-        (Block::Para(p), Some(o)) => place_outline_para(ctx, pb, p, block, o),
-        (Block::Table(_), Some(o)) if o.hidden.get(block).copied().unwrap_or(false) => {}
+        (Block::Para(p), Some(o)) => {
+            place_outline_para(ctx, pb, p, block, o);
+            None
+        }
+        (Block::Table(_), Some(o)) if o.hidden.get(block).copied().unwrap_or(false) => None,
         (Block::Para(p), None) => place_para(ctx, pb, p, block, body_top),
-        (Block::Table(t), _) => place_table(ctx, pb, t, block, body_top),
+        (Block::Table(t), _) => place_table(ctx, pb, t, block, body_top, None),
     }
 }
 
-/// Place the blocks from `block` to `last`, balancing the columns of the last page if asked.
-/// Returns the block after them and the text boxes laid out in the balancing attempts thrown away.
+/// Place the blocks from `block` to `last`, balancing the columns of the last page if asked, and
+/// with `rewrap` laying the text before a floating table or object on its page out again around
+/// it (see [`float_before`]; `rewraps` counts those per page). Returns the block after them and
+/// the text boxes laid out in the attempts thrown away.
 fn place_section_blocks<'p>(
     ctx: &mut Ctx,
     pb: &mut PageBuilder<'p>,
     outline: &Option<OutlinePass>,
     (mut block, last): (usize, usize),
     (balance, body_top): (bool, f32),
+    (rewrap, rewraps): (bool, &mut float_before::Rewraps),
 ) -> (usize, usize) {
     let mut from = balance.then(|| (block, Snap::take(pb, ctx)));
+    let mut kept = float_before::PageBlocks::default();
+    let mut discarded = 0usize;
     while block <= last && ctx.doc.body.get(block).is_some() {
         let before = balance.then(|| (pb.pages.len(), Snap::take(pb, ctx)));
+        let rewrap = rewrap && pb.page_valign == wordcraft_doc::section::PageVAlign::Top;
+        pb.wraps_before = rewrap;
+        if rewrap {
+            kept.before(pb, ctx, block);
+        }
         pb.mark_block();
-        place_block(ctx, pb, outline, block, body_top);
+        let placed = place_block(ctx, pb, outline, block, body_top);
+        if rewrap && let Some(placed) = placed {
+            discarded += float_before::wrap_text_before(ctx, pb, (&mut kept, rewraps), placed, body_top);
+        }
         if let Some((pages, snap)) = before
             && pb.pages.len() != pages
         {
@@ -343,7 +368,7 @@ fn place_section_blocks<'p>(
         }
         block += 1;
     }
-    let discarded = from.map_or(0, |(first, snap)| balance_columns(ctx, pb, (first, block), &snap, body_top));
+    discarded += from.map_or(0, |(first, snap)| balance_columns(ctx, pb, (first, block), &snap, body_top));
     (block, discarded)
 }
 
@@ -489,6 +514,8 @@ pub(crate) fn layout_pass(
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
+    let any_floats = !mode.web && float_before::has_floats(doc);
+    let mut rewraps = float_before::Rewraps::default();
     let mut block = 0usize;
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
@@ -514,7 +541,14 @@ pub(crate) fn layout_pass(
         pb.foot_top = sec.tops.foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
-        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
+        // Text before a floating table or object on its page is laid out again around it (see
+        // `float_before`); a section with balanced columns lays its last page out again itself.
+        // Pages aligned other than at the top move their text when left, and laying text out
+        // again can't move it back: they keep the text before a float as it is. A page is aligned
+        // as the section it starts in says, so a continuous section on a page another section
+        // aligns keeps it too.
+        let rewrap = any_floats && !balance && outline.is_none() && sect.valign == wordcraft_doc::section::PageVAlign::Top;
+        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body), (rewrap, &mut rewraps));
         (block, boxes_discarded) = (next, boxes_discarded + discarded);
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
@@ -551,29 +585,31 @@ pub(crate) fn layout_pass(
 
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing
 /// columns): the builder without its pages, how far its last page had got, and the walk state.
-struct Snap<'a> {
+pub(crate) struct Snap<'a> {
     pb: PageBuilder<'a>,
-    pages: usize,
+    pub(crate) pages: usize,
     items: usize,
     behind: usize,
-    counters: Counters,
+    counters: Arc<Counters>,
     eq_count: u32,
     page_field: u32,
-    boxes: usize,
+    pub(crate) boxes: usize,
 }
 
 impl<'a> Snap<'a> {
-    fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
+    pub(crate) fn take(pb: &mut PageBuilder<'a>, ctx: &mut Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
         let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
         let copy = pb.clone();
         (pb.pages, pb.behind) = (pages, behind);
+        let counters = &ctx.counters;
+        let counters = ctx.counters_saved.get_or_insert_with(|| Arc::new(counters.clone())).clone();
         Snap {
             pb: copy,
             pages: pb.pages.len(),
             items: pb.pages.last().map_or(0, |p| p.items.len()),
             behind: pb.behind.last().copied().unwrap_or(0),
-            counters: ctx.counters.clone(),
+            counters,
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
             boxes: ctx.boxes.total(),
@@ -582,7 +618,7 @@ impl<'a> Snap<'a> {
 
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
-    fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
+    pub(crate) fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
         let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
@@ -596,7 +632,8 @@ impl<'a> Snap<'a> {
         }
         *pb = self.pb.clone();
         (pb.pages, pb.behind) = (pages, behind);
-        ctx.counters = self.counters.clone();
+        ctx.counters = (*self.counters).clone();
+        ctx.counters_saved = Some(self.counters.clone());
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
     }
@@ -617,8 +654,12 @@ fn balance_pass<'a>(
     pb.cap_columns();
     for block in first..end {
         match ctx.doc.body.get(block).map(|b| &**b) {
-            Some(Block::Para(p)) => place_para(ctx, pb, p, block, body_top),
-            Some(Block::Table(t)) => place_table(ctx, pb, t, block, body_top),
+            Some(Block::Para(p)) => {
+                place_para(ctx, pb, p, block, body_top);
+            }
+            Some(Block::Table(t)) => {
+                place_table(ctx, pb, t, block, body_top, None);
+            }
             None => break,
         }
         // Spilled onto another page: too short (and no need to lay out the rest).

@@ -43,6 +43,15 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) excl: Vec<WrapArea>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
     pub(crate) float_tables: Vec<Rect>,
+    /// Wrap areas of floating tables and objects placed later in the text, to go into `excl` when
+    /// the page with this index starts: the text before them is being laid out again (see
+    /// [`super::float_before`]).
+    pub(crate) pending_floats: Vec<(usize, WrapArea)>,
+    /// Where the floating objects of a paragraph laid out again stay (block, object index, rect),
+    /// their wrap areas among `pending_floats` (see [`super::float_before`]).
+    pub(crate) fixed_objects: Vec<(usize, usize, Rect)>,
+    /// How many of `excl` the page started with (from `pending_floats`).
+    pub(crate) excl_base: usize,
     /// Line numbering counter.
     pub(crate) line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
@@ -85,6 +94,13 @@ pub(crate) struct PageBuilder<'a> {
     /// No layout pass follows for floats found above their anchors: each is kept clear of the
     /// text laid out before it ([`settle_early`]).
     pub(crate) settle: bool,
+    /// The text before a float on this page is laid out again around it ([`super::float_before`]):
+    /// a float found above its anchor that no earlier pass gave room is left to that, not settled.
+    pub(crate) wraps_before: bool,
+    /// While text before a float is laid out again ([`super::float_before`]), the first block on
+    /// the page that can be: text before it (an earlier section's, or a block's that started more
+    /// than a page back) is left to [`EarlyFloats`] passes.
+    pub(crate) walk_from: usize,
     /// The lines between the columns of the section on the current page, drawn once its text
     /// there is laid out ([`PageBuilder::close_column_lines`]).
     pub(crate) column_lines: Option<ColumnLines>,
@@ -227,6 +243,16 @@ impl PageBuilder<'_> {
             self.block_marks.push(pg.items.len().saturating_sub(behind));
         }
     }
+    /// Put the pending wrap areas for the page with index `page` into `excl`.
+    pub(crate) fn arm_pending_floats(&mut self, page: usize) {
+        let excl = &mut self.excl;
+        self.pending_floats.retain(|(p, area)| {
+            if *p == page {
+                excl.push(area.clone());
+            }
+            *p != page
+        });
+    }
     /// Justified vertical alignment: share the room left below the page's text out equally
     /// between the gaps of its blocks, so the last line sits on the bottom margin (above the
     /// footnotes). A page with one block, or several columns, stays at the top.
@@ -307,6 +333,8 @@ impl PageBuilder<'_> {
         self.excl.extend(early.get(&self.pages.len()).into_iter().flatten().map(|(_, _, a)| a.clone()));
         self.seeded = self.excl.len();
         self.float_tables.clear();
+        self.arm_pending_floats(self.pages.len());
+        self.excl_base = self.excl.len();
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
             self.line_no = 0;
         }

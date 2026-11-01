@@ -21,6 +21,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) cache: &'a mut LayoutCache,
     pub(crate) opts: &'a LayoutOptions,
     pub(crate) counters: Counters,
+    /// `counters` as last saved by a `Snap`, while they haven't changed since: the states kept
+    /// before each block share one copy.
+    pub(crate) counters_saved: Option<Arc<Counters>>,
     pub(crate) fields: FieldCtx,
     pub(crate) notes_hash: u64,
     pub(crate) numbers: HashMap<u32, Arc<ParaLayout>>,
@@ -225,6 +228,7 @@ impl Ctx<'_> {
     }
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+        self.counters_saved = None;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
     }
 

@@ -331,12 +331,15 @@ fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
 
 /// Position the floating objects anchored in `p` for a paragraph whose text starts at `y0` in
 /// the current column, add their wrap areas to the page (replacing any from an earlier attempt,
-/// from `excl_mark` on) and lay the paragraph out around them, with its list `label`. `p` is
-/// body block `block`. A float the page started with ([`EarlyFloats`]) keeps its place among the
-/// page's wrap areas (its area as placed now). Without `place` (a later piece of the paragraph
-/// broken again for another column) the floats stay where its first piece placed and drew them:
-/// they aren't placed again in the new column, and their record for the page they are drawn on
-/// ([`EarlyFloats`]) stands.
+/// from `excl_mark` on: (`pages.len()`, `excl.len()`) when the paragraph started; on a later page,
+/// from the areas that page started with) and lay the paragraph out around them, with its list
+/// `label`. `p` is body block `block`. A float the page started with ([`EarlyFloats`]) keeps its
+/// place among the page's wrap areas (its area as placed now). Objects of block `block` in
+/// `pb.fixed_objects` stay where they are, their areas already on the page (the text before them
+/// was laid out again around them, see [`super::float_before`]). Without `place` (a later piece of
+/// the paragraph broken again for another column) the floats stay where its first piece placed and
+/// drew them: they aren't placed again in the new column, and their record for the page they are
+/// drawn on ([`EarlyFloats`]) stands.
 pub(crate) fn anchor_floats(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
@@ -348,7 +351,8 @@ pub(crate) fn anchor_floats(
     let mut rects = HashMap::new();
     if !pb.web && place {
         // (A mark from a page before may be short of the areas this page started with.)
-        pb.excl.truncate(excl_mark.max(pb.seeded));
+        let mark = if excl_mark.0 == pb.pages.len() { excl_mark.1 } else { pb.excl_base };
+        pb.excl.truncate(mark.max(pb.seeded));
         let page = pb.pages.len().saturating_sub(1);
         let early = pb.early.get(&page);
         // The paragraph's top, and whether text was placed before it on the page.
@@ -363,13 +367,24 @@ pub(crate) fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            if let Some(r) = pb.fixed_objects.iter().find(|(b, i, _)| *b == block && *i == oi).map(|(_, _, r)| *r) {
+                rects.insert(oi, r);
+                // The text before it was laid out again around it: no pass is needed for it, unless
+                // text the walk doesn't lay out again is still under it (#2048 moves that).
+                let outline = ctx.wrap_outline(o);
+                let area = wrap_area(r, float, outline.as_deref().map(Vec::as_slice));
+                let under =
+                    area.filter(|a| pb.pages.get(page).is_some_and(|pg| super::float_before::text_under(ctx.doc, pg, pb.walk_from.min(block), a)));
+                ctx.floats_above.insert((block, oi), under.map(|a| (page, a)));
+                continue;
+            }
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
             let outline = outline.as_deref().map(Vec::as_slice);
             let mut area = wrap_area(r, float, outline);
-            if pb.settle && text_before {
-                let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
+            let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
+            if pb.settle && text_before && !(pb.wraps_before && seed.is_none()) {
                 (r, area) = settle_early(r, area, seed, top, |r| wrap_area(r, float, outline));
             }
             rects.insert(oi, r);
@@ -416,15 +431,15 @@ pub(crate) struct ObjFrame<'a> {
 }
 
 /// What [`anchor_floats`] anchors: paragraph `p` (body block `block`) starting at `y0` with
-/// `before` of space above it, its list `label`, the wrap areas to keep from `excl_mark` on, and
-/// whether to `place` its floats.
+/// `before` of space above it, its list `label`, the wrap areas to keep from `excl_mark` on
+/// ((`pages.len()`, `excl.len()`), see [`anchor_floats`]), and whether to `place` its floats.
 #[derive(Clone, Copy)]
 pub(crate) struct FloatAnchor<'a> {
     pub p: &'a Paragraph,
     pub block: usize,
     pub y0: f32,
     pub before: f32,
-    pub excl_mark: usize,
+    pub excl_mark: (usize, usize),
     pub label: &'a Option<(String, Level)>,
     pub place: bool,
 }
