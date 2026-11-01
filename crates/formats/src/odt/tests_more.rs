@@ -29,6 +29,7 @@ mod para_borders;
 mod polygons;
 mod rotation;
 mod rtl;
+mod ruby;
 mod settings;
 mod shapes;
 mod spacing;

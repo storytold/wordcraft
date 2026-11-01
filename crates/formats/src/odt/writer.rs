@@ -159,6 +159,8 @@ pub(super) struct Writer {
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
+    /// Ruby was written: its automatic ruby style is.
+    ruby_used: bool,
     /// Form controls written (`form:*` elements for `office:forms`), and whether this writer's
     /// text may hold them (the body's; not headers and footers).
     pub(super) forms: Vec<String>,
@@ -294,8 +296,6 @@ impl Writer {
 
     fn plain_inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        // ODF has no ruby: its base text goes through the text path below.
-        let inl = model::ruby_as_text(inl);
         let last = inl.len().saturating_sub(1);
         for (idx, i) in inl.iter().enumerate() {
             match i {
@@ -420,8 +420,25 @@ impl Writer {
                         prev_space = result.ends_with(' ');
                     }
                 },
-                // Read as its base text by `ruby_as_text` above.
-                Inline::Ruby { .. } => {}
+                // Inside a tracked change: its base text, which the text path marks as changed.
+                Inline::Ruby { base, fmt, .. } if fmt.ins.is_some() || fmt.del.is_some() => {
+                    self.plain_inlines(&[Inline::Text(base.clone(), fmt.clone())], out);
+                    prev_space = false;
+                }
+                // Ruby (§6.4): the base text in its formatting, the ruby text over it.
+                Inline::Ruby { base, ruby, fmt } => {
+                    self.ruby_used = true;
+                    let base_xml = match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
+                        Some(n) => format!("<text:span text:style-name=\"{n}\">{}</text:span>", x(base)),
+                        None => x(base),
+                    };
+                    out.push_str(&format!(
+                        "<text:ruby text:style-name=\"{}Ru1\"><text:ruby-base>{base_xml}</text:ruby-base><text:ruby-text>{}</text:ruby-text></text:ruby>",
+                        self.prefix,
+                        x(ruby)
+                    ));
+                    prev_space = false;
+                }
                 Inline::Equation { linear, display } => {
                     self.formula(linear, *display, out);
                     prev_space = false;
@@ -747,6 +764,12 @@ impl Writer {
                     pt(*w)
                 ));
             }
+        }
+        if self.ruby_used {
+            s.push_str(&format!(
+                "<style:style style:name=\"{}Ru1\" style:family=\"ruby\"><style:ruby-properties style:ruby-position=\"above\" style:ruby-align=\"center\"/></style:style>",
+                self.prefix
+            ));
         }
         for (i, props) in self.row_styles.iter().enumerate() {
             s.push_str(&format!(

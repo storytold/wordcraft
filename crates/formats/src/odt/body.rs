@@ -30,6 +30,9 @@ pub(super) struct Body<'a> {
     pub(super) entries: &'a [String],
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
+    /// A ruby being read: its base text, ruby text, which of them the text goes to (`true`:
+    /// the ruby), and the base's formatting.
+    ruby: Option<(String, String, Option<bool>, Fmt)>,
     /// The form controls of `office:forms`, placed where a `draw:control` names them.
     forms: super::forms::FormsReader,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
@@ -128,6 +131,7 @@ impl<'a> Body<'a> {
             entries: &[],
             forms: Default::default(),
             break_next: false,
+            ruby: None,
             manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
@@ -216,6 +220,38 @@ impl<'a> Body<'a> {
             Ev::End(q) if self.forms.end(&q) => {}
             Ev::Start(q, a) if q == "draw:control" => self.place_control(&a),
             Ev::End(q) if q == "draw:control" => {}
+            // Ruby (ODF 1.3 §6.4): its base and ruby text, read on their own.
+            Ev::Start(q, _) if q == "text:ruby" && self.para.is_some() && self.field.is_none() => {
+                self.ruby = Some((String::new(), String::new(), None, self.cur_fmt()));
+            }
+            Ev::Start(q, _) if self.ruby.is_some() && matches!(q.as_str(), "text:ruby-base" | "text:ruby-text") => {
+                if let Some(r) = &mut self.ruby {
+                    r.2 = Some(q == "text:ruby-text");
+                }
+            }
+            Ev::End(q) if self.ruby.is_some() && matches!(q.as_str(), "text:ruby-base" | "text:ruby-text") => {
+                if let Some(r) = &mut self.ruby {
+                    r.2 = None;
+                }
+            }
+            Ev::End(q) if q == "text:ruby" && self.ruby.is_some() => {
+                if let Some((base, ruby, _, fmt)) = self.ruby.take() {
+                    let (base, ruby) = (base.trim().to_string(), ruby.trim().to_string());
+                    match (base.is_empty(), ruby.is_empty()) {
+                        (false, false) => self.push_inline(Inline::Ruby { base, ruby, fmt }),
+                        // A guide over nothing, or reading nothing: its text.
+                        (false, true) | (true, false) => self.push_inline(Inline::Text(if base.is_empty() { ruby } else { base }, fmt)),
+                        (true, true) => {}
+                    }
+                }
+            }
+            Ev::Text(t) if self.ruby.is_some() => {
+                if let Some((base, ruby, Some(in_ruby), _)) = &mut self.ruby {
+                    let s = if *in_ruby { ruby } else { base };
+                    let room = MAX_FIELD_RESULT.saturating_sub(s.len());
+                    s.extend(t.chars().take(room));
+                }
+            }
             Ev::Start(q, a) => {
                 if self.depth < MAX_XML_DEPTH {
                     self.start(&q, &a);

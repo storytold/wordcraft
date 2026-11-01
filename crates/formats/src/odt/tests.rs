@@ -848,8 +848,8 @@ fn tracked_changes_round_trip_through_export() {
 
 #[test]
 fn an_inserted_ruby_keeps_its_tracked_insertion() {
-    // ODF has no ruby: its base text is written as text, and the insertion on the ruby must
-    // still be a change range around that text, not plain untracked text.
+    // A ruby inside a tracked insertion is written as its base text, so that it stays inside
+    // the change range rather than becoming plain untracked text.
     use wordcraft_doc::RevisionKind::Insert;
     let props = wordcraft_doc::props::CharProps::default();
     let mut p = wordcraft_doc::Paragraph::with_text("before ", props.clone());
