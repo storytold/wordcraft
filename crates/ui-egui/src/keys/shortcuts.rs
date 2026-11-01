@@ -101,12 +101,14 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
 
 /// Shortcuts for interface commands (`ui.*`), which aren't in the engine's keymap: Alt+Q moves
 /// to "Tell me" command search, as in Word for Windows (#819). Not on macOS, where Option+Q types
-/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac.
+/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac. Ctrl+Shift+O (⌘⇧O) is Ask Agent…
+/// ([`crate::ask_agent::SHORTCUT`]), not among Word's published shortcuts.
 pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value)> {
     let alt_only = m.alt && !m.command && !m.ctrl && !m.mac_cmd && !m.shift;
     let mac_cmd_alt = cfg!(target_os = "macos") && m.mac_cmd && m.alt && !m.ctrl && !m.shift;
     match key {
         Key::Q if alt_only && !cfg!(target_os = "macos") => Some(("ui.dialog", json!({"name": "commands"}))),
+        Key::O if m.command && m.shift && !m.alt => Some(("ui.askAgent", json!({}))),
         Key::R if mac_cmd_alt => Some(("ui.collapseRibbon", json!({}))),
         // Ctrl+F1 collapses or expands the ribbon, as in Word for Windows (#1678). Not on macOS,
         // where Ctrl+F1 is the system's keyboard-access switch.

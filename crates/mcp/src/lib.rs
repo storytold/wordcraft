@@ -21,6 +21,9 @@ use wordcraft_engine::file_access::{self, AutomationRoots};
 /// Methods that need the desktop app.
 pub const NEEDS_APP: &str = "needs the desktop app: start `wordcraft --control 7981` and run `wordcraft-cli mcp --connect 127.0.0.1:7981`";
 
+/// Ask Agent without the desktop app.
+pub const ASK_NEEDS_APP: &str = "Ask Agent requests come from the WordCraft window, and this server has no window (headless): start `wordcraft --control 7981`, then run `wordcraft-cli mcp --connect 127.0.0.1:7981`";
+
 /// An in-process session.
 pub struct Headless {
     pub session: Session,
@@ -87,6 +90,7 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
             Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
         }
         m if m.starts_with("ui.") => Err(format!("`{m}` {NEEDS_APP}")),
+        m if m.starts_with("agent.") => Err(ASK_NEEDS_APP.to_string()),
         other => session.run(other, &params).map_err(|e| e.to_string()),
     }
 }

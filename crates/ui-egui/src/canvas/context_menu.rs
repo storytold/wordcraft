@@ -112,6 +112,21 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
+    // Ask Agent…, when the app has a control channel an agent can listen on; greyed out, with
+    // the reason, while no agent listens.
+    if app.ask_agent.hub.is_some() {
+        let why = app.ask_agent.unavailable();
+        let sc = crate::widgets::shortcut_text(app, "ui.askAgent");
+        let resp = ui.add_enabled(why.is_none(), egui::Button::new(tl!("Ask Agent…")).shortcut_text(sc));
+        let resp = match why {
+            Some(why) => resp.on_disabled_hover_text(why.shown()),
+            None => resp,
+        };
+        if resp.clicked() {
+            let _ = app.run("ui.askAgent", json!({}));
+            ui.close();
+        }
+    }
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
         ui.separator();
         item(ui, app, tl!("Update Field"), "references.updateFields", json!({}));

@@ -41,6 +41,7 @@ pub(crate) use screenshots::{Shots, admit_screenshot, drain_screenshots, issue_s
 
 pub struct ControlRequest {
     pub method: String,
+    pub connection: Option<u64>,
     pub params: Value,
     pub reply: Sender<Value>,
 }
@@ -48,7 +49,7 @@ pub struct ControlRequest {
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), connection: None, params, reply: tx }, rx)
     }
 }
 
