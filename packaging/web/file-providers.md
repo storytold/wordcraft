@@ -115,3 +115,7 @@ comment drafts must be activated and finished first. ACKs do not clear newer com
 Resource overwrites advance alias revisions so delayed ACKs cannot clean an invalidated tab.
 Provider saves with opaque VBA require a macro-enabled .docm/.dotm filename; Device retains the
 official writer and format behavior.
+
+Opening provider bytes preserves the complete device Recent list, including when decoding fails;
+a provider filename is never admitted as a local path. Provider event consumers select a pending
+save dialog by event type rather than assuming the event queue contains only that dialog.

@@ -144,7 +144,11 @@ impl WordApp {
         let Command::Open { request, resource: _, name, bytes } = command else { return };
         let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
         // `data` forces an import, never a lookup by a homonymous device path.
+        // Ordinary imports record their path in device history. This name identifies
+        // provider bytes, so retain the complete device list even when decoding fails.
+        let recent = self.ui.recent.clone();
         let result = self.execute("file.open", json!({"path":name, "data":data}));
+        self.ui.recent = recent;
         match result {
             Ok(_) => {
                 self.session.path = None;
@@ -183,7 +187,7 @@ mod tests {
 
     fn save(app: &mut WordApp, host: &Host) -> (String, Vec<u8>) {
         assert!(app.choose_provider_save(false));
-        let dialog = host.take_events().remove(0);
+        let dialog = host.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
         let request = dialog.metadata["requestId"].as_str().unwrap().to_string();
         host.resolve_dialog(&request, "provider", "Document.docx").unwrap();
         app.provider_tick();
@@ -194,20 +198,22 @@ mod tests {
     #[test]
     fn durable_save_and_reopen_use_native_docx_and_separate_recents() {
         let (mut app, host) = app();
+        let device_recents = vec!["/device/Existing.docx".to_string(), "/device/Older.docm".to_string()];
+        app.ui.recent = device_recents.clone();
         let (request, bytes) = save(&mut app, &host);
         assert!(app.session.dirty, "producing DOCX bytes is not a durable save");
         host.result(request, "saved".into(), "resource-one".into()).unwrap();
         app.provider_tick();
         assert!(!app.session.dirty);
         assert!(app.session.path.is_none(), "a provider ID is never a device path");
-        assert!(app.ui.recent.is_empty());
+        assert_eq!(app.ui.recent, device_recents);
         assert_eq!(host.snapshot()["resources"][0]["name"], "Document.docx");
         let open = host.request_open("resource-one").unwrap();
         host.open(open, "Document.docx".into(), bytes).unwrap();
         app.provider_tick();
         assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Documento con ñ"));
         assert!(app.has_document());
-        assert!(app.ui.recent.is_empty());
+        assert_eq!(app.ui.recent, device_recents);
     }
 
     #[test]
@@ -273,5 +279,22 @@ mod tests {
         let bytes = events.iter().find(|e| e.metadata["type"] == "save").unwrap().bytes.as_ref().unwrap();
         let restored = wordcraft_engine::io::open_bytes("Macro-preserving.docm", bytes).unwrap();
         assert_eq!(restored.passthrough.get("word/vbaProject.bin"), Some(&vba));
+    }
+
+    #[test]
+    fn malformed_provider_import_keeps_the_device_history_and_current_document() {
+        let (mut app, host) = app();
+        let (request, _) = save(&mut app, &host);
+        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+        app.provider_tick();
+        let document = app.session.document_id();
+        let device_recents = vec!["/device/Existing.docx".to_string()];
+        app.ui.recent = device_recents.clone();
+        let read = host.request_open("resource-one").unwrap();
+        host.open(read, "Invalid.docx".into(), vec![0, 1, 2]).unwrap();
+        app.provider_tick();
+        assert_eq!(app.session.document_id(), document);
+        assert_eq!(app.ui.recent, device_recents);
+        assert!(!host.busy());
     }
 }
