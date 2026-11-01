@@ -46,6 +46,7 @@ impl WordApp {
 
     /// Draw the File page, the empty-window chrome, or the normal document window.
     pub(super) fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
+        crate::announce::expose(self, ctx);
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         if self.ui.backstage {

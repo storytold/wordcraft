@@ -132,7 +132,10 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
-        let _ = app.run(spec.id, json!({}));
+        // Screen readers hear what a formatting shortcut did, as Word says it ("Bold On").
+        if app.run(spec.id, json!({})).is_ok() {
+            crate::announce::after_shortcut(app, spec.id);
+        }
         return true;
     }
     let Some(name) = name else { return false };

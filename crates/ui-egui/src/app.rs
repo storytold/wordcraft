@@ -133,6 +133,7 @@ impl WordApp {
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
+            announcement: None,
             read_aloud_error: None,
             autosave_path: None,
             saves_in_flight: Vec::new(),
