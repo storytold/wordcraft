@@ -332,7 +332,17 @@ mod tests {
         assert!(load(&aff, &big).unwrap_err().contains("too large"));
         // A directory, and on Unix an endless device, are not dictionary files. (No clock: a
         // reader that read `/dev/zero` would never return, so the error itself is the proof.)
-        assert!(load(&aff, &dir).unwrap_err().contains("not a regular file"));
+        let directory_error = load(&aff, &dir).unwrap_err();
+        #[cfg(windows)]
+        {
+            // Windows refuses opening a directory before read_capped can inspect its metadata.
+            // Check the OS refusal and its propagation, without depending on localized wording.
+            let open_error = std::fs::File::open(&dir).unwrap_err();
+            assert_eq!(open_error.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(directory_error, format!("{}: {open_error}", dir.display()));
+        }
+        #[cfg(not(windows))]
+        assert!(directory_error.contains("not a regular file"), "{directory_error}");
         #[cfg(unix)]
         assert!(load(&aff, Path::new("/dev/zero")).unwrap_err().contains("not a regular file"));
         // Turkish reads through the same reader.
@@ -341,6 +351,7 @@ mod tests {
         std::fs::write(&tr_dic, "1\nkitap/1\n").unwrap();
         assert!(crate::tr::load(&tr_aff, &tr_dic).unwrap().contains("kitaplar"));
         assert!(crate::tr::load(&tr_aff, &big).unwrap_err().contains("too large"));
+        assert_eq!(crate::tr::load(&tr_aff, &dir).unwrap_err(), directory_error);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
