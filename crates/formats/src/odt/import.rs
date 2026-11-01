@@ -406,6 +406,8 @@ struct Parsed {
     hyphenate: bool,
     /// Custom document properties (`meta:user-defined`) and user fields.
     custom: Vec<wordcraft_doc::CustomProp>,
+    /// The bibliography sources the citations carry.
+    sources: Vec<wordcraft_doc::Source>,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -495,6 +497,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     }
     let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
+    let sources = std::mem::take(&mut body.sources);
     Ok(Parsed {
         flow: Flow { blocks, meta },
         last,
@@ -516,6 +519,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         parts,
         hyphenate,
         custom,
+        sources,
     })
 }
 
@@ -543,9 +547,11 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         parts,
         hyphenate,
         custom,
+        sources,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     doc.custom_props = custom;
+    doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {
         doc.styles.default_chr.font = font;

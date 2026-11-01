@@ -159,6 +159,9 @@ pub(super) struct Writer {
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
+    /// The document's bibliography sources by tag: `CITATION` fields of one are written as
+    /// bibliography marks carrying it.
+    pub(super) sources: HashMap<String, wordcraft_doc::Source>,
     /// The document's custom properties' names: `DOCPROPERTY` fields naming one are written as
     /// `text:user-defined`.
     pub(super) custom_props: std::collections::HashSet<String>,
@@ -648,6 +651,10 @@ impl Writer {
     /// The ODF element for field `instr` showing `result`, with the date style and sequence
     /// declaration it needs; `None` when ODF has none.
     fn field_element(&mut self, instr: &str, result: &str) -> Option<String> {
+        // A citation of a source the document has (§8.1.24).
+        if let Some(s) = instr.trim_start().strip_prefix("CITATION").and_then(|r| r.split_whitespace().next()).and_then(|t| self.sources.get(t)) {
+            return Some(super::fields::bib_mark(s, &x(result)));
+        }
         // A custom document property's value (§7.5.6).
         if let Some(n) = super::fields::docproperty_name(instr).filter(|n| self.custom_props.contains(*n)) {
             return Some(format!("<text:user-defined text:name=\"{}\">{}</text:user-defined>", x(n), x(result)));

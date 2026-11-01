@@ -89,3 +89,25 @@ fn an_odt_index_updates_from_its_marks() {
     assert!(text.iter().any(|t| t.starts_with("kilns")), "{text:?}");
     assert!(!text.iter().any(|t| t.contains("stale")), "{text:?}");
 }
+
+#[test]
+fn an_odt_bibliography_updates_from_its_citations_sources() {
+    // A bibliography and a citation carrying its source: Update lists the source.
+    let content = format!(
+        r#"<office:document-content {NS}><office:body><office:text>
+        <text:p>Clay <text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book" text:author="Smith, Jane" text:title="Kilns and Fire" text:year="2020">[Smi20]</text:bibliography-mark>.</text:p>
+        <text:bibliography text:name="B"><text:bibliography-source/><text:index-body><text:p>stale</text:p></text:index-body></text:bibliography>
+        </office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
+        z.start_file(name, o).unwrap();
+        z.write_all(data.as_bytes()).unwrap();
+    }
+    let mut s = Session::new(io::open_bytes("bib.odt", &z.finish().unwrap().into_inner()).unwrap());
+    s.run("references.updateIndex", &json!({})).unwrap();
+    let text: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect();
+    assert!(text.iter().any(|t| t.contains("Kilns and Fire")), "{text:?}");
+    assert!(!text.iter().any(|t| t.contains("stale")), "{text:?}");
+}

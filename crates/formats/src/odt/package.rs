@@ -551,6 +551,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let mut w = Writer::default();
     w.accents.clone_from(&accents);
     w.conn_kinds = conn_kinds(&flow.blocks);
+    w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
     w.custom_props = doc.custom_props.iter().filter(|p| p.kind != "raw").map(|p| p.name.clone()).collect();
     w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);

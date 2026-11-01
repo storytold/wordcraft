@@ -203,3 +203,31 @@ fn custom_date_properties_are_full_utc_dates() {
         assert_eq!((p.kind.as_str(), p.value.as_str()), (kind, want), "{v}");
     }
 }
+
+#[test]
+fn bibliography_marks_are_citations_of_sources() {
+    // `text:bibliography-mark`: a citation carrying its source, which becomes the document's.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>As shown <text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book" text:author="Smith, Jane" text:title="Kilns" text:year="2020" text:publisher="Clay Press">[Smi20]</text:bibliography-mark>, and again <text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book">[Smi20]</text:bibliography-mark>.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    assert_eq!(d.sources.len(), 1);
+    let s = &d.sources[0];
+    assert_eq!(
+        (s.tag.as_str(), s.kind.as_str(), s.author.as_str(), s.title.as_str(), s.year.as_str(), s.publisher.as_str()),
+        ("Smi20", "book", "Smith, Jane", "Kilns", "2020", "Clay Press")
+    );
+    let fields: Vec<(String, String)> = d
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Some((instr.clone(), result.clone())) } else { None })
+        .collect();
+    assert_eq!(fields, [("CITATION Smi20".to_string(), "[Smi20]".to_string()), ("CITATION Smi20".to_string(), "[Smi20]".to_string())]);
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(
+        c.contains(r#"<text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book" text:author="Smith, Jane" text:title="Kilns" text:year="2020" text:publisher="Clay Press">[Smi20]</text:bibliography-mark>"#),
+        "{c}"
+    );
+}

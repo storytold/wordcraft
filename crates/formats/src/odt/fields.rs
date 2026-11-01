@@ -53,6 +53,9 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             let n = clean_prop_name(get(a, "text:name")?)?;
             Some(format!("DOCPROPERTY \"{n}\""))
         }
+        // A citation (§8.1.24 `text:bibliography-mark`): Word's `CITATION` of the source it
+        // carries (see [`bib_source`]).
+        "bibliography-mark" => bib_tag(get(a, "text:identifier")?).map(|t| format!("CITATION {t}")),
         // An index entry at a point (§8.1.10): Word's `XE`, its keys the levels above it.
         "alphabetical-index-mark" => xe_instr(get(a, "text:key1"), get(a, "text:key2"), get(a, "text:string-value")?),
         // Numbering figures, tables and the like (§7.4.13): Word's `SEQ` and its number format.
@@ -294,6 +297,83 @@ pub(super) fn user_fields(xml: &[u8]) -> Vec<wordcraft_doc::CustomProp> {
         }
     });
     out
+}
+
+/// A source's tag as a field code names it: one word (spaces made underscores), at most 64
+/// characters, no quotes or backslashes. `None` when nothing is left.
+pub(super) fn bib_tag(id: &str) -> Option<String> {
+    let t: String =
+        id.trim().chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).map(|c| if c.is_whitespace() { '_' } else { c }).take(64).collect();
+    (!t.is_empty()).then_some(t)
+}
+
+/// ODF bibliography types (§19.817 `text:bibliography-type`) and WordCraft's source kinds.
+const BIB_KINDS: [(&str, &str); 10] = [
+    ("book", "book"),
+    ("inbook", "bookSection"),
+    ("incollection", "bookSection"),
+    ("article", "article"),
+    ("journal", "periodical"),
+    ("inproceedings", "conference"),
+    ("proceedings", "conference"),
+    ("conference", "conference"),
+    ("techreport", "report"),
+    ("www", "website"),
+];
+
+/// The source a `text:bibliography-mark` carries: its identifier as the tag, its type as the
+/// kind, and its author, title, year, publisher, address, journal, volume, pages, URL, editor,
+/// edition, number (issue) and month. `None` without an identifier.
+pub(super) fn bib_source(a: &Attrs) -> Option<wordcraft_doc::Source> {
+    let tag = bib_tag(get(a, "text:identifier")?)?;
+    let v = |k: &str| get(a, k).map(|s| s.chars().filter(|c| !c.is_control()).take(1024).collect::<String>()).unwrap_or_default();
+    let t = get(a, "text:bibliography-type").map(str::trim).unwrap_or("");
+    let kind = BIB_KINDS.iter().find(|(o, _)| *o == t).map_or("other", |(_, k)| k).to_string();
+    Some(wordcraft_doc::Source {
+        tag,
+        kind,
+        author: v("text:author"),
+        title: v("text:title"),
+        year: v("text:year"),
+        publisher: v("text:publisher"),
+        city: v("text:address"),
+        journal: v("text:journal"),
+        volume: v("text:volume"),
+        pages: v("text:pages"),
+        url: v("text:url"),
+        editor: v("text:editor"),
+        edition: v("text:edition"),
+        issue: v("text:number"),
+        month: v("text:month"),
+        ..Default::default()
+    })
+}
+
+/// A source as a `text:bibliography-mark` around `result` (already escaped).
+pub(super) fn bib_mark(s: &wordcraft_doc::Source, result: &str) -> String {
+    let t = BIB_KINDS.iter().find(|(_, k)| *k == s.kind).map_or("misc", |(o, _)| o);
+    let author = if s.corporate.is_empty() { &s.author } else { &s.corporate };
+    let mut a = format!(" text:identifier=\"{}\" text:bibliography-type=\"{t}\"", x(&s.tag));
+    for (k, v) in [
+        ("author", author),
+        ("title", &s.title),
+        ("year", &s.year),
+        ("publisher", &s.publisher),
+        ("address", &s.city),
+        ("journal", &s.journal),
+        ("volume", &s.volume),
+        ("pages", &s.pages),
+        ("url", &s.url),
+        ("editor", &s.editor),
+        ("edition", &s.edition),
+        ("number", &s.issue),
+        ("month", &s.month),
+    ] {
+        if !v.is_empty() {
+            a.push_str(&format!(" text:{k}=\"{}\"", x(v)));
+        }
+    }
+    format!("<text:bibliography-mark{a}>{result}</text:bibliography-mark>")
 }
 
 /// Most characters of an index entry's level.

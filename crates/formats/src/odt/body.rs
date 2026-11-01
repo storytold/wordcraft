@@ -19,6 +19,9 @@ use notes::{OpenField, OpenNote, balance_comments};
 use tables::TableB;
 use tracked::{DelState, Region, change_mark};
 
+/// Most bibliography sources read.
+const MAX_SOURCES: usize = 10_000;
+
 /// Most index entries over text open at once in a paragraph.
 const MAX_OPEN_MARKS: usize = 64;
 
@@ -31,6 +34,8 @@ pub(super) struct Body<'a> {
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
     /// The package's entry names and its manifest's media types, for embedded objects.
     pub(super) entries: &'a [String],
+    /// The bibliography sources the citations carry.
+    pub(super) sources: Vec<wordcraft_doc::Source>,
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
     /// Shapes' ids (`xml:id`, `draw:id`) as WordCraft drawing ids, and where the shapes with one
@@ -149,6 +154,7 @@ impl<'a> Body<'a> {
             entries: &[],
             forms: Default::default(),
             break_next: false,
+            sources: Vec::new(),
             ruby: None,
             index_marks: Vec::new(),
             conn_ids: HashMap::new(),
@@ -915,6 +921,14 @@ impl Body<'_> {
         // Inside a field everything is its shown text.
         if self.field.is_some() {
             return true;
+        }
+        // A citation carries its source: the document's (the first by its identifier).
+        if q == "text:bibliography-mark"
+            && let Some(s) = super::fields::bib_source(a)
+            && self.sources.len() < MAX_SOURCES
+            && !self.sources.iter().any(|o| o.tag == s.tag)
+        {
+            self.sources.push(s);
         }
         if q.starts_with("text:")
             && self.frame.is_none()
