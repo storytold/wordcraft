@@ -175,3 +175,108 @@ fn rtl_tables_and_sections_round_trip() {
     assert_eq!(again, vec![true, false]);
     assert!(r.last_section.rtl && r.last_section.columns.count == 2);
 }
+
+/// Each run of `p` as (text, `w:cs`).
+fn run_cs(p: &Paragraph) -> Vec<(&str, Option<bool>)> {
+    p.run_ranges().map(|(r, c)| (&p.text[r], c.cs)).collect()
+}
+
+#[test]
+fn thai_pieces_are_written_complex_script() {
+    // Word breaks Thai by word only in `w:cs` runs, and marks typed Thai that way; a Latin name
+    // and Western digits stay outside them.
+    let text = "ประชุม WordCraft วันที่ 29 ตุลาคม";
+    let font = CharProps { font: Some("TH Sarabun New".into()), ..Default::default() };
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text(text, font.clone()))];
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let ps = paras(&r);
+    assert_eq!(ps[0].text, text);
+    assert_eq!(run_cs(ps[0]), vec![("ประชุม ", Some(true)), ("WordCraft ", None), ("วันที่ ", Some(true)), ("29 ", None), ("ตุลาคม", Some(true))]);
+    assert!(ps[0].runs.iter().all(|run| run.props.font == font.font), "the Latin font is kept");
+
+    // A file whose Thai runs don't say it (as WPS writes them) gets it when saved.
+    let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
+    let read = wordcraft_docx::read(&wps).unwrap();
+    assert_eq!(paras(&read)[0].runs[0].props.cs, None);
+    let xml = document_xml(&wordcraft_docx::write(&read).unwrap());
+    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+
+    // A run that says `w:cs="0"` keeps it.
+    let off = docx(r#"<w:p><w:r><w:rPr><w:cs w:val="0"/></w:rPr><w:t>ไทย</w:t></w:r></w:p>"#);
+    let xml = document_xml(&wordcraft_docx::write(&wordcraft_docx::read(&off).unwrap()).unwrap());
+    assert!(!xml.contains("<w:cs/>"), "{xml}");
+}
+
+/// The first `<w:r>` of `xml` whose text is `text`.
+fn run_xml<'a>(xml: &'a str, text: &str) -> &'a str {
+    xml.split("<w:r>").find(|r| r.contains(&format!(">{text}</w:t>"))).unwrap_or_else(|| panic!("{text} missing: {xml}"))
+}
+
+#[test]
+fn marked_thai_keeps_the_font_size_bold_and_italic_it_was_drawn_with() {
+    // Word draws a `w:cs` run with the complex-script values alone, 10 pt without `w:szCs`: a
+    // marked piece also gets the ordinary ones, from the run or the defaults, where nothing sets
+    // complex-script values; a tracked change's "before" copy too.
+    use wordcraft_doc::props::PropChange;
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.styles.default_chr.size = Some(14.0);
+    d.styles.default_chr.size_cs = None;
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let direct = CharProps { font: Some("Leelawadee UI".into()), bold: Some(true), italic: Some(true), ..Default::default() };
+    let tracked = CharProps { fmt_change: PropChange::boxed(0, CharProps { size: Some(20.0), ..Default::default() }), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("ตัวหนา", direct)), para_block(Paragraph::with_text("ติดตาม", tracked))];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let bold = run_xml(&xml, "ตัวหนา");
+    for want in [r#"w:cs="Leelawadee UI""#, "<w:bCs/>", "<w:iCs/>", r#"<w:szCs w:val="28"/>"#, "<w:cs/>"] {
+        assert!(bold.contains(want), "{want} in {bold}");
+    }
+    let (now, before) = run_xml(&xml, "ติดตาม").split_once("<w:rPrChange").unwrap();
+    assert!(now.contains(r#"<w:szCs w:val="28"/>"#) && now.contains("<w:cs/>"), "{now}");
+    assert!(before.contains(r#"<w:szCs w:val="40"/>"#) && before.contains("<w:cs/>"), "the before-copy keeps its own size: {before}");
+
+    // Read back, WordCraft draws the Thai as before.
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    for (p, orig) in paras(&r).iter().zip(paras(&d)) {
+        let (now, was) = (r.styles.resolve_char(None, &p.runs[0].props).complex(), d.styles.resolve_char(None, &orig.runs[0].props).complex());
+        assert_eq!((&now.font, now.size, now.bold, now.italic), (&was.font, was.size, was.bold, was.italic));
+    }
+
+    // Complex-script values the defaults set are left to them.
+    let mut d = Document::new();
+    d.styles.default_chr.size_cs = Some(18.0);
+    d.styles.default_chr.font_cs = Some("TH SarabunPSK".into());
+    d.body = vec![para_block(Paragraph::with_text("ค่าเริ่มต้น", CharProps::default()))];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let run = run_xml(&xml, "ค่าเริ่มต้น");
+    assert!(run.contains("<w:cs/>") && !run.contains("w:szCs") && !run.contains("w:cs=\""), "{run}");
+}
+
+#[test]
+fn a_run_already_marked_complex_script_round_trips_unchanged() {
+    // A Thai run that already says `w:cs`, with its complex-script font, is written as it came,
+    // digits and all (the writer marks only runs that don't say it):
+    // one `<w:cs/>`, the `w:rFonts w:cs` attribute kept. Read back, the marks are what they were,
+    // not direct formatting added to the run, and saving again writes the same document.
+    let marked = docx(
+        r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="TH SarabunPSK" w:hAnsi="TH SarabunPSK" w:cs="TH SarabunPSK"/><w:cs/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้ 2569</w:t></w:r></w:p>"#,
+    );
+    let first = wordcraft_docx::read(&marked).unwrap();
+    let saved = wordcraft_docx::write(&first).unwrap();
+    let xml = document_xml(&saved);
+    assert_eq!(xml.matches("<w:cs/>").count(), 1, "{xml}");
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้ 2569").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
+    let again = wordcraft_docx::read(&saved).unwrap();
+    let props = |d: &Document| paras(d)[0].runs.iter().map(|r| r.props.clone()).collect::<Vec<_>>();
+    assert_eq!(run_cs(paras(&again)[0]), vec![("ตามที่ได้แจ้งไว้ 2569", Some(true))]);
+    assert_eq!(props(&again)[0].font_cs, props(&first)[0].font_cs);
+    assert_eq!(props(&again)[0].font, props(&first)[0].font);
+    assert_eq!((props(&again)[0].bold, props(&again)[0].size, props(&again)[0].italic), (None, None, None), "no formatting added");
+    assert_eq!(document_xml(&wordcraft_docx::write(&again).unwrap()), xml, "a second save writes the same document");
+    // The WPS run the save marks keeps its complex-script font too.
+    let wps = docx(r#"<w:p><w:r><w:rPr><w:rFonts w:cs="TH SarabunPSK"/><w:lang w:bidi="th-TH"/></w:rPr><w:t>ตามที่ได้แจ้งไว้</w:t></w:r></w:p>"#);
+    let xml = document_xml(&wordcraft_docx::write(&wordcraft_docx::read(&wps).unwrap()).unwrap());
+    assert!(run_xml(&xml, "ตามที่ได้แจ้งไว้").contains(r#"w:cs="TH SarabunPSK""#), "{xml}");
+}
