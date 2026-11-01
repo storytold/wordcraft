@@ -213,6 +213,17 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     theme_picker(app, ui);
     interface_size_picker(app, ui);
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
+    if !cfg!(target_arch = "wasm32") {
+        let mut enabled = app.ui.document_tabs;
+        if ui.checkbox(&mut enabled, tl!("Show document tabs (like a web browser)")).changed() {
+            if let Err(e) = app.run("ui.documentTabs", json!({"value": enabled})) { app.status(e); }
+        }
+        if app.ui.document_tabs {
+            ui.indent("restore_document_tabs", |ui| {
+                ui.checkbox(&mut app.ui.restore_document_tabs, tl!("Restore saved document tabs when WordCraft starts"));
+            });
+        }
+    }
     let mut dark_page = app.session.view.dark_mode;
     if ui
         .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))

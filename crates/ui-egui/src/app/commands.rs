@@ -506,6 +506,20 @@ impl WordApp {
                 crate::updates_ui::check(self);
                 Value::Null
             }
+            "ui.documentTabs" => {
+                if let Some(value) = p.get("value") {
+                    let Some(on) = value.as_bool() else { return Some(Err("`value` must be boolean".into())); };
+                    if on && cfg!(target_arch = "wasm32") {
+                        return Some(Err("Document tabs are desktop-only".into()));
+                    }
+                    if !on && self.session.documents().len() > 1 {
+                        return Some(Err("Close all but one document before disabling tabs".into()));
+                    }
+                    if let Err(e) = self.windows.set_document_tabs(on) { return Some(Err(e)); }
+                    self.ui.document_tabs = on;
+                }
+                json!({"documentTabs": self.ui.document_tabs})
+            }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
@@ -1021,6 +1035,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "view.ruler"
             | "view.numeral"
             | "ui.tab"
+            | "ui.documentTabs"
             | "ui.backstage"
             | "ui.dialog"
             | "ui.closeDialog"

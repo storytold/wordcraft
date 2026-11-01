@@ -20,6 +20,17 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
+        ui.open_document_paths.clear();
+        ui.preferred_document_path = None;
+        if ui.document_tabs && !cfg!(target_arch = "wasm32") {
+            for doc in self.session.documents() {
+                if let Some(path) = doc.path {
+                    let path = path.to_string_lossy().into_owned();
+                    if doc.active { ui.preferred_document_path = Some(path.clone()); }
+                    ui.open_document_paths.push(path);
+                }
+            }
+        }
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
@@ -31,6 +42,10 @@ impl WordApp {
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: UiState) {
         self.ui = ui;
+        if cfg!(target_arch = "wasm32") { self.ui.document_tabs = false; }
+        if self.ui.document_tabs {
+            if let Err(e) = self.windows.set_document_tabs(true) { self.status(e); }
+        }
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab `ui.json` holds is not restored. Going File
         // and back to the editor within the run still returns to the tab that was showing.

@@ -38,6 +38,7 @@ pub mod crop;
 pub mod desktop_theme;
 pub mod dialogs;
 pub mod documents;
+pub mod document_tabs;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
@@ -152,6 +153,12 @@ pub struct UiState {
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
+    /// Desktop only: show open documents in one window as tabs (off by default).
+    pub document_tabs: bool,
+    /// Reopen previously saved files when starting in tab mode.
+    pub restore_document_tabs: bool,
+    pub open_document_paths: Vec<String>,
+    pub preferred_document_path: Option<String>,
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
@@ -307,6 +314,10 @@ impl Default for UiState {
             print: print_page::PrintSettings::default(),
             ribbon_collapsed: false,
             quick_access_toolbar: true,
+            document_tabs: false,
+            restore_document_tabs: true,
+            open_document_paths: Vec::new(),
+            preferred_document_path: None,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
             recent_colors: Vec::new(),
@@ -464,6 +475,9 @@ fn migrate_units(v: &mut Value) {
 /// The application.
 pub struct WordApp {
     pub session: Session,
+    /// Visual tab ordering; the engine owns each document and its undo history.
+    pub(crate) document_tab_order: Vec<u64>,
+    pub(crate) dragging_document_tab: Option<u64>,
     pub ui: UiState,
     pub services: Services,
     pub printing: printing::State,
