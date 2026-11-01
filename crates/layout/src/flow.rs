@@ -315,8 +315,7 @@ impl<'a> Flow<'a> {
         if rp.keep_next
             && !pb.web
             && !pb.fresh()
-            && let Some(starts) =
-                super::table_flow::kept_table_can_start(ctx, self.block, self.width, pb.bottom - pb.y - height - rp.space_after.max(0.0))
+            && let Some(starts) = super::table_flow::kept_table_can_start(ctx, pb, self.block, pb.y + height + rp.space_after.max(0.0))
         {
             if !starts && height <= pb.next_room(self.body_top) {
                 pb.advance(self.block, self.body_top);

@@ -110,7 +110,7 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
 /// Whether an inline table can begin in the space below a kept body paragraph. Probe the
 /// real cell geometry without advancing list/equation numbers or consuming text-box budgets.
 /// Floating tables retain their independent anchoring rules.
-pub(crate) fn kept_table_can_start(ctx: &mut Ctx, block: usize, width: f32, room: f32) -> Option<bool> {
+pub(crate) fn kept_table_can_start(ctx: &mut Ctx, pb: &PageBuilder, block: usize, start: f32) -> Option<bool> {
     let super::Block::Table(table) = &**ctx.doc.body.get(block + 1)? else { return None };
     if table.props.float.is_some() {
         return None;
@@ -120,12 +120,16 @@ pub(crate) fn kept_table_can_start(ctx: &mut Ctx, block: usize, width: f32, room
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let laid = table::layout_table(ctx, StoryRef::Body, table, &[(block + 1) as u32], width, 1);
+    let laid = table::layout_table(ctx, StoryRef::Body, table, &[(block + 1) as u32], pb.col_w(), 1);
     ctx.counters = counters;
     ctx.eq_count = eq_count;
     ctx.boxes = boxes;
     ctx.chains = chains;
     ctx.track_totals = track;
+    // Use the same full-width float clearance as placement, without moving the page cursor.
+    let x = pb.col_x() + laid.x;
+    let start = below(&body_wraps(ctx, pb), start, x, x + laid.width);
+    let room = pb.bottom - start;
     let headers = table.rows.iter().take_while(|row| row.props.header).count();
     let header_height: f32 = laid.rows.iter().take(headers).map(|row| row.height).sum();
     let (Some(row), Some(geometry)) = (table.rows.get(headers), laid.rows.get(headers)) else {

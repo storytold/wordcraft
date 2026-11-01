@@ -120,3 +120,41 @@ fn table_lookahead_preserves_list_counters() {
         .collect();
     assert_eq!(labels, ["1.", "2."], "probing the table must not number its cells twice");
 }
+
+/// A wrapping shape clears the table's full width even when the heading can fit beside it.
+#[test]
+fn kept_heading_counts_float_clearance_before_the_table() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    for (overlap, keep, expected) in [(true, true, 1), (true, false, 0), (false, true, 0)] {
+        let mut doc = control(28.0, 40.0, true, 1, keep);
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 20.0,
+            h: 70.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float {
+                wrap: Wrap::Square,
+                h_rel: Anchor::Page,
+                v_rel: Anchor::Page,
+                x: if overlap { 300.0 } else { 372.0 },
+                y: 210.0,
+                dist: 0.0,
+                dist_top: 0.0,
+                dist_bottom: 0.0,
+                ..Default::default()
+            },
+            story: None,
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let layout = lay(&doc);
+        assert_pagination_fixture_font(&layout);
+        let heading = layout.caret(&Pos::body(1, 0)).unwrap().page;
+        let table = layout.caret(&Pos { story: StoryRef::Body, path: Path(vec![2, 0, 0, 0]), off: 0 }).unwrap().page;
+        assert_eq!([heading, table], [expected, usize::from(overlap)], "overlap={overlap}, keep={keep}");
+    }
+}
