@@ -226,25 +226,23 @@ fn saved_window() -> Option<WindowGeometry> {
 }
 
 fn save_prefs(app: &WordApp) {
+    if let Err(e) = try_save_prefs(app) {
+        log::warn!("preferences: {e}");
+    }
+}
+
+/// Saves the preferences and says why when it could not. Nothing to write (prefs disabled or no
+/// settings folder) counts as success.
+fn try_save_prefs(app: &WordApp) -> Result<(), String> {
     if !prefs_enabled() {
-        return;
+        return Ok(());
     }
-    if let Some(p) = prefs_path() {
-        if let Some(dir) = p.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            log::warn!("preferences: cannot create {}: {e}", dir.display());
-            return;
-        }
-        match serde_json::to_vec_pretty(&app.prefs()) {
-            Ok(bytes) => {
-                if let Err(e) = write_prefs(&p, &bytes) {
-                    log::warn!("preferences: cannot save {}: {e}", p.display());
-                }
-            }
-            Err(e) => log::warn!("preferences: cannot serialize: {e}"),
-        }
+    let Some(p) = prefs_path() else { return Ok(()) };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
+    let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
+    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
@@ -278,7 +276,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         set_clipboard_html: Some(Box::new(clipboard::set_html)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
-        save_prefs: Some(Box::new(save_prefs)),
+        save_prefs: Some(Box::new(try_save_prefs)),
         ..Default::default()
     }
 }

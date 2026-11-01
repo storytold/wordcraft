@@ -7199,6 +7199,7 @@ fn recent_list_edits_are_final_and_persist() {
     a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
         saved_hook.set(saved_hook.get() + 1);
         let _ = serde_json::to_string(&app.prefs()).unwrap();
+        Ok(())
     }));
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
     // The open document is on the list, at the back.
@@ -7208,6 +7209,7 @@ fn recent_list_edits_are_final_and_persist() {
     let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
     assert_eq!(r["removed"], 1);
     assert_eq!(r["recent"], json!(["/tmp/alpha.docx"]));
+    assert_eq!(r["saved"], true);
     assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
     assert_eq!(saved.get(), 1, "the change is written out at once");
 
@@ -7245,6 +7247,33 @@ fn recent_list_edits_are_final_and_persist() {
     let mut b = app();
     b.apply_prefs(serde_json::from_str(&saved_prefs).unwrap());
     assert_eq!(b.ui.recent, ["/tmp/beta.docx".to_string()]);
+}
+
+/// Issue #2716: when the immediate preferences write fails, both recent commands say so (result
+/// and status line) instead of reporting plain success; the removal still holds for this run.
+/// A host with no hook reports `saved: null`.
+#[test]
+fn recent_list_edits_report_a_failed_preferences_save() {
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err("disk full".to_string())));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["recent"], json!(["/tmp/beta.docx"]));
+    assert_eq!(a.ui.recent, ["/tmp/beta.docx".to_string()], "the removal holds for this run");
+    let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(status.contains("disk full") && !status.starts_with("Removed"), "{status}");
+
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["removed"], 1);
+    assert!(a.ui.recent.is_empty());
+
+    a.services.save_prefs = None;
+    a.ui.recent = vec!["/tmp/alpha.docx".into()];
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
 }
 
 /// Issue #2716: taking documents off the list needs no open document — the Start screen shows

@@ -90,8 +90,9 @@ pub struct Services {
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
     /// Desktop: write the app's current preferences out now, not only at exit (#2716): a
     /// document taken off the recent list should survive the app being killed before a normal
-    /// close. `None` (web, tests) keeps the change to this run.
-    pub save_prefs: Option<Box<dyn Fn(&WordApp)>>,
+    /// close. An error is the reason the write failed; the recent commands report it. `None`
+    /// (web, tests) keeps the change to this run, and the commands then report `saved: null`.
+    pub save_prefs: Option<Box<dyn Fn(&WordApp) -> Result<(), String>>>,
     /// Desktop: the app's own user templates folder (`Templates` in the settings folder, #2852),
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.

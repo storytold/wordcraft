@@ -796,18 +796,26 @@ impl WordApp {
                 if self.ui.recent.len() == before {
                     return Some(Err(format!("`{path}` is not on the recent list")));
                 }
-                self.save_prefs_now();
-                let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
-                self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
-                json!({"removed": 1, "recent": self.ui.recent})
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                    self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                }
+                let mut r = json!({"removed": 1, "recent": self.ui.recent});
+                add_saved(&mut r, saved);
+                r
             }
             "ui.recentClear" => {
                 // Clear the whole list, as Word's registry clear does for recent documents (#2716).
                 let removed = self.ui.recent.len();
                 self.ui.recent.clear();
-                self.save_prefs_now();
-                self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
-                json!({"removed": removed, "recent": self.ui.recent})
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                }
+                let mut r = json!({"removed": removed, "recent": self.ui.recent});
+                add_saved(&mut r, saved);
+                r
             }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
@@ -1025,6 +1033,19 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
 /// Keyboard).
 /// Everything else needs a document, `ui.*` included: only the interface commands listed here
 /// (tabs, Backstage, dialogs, appearance, opening files) work without one.
+/// The result fields of a command that saves the preferences at once: `saved` is true when the
+/// write worked, false with `saveError` when it failed (the change still holds for this run) and
+/// null when the host has no preferences hook.
+fn add_saved(r: &mut Value, saved: Option<Result<(), String>>) {
+    r["saved"] = match &saved {
+        None => Value::Null,
+        Some(res) => json!(res.is_ok()),
+    };
+    if let Some(Err(e)) = saved {
+        r["saveError"] = json!(e);
+    }
+}
+
 pub(crate) fn works_without_document(id: &str) -> bool {
     matches!(
         id,
