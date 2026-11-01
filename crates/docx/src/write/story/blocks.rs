@@ -56,7 +56,12 @@ impl Writer<'_> {
         if depth == 0 {
             self.move_ranges(w, &[]);
         }
-        if bl.is_empty() || (trailing_after_table && bl.last().is_some_and(|b| matches!(**b, Block::Table(_)))) {
+        // Tables without writable rows are skipped; an otherwise empty story still needs a block.
+        let no_written_blocks = bl.iter().all(|b| match &**b {
+            Block::Para(_) => false,
+            Block::Table(t) => t.rows.iter().all(|r| r.cells.is_empty()),
+        });
+        if no_written_blocks || (trailing_after_table && bl.last().is_some_and(|b| matches!(**b, Block::Table(_)))) {
             self.write_trailing_para(w, depth);
         }
     }
