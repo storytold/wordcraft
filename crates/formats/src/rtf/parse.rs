@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use super::reader::Reader;
 use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
 use super::{Cell, Document, FBlock, Flow, Para, model};
@@ -233,9 +236,13 @@ fn finalize(mut r: Reader) -> Parsed {
 
 /// Most grid columns a table gets (the document model's own cap).
 const MAX_GRID_COLS: usize = 63;
-/// Narrowest grid column, in twips (2 pt). Edges closer than this merge: the document model takes
-/// no column under a point, and files exported from spreadsheets put edges a few twips apart.
-const MIN_GRID_GAP: i32 = 40;
+/// Grid columns under this width, in twips (6 pt), merge while the rows leave room: import widens
+/// any narrower column to 6 pt, which grows the table, and files exported from spreadsheets put
+/// edges a few twips apart.
+const MIN_GRID_GAP: i64 = 120;
+/// Grid columns of this width or less, in twips (1 pt), always merge: the document model refuses
+/// them, and would then give the table equal columns.
+const NO_GRID_GAP: i64 = 20;
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
 /// column, and each cell spans the grid columns between its left and right edges, as Word lays
@@ -244,8 +251,9 @@ const MIN_GRID_GAP: i32 = 40;
 ///
 /// One odd row never costs the whole table its grid (a form exported from a spreadsheet, with
 /// many narrow columns, otherwise had its wide title squeezed into one of four equal columns):
-/// - Over [`MAX_GRID_COLS`] edges, or edges closer than [`MIN_GRID_GAP`], merge into the
-///   coarsest-needed grid ([`coarse_edges`]); each cell edge moves to the nearest grid edge.
+/// - Over [`MAX_GRID_COLS`] edges, or edges closer than [`MIN_GRID_GAP`], merge, leaving a column
+///   for each cell of the widest row ([`coarse_edges`]); each cell edge moves to the nearest
+///   grid edge.
 /// - A cell that ends at or before the previous one (a zero-width cell, or a cell with no
 ///   `\cellx` of its own) still gets a grid column of its own; cells pushed past the table's
 ///   right edge move back.
@@ -256,10 +264,10 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
     let mut edges: Vec<i32> = rights.iter().flatten().copied().filter(|&x| x > 0).collect();
     edges.sort_unstable();
     edges.dedup();
-    let Some(&table_right) = edges.last() else {
+    if edges.is_empty() {
         return Vec::new();
-    };
-    let grid = coarse_edges(&edges, table_right);
+    }
+    let grid = coarse_edges(&edges, rows.iter().map(Vec::len).max().unwrap_or(0));
     // Each cell's right edge as a grid edge number (1 = the first grid column's right edge).
     let mut ends: Vec<Vec<usize>> = Vec::with_capacity(rows.len());
     for (row, x) in rows.iter().zip(rights) {
@@ -298,37 +306,54 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
         .collect()
 }
 
-/// The grid edges kept from the sorted, distinct, positive `edges` (the last is `right`): an edge
-/// is kept when it lies at least a gap past the last one kept, with the smallest gap from
-/// [`MIN_GRID_GAP`] up that keeps [`MAX_GRID_COLS`] edges or fewer. The table's right edge is
-/// always kept, in place of the last edge before it when the two are closer than the gap.
-fn coarse_edges(edges: &[i32], right: i32) -> Vec<i32> {
-    let keep = |gap: i32| -> Vec<i32> {
-        let mut out: Vec<i32> = Vec::new();
-        let mut last = 0i64;
-        for &e in edges {
-            if i64::from(e) - last >= i64::from(gap) {
-                out.push(e);
-                last = i64::from(e);
+/// The grid edges kept from the sorted, distinct, positive `edges`. The narrowest column merges
+/// into the next, one at a time, so an edge moves only when it has to: while there are over
+/// [`MAX_GRID_COLS`] columns, or columns of [`NO_GRID_GAP`] or less, and while a column is under
+/// [`MIN_GRID_GAP`] and more columns remain than the `widest_row`'s cells. The table's right edge
+/// is always kept.
+fn coarse_edges(edges: &[i32], widest_row: usize) -> Vec<i32> {
+    let n = edges.len();
+    // Each edge's neighbours among the edges still kept.
+    let mut left: Vec<Option<usize>> = (0..n).map(|i| i.checked_sub(1)).collect();
+    let mut right: Vec<Option<usize>> = (1..=n).map(|i| (i < n).then_some(i)).collect();
+    let mut kept = vec![true; n];
+    let at = |i: Option<usize>| i.and_then(|i| edges.get(i)).map_or(0, |&e| i64::from(e));
+    let width = |i: usize, left: &[Option<usize>]| at(Some(i)) - at(left.get(i).copied().flatten());
+    let mut narrowest: BinaryHeap<Reverse<(i64, usize)>> = (0..n).map(|i| Reverse((width(i, &left), i))).collect();
+    let mut count = n;
+    while count > 1 {
+        let Some(Reverse((w, i))) = narrowest.pop() else {
+            break;
+        };
+        // A column that has since grown, or gone, has a fresher entry or none.
+        if !kept.get(i).copied().unwrap_or(false) || w != width(i, &left) {
+            continue;
+        }
+        if count <= MAX_GRID_COLS && w > NO_GRID_GAP && (w >= MIN_GRID_GAP || count <= widest_row) {
+            break;
+        }
+        // The column's right edge goes, unless it is the table's: then its left edge does.
+        let last = right.get(i).copied().flatten().is_none();
+        let Some(gone) = (if last { left.get(i).copied().flatten() } else { Some(i) }) else {
+            break;
+        };
+        let before = left.get(gone).copied().flatten();
+        let after = right.get(gone).copied().flatten();
+        if let Some(slot) = before.and_then(|b| right.get_mut(b)) {
+            *slot = after;
+        }
+        if let Some(a) = after {
+            if let Some(slot) = left.get_mut(a) {
+                *slot = before;
             }
+            narrowest.push(Reverse((width(a, &left), a)));
         }
-        if out.last() != Some(&right) {
-            out.pop();
-            out.push(right);
+        if let Some(slot) = kept.get_mut(gone) {
+            *slot = false;
         }
-        out
-    };
-    // Fewer edges are kept as the gap grows; at `right` only the right edge is.
-    let (mut lo, mut hi) = (MIN_GRID_GAP, right.max(MIN_GRID_GAP));
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if keep(mid).len() <= MAX_GRID_COLS {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
+        count -= 1;
     }
-    keep(lo)
+    edges.iter().zip(&kept).filter(|&(_, &k)| k).map(|(&e, _)| e).collect()
 }
 
 /// The number of the grid edge nearest `x` (1-based; 0 is the table's left edge).
