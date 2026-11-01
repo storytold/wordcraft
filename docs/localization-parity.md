@@ -44,7 +44,6 @@ native-speaker review (human).
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
   Language… for any of 38 languages and Set As Default for the document and future blank documents; the language survives DOCX, RTF, ODT
   and HTML, Latin, complex-script and East Asian alike). Languages without proofing tools get
-  the styles; Review › Language and the status bar set it). Languages without proofing tools get
   no spelling or grammar marks (as in Word without the language's tools) instead of being flagged
   as English. Detail in [Proofing per language](#proofing-per-language).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
