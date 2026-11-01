@@ -1,6 +1,6 @@
 use super::properties::{
-    all_bookmarks, bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property,
-    summary_property, text_result,
+    all_bookmarks, bookmark_spans_paragraphs, bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
+    set_summary_property, summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -220,7 +220,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let f = FieldCode::parse(instr);
                     let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
                     let r = if name == "REF" {
-                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
+                        // A bookmark ending in a later paragraph keeps the REF's result: Word shows
+                        // its paragraphs, which a one-paragraph result can't hold.
+                        if !has_switch(instr, 'p') && !bookmark_spans_paragraphs(&s.doc, target) { bookmark_text(&s.doc, target) } else { None }
                     } else if !has_switch(instr, 'p') {
                         pages.get(target).map(|(num, page_fmt)| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);

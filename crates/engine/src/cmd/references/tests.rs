@@ -579,3 +579,51 @@ fn update_fields_finds_bookmarks_outside_the_body() {
     let expected: Vec<String> = names.iter().zip(pages).flat_map(|(n, p)| [format!("Target {n}"), p.to_string()]).collect();
     assert_eq!(got, expected);
 }
+
+/// A bookmark ending in a later paragraph, in the body or a header, keeps its REF's result on F9:
+/// Word shows its paragraphs as paragraphs of the result, which a field's one-paragraph result
+/// can't hold, rather than the start paragraph's text alone. One ending in its own paragraph is
+/// filled in.
+#[test]
+fn update_fields_keeps_references_to_bookmarks_spanning_paragraphs() {
+    let mark = |name: &str, end: bool| {
+        let name = name.to_string();
+        if end { InlineObject::BookmarkEnd { name } } else { InlineObject::BookmarkStart { name } }
+    };
+    let para = |text: &str, before: Vec<InlineObject>, after: Vec<InlineObject>| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, CharProps::default());
+        // Each at the start, the last first, so they stand in order.
+        for o in before.into_iter().rev() {
+            p.insert_object(0, o, &CharProps::default()).unwrap();
+        }
+        for o in after {
+            let at = p.len();
+            p.insert_object(at, o, &CharProps::default()).unwrap();
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = wordcraft_doc::Document::new();
+    let header = d.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![para("one", vec![mark("Head", false)], vec![]), para("two", vec![], vec![mark("Head", true)])],
+    );
+    d.last_section.headers.default = Some(header);
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: "stale".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    d.body = vec![
+        para("alpha", vec![mark("Span", false)], vec![]),
+        para("beta", vec![], vec![mark("Span", true)]),
+        para("gamma", vec![mark("Own", false)], vec![mark("Own", true)]),
+        para("", vec![field("REF Span \\h"), field("REF Head \\h"), field("REF Own \\h")], vec![]),
+    ];
+    let mut s = Session::new(d);
+    update_fields(&mut s).unwrap();
+    let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["stale", "stale", "gamma"]);
+}

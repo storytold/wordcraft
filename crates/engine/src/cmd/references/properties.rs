@@ -103,6 +103,26 @@ pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String
     Some(doc.copy_range(&start, &Pos { off: end, ..start.clone() }).plain_text().trim().to_string())
 }
 
+/// Does bookmark `name` (the first of that name, as [`bookmark_text`] takes it) end in a later
+/// paragraph than the one it starts in? Word's F9 shows such a bookmark's paragraphs as
+/// paragraphs of a REF's result, which a field's one-paragraph result can't hold.
+pub(super) fn bookmark_spans_paragraphs(doc: &wordcraft_doc::Document, name: &str) -> bool {
+    let Some((_, start)) = all_bookmarks(doc).into_iter().find(|(n, _)| n == name) else { return false };
+    let ends = |p: &wordcraft_doc::Paragraph, after: Option<usize>| {
+        p.object_offsets()
+            .into_iter()
+            .any(|o| after.is_none_or(|a| o > a) && matches!(p.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
+    };
+    if doc.para(start.story, &start.path).is_some_and(|p| ends(p, Some(start.off))) {
+        return false;
+    }
+    doc.para_paths(start.story)
+        .into_iter()
+        .skip_while(|p| *p != start.path)
+        .skip(1)
+        .any(|path| doc.para(start.story, &path).is_some_and(|p| ends(p, None)))
+}
+
 /// Every bookmark start in the document: the body's, then those of each header, footer, note,
 /// comment and text box in story order.
 pub(super) fn all_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
