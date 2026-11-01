@@ -15,6 +15,7 @@ cfb = { workspace = true }
 image = { workspace = true }
 miniz_oxide = { workspace = true }
 sha1 = { workspace = true }
+zeroize = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }

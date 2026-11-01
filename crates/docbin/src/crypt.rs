@@ -15,6 +15,7 @@
 //! yields a garbled document. Everything is written from the public specifications.
 
 use sha1::{Digest, Sha1};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::DocbinError;
 
@@ -50,7 +51,9 @@ pub(crate) fn md5(data: &[u8]) -> [u8; 16] {
     // K[i] = floor(2^32 * abs(sin(i + 1))), as the RFC defines it.
     let k: Vec<u32> = (0..64u32).map(|i| (f64::from(i + 1).sin().abs() * 4_294_967_296.0) as u32).collect();
     let (mut a0, mut b0, mut c0, mut d0) = (0x6745_2301u32, 0xefcd_ab89u32, 0x98ba_dcfeu32, 0x1032_5476u32);
-    let mut msg = Vec::with_capacity(data.len() + 72);
+    // `data` can be the password or a key. The capacity covers the padding, so the copy is never
+    // reallocated, and it is wiped when dropped.
+    let mut msg = Zeroizing::new(Vec::with_capacity(data.len() + 72));
     msg.extend_from_slice(data);
     msg.push(0x80);
     while msg.len() % 64 != 56 {
@@ -138,8 +141,21 @@ impl Rc4 {
     }
 }
 
-fn utf16le(password: &str) -> Vec<u8> {
-    password.encode_utf16().take(MAX_PASSWORD_CHARS).flat_map(u16::to_le_bytes).collect()
+impl Drop for Rc4 {
+    /// Clears the state, which is derived from the key.
+    fn drop(&mut self) {
+        self.s.zeroize();
+        self.i.zeroize();
+        self.j.zeroize();
+    }
+}
+
+/// `password` as UTF-16LE, in a buffer reserved for the longest password, so it is never moved,
+/// which would leave a copy in freed memory.
+fn utf16le(password: &str) -> Zeroizing<Vec<u8>> {
+    let mut pw = Zeroizing::new(Vec::with_capacity(MAX_PASSWORD_CHARS * 2));
+    pw.extend(password.encode_utf16().take(MAX_PASSWORD_CHARS).flat_map(u16::to_le_bytes));
+    pw
 }
 
 fn u16_at(d: &[u8], at: usize) -> Option<u16> {
@@ -238,7 +254,7 @@ fn xor_candidates(password: &str) -> Vec<Vec<u8>> {
 /// How the streams of one file are transformed, once the password has been verified.
 pub(crate) enum Cipher {
     Xor { array: [u8; 16] },
-    Rc4 { base: Vec<u8>, crypto_api: bool, key_len: usize, table_skip: usize },
+    Rc4 { base: Zeroizing<Vec<u8>>, crypto_api: bool, key_len: usize, table_skip: usize },
 }
 
 impl Cipher {
@@ -268,13 +284,13 @@ impl Cipher {
         let salt = table.get(4..20).ok_or_else(short)?;
         let enc_verifier = table.get(20..36).ok_or_else(short)?;
         let enc_hash = table.get(36..52).ok_or_else(short)?;
-        let h0 = md5(&utf16le(password));
-        let mut buf = Vec::with_capacity(336);
+        let h0 = Zeroizing::new(md5(&utf16le(password)));
+        let mut buf = Zeroizing::new(Vec::with_capacity(336));
         for _ in 0..16 {
             buf.extend_from_slice(&h0[..5]);
             buf.extend_from_slice(salt);
         }
-        let base = md5(&buf)[..5].to_vec();
+        let base = Zeroizing::new(Zeroizing::new(md5(&buf))[..5].to_vec());
         let cipher = Cipher::Rc4 { base, crypto_api: false, key_len: 16, table_skip: 52 };
         let mut rc4 = Rc4::new(&cipher.block_key(0));
         let mut verifier = [0u8; 16];
@@ -340,9 +356,7 @@ impl Cipher {
             return Err(unsupported("a verifier hash that is not SHA-1"));
         }
         let enc_hash = table.get(v + 40..v + 60).ok_or_else(short)?;
-        let mut pw = utf16le(password);
-        let base = sha1(&[salt, &pw]);
-        pw.fill(0);
+        let base = Zeroizing::new(sha1(&[salt, &utf16le(password)]));
         let cipher = Cipher::Rc4 { base, crypto_api: true, key_len, table_skip: v + 60 };
         let mut rc4 = Rc4::new(&cipher.block_key(0));
         let mut verifier = enc_verifier.to_vec();
@@ -356,12 +370,15 @@ impl Cipher {
     }
 
     /// The RC4 key of stream block `block`.
-    fn block_key(&self, block: u32) -> Vec<u8> {
+    fn block_key(&self, block: u32) -> Zeroizing<Vec<u8>> {
         match self {
-            Cipher::Xor { .. } => Vec::new(),
-            Cipher::Rc4 { base, crypto_api: false, .. } => md5(&[base.as_slice(), &block.to_le_bytes()].concat()).to_vec(),
+            Cipher::Xor { .. } => Zeroizing::new(Vec::new()),
+            Cipher::Rc4 { base, crypto_api: false, .. } => {
+                let input = Zeroizing::new([base.as_slice(), &block.to_le_bytes()].concat());
+                Zeroizing::new(Zeroizing::new(md5(&input)).to_vec())
+            }
             Cipher::Rc4 { base, crypto_api: true, key_len, .. } => {
-                let mut k = sha1(&[base, &block.to_le_bytes()]);
+                let mut k = Zeroizing::new(sha1(&[base, &block.to_le_bytes()]));
                 k.truncate(*key_len);
                 // A 40-bit key is zero-padded to 128 bits.
                 if *key_len == 5 {
@@ -436,6 +453,19 @@ mod tests {
             hex(&md5(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890")),
             "57edf4a22be3c955ac49da2e2107b67a"
         );
+    }
+
+    /// The UTF-16 password is written into a buffer reserved for the longest password, so it is
+    /// never moved (which would leave the old copy in freed memory, uncleared). It ends with that
+    /// capacity (the code this replaces ended with a different capacity for every case here).
+    #[test]
+    fn utf16le_password_is_allocated_at_its_final_size() {
+        for pw in ["Password", "Password1234_", "p\u{e4}ssw\u{f6}rd", &"x".repeat(300)] {
+            let b = utf16le(pw);
+            let want: Vec<u8> = pw.encode_utf16().take(MAX_PASSWORD_CHARS).flat_map(u16::to_le_bytes).collect();
+            assert_eq!(b.as_slice(), want.as_slice());
+            assert_eq!(b.capacity(), MAX_PASSWORD_CHARS * 2);
+        }
     }
 
     #[test]
