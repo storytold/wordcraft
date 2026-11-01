@@ -139,7 +139,7 @@ impl Writer<'_> {
         let rtl_para = self.doc.styles.resolve_para(&p.props).bidi;
         let styles = &self.doc.styles;
         let para_style = p.props.style.as_deref();
-        let para_chr = styles.para_style_props(para_style.unwrap_or("Normal")).1;
+        let para_chr = styles.para_style_props_in(para_style.unwrap_or("Normal"), self.table_chr.as_ref()).1;
         let para_lang = para_chr.lang_bidi.is_some();
         let spans = crate::write::bidi::direction_spans(
             &p.text,

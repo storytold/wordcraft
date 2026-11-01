@@ -89,10 +89,11 @@ impl Writer<'_> {
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
-        let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
+        let rows: Vec<_> = t.rows.iter().enumerate().filter(|(_, r)| !r.cells.is_empty()).collect();
         if rows.is_empty() {
             return;
         }
+        let style = t.props.style.as_deref().and_then(|id| self.doc.styles.table_style(id));
         w.open("w:tbl", &[]);
         let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
         tblpr(w, &t.props, chg.as_ref());
@@ -106,7 +107,8 @@ impl Writer<'_> {
         // Controls around rows and cells (repeating sections): opens and closes balanced
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
-        for r in rows {
+        for (ri, r) in rows {
+            let mut g = r.first_grid();
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
@@ -123,7 +125,12 @@ impl Writer<'_> {
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
+                let span = c.span();
+                let chr = style.as_ref().map(|st| cell_chr(st, t, (ri, g, span)));
+                let outer = std::mem::replace(&mut self.table_chr, chr);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
+                self.table_chr = outer;
+                g = g.saturating_add(span);
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);
                 for _ in 0..n {
@@ -146,4 +153,17 @@ impl Writer<'_> {
         }
         w.close("w:tbl");
     }
+}
+
+/// The run formatting table style `st` gives the cell of `t` at row `ri`, grid column `g`
+/// spanning `span` columns: each of the cell's style parts over the last, lowest precedence
+/// first (ECMA-376 §17.7.6), as layout gives the cell's text.
+fn cell_chr(st: &wordcraft_doc::styles::TableStyleProps, t: &Table, (ri, g, span): (usize, usize, usize)) -> CharProps {
+    let bands = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+    let parts = wordcraft_doc::styles::PartSet::of_cell(&t.props.look, bands, (ri, t.rows.len()), (g, span, t.cols()));
+    let mut chr = CharProps::default();
+    for part in parts.iter() {
+        chr.overlay(&st.part(part).chr);
+    }
+    chr
 }

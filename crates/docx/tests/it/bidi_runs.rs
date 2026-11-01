@@ -275,6 +275,41 @@ fn a_run_already_marked_complex_script_gets_no_complex_script_values() {
 }
 
 #[test]
+fn table_style_formatting_becomes_the_complex_script_values() {
+    // The table style makes its text bold and 20 pt, and its header row italic: WordCraft draws
+    // the Hebrew in the cells so, and the pieces marked `w:rtl` must say so in complex-script
+    // values for Word to draw them alike.
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart};
+    let mut st = Style {
+        id: "HebrewTable".into(),
+        name: "HebrewTable".into(),
+        kind: StyleKind::Table,
+        chr: CharProps { bold: Some(true), size: Some(20.0), ..Default::default() },
+        ..Default::default()
+    };
+    st.set_table_part(TablePart::FirstRow, PartFormat { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() });
+    let mut d = Document::new();
+    d.styles.upsert(st);
+    let mut t = wordcraft_doc::Table::new(2, 1, 468.0);
+    t.props.style = Some("HebrewTable".into());
+    for row in &mut t.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("שלום", CharProps::default()))];
+        }
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), para_block(Paragraph::with_text("", CharProps::default()))];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let cells: Vec<&str> = xml.split("<w:tc>").skip(1).map(|c| c.split("</w:tc>").next().unwrap()).collect();
+    assert_eq!(cells.len(), 2);
+    for (row, cell) in cells.iter().enumerate() {
+        let run = cell.split("<w:r>").nth(1).unwrap_or_else(|| panic!("row {row}: {cell}"));
+        assert!(run.contains("<w:rtl/>"), "row {row}: {run}");
+        assert!(run.contains("<w:bCs/>") && run.contains(r#"<w:szCs w:val="40"/>"#), "row {row}: {run}");
+        assert_eq!(run.contains("<w:iCs/>"), row == 0, "only the header row is italic: {run}");
+    }
+}
+
+#[test]
 fn complex_script_values_already_set_are_not_repeated() {
     let mut d = doc_of("שלום WordCraft", true, CharProps { size: Some(20.0), bold: Some(true), ..arial() });
     d.styles.default_chr.font_cs = Some("Arial".into());

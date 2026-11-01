@@ -124,6 +124,9 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Byte offsets of the content control markers the next paragraph writes inline.
     inline_controls: Vec<usize>,
+    /// The run formatting the table style gives the cell being written (its conditional parts
+    /// merged), which the resolver puts under the paragraph's styles; `None` outside table cells.
+    table_chr: Option<wordcraft_doc::props::CharProps>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
