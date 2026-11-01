@@ -1183,6 +1183,53 @@ fn table_merges_borders_shading() {
     assert_eq!(top.width, 0.5);
 }
 
+/// Table borders read the BrcType byte as paragraph borders do; a nil Brc80 is no border.
+#[test]
+fn table_borders_read_border_types_as_paragraphs_do() {
+    use wordcraft_doc::props::BorderStyle as S;
+    let text = "a\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let row_end = {
+        let mut v = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]), t_def_edges(&[0, 2880])].concat();
+        v.extend_from_slice(&0xD605u16.to_le_bytes());
+        v.push(0x18);
+        // Dotted, triple, double wave, nil, 3-D emboss 255/8 pt wide, all zero.
+        for brc in [[8, 0x06, 1, 0], [8, 0x0A, 1, 0], [8, 0x15, 1, 0], [0xFF; 4], [0xFF, 0x18, 1, 0], [0, 0, 0, 0]] {
+            v.extend_from_slice(&brc);
+        }
+        v
+    };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, row_end), (3, 0, grpprl(&[(0x6424, &[0xFF, 0x01, 1, 0])]))],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let b = tbl.props.borders.expect("table borders");
+    let seen = [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].map(|s| s.map(|s| (s.style, s.is_visible(), s.width)));
+    let want = [
+        (S::Dotted, true, 1.0),
+        (S::Triple, true, 1.0),
+        (S::Wave, true, 1.0),
+        (S::None, false, 0.0),
+        (S::Single, true, 12.0),
+        (S::None, false, 0.25),
+    ];
+    assert_eq!(seen, want.map(Some));
+    // A paragraph border is at most 12 points too, as a table border and a DOCX `w:sz` are.
+    let tail = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "tail").expect("tail paragraph");
+    assert_eq!(tail.props.borders.and_then(|b| b.top).map(|t| t.width), Some(12.0));
+}
+
 // ---------------------------------------------------------------------------------------------
 // D3: lists (PlfLst + PlfLfo) and the combined document.
 
@@ -1441,6 +1488,16 @@ fn hyperlink_target_sublocation_and_quotes() {
 fn hyperlink_target_needs_the_whole_field_name() {
     assert_eq!(super::hyperlink_target(r#"HYPERLINKS "x""#), None);
     assert_eq!(super::hyperlink_target(r#"HYPERLINK	"http://example.com""#), Some("http://example.com".into()));
+}
+
+/// A bare `\m` or `\n` keeps the address after it; escapes, an empty address and `%22` read as in DOCX.
+#[test]
+fn hyperlink_target_keeps_the_address_after_a_bare_switch() {
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \m "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \n "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "C:\\Docs\\f.doc""#), Some(r"C:\Docs\f.doc".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "" \l "bm""#), Some("#bm".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com/a%22b""#), Some("http://example.com/a%22b".into()));
 }
 
 #[test]
