@@ -153,6 +153,8 @@ wordcraft-cli run --script job.json                 # the same from a file: comm
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
+Experimental Android ARM64: build the native APK from the full workspace with the [Android build guide](apps/wordcraft-android/README.md).
+
 ## For agents: CLI and MCP
 
 WordCraft was designed to be driven by people *and* by AI agents.

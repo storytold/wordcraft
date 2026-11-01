@@ -1,0 +1,48 @@
+[package]
+name = "wordcraft-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "WordCraft native Android app"
+[lints.rust]
+unsafe_code = "allow"
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+egui = { workspace = true }
+winit = { version = "0.30", features = ["android-native-activity"] }
+android_logger = "0.15.1"
+log = { workspace = true }
+[package.metadata.android]
+package = "ai.storyteller.wordcraft"
+apk_name = "wordcraft"
+use_aapt2 = false
+manifest_override = "AndroidManifest.xml"
+build_targets = ["aarch64-linux-android"]
+include_cplusplus_shared = true
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+has_code = false
+
+[[package.metadata.android.application.activity]]
+name = "android.app.NativeActivity"
+
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.lib_name"
+value = "wordcraft_android"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
