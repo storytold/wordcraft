@@ -1073,7 +1073,7 @@ fn handle_primary_pointer(
     ui: &Ui,
     resp: &egui::Response,
     rects: &[Rect],
-    layout: &DocLayout,
+    layout: &std::sync::Arc<DocLayout>,
     geo: &Geometry,
     middle_gesture: bool,
 ) {
