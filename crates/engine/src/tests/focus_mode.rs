@@ -48,8 +48,14 @@ fn a_non_boolean_value_is_refused_and_leaves_the_view_alone() {
         assert!(matches!(r, Err(crate::CmdError::Params(_))), "{junk} is refused: {r:?}");
         assert!(s.view.focus_mode, "{junk} leaves Focus on");
     }
-    // The whole view switch family, not just Focus.
-    for id in [
+    // The whole switch family, not just Focus: the view switches, the character and paragraph
+    // toggles, the panes, the document and table settings, and the commands that branch on
+    // `value` before they read it (`draw.inkToShape` converts the lasso's strokes on that path,
+    // and `layout.hyphenation` toggles).
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let switches = [
         "view.focus",
         "view.fullScreenView",
         "view.fullScreen",
@@ -61,17 +67,40 @@ fn a_non_boolean_value_is_refused_and_leaves_the_view_alone() {
         "view.stylesPane",
         "view.commentsPane",
         "view.accessibilityPane",
+        "view.altTextPane",
         "view.hideWhiteSpace",
         "view.darkMode",
-    ] {
-        let before = run(&mut s, "view.state", json!({}));
+        "format.bold",
+        "format.italic",
+        "format.underline",
+        "para.keepNext",
+        "para.keepLines",
+        "layout.hyphenation",
+        "layout.differentFirstPage",
+        "layout.sectionRtl",
+        "draw.inkToShape",
+        "table.repeatHeader",
+        "table.rtl",
+        "review.trackChanges",
+        "review.proofing",
+        "text.overtype",
+        "edit.clipboardPane",
+        "styles.inspector",
+    ];
+    for id in switches {
+        let before = (run(&mut s, "view.state", json!({})), s.run("document.inspect", &json!({})).ok(), s.undo_labels());
         let r = s.run(id, &json!({"value": "yes"}));
         assert!(matches!(r, Err(crate::CmdError::Params(_))), "{id} refuses a non-boolean value: {r:?}");
-        assert_eq!(run(&mut s, "view.state", json!({})), before, "{id} changed nothing when it refused");
+        let after = (run(&mut s, "view.state", json!({})), s.run("document.inspect", &json!({})).ok(), s.undo_labels());
+        assert!(after == before, "{id} changed nothing when it refused");
     }
     // Absent still toggles, and a real bool still sets.
     assert_eq!(run(&mut s, "view.focus", json!({}))["value"], false, "no value toggles");
     assert_eq!(run(&mut s, "view.focus", json!({"value": true}))["value"], true);
+    // The branch that used to swallow a junk value still runs for a real one.
+    run(&mut s, "format.bold", json!({"value": true}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["bold"], true, "a real value still sets Bold");
+    assert_eq!(run(&mut s, "draw.inkToShape", json!({"value": true}))["value"], true, "and Ink to Shape");
 }
 
 /// Focus is presentation only: no undo checkpoint, no document change, no dirtying, and it

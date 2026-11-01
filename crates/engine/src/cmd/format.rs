@@ -300,6 +300,8 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
 }
 
 fn toggle(s: &mut Session, v: &Value, get: fn(&ResolvedChar) -> bool, set: fn(&mut CharProps, bool)) -> CmdResult {
+    // A `value` that is not a boolean refuses the command before the text changes.
+    p::check_switch(v)?;
     let on = match p::bool(v, "value") {
         Some(b) => b,
         None => !resolved(s).iter().all(get),
@@ -308,6 +310,8 @@ fn toggle(s: &mut Session, v: &Value, get: fn(&ResolvedChar) -> bool, set: fn(&m
 }
 
 fn underline(s: &mut Session, v: &Value) -> CmdResult {
+    // A `value` that is not a boolean refuses the command before the text changes.
+    p::check_switch(v)?;
     let style = p::str(v, "style").map(Underline::from_ooxml);
     let on = match (p::bool(v, "value"), style) {
         (Some(b), _) => b,

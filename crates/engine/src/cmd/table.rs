@@ -169,11 +169,13 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"height": pt, "rule"?: "atLeast|exact"} (every row the selection covers, the caret's without one)"#)),
         t(CommandSpec::new("table.repeatHeader", "Repeat Header Rows", "Table Layout › Data", |s, v| {
-            let (_, r, _) = cell(s)?;
-            let on = p::bool(v, "value");
+            let (tp, r, _) = cell(s)?;
+            let header = s.doc.table(s.sel.focus.story, &tp).and_then(|t| t.rows.get(r)).is_some_and(|row| row.props.header);
+            // A `value` that is not a boolean refuses the command instead of toggling the row.
+            let on = p::toggle(v, header)?;
             with_table(s, |t| {
                 if let Some(row) = t.rows.get_mut(r) {
-                    row.props.header = on.unwrap_or(!row.props.header);
+                    row.props.header = on;
                 }
             })
         })),
@@ -217,6 +219,8 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure()),
         t(CommandSpec::new("table.rtl", "Right-to-Left Table", "Table Layout › Table", |s, v| {
             let (tp, _, _) = cell(s)?;
+            // A `value` that is not a boolean refuses the command instead of toggling the table.
+            p::check_switch(v)?;
             let on = match p::bool(v, "value") {
                 Some(b) => b,
                 None => !s.doc.table(s.sel.focus.story, &tp).is_some_and(|t| t.props.bidi_visual),
