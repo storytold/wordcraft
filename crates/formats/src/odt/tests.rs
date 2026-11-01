@@ -1251,7 +1251,8 @@ fn paragraph_margins_in_any_unit_and_the_fo_margin_shorthand() {
     let want = [
         (Some(cm(0.423)), Some(cm(0.212))),
         (Some(18.0), Some(9.0)),
-        (Some(5.0 * 72.0 / 25.4), None),
+        // Parentless, so what it leaves unset is ODF's default (no default style here), not Standard's.
+        (Some(5.0 * 72.0 / 25.4), Some(0.0)),
         (Some(12.0), Some(12.0)),
         (Some(3.0), Some(12.0)),
         (Some(36.0), Some(cm(1.0))),
@@ -1311,4 +1312,42 @@ fn automatic_style_on_a_parentless_no_spacing_style_keeps_its_zero_spacing() {
     let d = &doc.styles.default_para;
     assert!(d.space_after.is_some_and(|a| (a - 0.139 * 72.0).abs() < 1e-3), "{:?}", d.space_after);
     assert!(matches!(d.line_spacing, Some(LineSpacing::Multiple(m)) if (m - 1.15).abs() < 1e-6));
+}
+
+#[test]
+fn a_parentless_style_inherits_the_default_styles_spacing_not_standards() {
+    // ODF 1.3 §16.2: a common style with no parent inherits from the default style. `Standard`
+    // is only the document default for paragraphs that use it (or no style at all), so what a
+    // parentless style leaves unset comes from the default style, then ODF's own defaults.
+    use wordcraft_doc::props::LineSpacing;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:default-style style:family="paragraph"><style:paragraph-properties fo:margin-bottom="0.05in"/></style:default-style>
+        <style:style style:name="Standard" style:family="paragraph" style:class="text"><style:paragraph-properties fo:margin-top="0.1in" fo:margin-bottom="0.139in" fo:line-height="115%"/></style:style>
+        <style:style style:name="Plain" style:family="paragraph"><style:paragraph-properties fo:margin-top="6pt"/></style:style>
+        <style:style style:name="Body" style:family="paragraph" style:parent-style-name="Standard"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="P1" style:family="paragraph" style:parent-style-name="Plain"><style:text-properties fo:font-size="12pt"/></style:style>
+        <style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:p text:style-name="Plain">Plain</text:p><text:p text:style-name="P1">Plain, automatic</text:p>
+        <text:p text:style-name="Body">Body</text:p><text:p>Default</text:p><text:p text:style-name="P2">Automatic only</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let flow = parse(&package(&content, Some(&styles))).unwrap();
+    let got: Vec<_> = paras(&flow).iter().map(|p| (p.spacing.before, p.spacing.after, p.spacing.line)).collect();
+    let plain = (Some(6.0), Some(0.05 * 72.0), Some(LineSpacing::Multiple(1.0)));
+    let close = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(x), Some(y)) => (x - y).abs() < 1e-3,
+        (x, y) => x == y,
+    };
+    for g in &got[..2] {
+        assert!(close(g.0, plain.0) && close(g.1, plain.1) && g.2 == plain.2, "{got:?}");
+    }
+    // Paragraphs on Standard (by inheritance, with no style, or with only a parentless automatic
+    // style, which LibreOffice puts on Standard) follow the document defaults.
+    assert_eq!(&got[2..], &[(None, None, None), (None, None, None), (None, None, None)]);
 }

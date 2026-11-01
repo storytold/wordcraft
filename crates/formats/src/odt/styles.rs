@@ -330,13 +330,25 @@ impl Styles {
     /// style's, else ODF's own defaults (no space before or after, single line spacing, ODF 1.3
     /// §20.207, §20.235, §20.355), which are not Word's (8pt after, 1.15 lines).
     pub(super) fn doc_spacing(&self) -> model::Spacing {
-        use wordcraft_doc::props::LineSpacing;
         let standard = self.map.get("Standard").filter(|s| !s.auto).map(|s| s.spacing).unwrap_or_default();
+        let base = self.base_spacing();
+        model::Spacing {
+            before: standard.before.or(base.before),
+            after: standard.after.or(base.after),
+            line: standard.line.or(base.line),
+            ..model::Spacing::default()
+        }
+    }
+
+    /// The spacing under every paragraph style: the default style's, else ODF's own defaults.
+    /// A chain of common styles that never reaches `Standard` inherits from this, not `Standard`.
+    fn base_spacing(&self) -> model::Spacing {
+        use wordcraft_doc::props::LineSpacing;
         let d = self.default_spacing;
         model::Spacing {
-            before: standard.before.or(d.before).or(Some(0.0)),
-            after: standard.after.or(d.after).or(Some(0.0)),
-            line: standard.line.or(d.line).or(Some(LineSpacing::Multiple(1.0))),
+            before: d.before.or(Some(0.0)),
+            after: d.after.or(Some(0.0)),
+            line: d.line.or(Some(LineSpacing::Multiple(1.0))),
             ..model::Spacing::default()
         }
     }
@@ -446,12 +458,24 @@ impl Styles {
         // `Standard` holds the document defaults (`doc_spacing`); a paragraph that sets nothing
         // of its own follows them.
         let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
-        let spacing = model::Spacing {
+        let mut spacing = model::Spacing {
             before: own().find_map(|(_, s)| s.spacing.before),
             after: own().find_map(|(_, s)| s.spacing.after),
             line: own().find_map(|(_, s)| s.spacing.line),
             ..model::Spacing::default()
         };
+        // A normal paragraph whose chain ends in a common style other than `Standard` (a
+        // parentless common style) inherits the default style's spacing, not `Standard`'s, so
+        // what it leaves unset is given here rather than left to the document defaults. A chain
+        // of automatic styles alone is a plain paragraph, which LibreOffice puts on `Standard`.
+        // Kind paragraphs keep their kind's spacing, as above.
+        let common = chain.iter().filter(|(_, s)| !s.auto);
+        if kind == Kind::Normal && common.clone().next().is_some() && !common.clone().any(|(n, _)| *n == "Standard") {
+            let base = self.base_spacing();
+            spacing.before = spacing.before.or(base.before);
+            spacing.after = spacing.after.or(base.after);
+            spacing.line = spacing.line.or(base.line);
+        }
         (kind, align, spacing, pb, rule, keep_next, f)
     }
 }
