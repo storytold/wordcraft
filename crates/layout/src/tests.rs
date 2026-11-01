@@ -5869,6 +5869,72 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// A floating table `y` below the text, then a table of `flow_rows` rows in the text flow.
+fn float_then_flow(y: f32, flow_rows: usize) -> [wordcraft_doc::Block; 2] {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let table = |text: &str, rows: usize| {
+        let mut t = Table::new(rows, 1, 468.0);
+        for r in &mut t.rows {
+            r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        t
+    };
+    let mut floated = table("Floated", 1);
+    floated.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, y, overlap: false, ..Default::default() });
+    [wordcraft_doc::Block::Table(floated), wordcraft_doc::Block::Table(table("Flow", flow_rows))]
+}
+
+/// The two tables of [`float_then_flow`] in the body, before a paragraph.
+fn float_then_flow_table(y: f32, flow_rows: usize) -> DocLayout {
+    let [floated, flow] = float_then_flow(y, flow_rows);
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), floated).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(1), flow).unwrap();
+    lay(&d)
+}
+
+/// The first cell of the table at `table` on the first page.
+fn first_cell(l: &DocLayout, table: &[u32]) -> Option<Rect> {
+    l.pages[0].items.iter().find_map(|i| match i {
+        Placed::Cell { rect, table: t, row: 0, cell: 0, .. } if t.0 == table => Some(*rect),
+        _ => None,
+    })
+}
+
+/// `w:tblpY="1"` puts a floating table a twip below the text; the table in the flow after it
+/// still starts below it, not over it (#3282).
+#[test]
+fn a_flow_table_starts_below_a_float_a_twip_down() {
+    let l = float_then_flow_table(0.05, 1);
+    let (Some(floated), Some(flow)) = (first_cell(&l, &[0]), first_cell(&l, &[1])) else { panic!("cells missing") };
+    assert!(flow.y >= floated.bottom(), "flow cell at {}, over the floating cell ending at {}", flow.y, floated.bottom());
+}
+
+/// The same in a table cell, where tables are laid out as in text boxes, headers and footers.
+#[test]
+fn a_flow_table_in_a_cell_starts_below_a_float_a_twip_down() {
+    let mut outer = Table::new(1, 1, 468.0);
+    outer.rows[0].cells[0].blocks = float_then_flow(0.05, 1).into_iter().map(std::sync::Arc::new).collect();
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+    let l = lay(&d);
+    let (Some(floated), Some(flow)) = (first_cell(&l, &[0, 0, 0, 0]), first_cell(&l, &[0, 0, 0, 1])) else { panic!("cells missing") };
+    assert!(flow.y >= floated.bottom(), "flow cell at {}, over the floating cell ending at {}", flow.y, floated.bottom());
+}
+
+/// Only the flow table's first row counts: a float further down, which later rows of a long
+/// table reach, doesn't push the table below it.
+#[test]
+fn a_flow_table_starts_above_a_float_lower_down() {
+    let l = float_then_flow_table(100.0, 20);
+    let [(_, floated_y, _)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("floated text missing") };
+    let [(_, flow_y, _)] = para_at(&l, &[1, 0, 0, 0])[..] else { panic!("flow text missing") };
+    let [(_, last_y, _)] = para_at(&l, &[1, 19, 0, 0])[..] else { panic!("last row text missing") };
+    assert!(last_y > floated_y, "the flow table ends at {last_y}, above the floating table at {floated_y}");
+    assert!(flow_y < floated_y, "flow table at {flow_y}, pushed below the floating table at {floated_y}");
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.
