@@ -59,9 +59,17 @@ pub(crate) struct Ctx<'a> {
     pub(crate) pin: Option<Pin>,
     pub(crate) footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     pub(crate) header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
+    /// Extents of source-stable outer floating boxes for this pass.
+    pub(super) frames: textbox::FrameCache,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Insertion order permits rolling back speculative fitted heights without copying the cache.
+    pub(super) fitted_order: Vec<(u32, u32)>,
+    /// Monotonic speculative work within one outer box, independent of placement allowance.
+    pub(super) measure_left: usize,
+    pub(super) measure_depth: usize,
+    pub(super) measure_exhausted: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -319,8 +327,12 @@ impl Ctx<'_> {
             let h = match self.fitted.get(&key) {
                 Some(h) => *h,
                 None => {
+                    let fresh = self.measure_depth == 0 && !self.boxes.inside();
                     let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
+                    if fresh || !self.measure_exhausted {
+                        self.fitted.insert(key, h);
+                        self.fitted_order.push(key);
+                    }
                     h
                 }
             };
@@ -424,3 +436,7 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
     ctx.pct_base = before;
     out
 }
+
+#[cfg(test)]
+#[path = "tests/ctx_textbox.rs"]
+mod textbox_tests;

@@ -355,6 +355,7 @@ pub(crate) fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -480,7 +481,10 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| {
+                    let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
+                    float_rect(at.page, at.col, at.para_y, w, h, float)
+                })
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
@@ -525,7 +529,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
             for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+                let parent = if text_box == Some(id) { Some(obj) } else { None };
+                let items = textbox::box_items(ctx, id, rect, depth, parent);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
