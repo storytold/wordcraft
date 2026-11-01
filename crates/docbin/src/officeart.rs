@@ -377,21 +377,15 @@ impl Props {
                 }
                 0x0104 => self.pib = Some(op),
                 0x0181 => self.fill_color = color(op),
-                0x01BF => {
-                    // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
-                    if op & (1 << 20) != 0 {
-                        self.filled = Some(op & (1 << 4) != 0);
-                    }
-                }
+                // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
+                0x01BF if op & (1 << 20) != 0 => self.filled = Some(op & (1 << 4) != 0),
+                0x01BF => {}
                 0x01C0 => self.line_color = color(op),
                 0x01CB => self.line_width = Some(op),
                 0x01D0 | 0x01D1 => self.arrowhead |= op != 0,
-                0x01FF => {
-                    // fLine (bit 3) is valid when fUsefLine (bit 19) is set.
-                    if op & (1 << 19) != 0 {
-                        self.line = Some(op & (1 << 3) != 0);
-                    }
-                }
+                // fLine (bit 3) is valid when fUsefLine (bit 19) is set.
+                0x01FF if op & (1 << 19) != 0 => self.line = Some(op & (1 << 3) != 0),
+                0x01FF => {}
                 0x0384..=0x0387 => self.wrap_dist[(pid - 0x0384) as usize] = Some(op),
                 0x038F => self.posh = Some(op),
                 0x0390 => self.posrelh = Some(op),
