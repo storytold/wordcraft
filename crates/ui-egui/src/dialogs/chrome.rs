@@ -67,6 +67,80 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Makes `window` modal (#3859): the document gives up the keyboard now, and from the next frame
+/// nothing beneath the window takes the pointer or Tab. A press beside it nudges it ([`nudge`]).
+pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Response) {
+    let layer = window.layer_id;
+    // egui's hit test doesn't look at the modal layer, so a transparent backdrop just under the
+    // window takes the clicks; nothing is dimmed, as in Word.
+    let screen = ctx.content_rect();
+    let backdrop = egui::Area::new(layer.id.with("modal_backdrop"))
+        .order(layer.order)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| ui.allocate_rect(screen, Sense::CLICK | Sense::DRAG))
+        .inner;
+    // The backdrop also has the pointer just inside the window's edge (egui's hit radius).
+    let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !window.rect.contains(p)));
+    ctx.move_to_top(layer);
+    ctx.memory_mut(|m| m.set_modal_layer(layer));
+    ctx.accesskit_node_builder(window.id, |node| node.set_modal());
+    release_keyboard(app, ctx);
+    nudge(ctx, window, backdrop.contains_pointer() && beside, app.animations_on());
+}
+
+/// How long a modal window shakes or flashes after a press beside it, in seconds.
+const NUDGE_SECS: f64 = 0.4;
+
+/// The `ctx.data` key for when the window `id` was last nudged, in this document window: the data
+/// is shared by all of them.
+pub(super) fn nudge_id(ctx: &egui::Context, id: egui::Id) -> egui::Id {
+    id.with(("nudge", ctx.viewport_id()))
+}
+
+/// Forgets a nudge of the window `id` as it closes, so it doesn't go on when the window reopens.
+pub(crate) fn forget_nudge(ctx: &egui::Context, id: egui::Id) {
+    let key = nudge_id(ctx, id);
+    ctx.data_mut(|d| d.remove::<f64>(key));
+}
+
+/// The shake's sideways offset at `t` (0 to 1) through it: three swings either way of up to 6
+/// points, dying away.
+pub(super) fn shake_offset(t: f32) -> f32 {
+    6.0 * (t * 3.0 * std::f32::consts::TAU).sin() * (1.0 - t)
+}
+
+/// A press beside a modal window shakes it a little (#3859), so the user sees why nothing behind
+/// it reacts; with animation effects off, its border flashes twice instead. A press while it runs
+/// doesn't start it over.
+fn nudge(ctx: &egui::Context, window: &egui::Response, pressed: bool, animate: bool) {
+    let id = nudge_id(ctx, window.layer_id.id);
+    let now = ctx.input(|i| i.time);
+    let start = match ctx.data(|d| d.get_temp::<f64>(id)).filter(|s| (0.0..NUDGE_SECS).contains(&(now - s))) {
+        Some(s) => s,
+        None if pressed => {
+            ctx.data_mut(|d| d.insert_temp(id, now));
+            now
+        }
+        None => return,
+    };
+    ctx.request_repaint();
+    let t = ((now - start) / NUDGE_SECS).clamp(0.0, 1.0) as f32;
+    if animate {
+        ctx.transform_layer_shapes(window.layer_id, egui::emath::TSTransform::from_translation(vec2(shake_offset(t), 0.0)));
+    } else if ((t * 4.0) as u32).is_multiple_of(2) {
+        let radius = ctx.global_style().visuals.window_corner_radius;
+        let stroke = egui::Stroke::new(2.0, Tokens::get(ctx).accent);
+        ctx.layer_painter(window.layer_id).rect_stroke(window.rect, radius, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// Takes the keyboard from the document while a modal window is open.
+pub(crate) fn release_keyboard(app: &WordApp, ctx: &egui::Context) {
+    if let Some((id, _)) = app.canvas.widget_id {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
 /// Takes the active dialog, resolves its translated title, hosts it as a non-resizable window, draws
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
@@ -135,10 +209,16 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     };
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
+    // A file browser or Colors dialog it opened is above it and takes the keys: Escape or Enter
+    // there doesn't also cancel or OK this one.
+    let held = (app.file_browser_open() || app.colors.is_some()).then(|| ctx.input_mut(|i| std::mem::take(&mut i.events)));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
     });
+    if let Some(events) = held {
+        ctx.input_mut(|i| i.events = events);
+    }
     if let Some(shown) = &shown {
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
@@ -157,9 +237,17 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         }
         count_dialog_frame(ctx, id);
         close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
+        // A file browser it opened (Attach…, Browse…) stays above it.
+        if d.is_modal() && !close && !app.file_browser_open() {
+            block_behind(app, ctx, &shown.response);
+        }
     }
     if close {
-        app.canvas.want_focus = true;
+        forget_nudge(ctx, id);
+        // Not from a browser it opened as it closed (Save As): that one keeps the keyboard.
+        if !app.file_browser_open() {
+            app.canvas.want_focus = true;
+        }
     } else {
         app.dialog = Some(d);
     }
