@@ -671,6 +671,44 @@ fn export_of_a_one_section_document_stays_simple() {
 }
 
 #[test]
+fn notes_comments_tracked_changes_and_sections_work_together() {
+    let ns = format!(r#"{NS_T} xmlns:dc="http://purl.org/dc/elements/1.1/""#);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles>
+        <style:page-layout style:name="pU"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" style:print-orientation="portrait"/></style:page-layout>
+        <style:page-layout style:name="pW"><style:page-layout-properties fo:page-width="29.7cm" fo:page-height="21cm" style:print-orientation="landscape"/></style:page-layout>
+        </office:automatic-styles><office:master-styles>
+        <style:master-page style:name="Upright" style:page-layout-name="pU"/>
+        <style:master-page style:name="Wide" style:page-layout-name="pW"/>
+        </office:master-styles></office:document-styles>"#
+    );
+    // The note's own paragraph names a master page: inside a note that must not start a section.
+    let content = format!(
+        r#"<office:document-content {ns}><office:automatic-styles>
+        <style:style style:name="PStart" style:family="paragraph" style:master-page-name="Upright"/>
+        <style:style style:name="PWide" style:family="paragraph" style:master-page-name="Wide"><style:paragraph-properties fo:break-before="page"/></style:style>
+        </office:automatic-styles><office:body><office:text>
+        <text:tracked-changes text:track-changes="true"><text:changed-region text:id="ct1"><text:insertion><office:change-info><dc:creator>Alice</dc:creator><dc:date>2024-03-01T10:00:00</dc:date></office:change-info></text:insertion></text:changed-region></text:tracked-changes>
+        <text:p text:style-name="PStart">First section.</text:p>
+        <text:p text:style-name="PWide">Second<text:note text:id="ftn1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p text:style-name="PStart">Note text</text:p></text:note-body></text:note> <text:change-start text:change-id="ct1"/>added<text:change-end text:change-id="ct1"/><office:annotation><dc:creator>Bo</dc:creator><dc:date>2025-01-02T03:04:05</dc:date><text:p>Remark</text:p></office:annotation> end.</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &Document| {
+        assert_eq!(d.revisions.len(), 1);
+        let parts = |k: wordcraft_doc::PartKind| d.parts.values().filter(|p| p.kind == k).count();
+        assert_eq!(parts(wordcraft_doc::PartKind::Footnote), 1);
+        assert_eq!(d.comments.len(), 1);
+        assert!(d.settings.track_changes);
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    // Sections are read, not written yet; the note's master page did not add one.
+    assert_eq!(d.sections().len(), 2);
+    check(&d);
+    let d2 = import(&export(&d).unwrap()).unwrap();
+    check(&d2);
+}
+
+#[test]
 fn one_master_page_stays_one_section() {
     let styles = format!(
         r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pU"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pU"/></office:master-styles></office:document-styles>"#

@@ -1,4 +1,4 @@
-use super::writer::{NS, Writer, pt, x};
+use super::writer::{NS, Writer, prepare_export, pt, x};
 use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
@@ -99,8 +99,10 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_tracked(doc);
+    let (marked, out) = prepare_export(doc);
+    let flow = model::from_doc_tracked(marked.as_ref().unwrap_or(doc));
     let mut w = Writer::default();
+    w.out = out;
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
     // One master page per section that starts a page; the first one is "Standard".

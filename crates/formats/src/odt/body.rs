@@ -2,7 +2,10 @@ use super::import::Pages;
 use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
+use super::{
+    Arc, Block, Blocks, Cell, CharProps, Comment, Document, FBlock, FTable, Fmt, HashMap, HashSet, Inline, InlineObject, Kind, ListInfo, NoteKind,
+    OBJ, Para, Paragraph, PartKind, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model,
+};
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
@@ -130,6 +133,12 @@ pub(super) struct Body<'a> {
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
     frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>)>,
     in_desc: bool,
+    /// Notes and comments read so far (see [`Extras`]).
+    pub(super) extras: Extras,
+    /// A `text:note` / `office:annotation` being collected (its events, replayed by a body of its own).
+    capture: Option<Capture>,
+    /// A body replaying a note: notes and comments inside it are skipped.
+    nested: bool,
     /// The master pages' page setups.
     pages: &'a Pages,
     /// The current master page's setup (a column section's page, without its columns).
@@ -180,6 +189,9 @@ impl<'a> Body<'a> {
             depth: 0,
             frame: None,
             in_desc: false,
+            extras: Extras::default(),
+            capture: None,
+            nested: false,
             pages,
             sec: page.clone(),
             page,
@@ -250,7 +262,7 @@ impl Body<'_> {
 
     /// Reading the body itself, not a table cell or a frame.
     fn in_body(&self) -> bool {
-        self.containers.len() == 1 && self.tables.is_empty() && self.frame.is_none()
+        !self.nested && self.containers.len() == 1 && self.tables.is_empty() && self.frame.is_none()
     }
 
     /// End the open section before what comes next, which starts section `next`. An open section
@@ -420,6 +432,10 @@ impl Body<'_> {
     }
 
     fn text(&mut self, t: &str) {
+        if self.capture.is_some() {
+            self.capture_event(Ev::Text(t.to_string()));
+            return;
+        }
         if self.skip > 0 || !self.in_text {
             return;
         }
@@ -469,6 +485,10 @@ impl Body<'_> {
 
     fn start(&mut self, q: &str, a: &Attrs) {
         self.depth += 1;
+        if self.capture.is_some() {
+            self.capture_event(Ev::Start(q.to_string(), a.clone()));
+            return;
+        }
         if q == "office:text" {
             self.in_text = true;
             return;
@@ -491,7 +511,7 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
-        if self.start_inline(q, a) {
+        if self.start_inline(q, a) || self.start_note(q, a) {
             return;
         }
         match local(q) {
@@ -804,6 +824,17 @@ impl Body<'_> {
         false
     }
 
+    /// `text:note`, `office:annotation` and `office:annotation-end` (not inside a note or comment).
+    fn start_note(&mut self, q: &str, a: &Attrs) -> bool {
+        match q {
+            "text:note" if !self.nested => self.begin_capture(false, a),
+            "office:annotation" if !self.nested => self.begin_capture(true, a),
+            "office:annotation-end" if !self.nested => self.end_annotation(a),
+            _ => return false,
+        }
+        true
+    }
+
     fn start_inline(&mut self, q: &str, a: &Attrs) -> bool {
         match local(q) {
             "span" => {
@@ -828,7 +859,7 @@ impl Body<'_> {
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
             "bookmark" | "bookmark-start" => {
-                if let Some(name) = get(a, "text:name") {
+                if let Some(name) = get(a, "text:name").filter(|name| !name.starts_with(MARK)) {
                     if self.para.is_none() {
                         self.start_para(None, None);
                     }
@@ -844,6 +875,10 @@ impl Body<'_> {
 
     fn end(&mut self, q: &str) {
         self.depth = self.depth.saturating_sub(1);
+        if self.capture.is_some() {
+            self.capture_event(Ev::End(q.to_string()));
+            return;
+        }
         if q == "office:text" {
             if self.del.is_some() {
                 // Unclosed deleted content (hostile): drop it.
@@ -995,4 +1030,424 @@ fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMar
     {
         open.push((id.to_string(), r.mark()));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Footnotes, endnotes and comments
+
+/// Start of the bookmark names that stand for a note reference or a comment range boundary while
+/// the text goes through the flow model (`n<id>`, `cs<id>`, `ce<id>` follow). A control character
+/// no real bookmark has; files that carry it anyway are ignored on import.
+pub(super) const MARK: &str = "\u{1}wc-odt:";
+/// Most notes plus comments read from one file.
+pub(super) const MAX_NOTES: usize = 10_000;
+/// Most events kept for one note or comment.
+pub(super) const MAX_NOTE_EVENTS: usize = 50_000;
+/// Most bytes (names, attributes, text) kept for one note or comment.
+pub(super) const MAX_NOTE_BYTES: usize = 1 << 20;
+/// Most bytes kept for all notes and comments of a file.
+pub(super) const MAX_NOTES_TOTAL: usize = 16 << 20;
+/// Longest custom note mark (characters), as the Footnote dialog takes.
+pub(super) const MAX_MARK_CHARS: usize = 10;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkKind {
+    Note,
+    CommentStart,
+    CommentEnd,
+}
+
+pub(super) fn mark_name(kind: MarkKind, id: usize) -> String {
+    let k = match kind {
+        MarkKind::Note => "n",
+        MarkKind::CommentStart => "cs",
+        MarkKind::CommentEnd => "ce",
+    };
+    format!("{MARK}{k}{id}")
+}
+
+pub(super) fn parse_mark(name: &str) -> Option<(MarkKind, usize)> {
+    let r = name.strip_prefix(MARK)?;
+    let (kind, n) = if let Some(n) = r.strip_prefix("cs") {
+        (MarkKind::CommentStart, n)
+    } else if let Some(n) = r.strip_prefix("ce") {
+        (MarkKind::CommentEnd, n)
+    } else {
+        (MarkKind::Note, r.strip_prefix('n')?)
+    };
+    Some((kind, n.parse().ok()?))
+}
+
+pub(super) fn short(s: &str, max: usize) -> String {
+    s.chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_string()
+}
+
+/// A footnote or endnote read from the file.
+pub(super) struct NoteIn {
+    endnote: bool,
+    custom: String,
+    blocks: Vec<FBlock>,
+}
+
+/// A comment read from the file.
+pub(super) struct CommentIn {
+    author: String,
+    initials: String,
+    date: String,
+    blocks: Vec<FBlock>,
+}
+
+/// What the flow model has no place for: the notes and comments of a file, numbered in reading
+/// order (the reserved bookmark names carry the numbers).
+#[derive(Default)]
+pub(super) struct Extras {
+    notes: Vec<NoteIn>,
+    comments: Vec<CommentIn>,
+    /// `office:name` and number of the comments whose range is open.
+    open: Vec<(String, usize)>,
+    /// Bytes kept so far.
+    budget: usize,
+}
+
+/// A `text:note` or `office:annotation` being collected.
+pub(super) struct Capture {
+    annotation: bool,
+    attrs: Attrs,
+    level: usize,
+    events: Vec<Ev>,
+    bytes: usize,
+    overflow: bool,
+}
+
+impl Body<'_> {
+    fn begin_capture(&mut self, annotation: bool, a: &Attrs) {
+        if self.extras.notes.len() + self.extras.comments.len() >= MAX_NOTES || self.extras.budget >= MAX_NOTES_TOTAL {
+            self.skip = 1;
+            return;
+        }
+        self.capture = Some(Capture { annotation, attrs: a.clone(), level: 1, events: Vec::new(), bytes: 0, overflow: false });
+    }
+
+    fn capture_event(&mut self, ev: Ev) {
+        let Some(cap) = self.capture.as_mut() else { return };
+        match &ev {
+            Ev::Start(..) => cap.level += 1,
+            Ev::End(_) => cap.level = cap.level.saturating_sub(1),
+            Ev::Text(_) => {}
+        }
+        if cap.level == 0 {
+            self.finish_capture();
+            return;
+        }
+        if cap.overflow {
+            return;
+        }
+        let cost = match &ev {
+            Ev::Start(q, a) => q.len() + a.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() + 16,
+            Ev::End(q) => q.len() + 8,
+            Ev::Text(t) => t.len() + 8,
+        };
+        if cap.events.len() >= MAX_NOTE_EVENTS || cap.bytes.saturating_add(cost) > MAX_NOTE_BYTES {
+            cap.overflow = true;
+            return;
+        }
+        cap.bytes += cost;
+        cap.events.push(ev);
+    }
+
+    fn finish_capture(&mut self) {
+        let Some(cap) = self.capture.take() else { return };
+        self.extras.budget = self.extras.budget.saturating_add(cap.bytes);
+        if cap.annotation { self.finish_annotation(cap) } else { self.finish_note(cap) }
+    }
+
+    /// A marker bookmark at the current position (in a paragraph of its own if none is open).
+    fn add_marker(&mut self, name: String) {
+        if self.para.is_none() {
+            self.start_para(None, None);
+        }
+        if let Some(p) = &mut self.para {
+            p.inlines.push(Inline::Anchor(name));
+        }
+    }
+
+    /// The blocks `events` make up, read by a body of its own (in which notes and comments are
+    /// skipped, so nesting is bounded).
+    fn replay(&mut self, events: &[Ev]) -> Vec<FBlock> {
+        let mut sub = Body {
+            styles: self.styles,
+            zip: &mut *self.zip,
+            containers: vec![Vec::new()],
+            fmt: Vec::new(),
+            para: None,
+            para_cont: false,
+            lists: Vec::new(),
+            xml_space_end: false,
+            lists_saved: Vec::new(),
+            item_used: Vec::new(),
+            tables: Vec::new(),
+            cells: Vec::new(),
+            in_text: true,
+            skip: 0,
+            depth: 0,
+            frame: None,
+            in_desc: false,
+            extras: Extras::default(),
+            capture: None,
+            nested: true,
+            pages: self.pages,
+            sec: self.page.clone(),
+            page: self.page.clone(),
+            sec_from: 0,
+            sections: 0,
+            cols_at: None,
+            in_tc: false,
+            track: None,
+            regions: HashMap::new(),
+            region_count: 0,
+            region: None,
+            info_at: None,
+            info_field: None,
+            del: None,
+            active_ins: Vec::new(),
+        };
+        for ev in events {
+            match ev {
+                Ev::Start(q, a) => {
+                    if sub.depth < MAX_XML_DEPTH {
+                        sub.start(q, a);
+                    } else {
+                        sub.depth += 1;
+                    }
+                }
+                Ev::End(q) => {
+                    if sub.depth <= MAX_XML_DEPTH {
+                        sub.end(q);
+                    } else {
+                        sub.depth -= 1;
+                    }
+                }
+                Ev::Text(t) => sub.text(t),
+            }
+        }
+        sub.end_para();
+        while sub.containers.len() > 1 {
+            let c = sub.containers.pop().unwrap_or_default();
+            sub.container().extend(c);
+        }
+        let mut blocks = sub.containers.pop().unwrap_or_default();
+        for t in sub.tables.drain(..) {
+            if !t.rows.is_empty() {
+                blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+            }
+        }
+        blocks
+    }
+
+    /// `<text:note text:note-class="footnote|endnote">` with its citation and body.
+    fn finish_note(&mut self, cap: Capture) {
+        let endnote = get(&cap.attrs, "text:note-class") == Some("endnote");
+        let mut custom = String::new();
+        let mut level = 0usize;
+        let mut body_level = 0usize;
+        let mut body_start: Option<usize> = None;
+        let mut body_end: Option<usize> = None;
+        for (i, ev) in cap.events.iter().enumerate() {
+            match ev {
+                Ev::Start(q, a) => {
+                    level += 1;
+                    if q == "text:note-citation"
+                        && body_start.is_none()
+                        && let Some(l) = get(a, "text:label")
+                    {
+                        custom = short(l, MAX_MARK_CHARS);
+                    } else if q == "text:note-body" && body_start.is_none() {
+                        body_start = Some(i + 1);
+                        body_level = level;
+                    }
+                }
+                Ev::End(q) => {
+                    if q == "text:note-body" && body_start.is_some() && body_end.is_none() && level == body_level {
+                        body_end = Some(i);
+                    }
+                    level = level.saturating_sub(1);
+                }
+                Ev::Text(_) => {}
+            }
+        }
+        let events = match body_start {
+            Some(s) => cap.events.get(s..body_end.unwrap_or(cap.events.len())).unwrap_or(&[]),
+            None => &[],
+        };
+        let blocks = self.replay(events);
+        let idx = self.extras.notes.len();
+        self.extras.notes.push(NoteIn { endnote, custom, blocks });
+        self.add_marker(mark_name(MarkKind::Note, idx));
+    }
+
+    /// `<office:annotation>`: author, date, initials and the comment's paragraphs.
+    fn finish_annotation(&mut self, cap: Capture) {
+        let (mut author, mut date, mut initials) = (String::new(), String::new(), String::new());
+        let mut cur: Option<u8> = None;
+        for ev in &cap.events {
+            match ev {
+                Ev::Start(q, _) => {
+                    cur = match q.as_str() {
+                        "dc:creator" => Some(0),
+                        "dc:date" => Some(1),
+                        "meta:creator-initials" => Some(2),
+                        _ => None,
+                    }
+                }
+                Ev::End(_) => cur = None,
+                Ev::Text(t) => {
+                    let dst = match cur {
+                        Some(0) => &mut author,
+                        Some(1) => &mut date,
+                        Some(2) => &mut initials,
+                        _ => continue,
+                    };
+                    if dst.len() < 1024 {
+                        dst.push_str(t);
+                    }
+                }
+            }
+        }
+        let blocks = self.replay(&cap.events);
+        let idx = self.extras.comments.len();
+        self.extras.comments.push(CommentIn { author: short(&author, 256), initials: short(&initials, 16), date: short(&date, 64), blocks });
+        if let Some(name) = get(&cap.attrs, "office:name").filter(|n| !n.is_empty() && n.len() <= 256)
+            && self.extras.open.len() < MAX_NOTES
+        {
+            self.extras.open.push((name.to_string(), idx));
+        }
+        self.add_marker(mark_name(MarkKind::CommentStart, idx));
+    }
+
+    /// `<office:annotation-end>`: the commented range ends here.
+    fn end_annotation(&mut self, a: &Attrs) {
+        let Some(name) = get(a, "office:name") else { return };
+        if let Some(at) = self.extras.open.iter().position(|(n, _)| n == name) {
+            let (_, idx) = self.extras.open.remove(at);
+            self.add_marker(mark_name(MarkKind::CommentEnd, idx));
+        }
+    }
+}
+
+/// Run `f` on every paragraph of `blocks`, in table cells too.
+pub(super) fn for_paras(blocks: &mut Blocks, depth: usize, f: &mut dyn FnMut(&mut Paragraph)) {
+    for b in blocks.iter_mut() {
+        match Arc::make_mut(b) {
+            Block::Para(p) => f(p),
+            Block::Table(t) if depth < model::MAX_DEPTH => {
+                for r in t.rows.iter_mut() {
+                    for c in r.cells.iter_mut() {
+                        for_paras(&mut c.blocks, depth + 1, f);
+                    }
+                }
+            }
+            Block::Table(_) => {}
+        }
+    }
+}
+
+/// Swap the marker bookmarks `import` finds in `doc` for note references and comment ranges, and
+/// add the notes' and comments' stories to the document.
+pub(super) fn attach_extras(doc: &mut Document, extras: Extras) {
+    if extras.notes.is_empty() && extras.comments.is_empty() {
+        return;
+    }
+    let mut notes: Vec<Option<InlineObject>> = Vec::new();
+    for n in &extras.notes {
+        let (pk, kind, style, refstyle) = if n.endnote {
+            (PartKind::Endnote, NoteKind::Endnote, "EndnoteText", "EndnoteReference")
+        } else {
+            (PartKind::Footnote, NoteKind::Footnote, "FootnoteText", "FootnoteReference")
+        };
+        let id = doc.add_part(pk, Blocks::new());
+        let mut blocks = model::part_blocks(doc, &n.blocks);
+        // Like a note made in the app, the story starts with its own reference mark.
+        if let Some(first) = blocks.first_mut()
+            && let Block::Para(p) = Arc::make_mut(first)
+        {
+            let had_text = !p.is_empty();
+            p.props.style.get_or_insert_with(|| style.to_string());
+            let props = CharProps { style: Some(refstyle.to_string()), ..Default::default() };
+            let _ = p.insert_object(0, InlineObject::NoteRef { kind, id, custom: n.custom.clone() }, &props);
+            if had_text {
+                let _ = p.insert_text(OBJ.len_utf8(), " ", &CharProps::default());
+            }
+        }
+        if let Some(part) = doc.parts.get_mut(&id) {
+            part.blocks = blocks;
+        }
+        notes.push(Some(InlineObject::NoteRef { kind, id, custom: n.custom.clone() }));
+    }
+    let mut comments: Vec<Option<u32>> = Vec::new();
+    for c in &extras.comments {
+        let blocks = model::part_blocks(doc, &c.blocks);
+        let part = doc.add_part(PartKind::Comment, blocks);
+        let id = doc.comments.keys().next_back().map(|k| k.saturating_add(1)).unwrap_or(0);
+        doc.comments.insert(
+            id,
+            Comment {
+                author: c.author.clone(),
+                initials: c.initials.clone(),
+                date: c.date.clone(),
+                parent: None,
+                resolved: false,
+                part,
+                ..Default::default()
+            },
+        );
+        comments.push(Some(id));
+    }
+    // Which comments have an end marker; those without are points.
+    let mut ended: HashSet<usize> = HashSet::new();
+    for_paras(&mut doc.body, 0, &mut |p| {
+        for off in p.object_offsets() {
+            if let Some(InlineObject::BookmarkEnd { name }) = p.object_at(off)
+                && let Some((MarkKind::CommentEnd, i)) = parse_mark(name)
+            {
+                ended.insert(i);
+            }
+        }
+    });
+    for_paras(&mut doc.body, 0, &mut |p| {
+        // (offset, what replaces the marker (None: remove it), a point comment's end to add)
+        let mut acts: Vec<(usize, Option<InlineObject>, Option<u32>)> = Vec::new();
+        for off in p.object_offsets() {
+            let (name, is_start) = match p.object_at(off) {
+                Some(InlineObject::BookmarkStart { name }) => (name, true),
+                Some(InlineObject::BookmarkEnd { name }) => (name, false),
+                _ => continue,
+            };
+            let Some((kind, i)) = parse_mark(name) else { continue };
+            let comment = comments.get(i).copied().flatten();
+            let act = match (kind, is_start) {
+                (MarkKind::Note, true) => notes.get(i).cloned().flatten(),
+                (MarkKind::CommentStart, true) => comment.map(|id| InlineObject::CommentStart { id }),
+                (MarkKind::CommentEnd, false) => comment.map(|id| InlineObject::CommentEnd { id }),
+                _ => None,
+            };
+            let point = if kind == MarkKind::CommentStart && is_start && !ended.contains(&i) { comment } else { None };
+            acts.push((off, act, point));
+        }
+        // Back to front, so the offsets before stay valid.
+        for (off, act, point) in acts.into_iter().rev() {
+            match act {
+                Some(obj) => {
+                    if let Some(o) = p.object_at_mut(off) {
+                        *o = obj;
+                    }
+                    if let Some(id) = point {
+                        let _ = p.insert_object(off + OBJ.len_utf8(), InlineObject::CommentEnd { id }, &CharProps::default());
+                    }
+                }
+                None => {
+                    let _ = p.delete(off, off + OBJ.len_utf8());
+                }
+            }
+        }
+    });
 }
