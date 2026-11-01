@@ -376,17 +376,26 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentEnd { id: *doc_id }));
                     }
                 }
-                Inline::TextBox { w, h, float, blocks } => {
+                Inline::TextBox { w, h, float, blocks, look } => {
                     let story = self.blocks(blocks, 1);
                     if let Ok(id) = self.doc.try_add_part(wordcraft_doc::PartKind::TextBox, story) {
+                        if let Some(part) = self.doc.parts.get_mut(&id) {
+                            let emu = |v: f32| if v.is_finite() { (v.clamp(0.0, 1584.0) * 12_700.0).round() as u32 } else { 0 };
+                            part.body.inset = look.inset.map(|i| i.map(emu));
+                            part.body.auto_fit = look.auto_fit;
+                        }
+                        let (stroke, stroke_width) = match look.line {
+                            Some((c, w)) if w.is_finite() && w > 0.0 => (Some(c), w.min(12.0)),
+                            _ => (None, 0.0),
+                        };
                         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
                         let obj = InlineObject::Shape {
                             kind: wordcraft_doc::para::ShapeKind::TextBox,
                             w: fit(*w),
                             h: fit(*h),
-                            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
-                            stroke: Some(Rgb::BLACK),
-                            stroke_width: 0.75,
+                            fill: look.fill.map(wordcraft_doc::fill::Fill::solid),
+                            stroke,
+                            stroke_width,
                             float: float.as_deref().cloned().unwrap_or_default(),
                             story: Some(id),
                             freeform: None,

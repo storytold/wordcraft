@@ -8,8 +8,8 @@ use super::{
 };
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
-/// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
-/// some writers emit it bare): the first element named `math` in document order, with its
+/// (its root, ODF 1.3 Part 3 §2.2.9 B; some writers wrap it in an `office:math`, which isn't
+/// it): the first MathML element named `math` in document order, with its
 /// subtree, passed to [`crate::mathml::read`]. `None` when there's no such element, it holds
 /// nothing, or the XML is malformed. Nesting and element count are bounded like other XML here.
 fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
@@ -29,7 +29,7 @@ fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
         }
         match ev {
             Ev::Start(q, a) => {
-                if stack.is_empty() && local(&q) != "math" {
+                if stack.is_empty() && (local(&q) != "math" || q.starts_with("office:")) {
                     return;
                 }
                 if stack.len() < wordcraft_doc::math::MAX_DEPTH {
@@ -285,6 +285,8 @@ pub(super) struct Body<'a> {
     frame_float: Option<wordcraft_doc::para::Float>,
     /// The content of the text box in the frame being read.
     frame_box: Option<Vec<FBlock>>,
+    /// The look of the frame being read, should it hold a text box.
+    frame_look: model::BoxLook,
     /// The note or comment being read.
     note: Option<OpenNote>,
     /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
@@ -330,7 +332,7 @@ struct OpenNote {
     comment: Option<CommentInfo>,
     /// Set for a text box: the frame it is in, put aside with its placement while its content is
     /// read (a frame inside it is a frame of its own).
-    text_box: Option<(Option<Frame>, Option<wordcraft_doc::para::Float>)>,
+    text_box: Option<(Option<Frame>, Option<wordcraft_doc::para::Float>, model::BoxLook)>,
     para: Option<Para>,
     fmt: Vec<Fmt>,
     xml_space_end: bool,
@@ -397,6 +399,7 @@ impl<'a> Body<'a> {
             field: None,
             frame_float: None,
             frame_box: None,
+            frame_look: model::BoxLook::default(),
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
@@ -889,6 +892,8 @@ impl Body<'_> {
                 self.frame = Some((w, h, None, String::new(), None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
                 self.frame_float = Some(super::frames::float_of(get(a, "text:anchor-type"), get(a, "svg:x"), get(a, "svg:y"), &g));
+                // Without a height, a text box in it grows to its text (`fo:min-height` below).
+                self.frame_look = g.look(h.is_none());
             }
             "image" => {
                 if let Some(href) = get(a, "xlink:href")
@@ -1193,7 +1198,14 @@ impl Body<'_> {
             "office:annotation" if free && self.comment_names.len() < MAX_COMMENTS => self.start_comment(a),
             // A text box: its content read as a note's, the frame it is in put aside meanwhile.
             "draw:text-box" if self.frame.is_some() && self.note.is_none() && self.del.is_none() && !self.in_tc && self.frame_box.is_none() => {
-                let frame = (self.frame.take(), self.frame_float.take());
+                // A least height (ODF 1.3 §20.207 `fo:min-height`): the box grows to its text.
+                if let Some(min) = get(a, "fo:min-height").and_then(length).filter(|v| v.is_finite() && *v >= 0.0)
+                    && let Some(fr) = &mut self.frame
+                {
+                    self.frame_look.auto_fit = true;
+                    fr.1 = fr.1.or(Some(min));
+                }
+                let frame = (self.frame.take(), self.frame_float.take(), std::mem::take(&mut self.frame_look));
                 self.start_note(a);
                 if let Some(n) = &mut self.note {
                     n.text_box = Some(frame);
@@ -1287,9 +1299,9 @@ impl Body<'_> {
         self.lists = n.lists;
         self.item_used = n.item_used;
         self.list_id = n.list_id;
-        if let Some((frame, float)) = n.text_box {
+        if let Some((frame, float, look)) = n.text_box {
             // Back in the frame, which holds the box's content until it ends.
-            (self.frame, self.frame_float) = (frame, float);
+            (self.frame, self.frame_float, self.frame_look) = (frame, float, look);
             self.frame_box = Some(blocks);
             return;
         }
@@ -1494,7 +1506,11 @@ impl Body<'_> {
                     let boxed = self.frame_box.take();
                     let float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline);
                     let inline = match (boxed, eq) {
-                        (Some(blocks), _) => Some(Inline::TextBox { w: w.unwrap_or(72.0), h: h.unwrap_or(36.0), float: float.map(Box::new), blocks }),
+                        (Some(blocks), _) => {
+                            let look = std::mem::take(&mut self.frame_look);
+                            // Without a height it grows from nothing to its text.
+                            Some(Inline::TextBox { w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look })
+                        }
                         (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
                         (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
                             img.float = float.map(Box::new);

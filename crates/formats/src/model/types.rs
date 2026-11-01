@@ -205,7 +205,29 @@ pub enum Inline {
         h: f32,
         float: Option<Box<wordcraft_doc::para::Float>>,
         blocks: Vec<FBlock>,
+        look: BoxLook,
     },
+}
+
+/// How a text box looks: its fill, its outline, its inner margins, and whether it grows to fit
+/// its text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoxLook {
+    /// Fill colour; `None` is no fill.
+    pub fill: Option<Rgb>,
+    /// Outline colour and width in points; `None` is no line.
+    pub line: Option<(Rgb, f32)>,
+    /// Inner margins (left, top, right, bottom) in points; `None` is the default.
+    pub inset: Option<[f32; 4]>,
+    /// The box grows to its text; its height is the least it is.
+    pub auto_fit: bool,
+}
+
+impl Default for BoxLook {
+    /// A new text box's: white, with a thin black line.
+    fn default() -> BoxLook {
+        BoxLook { fill: Some(Rgb::WHITE), line: Some((Rgb::BLACK, 0.75)), inset: None, auto_fit: false }
+    }
 }
 
 /// `blocks` with each table replaced by the blocks of its cells, row by row (nested tables too),

@@ -418,6 +418,34 @@ fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<&model::Cell> {
     })
 }
 
+/// A text box frame's graphic properties for `look`: its line (§20.183 `fo:border`), padding
+/// (§20.210 `fo:padding-*`) and fill, both ways (LibreOffice reads `draw:fill`, and fills a
+/// frame without it).
+fn box_look_attrs(look: &model::BoxLook) -> String {
+    let hex = |c: Rgb| format!("#{}", c.hex().to_ascii_lowercase());
+    let mut a = match look.line {
+        Some((c, w)) if w.is_finite() && w > 0.0 => format!(" fo:border=\"{} solid {}\"", pt(w.min(12.0)), hex(c)),
+        _ => " fo:border=\"none\"".to_string(),
+    };
+    let [l, t, r, b] = look.inset.unwrap_or(DEFAULT_BOX_INSET).map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 });
+    a.push_str(&format!(
+        " fo:padding-left=\"{}\" fo:padding-top=\"{}\" fo:padding-right=\"{}\" fo:padding-bottom=\"{}\"",
+        pt(l),
+        pt(t),
+        pt(r),
+        pt(b)
+    ));
+    match look.fill {
+        Some(c) => a.push_str(&format!(" fo:background-color=\"{0}\" draw:fill=\"solid\" draw:fill-color=\"{0}\"", hex(c))),
+        None => a.push_str(" fo:background-color=\"transparent\" draw:fill=\"none\""),
+    }
+    a
+}
+
+/// A text box's default inner margins (left, top, right, bottom), points: WordCraft's and
+/// Word's (0.1" and 0.05").
+const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
+
 /// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
 fn odf_border(b: Option<Border>) -> String {
     let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
@@ -810,8 +838,8 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
-                Inline::TextBox { w, h, float, blocks } => {
-                    self.text_box(*w, *h, float.as_deref(), blocks, out);
+                Inline::TextBox { w, h, float, blocks, look } => {
+                    self.text_box((*w, *h), float.as_deref(), look, blocks, out);
                     prev_space = false;
                 }
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
@@ -875,13 +903,12 @@ impl Writer {
         }
     }
 
-    /// A text box (ODF 1.3 §10.4.3 `draw:text-box` in a `draw:frame`): in line with the text, or
-    /// anchored and placed as it floats; framed by a thin line, as WordCraft draws a new one.
-    fn text_box(&mut self, w: f32, h: f32, float: Option<&wordcraft_doc::para::Float>, blocks: &[FBlock], out: &mut String) {
+    /// A text box (ODF 1.3 §10.4.3 `draw:text-box` in a `draw:frame`) of `size` (points): in line
+    /// with the text, or anchored and placed as it floats, with its fill, line and padding.
+    fn text_box(&mut self, size: (f32, f32), float: Option<&wordcraft_doc::para::Float>, look: &model::BoxLook, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
-        // The fill both ways: LibreOffice reads `draw:fill` (and fills a frame without it).
-        let frame = " fo:border=\"0.75pt solid #000000\" fo:padding=\"3.6pt\" fo:background-color=\"#ffffff\" draw:fill=\"solid\" draw:fill-color=\"#ffffff\"";
+        let frame = box_look_attrs(look);
         let (anchor, props, xy) = match float {
             Some(f) => super::frames::frame_of(f),
             None => ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), String::new()),
@@ -897,12 +924,17 @@ impl Writer {
         }
         self.boxes += 1;
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+        // A box growing to its text has a least height (§20.207 `fo:min-height`), not a height.
+        let (height, min) = if look.auto_fit {
+            (String::new(), format!(" fo:min-height=\"{}\"", pt(fit(size.1))))
+        } else {
+            (format!(" svg:height=\"{}\"", pt(fit(size.1))), String::new())
+        };
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\" svg:width=\"{}\" svg:height=\"{}\"{xy} draw:z-index=\"0\"><draw:text-box>{body}</draw:text-box></draw:frame>",
+            "<draw:frame draw:name=\"{}Frame{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\" svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}>{body}</draw:text-box></draw:frame>",
             self.prefix,
             self.boxes,
-            pt(fit(w)),
-            pt(fit(h))
+            pt(fit(size.0)),
         ));
         if let Some(m) = reopen {
             self.open_ins(&m, out);

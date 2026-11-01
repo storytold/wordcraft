@@ -1,5 +1,5 @@
 use super::types::{
-    Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing,
+    BoxLook, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing,
 };
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
@@ -278,11 +278,20 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             }
         }
         // A text box's content, without notes, comments or boxes of its own.
-        InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::TextBox, w, h, float, story: Some(id), .. } if opts.boxes => {
+        InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::TextBox, w, h, float, story: Some(id), fill, stroke, stroke_width, .. }
+            if opts.boxes =>
+        {
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
-            let blocks = doc.parts.get(id).map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
+            let part = doc.parts.get(id);
+            let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
             let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float.clone()));
-            vec![Inline::TextBox { w: *w, h: *h, float, blocks }]
+            let look = BoxLook {
+                fill: fill.as_ref().map(wordcraft_doc::fill::Fill::main_color),
+                line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
+                inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
+                auto_fit: part.is_some_and(|p| p.body.auto_fit),
+            };
+            vec![Inline::TextBox { w: *w, h: *h, float, blocks, look }]
         }
         InlineObject::Field { instr, result, .. } if opts.fields => {
             vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]

@@ -295,3 +295,26 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
 const FILLER: usize = 22;
+
+/// A floating box that resizes to fit its text takes its text's height too, both where it is
+/// drawn and the room the text beside it wraps around (an OpenDocument frame without a height).
+#[test]
+fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
+    use wordcraft_doc::para::{Float, Wrap};
+    let rect = |auto_fit: bool, h: f32| {
+        let mut d = Document::from_text("Beside the box the text runs on and on and on.");
+        let id = text_box(&mut d, 0, "Inside", 144.0, h, TextBody { auto_fit, ..Default::default() });
+        if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut)
+            && let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut()
+        {
+            *float = Float { wrap: Wrap::Square, ..Default::default() };
+        }
+        frame_of(&lay(&d), id)
+    };
+    let fixed = rect(false, 1.0);
+    assert!(fixed.h < 2.0, "a box that keeps its height: {fixed:?}");
+    let grown = rect(true, 1.0);
+    assert!(grown.h > 15.0 && grown.h < 30.0, "one line and the margins: {grown:?}");
+    let shrunk = rect(true, 300.0);
+    assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
+}

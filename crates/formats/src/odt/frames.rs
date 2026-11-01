@@ -3,9 +3,13 @@
 //! `style:vertical-pos`/`-rel`, `fo:margin-*` of `style:graphic-properties`), and WordCraft's
 //! [`Float`] for it, both ways.
 
+use super::styles::parse_border;
 use super::writer::pt;
 use super::xml::{Attrs, get, length};
+use crate::model::{BoxLook, parse_color};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+use wordcraft_doc::props::BorderStyle;
+use wordcraft_doc::props::Rgb;
 
 /// Largest offset or distance read, points (22 inches).
 const MAX_LEN: f32 = 1584.0;
@@ -22,6 +26,13 @@ pub(super) struct Graphic {
     vrel: Option<String>,
     /// `fo:margin-left`, `-right`, `-top`, `-bottom`.
     margins: [Option<f32>; 4],
+    /// The frame's line (`fo:border`): colour and width, or `Some(None)` for none.
+    line: Option<Option<(Rgb, f32)>>,
+    /// `fo:padding-left`, `-top`, `-right`, `-bottom` (or `fo:padding` for each).
+    padding: [Option<f32>; 4],
+    /// Its fill (`draw:fill` and `draw:fill-color`, or `fo:background-color`), or `Some(None)`
+    /// for none.
+    fill: Option<Option<Rgb>>,
 }
 
 impl Graphic {
@@ -37,6 +48,13 @@ impl Graphic {
             vpos: s("style:vertical-pos"),
             vrel: s("style:vertical-rel"),
             margins: [m("fo:margin-left"), m("fo:margin-right"), m("fo:margin-top"), m("fo:margin-bottom")],
+            line: ["fo:border", "fo:border-top", "fo:border-left"]
+                .iter()
+                .find_map(|k| get(a, k))
+                .and_then(parse_border)
+                .map(|b| (b.style != BorderStyle::None && b.width > 0.0).then(|| (b.color.unwrap_or(Rgb::BLACK), b.width.clamp(0.0, 12.0)))),
+            padding: ["left", "top", "right", "bottom"].map(|side| m(&format!("fo:padding-{side}")).or_else(|| m("fo:padding"))),
+            fill: read_fill(a),
         }
     }
 
@@ -56,7 +74,31 @@ impl Graphic {
         for (m, p) in self.margins.iter_mut().zip(parent.margins) {
             *m = m.or(p);
         }
+        for (m, p) in self.padding.iter_mut().zip(parent.padding) {
+            *m = m.or(p);
+        }
+        self.line = self.line.or(parent.line);
+        self.fill = self.fill.or(parent.fill);
         self
+    }
+
+    /// The look of a text box in a frame of this style, growing to its text when `auto_fit`.
+    /// What the styles leave unsaid is ODF's default: no line, no fill, no padding.
+    pub(super) fn look(&self, auto_fit: bool) -> BoxLook {
+        BoxLook { fill: self.fill.flatten(), line: self.line.flatten(), inset: Some(self.padding.map(|p| p.unwrap_or(0.0))), auto_fit }
+    }
+}
+
+/// A graphic style's fill (ODF 1.3 §20.80 `draw:fill`, §20.82 `draw:fill-color`, §20.175
+/// `fo:background-color`): `Some(None)` for none, a gradient, hatch or bitmap fill as its colour.
+fn read_fill(a: &Attrs) -> Option<Option<Rgb>> {
+    let color = get(a, "draw:fill-color").and_then(parse_color);
+    let background = get(a, "fo:background-color").map(|v| parse_color(v).filter(|_| !v.trim().eq_ignore_ascii_case("transparent")));
+    match get(a, "draw:fill").map(str::trim) {
+        Some("none") => Some(None),
+        Some("solid") => Some(color.or(background.flatten())),
+        Some(_) => Some(color.or(background.flatten()).or(Some(Rgb::WHITE))),
+        None => background,
     }
 }
 
