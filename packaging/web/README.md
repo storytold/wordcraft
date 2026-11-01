@@ -64,8 +64,8 @@ macOS and Linux in the system's app list, and opens in a window of its own.
 The installed app opens Word, OpenDocument, RTF, Markdown, LaTeX and HTML documents from the
 system's file manager (Open with › WordCraft). Each file opens beside the documents already open,
 as a dropped file does; none replaces unsaved work. The app reads the file but can't write to it:
-Save asks where to save, as it does for any document opened in the browser. At most 20 files of
-up to 256 MB each open from one launch.
+Save asks where to save, as it does for any document opened in the browser. Files open one at a
+time, each up to 256 MB; at most 20 wait to be opened, and the app says how many more it left out.
 
 Browsers without installable apps or file handling (Firefox, Safari) run the page as before. An
 app in an iframe (`?host=parent`) doesn't take files from the system: its host page sends them.
