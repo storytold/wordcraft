@@ -19,9 +19,10 @@ mod typing;
 mod wordart;
 
 /// True, after saying so on stderr, when this build has no Language data embedded (craft-proof
-/// built without `CRAFT_I18N_DIR`): no Moby word list, no hyphenation patterns. Tests that check
-/// spelling marks or hyphenation from that data return early then, as craft-proof's own do; with
-/// the data (CI, releases) they all run.
+/// built without `CRAFT_I18N_DIR`). Without it English still spells from craft-proof's built-in
+/// word list, but there are no hyphenation patterns and no American/British variant table, so the
+/// tests that check those return early, as craft-proof's own do; with the data (CI, releases) they
+/// all run.
 pub(crate) fn no_language_data(test: &str) -> bool {
     let missing = wordcraft_proof::english_source(wordcraft_proof::ProofLang::En) != Some(wordcraft_proof::EnglishSource::Embedded);
     if missing {
@@ -255,9 +256,6 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 
 #[test]
 fn custom_dictionary_words_persist_through_their_file() {
-    if no_language_data("custom_dictionary_words_persist_through_their_file") {
-        return;
-    }
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).
     let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
@@ -8584,9 +8582,6 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
 /// grammar, suggestions come from it, and a suggestion fixes the text.
 #[test]
 fn portuguese_proofing_through_the_review_commands() {
-    if no_language_data("portuguese_proofing_through_the_review_commands") {
-        return;
-    }
     portuguese_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Saudade coraçao, e ele ele disse."}));
@@ -8889,9 +8884,6 @@ fn uruguayan_spanish_accepts_vos_forms() {
 /// Czech proofing through the same commands as Review, F7, Change and Add to Dictionary.
 #[test]
 fn czech_proofing_through_the_review_commands() {
-    if no_language_data("czech_proofing_through_the_review_commands") {
-        return;
-    }
     czech_test_dict::install();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Město pocitac, škola škola."}));
@@ -8974,9 +8966,6 @@ fn italian_proofing_through_the_review_commands() {
 
 #[test]
 fn polish_proofing_through_the_review_commands() {
-    if no_language_data("polish_proofing_through_the_review_commands") {
-        return;
-    }
     polish_test_dictionary();
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Płynie żeka, a wogóle to wiem że tak."}));

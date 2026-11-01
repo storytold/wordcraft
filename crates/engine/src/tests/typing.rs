@@ -2906,9 +2906,6 @@ fn moving_the_caret_out_of_the_typed_word_marks_it() {
 
 #[test]
 fn a_click_elsewhere_marks_the_typed_word_and_a_click_back_keeps_the_mark() {
-    if crate::tests::no_language_data("a_click_elsewhere_marks_the_typed_word_and_a_click_back_keeps_the_mark") {
-        return;
-    }
     let mut s = typed("Fine\nThe helo");
     assert_eq!(squiggles(&mut s, 1), Vec::<String>::new());
     // The canvas sets the caret directly on a click.
@@ -2926,9 +2923,6 @@ fn a_click_elsewhere_marks_the_typed_word_and_a_click_back_keeps_the_mark() {
 
 #[test]
 fn backspace_into_a_finished_word_edits_it_again() {
-    if crate::tests::no_language_data("backspace_into_a_finished_word_edits_it_again") {
-        return;
-    }
     let mut s = typed("The helo ");
     assert_eq!(squiggles(&mut s, 0), ["helo"]);
     typ(&mut s, "\u{8}");
