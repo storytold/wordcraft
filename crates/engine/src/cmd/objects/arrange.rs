@@ -392,7 +392,9 @@ pub(super) fn align(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         let first = areas.first().copied().unwrap_or_else(|| area(page));
         if how.starts_with("distribute") && areas.iter().any(|a| *a != first) {
-            return Err(CmdError::Disabled("objects in sections with different page sizes or margins can't be distributed against the page or margins".into()));
+            return Err(CmdError::Disabled(
+                "objects in sections with different page sizes or margins can't be distributed against the page or margins".into(),
+            ));
         }
         first
     };
