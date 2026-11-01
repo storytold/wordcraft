@@ -48,5 +48,6 @@ libc = { workspace = true }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }
+sha2 = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }

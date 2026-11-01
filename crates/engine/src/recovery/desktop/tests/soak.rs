@@ -1,26 +1,25 @@
 //! Opt-in process replay for the recovery worker. Uses real timers and retains its profiles.
 
 use super::{Document, Duration, Instant, Path, PathBuf, Session, StoryRef, fs, json, new_id, read_snapshot, settle};
+use sha2::Digest;
 use std::process::{Child, Command, Stdio};
 
 const CHILD_TEST: &str = "recovery::desktop::tests::soak::recovery_soak_child";
 const CYCLE_BUDGET: Duration = Duration::from_secs(50);
 
+/// Retain one evidence record, failing the check if serialization or writing fails.
 fn write_json(path: &Path, value: &serde_json::Value) {
     fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
 }
 
+/// Read a complete evidence record; missing or malformed evidence must fail the check.
 fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
 /// SHA-256 is evidence; exact byte comparisons below also guard the originals.
 fn sha256(path: &Path) -> String {
-    let out = Command::new("sha256sum").arg(path).output().unwrap();
-    assert!(out.status.success(), "sha256sum is required for this opt-in Linux check");
-    let digest = String::from_utf8(out.stdout).unwrap().split_whitespace().next().unwrap().to_owned();
-    assert_eq!(digest.len(), 64);
-    digest
+    sha2::Sha256::digest(fs::read(path).unwrap()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A handle from our own spawn, checked against Linux's executable identity before killing it.
@@ -31,6 +30,7 @@ struct OwnedChild {
 }
 
 impl OwnedChild {
+    /// Start one role in this test executable with its own log and explicit parent identity.
     fn spawn(dir: &Path, role: &str) -> Self {
         let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
         let log = fs::File::create(dir.join(format!("{role}.log"))).unwrap();
@@ -47,6 +47,7 @@ impl OwnedChild {
         Self { child, exe }
     }
 
+    /// Verify a live spawned child's executable and parent, and retain its PID and start time.
     fn identity(&mut self) -> serde_json::Value {
         assert!(self.child.try_wait().unwrap().is_none(), "child exited; inspect its retained log");
         let proc = PathBuf::from(format!("/proc/{}", self.child.id()));
@@ -58,6 +59,7 @@ impl OwnedChild {
         json!({"pid": self.child.id(), "executable": self.exe, "startTicks": fields[19]})
     }
 
+    /// Require the owned child to exit successfully before the caller's deadline.
     fn wait(&mut self, deadline: Instant) {
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
@@ -69,6 +71,7 @@ impl OwnedChild {
         }
     }
 
+    /// Verify this spawned child, send SIGKILL through its handle and wait for signal 9.
     fn crash(&mut self) -> serde_json::Value {
         use std::os::unix::process::ExitStatusExt;
         let identity = self.identity();
@@ -99,6 +102,7 @@ fn until(s: &mut Session, deadline: Instant, ready: impl Fn(&mut Session) -> boo
     }
 }
 
+/// Append a phase-specific witness to every open document through the normal edit commands.
 fn edit_all(s: &mut Session, phase: usize) {
     let ids: Vec<_> = s.documents().iter().map(|d| d.id).collect();
     for (index, id) in ids.into_iter().enumerate() {
@@ -110,6 +114,7 @@ fn edit_all(s: &mut Session, phase: usize) {
     }
 }
 
+/// Compare completed snapshots with the whole live models and retain expected models and hashes.
 fn capture(s: &mut Session, dir: &Path, phase: usize) -> Vec<serde_json::Value> {
     let mut copies = Vec::new();
     for d in s.recovery_docs() {
@@ -126,6 +131,7 @@ fn capture(s: &mut Session, dir: &Path, phase: usize) -> Vec<serde_json::Value> 
     copies
 }
 
+/// Use real timers for two documents' successful snapshots and failed successors, then await crash.
 fn writer(dir: &Path) {
     let deadline = Instant::now() + Duration::from_secs(38);
     let mut s = Session::new(Document::new());
@@ -165,10 +171,13 @@ fn writer(dir: &Path) {
     );
     loop {
         // No graceful finish/drop: the parent terminates this exact child with SIGKILL.
+        // A forcibly terminated parent cannot run its guard, so the writer also expires itself.
+        assert!(Instant::now() < deadline, "writer exceeded its bounded crash wait");
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
+/// Restore the latest valid and fallback models beside unsaved work, then save independent copies.
 fn restore(dir: &Path) {
     let expected = read_json(&dir.join("restore-plan.json"));
     let mut s = Session::new(Document::from_text("Work already open at restart."));
@@ -200,6 +209,7 @@ fn restore(dir: &Path) {
     // No finish_recovery: leave every profile and generation available for inspection.
 }
 
+/// Reopen both saved formats in a fresh process and compare text and the native model.
 fn observe(dir: &Path) {
     let expected = read_json(&dir.join("restore-plan.json"));
     for copy in expected.as_array().unwrap() {

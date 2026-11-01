@@ -104,7 +104,7 @@ after. No Microsoft Word operation is needed for this reliability test.
 ## Opt-in Linux process soak
 
 The existing isolated recovery test family also has a sustained process replay. It is ignored
-by normal CI. On Linux, with `sha256sum` available, choose a **new absolute output directory**
+by normal CI. On Linux, choose a **new absolute output directory**
 whose parent already exists, an explicit duration in seconds and an iteration limit:
 
 ```sh
