@@ -9850,12 +9850,33 @@ fn spacing_menu_labels_follow_the_paragraph() {
     run(&mut s, "para.addSpaceBefore", json!({}));
     assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph");
     run(&mut s, "para.removeSpaceAfter", json!({}));
-    assert_eq!(spacing_labels(&s).1, "Remove Space After Paragraph", "the item adds space when there is none");
+    assert_eq!(spacing_labels(&s).1, "Remove Space After Paragraph", "clicking it with no space after added some");
     run(&mut s, "para.addSpaceBefore", json!({}));
     run(&mut s, "para.removeSpaceAfter", json!({}));
     assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Add Space After Paragraph"));
     run(&mut s, "para.spacing", json!({"beforeAuto": true}));
     assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph", "automatic spacing counts as space");
+
+    // Spacing that only the style gives counts too: a new Normal paragraph has 8 pt after, Heading 1
+    // 18 pt before.
+    let mut s = crate::Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Styled"}));
+    assert_eq!(spacing_labels(&s), ("Add Space Before Paragraph", "Remove Space After Paragraph"));
+    run(&mut s, "para.style", json!({"style": "Heading 1"}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph");
+    run(&mut s, "para.addSpaceBefore", json!({}));
+    assert_eq!(spacing_labels(&s).0, "Add Space Before Paragraph", "a click removes the style's space");
+
+    // #418: a selection ending at the next paragraph's start is labelled from the last paragraph it
+    // covers, the one the commands change.
+    let mut s = crate::Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "text.insert", json!({"text": "Alpha\rBeta", "raw": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 2}}));
+    run(&mut s, "para.spacing", json!({"before": 12}));
+    run(&mut s, "select.paragraph", json!({}));
+    assert_eq!(spacing_labels(&s).0, "Remove Space Before Paragraph", "Alpha has space before");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    assert_eq!(spacing_labels(&s).0, "Add Space Before Paragraph", "Beta has none");
 }
 
 /// #712, as in Word: Ctrl+F (`edit.find` with no text) opens the Navigation pane and asks the UI
