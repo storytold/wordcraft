@@ -773,6 +773,32 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     assert!(paths > 0, "its glyphs are drawn as outlines");
 }
 
+/// #3674: shaping gives 32-bit glyph ids (a format-12 cmap can map a character to any of them),
+/// but krilla takes 16-bit ones and panics on a larger id. That failed the export, and on wasm
+/// (`panic = "abort"`) lost the tab. A glyph id above 65535 is now written as .notdef.
+#[test]
+fn glyph_id_above_u16_exports() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Wide glyph", CharProps { font: Some("Source Sans 3".into()), ..Default::default() }))];
+    let opts = PdfOptions { tagged: false, ..Default::default() };
+    let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (want, _) = count_glyphs_and_paths(&export_layout(&d, &lay, &opts).unwrap());
+    assert!(want > 0);
+    let mut wide = 0;
+    for item in lay.pages.iter_mut().flat_map(|p| p.items.iter_mut()) {
+        if let Placed::Lines { para, .. } = item
+            && let Some(g) = Arc::make_mut(para).glyphs.first_mut()
+        {
+            g.gid = 70_000;
+            wide += 1;
+        }
+    }
+    assert_eq!(wide, 1, "one glyph id is out of range");
+    let bytes = export_layout(&d, &lay, &opts).expect("a glyph id above 65535 must not fail the export");
+    let (glyphs, _) = count_glyphs_and_paths(&bytes);
+    assert_eq!(glyphs, want, "every glyph is still drawn, the wide one as .notdef");
+}
+
 #[test]
 fn flat_lines_in_a_group_are_drawn() {
     // A horizontal divider inside a group has no height (`a:ext cy="0"`): it used to be left out
@@ -2449,4 +2475,16 @@ fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
     assert!(ends[..=n].iter().all(|e| *e == 2 * n + 2));
     assert_eq!(ends.last(), Some(&(2 * n + 4)));
+}
+
+/// A run's baseline is the y most of its glyphs share, ties to the lower bits; a run on one
+/// baseline (the common case) gives its y without counting.
+#[test]
+fn baseline_is_the_most_shared_y() {
+    assert_eq!(baseline(&[]), None);
+    assert_eq!(baseline(&[(1, 0.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 7.5), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
+    assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
