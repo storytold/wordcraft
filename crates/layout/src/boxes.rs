@@ -234,8 +234,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
-                // the flow.
-                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
+                // the flow. Word treats the page/page frames in the reported header as ordinary
+                // paragraphs (#2361), while footer, note and cell frames keep their floating
+                // behavior. Text boxes retain the no-frame rule (#2357).
+                let header_page_frame = matches!(story, StoryRef::Part(id)
+                    if ctx.doc.parts.get(&id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Header)
+                        && !in_cell
+                        && pl.rp.frame.as_ref().is_some_and(|fr| fr.h_anchor == "page" && fr.v_anchor == "page"));
+                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames && !header_page_frame) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {

@@ -5766,6 +5766,81 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
     assert!(inline_top > 400.0 && inline_pages > control_pages, "inline box: body at {inline_top}, {inline_pages} pages");
 }
 
+/// Issue #2361: a square-wrapped logo anchored to its default-header paragraph (an extent,
+/// no `w:titlePg`, so page one uses the default header). The logo is drawn, and the body
+/// starts below the header float rather than at the top margin under it.
+#[test]
+fn square_wrapped_header_logo_is_drawn_and_pushes_the_body_down() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for (w, h, rot) in [(47.3, 65.55, 0.0), (180.0, 30.0, 90.0)] {
+        let mut d = Document::from_text("Body text.");
+        assert!(d.last_section.headers.first.is_none(), "no first-page header");
+        let logo =
+            Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: -26.45, dist: 9.0, rot, ..Default::default() };
+        let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
+        hp.insert_object(
+            0,
+            InlineObject::Image { media: "logo.wmf".into(), w, h, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+            &Default::default(),
+        )
+        .unwrap();
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        d.last_section.headers.default = Some(id);
+        let l = lay(&d);
+        let logo_bottom = l.pages[0]
+            .header
+            .iter()
+            .find_map(|i| match i {
+                Placed::Image { rect, spin, .. } => Some(spin.bounds(*rect).bottom()),
+                _ => None,
+            })
+            .expect("the logo is drawn in the header");
+        let body = first_line_top(&l.pages[0].items);
+        assert!(body >= logo_bottom - 0.5, "body starts at {body}, logo ends at {logo_bottom}");
+    }
+}
+
+/// Issue #2361: the header paragraphs carry a text frame (from their style, as in the file).
+/// Word lays them out as ordinary text — the three lines stack instead of overprinting — and
+/// a framed paragraph keeps its floating logo, which is drawn rather than dropped.
+#[test]
+fn framed_header_paragraphs_flow_and_keep_their_floats() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Body text.");
+    let frame = || TextFrame { h_anchor: "page".into(), v_anchor: "page".into(), x: 115.25, y: 108.05, ..Default::default() };
+    let mut paras = Vec::new();
+    for (i, text) in ["one", "two", "three"].iter().enumerate() {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame());
+        if i == 1 {
+            let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+            p.insert_object(
+                0,
+                InlineObject::Image { media: "logo.wmf".into(), w: 47.3, h: 65.55, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+                &Default::default(),
+            )
+            .unwrap();
+        }
+        paras.push(wordcraft_doc::para_block(p));
+    }
+    let id = d.add_part(wordcraft_doc::PartKind::Header, paras);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let mut tops: Vec<(f32, f32)> = l.pages[0]
+        .header
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Lines { story: StoryRef::Part(_), y, para, .. } => Some((*y, *y + para.height)),
+            _ => None,
+        })
+        .collect();
+    tops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(tops.len(), 3, "three header lines: {tops:?}");
+    assert!(tops.windows(2).all(|p| p[0].1 <= p[1].0 + 0.01), "the lines do not overlap: {tops:?}");
+    assert!(l.pages[0].header.iter().any(|i| matches!(i, Placed::Image { .. })), "the framed paragraph keeps its floating logo");
+}
+
 /// List labels drawn, in page order (each paragraph's first line).
 fn labels(l: &DocLayout) -> Vec<String> {
     l.pages
@@ -8745,6 +8820,57 @@ fn a_frame_inside_a_text_box_flows_with_its_text() {
     let (name, secretary, commissioner) = (top(0), top(1), top(2));
     assert!(secretary > name + 5.0, "the second framed paragraph goes under the first: {secretary} vs {name}");
     assert!(commissioner > secretary + 5.0, "the text after them follows: {commissioner} vs {secretary}");
+}
+
+/// A centred page number in a footer uses Word's framed-paragraph layout: it floats beside the
+/// footer text at the same top, rather than becoming a separate ordinary paragraph above it.
+#[test]
+fn a_centred_text_frame_in_a_footer_floats_beside_footer_text() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Body");
+    let mut framed = wordcraft_doc::Paragraph::with_text("7", Default::default());
+    framed.props.frame = Some(TextFrame {
+        w: Some(72.0),
+        x_align: Some("center".into()),
+        h_anchor: "text".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    });
+    let footer_text = wordcraft_doc::Paragraph::with_text("Footer text", Default::default());
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(footer_text)]);
+    d.last_section.footers.default = Some(id);
+    let l = lay(&d);
+    let frame = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).expect("the framed footer paragraph is laid out");
+    let text = l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(1), off: 0 }).expect("the footer text is laid out");
+    let expected_center = d.last_section.margin_left + (d.last_section.text_width() - 72.0) / 2.0;
+    assert!((frame.top - text.top).abs() < 0.5, "the frame takes no vertical room: {} vs {}", frame.top, text.top);
+    assert!((frame.x - expected_center).abs() < 0.5, "the frame is centred in the footer text area: {} vs {expected_center}", frame.x);
+    assert!(frame.x > text.x + 100.0, "the footer text wraps beside the centred frame: {} vs {}", frame.x, text.x);
+}
+
+#[test]
+fn a_page_anchored_frame_in_a_header_cell_still_floats() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Body");
+    let mut t = Table::new(1, 1, 300.0);
+    let mut framed = wordcraft_doc::Paragraph::with_text("7", Default::default());
+    framed.props.frame = Some(TextFrame {
+        x_align: Some("right".into()),
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    });
+    t.rows[0].cells[0].blocks =
+        vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell text", Default::default()))];
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::Block::Table(t).into()]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let at = |i| l.caret(&Pos { story: StoryRef::Part(id), path: Path(vec![0, 0, 0, i]), off: 0 }).unwrap();
+    let (frame, text) = (at(0), at(1));
+    assert!((frame.top - text.top).abs() < 0.5, "the frame takes no vertical room: {} vs {}", frame.top, text.top);
+    assert!(frame.x > text.x + 200.0, "the frame stays right-aligned in the cell");
 }
 
 /// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
