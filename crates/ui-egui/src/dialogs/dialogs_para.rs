@@ -552,14 +552,11 @@ impl BordersForm {
 
 /// The Borders and Shading dialog body. Returns true to close.
 pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
-    ui.horizontal(|ui| {
-        for (i, l) in ["Borders", "Page Border", "Shading"].into_iter().enumerate() {
-            if ui.selectable_label(f.tab == i as u8, tl!(l)).clicked() {
-                f.tab = i as u8;
-            }
-        }
-    });
-    ui.separator();
+    let names = ["Borders", "Page Border", "Shading"].map(|n| tl!(n).to_string());
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
+        f.tab = k as u8;
+    }
+    ui.add_space(6.0);
     let theme = app.session.doc.settings.theme_colors.clone();
     match f.tab {
         0 => {
