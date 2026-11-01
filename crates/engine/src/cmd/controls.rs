@@ -1092,6 +1092,35 @@ mod editing_tests {
         assert_eq!(text(&s), "Form");
     }
 
+    /// A file already past the limit opens whole: nothing is trimmed, a further control is refused,
+    /// and editing and saving there keep every control it held.
+    #[test]
+    fn a_file_past_the_limit_keeps_its_controls() {
+        let depth = MAX_CONTROL_NESTING + 16;
+        let mut p = wordcraft_doc::Paragraph::with_text("Deep", Default::default());
+        for _ in 0..depth {
+            p.insert_object(p.len(), InlineObject::ControlEnd, &Default::default()).unwrap();
+            p.insert_object(0, InlineObject::ControlStart { control: Box::default() }, &Default::default()).unwrap();
+        }
+        let mut d = wordcraft_doc::Document::new();
+        d.body = vec![std::sync::Arc::new(Block::Para(p))];
+        let file = wordcraft_docx::write(&d).unwrap();
+
+        let mut s = Session::new(wordcraft_docx::read(&file).unwrap());
+        assert_eq!(controls(&s.doc), depth);
+        assert_eq!(whole_body(&s), depth);
+        let inside = depth * wordcraft_doc::para::OBJ.len_utf8() + "De".len();
+        s.sel = Selection::caret(wordcraft_doc::Pos::body(0, inside));
+        let before = s.doc.clone();
+        let e = s.run("developer.plainText", &json!({})).unwrap_err();
+        assert!(e.to_string().contains("can't nest more than 64"), "{e}");
+        assert_eq!(s.doc, before);
+
+        run(&mut s, "text.insert", json!({"text": "ee"}));
+        assert_eq!(reopened(&s), depth);
+        assert_eq!(text(&s).replace(wordcraft_doc::para::OBJ, ""), "Deeeep");
+    }
+
     /// Tables and the text box around a control count too: 24 nested tables leave room for 88
     /// controls in a .docx, and a text box's content is written inside the controls around it.
     #[test]
