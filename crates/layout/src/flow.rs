@@ -309,6 +309,22 @@ impl<'a> Flow<'a> {
         if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
+        // Word moves a kept heading once when the inline table cannot start below it,
+        // even when an indivisible first body row is taller than a fresh page. Counting a
+        // fixed 24 pt strands the heading; demanding that the whole group fit also fails.
+        if rp.keep_next
+            && !pb.web
+            && !pb.fresh()
+            && let Some(starts) =
+                super::table_flow::kept_table_can_start(ctx, self.block, self.width, pb.bottom - pb.y - height - rp.space_after.max(0.0))
+        {
+            if !starts && height <= pb.next_room(self.body_top) {
+                pb.advance(self.block, self.body_top);
+                pb.y += rp.space_before.min(0.0);
+                return rp.space_before.min(0.0);
+            }
+            return before;
+        }
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.

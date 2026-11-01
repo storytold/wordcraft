@@ -107,6 +107,39 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     table::split_row(laid, room).is_some()
 }
 
+/// Whether an inline table can begin in the space below a kept body paragraph. Probe the
+/// real cell geometry without advancing list/equation numbers or consuming text-box budgets.
+/// Floating tables retain their independent anchoring rules.
+pub(crate) fn kept_table_can_start(ctx: &mut Ctx, block: usize, width: f32, room: f32) -> Option<bool> {
+    let super::Block::Table(table) = &**ctx.doc.body.get(block + 1)? else { return None };
+    if table.props.float.is_some() {
+        return None;
+    }
+    let counters = ctx.counters.clone();
+    let eq_count = ctx.eq_count;
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    let laid = table::layout_table(ctx, StoryRef::Body, table, &[(block + 1) as u32], width, 1);
+    ctx.counters = counters;
+    ctx.eq_count = eq_count;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.track_totals = track;
+    let headers = table.rows.iter().take_while(|row| row.props.header).count();
+    let header_height: f32 = laid.rows.iter().take(headers).map(|row| row.height).sum();
+    let (Some(row), Some(geometry)) = (table.rows.get(headers), laid.rows.get(headers)) else {
+        return Some(header_height <= room + 0.01);
+    };
+    let room = room - header_height;
+    if geometry.height + geometry.edge <= room + 0.01 {
+        return Some(true);
+    }
+    let indivisible = row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0));
+    let short_of_min = row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01);
+    Some(!indivisible && !short_of_min && table::split_row(geometry, room).is_some())
+}
+
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     let width = pb.col_w();
