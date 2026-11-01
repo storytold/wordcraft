@@ -291,7 +291,7 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
             let part = story.and_then(|id| doc.parts.get(&id));
             let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
-            let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float.clone()));
+            let float = kept_float(float);
             let look = BoxLook {
                 fill: fill.as_ref().filter(|_| kind != ShapeKind::Line).map(wordcraft_doc::fill::Fill::main_color),
                 line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
@@ -309,6 +309,12 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
 
 /// Comment `c` (a reply to `parent`) of `doc` as a flow comment: its text holds no comments or
 /// notes of its own.
+/// The placement a flow keeps for a drawing: when it floats, or turns or mirrors it in line.
+fn kept_float(f: &wordcraft_doc::para::Float) -> Option<Box<wordcraft_doc::para::Float>> {
+    let turned = f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999;
+    (f.wrap != wordcraft_doc::para::Wrap::Inline || turned || f.flip_h || f.flip_v).then(|| Box::new(f.clone()))
+}
+
 fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
     let story = doc.parts.get(&c.part).map(|p| &p.blocks);
     let blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, comments: false, ..opts })).unwrap_or_default();
@@ -440,7 +446,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                             w: *w,
                             h: *h,
                             alt: alt.to_string(),
-                            float: (opts.paras && float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float.clone())),
+                            float: kept_float(float).filter(|_| opts.paras),
                         })),
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}

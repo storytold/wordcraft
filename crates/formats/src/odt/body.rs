@@ -289,6 +289,8 @@ pub(super) struct Body<'a> {
     frame_look: model::BoxLook,
     /// The kind of the drawing shape being read (its text is read as a text box's).
     shape_kind: Option<wordcraft_doc::para::ShapeKind>,
+    /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
+    shape_flip: (bool, bool),
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
     group_at: Option<usize>,
     /// The note or comment being read.
@@ -405,6 +407,7 @@ impl<'a> Body<'a> {
             frame_box: None,
             frame_look: model::BoxLook::default(),
             shape_kind: None,
+            shape_flip: (false, false),
             group_at: None,
             note: None,
             comment_names: HashMap::new(),
@@ -801,6 +804,9 @@ impl Body<'_> {
             if let Some(t) = get(a, "draw:type") {
                 self.shape_kind = Some(super::shapes::kind_of(t));
             }
+            // Mirrored (§20.112 `draw:mirror-horizontal`, §20.113 `draw:mirror-vertical`).
+            let on = |k: &str| get(a, k).is_some_and(|v| v.trim() == "true");
+            self.shape_flip = (on("draw:mirror-horizontal"), on("draw:mirror-vertical"));
             self.skip = 1;
             return;
         }
@@ -917,7 +923,7 @@ impl Body<'_> {
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
-                self.frame_float = Some(super::frames::float_of(get(a, "text:anchor-type"), get(a, "svg:x"), get(a, "svg:y"), &g));
+                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none());
             }
@@ -1415,7 +1421,17 @@ impl Body<'_> {
     fn end_frame(&mut self) {
         if let Some((w, h, img, alt, eq)) = self.frame.take() {
             let boxed = self.frame_box.take();
-            let float = self.frame_float.take().filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline);
+            let mut float = self.frame_float.take();
+            if boxed.is_some()
+                && self.shape_kind.is_some()
+                && let Some(f) = &mut float
+            {
+                let (h, v) = std::mem::take(&mut self.shape_flip);
+                f.flip_h |= h;
+                f.flip_v ^= v;
+            }
+            // Kept when it floats, or turns or mirrors the object in line.
+            let float = float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || super::frames::turned(f) || f.flip_h || f.flip_v);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let look = std::mem::take(&mut self.frame_look);
@@ -1447,9 +1463,15 @@ impl Body<'_> {
         let kind = super::shapes::element_kind(local(q));
         let g = self.styles.shape_graphic(get(a, "draw:style-name"));
         let (w, h, x, y, rising) = super::shapes::geometry(kind, a);
-        let at = |v: Option<f32>| v.map(super::writer::pt);
-        let mut float = super::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
+        let mut float = if kind == wordcraft_doc::para::ShapeKind::Line {
+            // A line is placed by its ends.
+            let at = |v: Option<f32>| v.map(super::writer::pt);
+            super::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g)
+        } else {
+            super::frames::place(a, w, h, &g)
+        };
         float.flip_v = rising;
+        self.shape_flip = (false, false);
         self.frame_look = g.shape_look(kind);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));

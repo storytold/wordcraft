@@ -442,12 +442,16 @@ fn box_look_attrs(look: &model::BoxLook) -> String {
     a
 }
 
-/// How a frame or shape is anchored and placed: its `text:anchor-type`, its graphic style's
-/// placement and its `svg:x`/`svg:y`; in line with the text when it doesn't float.
-fn placement(float: Option<&wordcraft_doc::para::Float>) -> (&'static str, String, String) {
+/// How a frame or shape `w` × `h` is anchored and placed: its `text:anchor-type`, its graphic
+/// style's placement and its `svg:x`/`svg:y` (or `draw:transform` when it is turned); in line
+/// with the text when it doesn't float.
+fn placement(float: Option<&wordcraft_doc::para::Float>, w: f32, h: f32) -> (&'static str, String, String) {
     match float {
-        Some(f) => super::frames::frame_of(f),
-        None => ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), String::new()),
+        Some(f) if f.wrap != wordcraft_doc::para::Wrap::Inline => super::frames::frame_of(f, w, h),
+        f => {
+            let turn = f.filter(|f| super::frames::turned(f)).map(|f| super::frames::transform_attr(0.0, 0.0, w, h, f.rot));
+            ("as-char", " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), turn.unwrap_or_default())
+        }
     }
 }
 
@@ -853,7 +857,7 @@ impl Writer {
                     // A floating picture: anchored, in a graphic style that places and wraps it.
                     let (anchor, place) = match img.float.as_deref() {
                         Some(f) => {
-                            let (anchor, props, xy) = super::frames::frame_of(f);
+                            let (anchor, props, xy) = placement(Some(f), img.w, img.h);
                             (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
                         }
                         None => ("as-char", String::new()),
@@ -954,7 +958,7 @@ impl Writer {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let frame = box_look_attrs(look);
-        let (anchor, props, xy) = placement(float);
+        let (anchor, props, xy) = placement(float, size.0, size.1);
         let style = self.graphic_style(format!("{props}{frame}"));
         let mut body = self.story(blocks);
         if body.is_empty() {
@@ -993,7 +997,7 @@ impl Writer {
     ) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
-        let (anchor, props, xy) = placement(float);
+        let (anchor, props, xy) = placement(float, size.0, size.1);
         let style = self.graphic_style(format!("{props}{}", shape_look_attrs(look)));
         let body = self.story(blocks);
         self.boxes += 1;
@@ -1008,12 +1012,28 @@ impl Writer {
                 let (x, y) = float.map_or((0.0, 0.0), |f| (off(f.x, f.h_align.is_some()), off(f.y, f.v_align.is_some())));
                 let rises = float.is_some_and(|f| f.flip_v != f.flip_h);
                 let (y1, y2) = if rises { (y + h, y) } else { (y, y + h) };
-                format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x), pt(y1), pt(x + w), pt(y2))
+                // Turned about its centre: its ends turned with it.
+                let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                let (sin, cos) = float.filter(|f| super::frames::turned(f)).map_or(0.0, |f| f.rot.to_radians()).sin_cos();
+                let turn = |px: f32, py: f32| (cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos);
+                let ((x1, y1), (x2, y2)) = (turn(x, y1), turn(x + w, y2));
+                format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x1), pt(y1), pt(x2), pt(y2))
             }
         } else {
             format!(" svg:width=\"{}\" svg:height=\"{}\"{xy}", pt(len(size.0, 1.0)), pt(len(size.1, 1.0)))
         };
-        let geometry = geometry.map(|t| format!("<draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:type=\"{t}\"/>")).unwrap_or_default();
+        // Mirrored, as a custom shape's geometry says (§20.112, §20.113).
+        let mirror = |on: bool, k: &str| if on { format!(" draw:mirror-{k}=\"true\"") } else { String::new() };
+        let (fh, fv) = float.map_or((false, false), |f| (f.flip_h, f.flip_v));
+        let geometry = geometry
+            .map(|t| {
+                format!(
+                    "<draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:type=\"{t}\"{}{}/>",
+                    mirror(fh, "horizontal"),
+                    mirror(fv, "vertical")
+                )
+            })
+            .unwrap_or_default();
         out.push_str(&format!(
             "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\" text:anchor-type=\"{anchor}\"{at} draw:z-index=\"0\">{body}{geometry}</{element}>",
             self.prefix, self.boxes,

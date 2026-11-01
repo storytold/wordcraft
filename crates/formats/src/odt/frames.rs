@@ -217,9 +217,105 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
     }
 }
 
+/// Where a frame or shape `w` × `h` (points) sits: anchored as its `text:anchor-type` says, at
+/// its `svg:x`/`svg:y`, or turned and moved by its `draw:transform`, in graphic style `g`.
+pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
+    let turned = get(a, "draw:transform").and_then(|t| transform(t, w, h));
+    let (x, y) = match turned {
+        Some((x, y, _)) => (Some(pt(x)), Some(pt(y))),
+        None => (get(a, "svg:x").map(String::from), get(a, "svg:y").map(String::from)),
+    };
+    let mut f = float_of(get(a, "text:anchor-type"), x.as_deref(), y.as_deref(), g);
+    if let Some((.., rot)) = turned {
+        f.rot = rot;
+    }
+    f
+}
+
+/// Most operations of a `draw:transform` read.
+const MAX_TRANSFORMS: usize = 16;
+
+/// A `draw:transform` (ODF 1.3 §19.228) of an object `w` × `h`, as WordCraft places it: the
+/// offset of its unrotated box and its clockwise turn about the box's centre, in degrees
+/// (0–360). The file's operations apply in turn to the object's own coordinates, whose origin
+/// is its top left corner: `rotate` turns it anticlockwise (radians), `translate` moves it and
+/// `scale` scales it; `skewX`, `skewY` and `matrix` are left out. `None` when none reads.
+pub(super) fn transform(v: &str, w: f32, h: f32) -> Option<(f32, f32, f32)> {
+    // x' = m0·x + m2·y + m4, y' = m1·x + m3·y + m5.
+    let mut m = [1.0f64, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let mut angle = 0.0f64;
+    let mut any = false;
+    let mut rest = v;
+    for _ in 0..MAX_TRANSFORMS {
+        let (Some(open), Some(close)) = (rest.find('('), rest.find(')')) else { break };
+        let (Some(name), Some(args)) = (rest.get(..open), rest.get(open + 1..close)) else { break };
+        let args: Vec<&str> = args.split(|c: char| c.is_whitespace() || c == ',').filter(|s| !s.is_empty()).collect();
+        rest = rest.get(close + 1..).unwrap_or("");
+        let num = |i: usize| args.get(i).and_then(|a| a.parse::<f64>().ok()).filter(|v| v.is_finite());
+        let len = |i: usize| args.get(i).and_then(|a| length(a)).filter(|v| v.is_finite()).map(|v| f64::from(v.clamp(-MAX_LEN, MAX_LEN)));
+        match name.trim() {
+            "rotate" => {
+                let Some(a) = num(0) else { continue };
+                let a = a % std::f64::consts::TAU;
+                let (sin, cos) = a.sin_cos();
+                m = [
+                    cos * m[0] + sin * m[1],
+                    -sin * m[0] + cos * m[1],
+                    cos * m[2] + sin * m[3],
+                    -sin * m[2] + cos * m[3],
+                    cos * m[4] + sin * m[5],
+                    -sin * m[4] + cos * m[5],
+                ];
+                angle += a;
+            }
+            "translate" => {
+                let Some(tx) = len(0) else { continue };
+                m[4] += tx;
+                m[5] += len(1).unwrap_or(0.0);
+            }
+            "scale" => {
+                let Some(sx) = num(0).map(|v| v.clamp(-100.0, 100.0)) else { continue };
+                let sy = num(1).map_or(sx, |v| v.clamp(-100.0, 100.0));
+                m = [m[0] * sx, m[1] * sy, m[2] * sx, m[3] * sy, m[4] * sx, m[5] * sy];
+            }
+            _ => continue,
+        }
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    let (hw, hh) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
+    let centre = (m[0] * hw + m[2] * hh + m[4], m[1] * hw + m[3] * hh + m[5]);
+    let fit = |v: f64| if v.is_finite() { v.clamp(-f64::from(MAX_LEN), f64::from(MAX_LEN)) as f32 } else { 0.0 };
+    let rot = (-angle.to_degrees()).rem_euclid(360.0);
+    // Rounding can leave a whole turn.
+    let rot = if rot.is_finite() && rot < 359.9999 { rot as f32 } else { 0.0 };
+    Some((fit(centre.0 - hw), fit(centre.1 - hh), rot))
+}
+
+/// The `draw:transform` of an object `w` × `h` whose unrotated box is at `x`, `y` and turned `rot`
+/// degrees clockwise about its centre (the reverse of [`transform`]).
+pub(super) fn transform_attr(x: f32, y: f32, w: f32, h: f32, rot: f32) -> String {
+    let fin = |v: f32| if v.is_finite() { f64::from(v.clamp(-MAX_LEN, MAX_LEN)) } else { 0.0 };
+    let a = -fin(rot).to_radians();
+    let (sin, cos) = a.sin_cos();
+    let (hw, hh) = (fin(w) / 2.0, fin(h) / 2.0);
+    // The corner that ends up where the centre stays put.
+    let tx = fin(x) + hw - (cos * hw + sin * hh);
+    let ty = fin(y) + hh - (-sin * hw + cos * hh);
+    format!(" draw:transform=\"rotate ({a}) translate ({} {})\"", pt(tx as f32), pt(ty as f32))
+}
+
+/// Whether `f` turns its object.
+pub(super) fn turned(f: &Float) -> bool {
+    f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999
+}
+
 /// How a floating picture is written: its `text:anchor-type`, its graphic style's
-/// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes.
-pub(super) fn frame_of(f: &Float) -> (&'static str, String, String) {
+/// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
+/// `draw:transform` when it is turned (`w` × `h` its size).
+pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
     let anchor = if f.h_rel == Anchor::Page && f.v_rel == Anchor::Page {
         "page"
     } else if f.v_rel == Anchor::Line {
@@ -275,6 +371,11 @@ pub(super) fn frame_of(f: &Float) -> (&'static str, String, String) {
     );
     let mut xy = String::new();
     let p = |v: f32| pt(if v.is_finite() { v.clamp(-MAX_LEN, MAX_LEN) } else { 0.0 });
+    if turned(f) {
+        let x = if f.h_align.is_none() { f.x } else { 0.0 };
+        let y = if f.v_align.is_none() { f.y } else { 0.0 };
+        return (anchor, props, transform_attr(x, y, w, h, f.rot));
+    }
     if f.h_align.is_none() {
         xy.push_str(&format!(" svg:x=\"{}\"", p(f.x)));
     }

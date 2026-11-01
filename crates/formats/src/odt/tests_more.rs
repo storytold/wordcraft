@@ -13,6 +13,7 @@ mod named_styles;
 mod notes;
 mod outline;
 mod para_borders;
+mod rotation;
 mod rtl;
 mod settings;
 mod shapes;
