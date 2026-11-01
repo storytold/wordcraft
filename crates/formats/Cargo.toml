@@ -12,6 +12,7 @@ workspace = true
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-metafile = { workspace = true }
+base64 = { workspace = true }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }

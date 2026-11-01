@@ -239,6 +239,7 @@ fn format_name(ext: &str) -> String {
         "html" => "Web Page".into(),
         "rtf" => "Rich Text Format".into(),
         "odt" => "OpenDocument Text".into(),
+        "fodt" => "Flat OpenDocument Text".into(),
         "tex" => "LaTeX".into(),
         "png" => "PNG Image".into(),
         "json" => "JSON".into(),

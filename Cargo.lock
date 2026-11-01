@@ -6802,6 +6802,7 @@ dependencies = [
 name = "wordcraft-formats"
 version = "0.13.2"
 dependencies = [
+ "base64 0.23.1",
  "cfb",
  "chardetng",
  "chrono",

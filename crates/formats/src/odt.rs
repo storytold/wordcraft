@@ -40,6 +40,7 @@ use crate::model::{self, Cell, FBlock, FComment, FTable, Flow, Fmt, Inline, Kind
 mod body;
 mod datastyle;
 mod fields;
+mod flat;
 mod formula_size;
 mod frames;
 mod import;
@@ -53,6 +54,7 @@ mod writer;
 mod xml;
 
 use body::Body;
+pub use flat::{export_flat, import_flat};
 use import::Pages;
 #[cfg(test)]
 use import::{Pictures, apply_page_layout, read_entry, read_meta};

@@ -71,3 +71,14 @@ fn captions_chapters_and_dates_update_as_words() {
     s.run("references.updateFields", &json!({"all": true})).unwrap();
     assert_eq!(results(&s), ["1", "2", "Figure 2", "Methods"], "{:?}", text(&s));
 }
+
+#[test]
+fn a_flat_document_opens_and_saves_by_its_extension() {
+    let fodt = r#"<?xml version="1.0" encoding="UTF-8"?><office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text"><office:body><office:text><text:p>Flat words.</text:p></office:text></office:body></office:document>"#;
+    let doc = io::open_bytes("plain.fodt", fodt.as_bytes()).unwrap();
+    let s = Session::new(doc);
+    assert_eq!(text(&s), ["Flat words."]);
+    let saved = io::save_bytes("plain.fodt", &s.doc).unwrap();
+    assert!(saved.starts_with(b"<?xml"));
+    assert_eq!(text(&Session::new(io::open_bytes("plain.fodt", &saved).unwrap())), ["Flat words."]);
+}

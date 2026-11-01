@@ -358,6 +358,7 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("Word XML Document (*.xml)", "xml"),
         ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
         ("OpenDocument Text (*.odt)", "odt"),
+        ("Flat OpenDocument Text (*.fodt)", "fodt"),
         ("Rich Text Format (*.rtf)", "rtf"),
         ("Web page (*.html)", "html"),
         ("Markdown (*.md)", "md"),
