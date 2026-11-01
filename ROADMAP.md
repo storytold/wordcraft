@@ -1071,3 +1071,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+
+### Format Painter integration refresh, 2026-10-30
+
+Single-click release applies the armed painter to the target word without trailing spaces and disarms it. Explicit selections retain their scope (#1455, partial). Source and UI regressions are retained after the canvas/input module split. Earlier Windows pointer and browser qualification are historical; current-head hosted validation is pending, and native shortcut/Mint qualification is not newly claimed.
