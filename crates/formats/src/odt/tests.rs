@@ -1135,3 +1135,113 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn table_repeats_expand_rows_and_cells() {
+    // #1342: `table:number-rows-repeated` and `table:number-columns-repeated` are counted, so
+    // repeated populated rows and cells survive and repeated blanks keep later cells in place.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table>
+            <table:table-column table:number-columns-repeated="4"/>
+            <table:table-row table:number-rows-repeated="2"><table:table-cell table:number-columns-repeated="2"><text:p>R</text:p></table:table-cell><table:table-cell><text:p>End</text:p></table:table-cell></table:table-row>
+            <table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:covered-table-cell table:number-columns-repeated="2"/><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>
+            <table:table-row><table:table-cell table:number-columns-spanned="2" table:number-columns-repeated="2"><text:p>S</text:p></table:table-cell><table:covered-table-cell/><table:covered-table-cell/></table:table-row>
+            </table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    let texts = |r: &[model::Cell]| r.iter().map(Cell::text).collect::<Vec<_>>();
+    // The row repeated twice, its first cell twice.
+    assert_eq!(t.rows.len(), 4);
+    assert_eq!(texts(&t.rows[0]), ["R", "R", "End"]);
+    assert_eq!(texts(&t.rows[1]), ["R", "R", "End"]);
+    // A covered cell repeated twice keeps B in the fourth column.
+    let cells: Vec<(String, bool)> = t.rows[2].iter().map(|c| (c.text(), c.covered)).collect();
+    assert_eq!(cells, [("A".to_string(), false), (String::new(), true), (String::new(), true), ("B".to_string(), false)]);
+    // A spanning cell repeated twice, its covered columns owed twice.
+    let cells: Vec<(String, u32)> = t.rows[3].iter().map(|c| (c.text(), c.colspan)).collect();
+    assert_eq!(cells, [("S".to_string(), 2), ("S".to_string(), 2)]);
+}
+
+#[test]
+fn table_repeats_stop_at_the_caps() {
+    // Hostile repeat counts are clamped to the document table's own limits.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table>
+            <table:table-row><table:table-cell table:number-columns-repeated="4000000000"><text:p>x</text:p></table:table-cell></table:table-row>
+            <table:table-row table:number-rows-repeated="4000000000"><table:table-cell><text:p>y</text:p></table:table-cell></table:table-row>
+            </table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.len(), wordcraft_doc::table::MAX_ROWS);
+}
+
+#[test]
+fn repeated_spanning_cells_respect_the_column_cap() {
+    let max_cols = wordcraft_doc::table::MAX_COLS;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-row><table:table-cell table:number-columns-spanned="2" table:number-columns-repeated="{max_cols}"><text:p>x</text:p></table:table-cell><table:covered-table-cell table:number-columns-repeated="{max_cols}"/></table:table-row></table:table></office:text></office:body></office:document-content>"#
+    );
+    let f = parse(&package(&content, None)).unwrap();
+    let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+    let row = &t.rows[0];
+    let occupied: usize = row.iter().map(|c| c.colspan as usize).sum();
+    assert!(occupied <= max_cols, "{occupied} occupied columns exceed {max_cols}");
+    assert_eq!(row.len(), max_cols / 2 + 1);
+    assert_eq!(occupied, max_cols);
+    assert!(row.last().is_some_and(|c| c.covered));
+}
+
+#[test]
+fn malformed_content_is_an_error_not_a_partial_document() {
+    // #1342: a valid prefix followed by corruption fails the import, so a partial read
+    // cannot be mistaken for the file's content and saved or merged.
+    let prefix = format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>Good</text:p>"#);
+    let corrupt = format!("{prefix}<text:p><<bad");
+    let err = import(&package(&corrupt, None)).unwrap_err();
+    assert!(err.contains("not well-formed"), "{err}");
+    // The same prefix, well-formed, still imports.
+    let ok = format!("{prefix}</office:text></office:body></office:document-content>");
+    let doc = import(&package(&ok, None)).unwrap();
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), "Good");
+}
+
+#[test]
+fn xml_events_reject_unclosed_and_mismatched_outer_tags() {
+    let unclosed = format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>Good</text:p></office:text>"#);
+    let mismatched =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>Good</office:text></office:body></office:document-content>"#);
+    let mut accepted = Vec::new();
+    for (label, content) in [("unclosed", &unclosed), ("mismatched", &mismatched)] {
+        match import(&package(content, None)) {
+            Ok(_) => accepted.push(label),
+            Err(err) => assert!(err.contains("not well-formed"), "{err}"),
+        }
+    }
+    assert!(accepted.is_empty(), "malformed XML imported: {accepted:?}");
+}
+
+#[test]
+fn second_root_element_is_rejected() {
+    // quick-xml accepts a second top-level element; a well-formed document has one root.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Good</text:p></office:text></office:body></office:document-content><office:document-content {NS_T}><office:body/></office:document-content>"#
+    );
+    let err = import(&package(&content, None)).unwrap_err();
+    assert!(err.contains("not well-formed"), "{err}");
+}
+
+#[test]
+fn text_outside_the_root_is_rejected() {
+    // Only whitespace may follow the document element; other character data is malformed.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Good</text:p></office:text></office:body></office:document-content>"#
+    );
+    for trailing in ["garbage", "<![CDATA[ ]]>", "&amp;", "\u{a0}"] {
+        let err = import(&package(&format!("{content}{trailing}"), None)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{trailing}: {err}");
+    }
+    assert!(import(&package(&format!("{content}\r\n\t "), None)).is_ok());
+}

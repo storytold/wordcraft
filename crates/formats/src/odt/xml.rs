@@ -49,23 +49,57 @@ pub(super) enum Ev {
 }
 
 /// Stream XML events (empty elements become start + end). Malformed XML ends the stream.
-pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
+/// Stream XML events (empty elements become start + end). `false` when the reader stopped on
+/// malformed XML before the end of the stream: a truncated or corrupt file, whose partial
+/// content the caller must not mistake for a complete read (#1342).
+pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) -> bool {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
-    cfg.check_end_names = false;
-    cfg.allow_unmatched_ends = true;
+    cfg.check_end_names = true;
+    cfg.allow_unmatched_ends = false;
     let mut buf = Vec::new();
+    let mut depth = 0usize;
+    // `quick_xml` accepts a second top-level element; one document must have exactly one root.
+    let mut root_closed = false;
     loop {
         buf.clear();
         match r.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => f(Ev::Start(String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs_of(&e))),
+            Ok(Event::Start(e)) => {
+                if depth == 0 && root_closed {
+                    return false;
+                }
+                depth = depth.saturating_add(1);
+                f(Ev::Start(String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs_of(&e)));
+            }
             Ok(Event::Empty(e)) => {
+                if depth == 0 {
+                    if root_closed {
+                        return false;
+                    }
+                    root_closed = true;
+                }
                 let n = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 f(Ev::Start(n.clone(), attrs_of(&e)));
                 f(Ev::End(n));
             }
-            Ok(Event::End(e)) => f(Ev::End(String::from_utf8_lossy(e.name().as_ref()).into_owned())),
+            Ok(Event::End(e)) => {
+                depth = depth.saturating_sub(1);
+                f(Ev::End(String::from_utf8_lossy(e.name().as_ref()).into_owned()));
+                if depth == 0 {
+                    root_closed = true;
+                }
+            }
+            // Outside the document element only XML's four whitespace characters may appear
+            // (syntax: S = #x20 | #x9 | #xD | #xA); CDATA sections and entity references are
+            // not allowed there at all.
+            Ok(Event::Text(t)) if depth == 0 => {
+                if t.decode().map(|c| c.chars().any(|ch| !matches!(ch, ' ' | '\t' | '\r' | '\n'))).unwrap_or(true) {
+                    return false;
+                }
+            }
+            Ok(Event::CData(_)) if depth == 0 => return false,
+            Ok(Event::GeneralRef(_)) if depth == 0 => return false,
             Ok(Event::Text(t)) => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default())),
             Ok(Event::CData(t)) => f(Ev::Text(String::from_utf8_lossy(&t).into_owned())),
             Ok(Event::GeneralRef(r)) => {
@@ -80,7 +114,8 @@ pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
                 };
                 f(Ev::Text(s));
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => return root_closed && depth == 0,
+            Err(_) => return false,
             Ok(_) => {}
         }
     }

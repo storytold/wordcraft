@@ -27,7 +27,7 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
     let mut row: Option<(Vec<String>, u64, u64, Option<usize>)> = None;
     let mut cell: Option<OCell> = None;
     let (mut in_p, mut skip) = (0usize, 0usize);
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => {
             let n = e.local_name();
             let n = n.as_ref();
@@ -163,6 +163,9 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
             }
         }
     });
+    if !complete {
+        return Err("the spreadsheet's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     if names.is_empty() {
         return Err("the spreadsheet has no sheets".into());
     }
