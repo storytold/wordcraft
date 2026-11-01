@@ -746,11 +746,11 @@ fn font_dialog_size_box_takes_chinese_size_names() {
     let Some(d @ Dialog::Font { .. }) = &mut app.dialog else { panic!("no font dialog") };
     let Dialog::Font { size, .. } = d else { panic!() };
     assert_eq!(size, "小四");
-    for (typed, pt) in [("小四", 12.0), ("五號", 10.5), ("初号", 42.0), ("13", 13.0)] {
+    for (typed, pt) in [("小四", 12.0), ("五號", 10.5), ("初号", 42.0), ("13", 13.0), ("八号", 5.0), ("七號", 5.5)] {
         let Dialog::Font { size, .. } = d else { panic!() };
         *size = typed.into();
         assert_eq!(font_props(d).get("size").and_then(Value::as_f64), Some(pt), "{typed}");
-        assert_eq!(preview_size(typed), (pt as f32).clamp(6.0, 72.0), "{typed}");
+        assert_eq!(preview_size(typed), (pt as f32).clamp(5.0, 72.0), "{typed}");
     }
     crate::i18n::set_current(crate::i18n::Lang::EN);
 }

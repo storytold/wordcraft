@@ -1,9 +1,9 @@
 use super::{Dialog, Value, WordApp, json};
 
-/// The Font dialog preview's size: the Size box's points between 6 and 72, else 12. `"NaN"` and
+/// The Font dialog preview's size: the Size box's points between 5 (八号, the smallest Chinese size) and 72, else 12. `"NaN"` and
 /// `"inf"` parse as floats too, and a NaN font size trips epaint's glyph assertion (#3663).
 pub(super) fn preview_size(size: &str) -> f32 {
-    crate::font_sizes::parse(size).map_or(12.0, |pt| pt as f32).clamp(6.0, 72.0)
+    crate::font_sizes::parse(size).map_or(12.0, |pt| pt as f32).clamp(5.0, 72.0)
 }
 
 /// The character properties the Font dialog's fields stand for.
