@@ -290,14 +290,14 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
 }
 
 /// Continuous: new column layout below the current text (its tallest column).
-fn continue_page(pb: &mut PageBuilder, sect: &SectionProps) {
+fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
     pb.close_column_lines();
     pb.cols = sect.column_boxes();
     pb.col = 0;
     pb.top = pb.text_bottom();
     pb.y = pb.top;
     pb.max_y = pb.top;
-    pb.open_column_lines();
+    pb.open_column_lines(block);
 }
 
 /// Whether the section's last page balances its columns (see [`balance_columns`]), and set what
@@ -508,7 +508,7 @@ pub(crate) fn layout_pass(
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
             start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
         } else {
-            continue_page(&mut pb, sect);
+            continue_page(&mut pb, sect, block);
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;

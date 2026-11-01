@@ -7866,6 +7866,30 @@ fn the_line_between_columns_spans_the_section_s_text() {
     assert!(vertical_rules(&l, 0).is_empty(), "no line on page 1: {:?}", vertical_rules(&l, 0));
     assert_eq!(vertical_rules(&l, 1).len(), 1, "its line on page 2");
 
+    // A floating table of the section before, placed lower on the page than the columns' text,
+    // isn't the columns' text: the line stays with the columns.
+    let mut floated = Document::from_text("Intro\nEnd of one\nCol one\nCol two\nAfter");
+    let mut t = Table::new(1, 1, 200.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Low table", Default::default()))];
+    t.props.float = Some(wordcraft_doc::props::TableFloat {
+        h_rel: wordcraft_doc::para::Anchor::Margin,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        y: 500.0,
+        ..Default::default()
+    });
+    floated.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    floated.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::default());
+    floated.para_mut(StoryRef::Body, &Path::top(4)).unwrap().section = Some(Box::new(two.clone()));
+    floated.last_section.start = SectionStart::Continuous;
+    let l = lay(&floated);
+    let low = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, .. } = i { Some(rect.y) } else { None });
+    assert!(low.is_some_and(|y| y >= 490.0), "the table stands low on the page: {low:?}");
+    // The table's own side borders are vertical rules too: the line is the one midway.
+    let rules: Vec<_> = vertical_rules(&l, 0).into_iter().filter(|r| (r.0 - mid).abs() < 0.5).collect();
+    let [(_, _, bottom)] = rules[..] else { panic!("one line: {rules:?}") };
+    let boxes = para_boxes(&l);
+    assert!(bottom < 300.0 && bottom <= boxes[4].2 + 0.5, "the line ends with the columns, above After: {bottom} {boxes:?}");
+
     // One section of two columns: the line runs down to the bottom of the text, not the page.
     let mut d = Document::from_text("One\nTwo\nThree");
     d.last_section.columns = two.columns.clone();
