@@ -162,15 +162,38 @@ struct FieldCounts {
     chars: Option<usize>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    // Each test observes only recounts performed on its own thread.
+    pub(super) static BODY_RECOUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 impl FieldCounts {
+    /// Count the body once, when this update first needs NUMWORDS.
     fn words(&mut self, doc: &wordcraft_doc::Document) -> usize {
-        *self.words.get_or_insert_with(|| doc.word_count())
+        *self.words.get_or_insert_with(|| {
+            #[cfg(test)]
+            BODY_RECOUNTS.with(|counts| {
+                let (words, chars) = counts.get();
+                counts.set((words.saturating_add(1), chars));
+            });
+            doc.word_count()
+        })
     }
 
+    /// Count non-whitespace body characters once, on the first NUMCHARS field.
     fn chars(&mut self, doc: &wordcraft_doc::Document) -> usize {
-        *self.chars.get_or_insert_with(|| doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count())
+        *self.chars.get_or_insert_with(|| {
+            #[cfg(test)]
+            BODY_RECOUNTS.with(|counts| {
+                let (words, chars) = counts.get();
+                counts.set((words, chars.saturating_add(1)));
+            });
+            doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count()
+        })
     }
 
+    /// Measure only the paragraph contributions needed by initialized counts.
     fn paragraph(&self, para: &Paragraph) -> (usize, usize) {
         if self.words.is_none() && self.chars.is_none() {
             return (0, 0);
@@ -179,6 +202,7 @@ impl FieldCounts {
         (self.words.map_or(0, |_| wordcraft_doc::count_words(&text)), self.chars.map_or(0, |_| text.chars().filter(|c| !c.is_whitespace()).count()))
     }
 
+    /// Keep initialized totals current after writing one body's paragraph results.
     fn replace_paragraph(&mut self, before: (usize, usize), para: &Paragraph) {
         let after = self.paragraph(para);
         if let Some(words) = &mut self.words {

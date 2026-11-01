@@ -345,17 +345,21 @@ fn many_document_count_fields_do_not_rescan_the_body() {
     let header = doc.add_part(PartKind::Header, blocks);
     let mut s = Session::new(doc);
     s.sel = Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
-    let started = std::time::Instant::now();
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
     update_fields(&mut s).unwrap();
-    let elapsed = started.elapsed();
-    for (_, result) in story_fields(&s, StoryRef::Part(header)) {
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (1, 0));
+    let got = story_fields(&s, StoryRef::Part(header));
+    assert_eq!(got.len(), 6_000);
+    for (_, result) in got {
         assert_eq!(result, "20000");
     }
-    assert!(elapsed < std::time::Duration::from_secs(10), "count fields took {elapsed:?}");
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (1, 0), "a new update starts a fresh cache");
 }
 
-/// #3620: NUMCHARS has a separate cache. This 200,000-word workload exceeds the
-/// ten-second limit on the old CLI path; retain the separate NUMWORDS regression.
+/// #3620: NUMCHARS has a separate, lazy cache. Count its body scans independently
+/// of NUMWORDS, without making correctness depend on test-runner scheduling.
 #[test]
 fn many_document_character_count_fields_do_not_rescan_the_body() {
     let mut doc = wordcraft_doc::Document::from_text(&"one two three four five six seven eight nine ten\n".repeat(20_000));
@@ -373,15 +377,17 @@ fn many_document_character_count_fields_do_not_rescan_the_body() {
     let header = doc.add_part(PartKind::Header, blocks);
     let mut s = Session::new(doc);
     s.sel = Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
-    let started = std::time::Instant::now();
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
     update_fields(&mut s).unwrap();
-    let elapsed = started.elapsed();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (0, 1));
     let got = story_fields(&s, StoryRef::Part(header));
     assert_eq!(got.len(), 6_000);
     for (_, result) in got {
         assert_eq!(result, "780000");
     }
-    assert!(elapsed < std::time::Duration::from_secs(10), "count fields took {elapsed:?}");
+    super::fields::BODY_RECOUNTS.with(|counts| counts.set((0, 0)));
+    update_fields(&mut s).unwrap();
+    assert_eq!(super::fields::BODY_RECOUNTS.with(|counts| counts.get()), (0, 1), "a new update starts a fresh cache");
 }
 
 /// Results within one paragraph see the same counts; the next paragraph sees the previous
