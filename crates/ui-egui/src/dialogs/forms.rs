@@ -255,7 +255,7 @@ impl TableForm {
             .map(|(k, _)| k.to_string())
             .collect();
         let cell = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.props.clone()).unwrap_or_default();
-        let tw = wordcraft_engine::cmd::page::sect(s).text_width();
+        let tw = wordcraft_engine::cmd::page::laid_out_sect(s).text_width();
         let width = t.props.width_pct.filter(|p| *p > 0.0).map(|p| tw * p.min(100.0) / 100.0).or(t.props.width.filter(|w| *w > 0.0));
         let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
         Some(TableForm {

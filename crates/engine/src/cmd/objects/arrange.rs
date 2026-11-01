@@ -290,7 +290,7 @@ pub(crate) fn anchor_paragraph(
     // The page's columns (left, right), from its section's column geometry (headers and footers
     // span the text area); the column under `x` is the rightmost one starting at or left of it.
     let boxes = match story {
-        StoryRef::Body => doc.sections().get(pg.section).map(|(_, sp)| sp.column_boxes()).unwrap_or_default(),
+        StoryRef::Body => doc.laid_out_sections().get(pg.section).map(|(_, sp)| sp.column_boxes()).unwrap_or_default(),
         StoryRef::Part(_) => Vec::new(),
     };
     let mut cols: Vec<(f32, f32)> =

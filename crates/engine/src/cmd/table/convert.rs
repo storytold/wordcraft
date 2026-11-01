@@ -389,7 +389,7 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if cells.len() > wordcraft_doc::table::MAX_ROWS {
         return Err(CmdError::Failed(format!("a table can have at most {} rows", wordcraft_doc::table::MAX_ROWS)));
     }
-    let width = crate::cmd::page::sect(s).text_width();
+    let width = crate::cmd::page::laid_out_sect(s).text_width();
     let mut t = Table::new(cells.len().max(1), cols, width);
     if col_width > 0.0 {
         // Every column gets that preferred width, even past the margins (layout fits the table
@@ -448,7 +448,7 @@ pub(super) fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
         ],
     };
     let cols = data.iter().map(Vec::len).max().unwrap_or(1);
-    let width = crate::cmd::page::sect(s).text_width();
+    let width = crate::cmd::page::laid_out_sect(s).text_width();
     let mut t = Table::new(data.len(), cols, width);
     t.props.style = Some(if kind == "calendar" { "GridTable1Light" } else { "GridTable4AccentBlue" }.into());
     for (r, row) in data.iter().enumerate() {

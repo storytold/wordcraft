@@ -1,7 +1,7 @@
 use super::{
     Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, PB, Paragraph, Phase, PropChange,
     Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, last_para_mut, para_block,
-    placeholder_of, sectpr, tcpr, trpr,
+    placeholder_of, sectpr, sheet_from_page, tcpr, trpr,
 };
 
 impl Reader<'_> {
@@ -266,10 +266,19 @@ impl Reader<'_> {
     }
 
     pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
+        let mode = self.doc.settings.multiple_pages();
         let (mut sp, refs) = sectpr(s);
+        sheet_from_page(&mut sp, s, mode);
         // §17.13.5.32: the section's properties before a tracked change (no header references).
         if let Some(ch) = s.child("w:sectPrChange") {
-            let old = ch.child("w:sectPr").map(|o| sectpr(o).0).unwrap_or_default();
+            let old = ch
+                .child("w:sectPr")
+                .map(|o| {
+                    let mut old = sectpr(o).0;
+                    sheet_from_page(&mut old, o, mode);
+                    old
+                })
+                .unwrap_or_default();
             sp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
         }
         for r in refs {

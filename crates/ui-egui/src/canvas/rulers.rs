@@ -1,4 +1,4 @@
-use super::margins::{MarginEdge, margin_handle};
+use super::margins::{MarginEdge, margin_handle, ruler_sect};
 use super::pages::page_screen_scale;
 use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, vec2};
 
@@ -16,7 +16,8 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
     let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { return };
     let scale = page_screen_scale(*pr, page, scale);
-    let sect = app.session.doc.sections().get(page.section).map(|(_, s)| (*s).clone()).unwrap_or_default();
+    // The page the rulers show and drag: half the sheet under 2 pages per sheet and Book fold (#1836).
+    let sect = ruler_sect(&app.session.doc, page.section);
     // Horizontal.
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
@@ -58,7 +59,7 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
     // the indent markers, so a marker sitting on an edge keeps the pointer where they overlap.
     let (le, re) = (x0 + page.body.x * scale, x0 + page.body.right() * scale);
     // An even page of a mirrored layout is the odd page reflected: its left edge is the stored right margin.
-    let mirrored = app.session.doc.settings.mirror_margins && page.number.is_multiple_of(2);
+    let mirrored = app.session.doc.settings.mirrors() && page.number.is_multiple_of(2);
     for (edge, zone) in [
         (MarginEdge::Left, Rect::from_min_max(pos2(le - 10.0, bar.min.y), pos2(le + 3.0, bar.max.y))),
         (MarginEdge::Right, Rect::from_min_max(pos2(re - 3.0, bar.min.y), pos2(re + 10.0, bar.max.y))),

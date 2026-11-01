@@ -471,7 +471,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     let after_break = s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
     let section = s.doc.section_index_of(start + usize::from(after_break));
     let column = |x: &wordcraft_doc::SectionProps| x.column_boxes().first().map_or(x.text_width(), |(_, w)| *w);
-    let width = s.doc.sections().get(section).map_or_else(|| column(&crate::cmd::page::sect(s)), |(_, x)| column(x));
+    let width = s.doc.laid_out_sections().get(section).map_or_else(|| column(&crate::cmd::page::laid_out_sect(s)), |(_, x)| column(x));
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();
