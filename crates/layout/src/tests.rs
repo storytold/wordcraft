@@ -4815,10 +4815,95 @@ fn line_spacing_does_not_scale_pictures() {
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let line = &para.lines[0];
-    let desc = para.styles[0].descent;
-    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
-    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
+    let st = &para.styles[0];
+    // Word: the picture plus 0.15 of the paragraph mark's natural height, not (picture + descent)
+    // x 1.15, and not the descent either (Word for Mac 16.93: 1.9pt under a 2cm picture, 11pt Cambria).
+    let want = 144.0 + 0.15 * (st.ascent + st.descent);
+    assert!((line.height - want).abs() < 0.01, "line {} for a 144pt picture, want {want}", line.height);
     assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
+}
+
+#[test]
+fn a_picture_line_in_multiple_spacing_takes_the_leading_of_its_text_or_the_paragraph_mark() {
+    // Word for Mac 16.93, a 2cm picture at double spacing: alone on its line it gets the
+    // paragraph mark's natural height below it, whatever its own run's size (20pt run, 8pt mark:
+    // 9.2pt); next to text, the text's descent and natural height (20pt Arial: 4.2 + 23pt).
+    use wordcraft_doc::CharProps;
+    use wordcraft_doc::props::LineSpacing;
+    let pic = 56.7;
+    let size = |pt: f32| CharProps { size: Some(pt), ..Default::default() };
+    let para = |m: f32, mark: f32, picture_run: Option<f32>, text: Option<f32>| {
+        let mut p = wordcraft_doc::Paragraph::with_text(if text.is_some() { "x" } else { "" }, size(text.unwrap_or(mark)));
+        p.mark = size(mark);
+        p.props.line_spacing = Some(LineSpacing::Multiple(m));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        if let Some(run) = picture_run {
+            p.insert_object(0, picture(40.0, pic, Default::default()), &size(run)).unwrap();
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::from_text("");
+    d.body = vec![
+        para(1.0, 8.0, None, Some(8.0)),
+        para(1.0, 8.0, None, Some(20.0)),
+        para(2.0, 8.0, Some(20.0), None),
+        para(2.0, 8.0, Some(14.0), Some(20.0)),
+    ];
+    let l = lay(&d);
+    let lines: Vec<crate::para::Line> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some(para.lines[*l0].clone()) } else { None }).collect();
+    let (small, big) = (&lines[0], &lines[1]);
+    let alone = lines[2].height;
+    assert!((alone - (pic + small.height)).abs() < 0.01, "alone: {alone}, want {pic} + the 8pt mark's {}", small.height);
+    let beside = lines[3].height;
+    let want = pic + big.text_desc + big.height;
+    assert!((beside - want).abs() < 0.01, "next to 20pt text: {beside}, want {want}");
+    assert!((lines[3].baseline - lines[3].top - pic).abs() < 0.01, "the picture stands at the line top");
+}
+
+#[test]
+fn a_picture_in_one_and_a_half_spacing_takes_the_texts_leading_and_fits_at_the_page_bottom() {
+    // Word for Windows (a 472pt picture in 1.5-spaced 12pt text): the line is the picture plus
+    // half the text's natural height, and at the foot of a page the picture only has to fit above
+    // the bottom margin: it stayed with 1.7pt to spare, less than the descent.
+    use wordcraft_doc::props::LineSpacing;
+    let pic = 400.0;
+    let doc = |spare: f32| {
+        let mut d = Document::from_text("Text");
+        let s = d.last_section.clone();
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(s.page_h - s.margin_bottom - s.margin_top - 20.0 - pic - spare);
+        let mut q = wordcraft_doc::Paragraph::with_text("", Default::default());
+        q.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+        q.props.space_before = Some(0.0);
+        q.insert_object(0, picture(100.0, pic, Default::default()), &Default::default()).unwrap();
+        d.body.push(wordcraft_doc::para_block(q));
+        d
+    };
+    let l = lay(&doc(1.0));
+    let lines = |l: &DocLayout, page: usize| {
+        l.pages[page]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some((para.clone(), *l0)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    let on_first = lines(&l, 0);
+    let Some((para, l0)) = on_first.iter().find(|(p, _)| !p.lines.is_empty() && p.lines[0].text_asc >= pic) else {
+        panic!("the picture should stay on page 1 ({} pages)", l.pages.len())
+    };
+    let line = &para.lines[*l0];
+    let st = &para.styles[para.clusters[0].style as usize];
+    assert!(st.descent > 1.0, "the spare room is under the descent");
+    let want = pic + 0.5 * (st.ascent + st.descent);
+    assert!((line.height - want).abs() < 0.01, "line {} for a {pic}pt picture, want {want}", line.height);
+    assert!((line.baseline - line.top - pic).abs() < 0.01, "the picture stands at the line top");
+    // A picture that ends past the margin still goes to the next page.
+    let l = lay(&doc(-0.5));
+    assert!(!lines(&l, 0).iter().any(|(p, _)| p.lines.first().is_some_and(|x| x.text_asc >= pic)), "the picture should move on");
 }
 
 #[test]
@@ -4869,8 +4954,10 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
         let l = lay(&d);
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let line = &para.lines[0];
-        let desc = para.styles[para.clusters[0].style as usize].descent;
-        assert!((line.height - (144.0 + desc)).abs() < 0.01, "{spacing:?}: {}", line.height);
+        let st = &para.styles[para.clusters[0].style as usize];
+        // Under the picture: the descent, or the text's own multiple leading when larger.
+        let below = if let LineSpacing::Multiple(m) = spacing { st.descent.max((m - 1.0) * (st.ascent + st.descent)) } else { st.descent };
+        assert!((line.height - (144.0 + below)).abs() < 0.01, "{spacing:?}: {}", line.height);
         assert!((line.baseline - line.top - 144.0).abs() < 0.01);
     }
 }
