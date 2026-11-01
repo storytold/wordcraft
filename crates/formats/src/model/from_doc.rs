@@ -464,11 +464,13 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if hidden || obj.and_then(InlineObject::frame).is_some_and(|(_, _, f)| f.hidden) {
                 continue;
             }
+            let from = out.inlines.len();
             if let Some(items) = obj.and_then(|o| rich_inlines(doc, o, &f, opts)) {
                 if !buf.is_empty() {
                     out.push_text(&std::mem::take(&mut buf), &f);
                 }
                 out.inlines.extend(items);
+                raise_drawings(&mut out.inlines, from, props.position.filter(|_| opts.paras));
                 continue;
             }
             match obj {
@@ -537,6 +539,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                 Some(o) => buf.push_str(o.plain_text()),
                 None => {}
             }
+            raise_drawings(&mut out.inlines, from, props.position.filter(|_| opts.paras));
         }
         if !hidden_text {
             control.run_end(&buf, &mut out, &f);
@@ -563,6 +566,24 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     out.section.clone_from(&p.section);
     done.push(out);
     done
+}
+
+/// The drawings from `from` on (just added) raised by their run's position `raise` (points): a
+/// drawing in line keeps it as its float's `y` (see [`crate::model::Img::float`]).
+fn raise_drawings(inlines: &mut [Inline], from: usize, raise: Option<f32>) {
+    let Some(r) = raise.filter(|r| r.is_finite() && *r != 0.0) else { return };
+    for i in inlines.iter_mut().skip(from) {
+        let float = match i {
+            Inline::Image(img) => &mut img.float,
+            Inline::Chart(c) => &mut c.float,
+            Inline::Shape { float, .. } | Inline::Group { float, .. } => float,
+            _ => continue,
+        };
+        let f = float.get_or_insert_with(Default::default);
+        if f.wrap == wordcraft_doc::para::Wrap::Inline {
+            f.y = r;
+        }
+    }
 }
 
 /// A content control of plain text being read (formats with form controls): it, its text so

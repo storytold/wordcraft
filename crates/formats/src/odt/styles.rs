@@ -302,8 +302,11 @@ fn paragraph_spacing(a: &Attrs, sp: &mut Spacing) {
     // Leading (§20.336: extra space between lines, above each line as LibreOffice draws it) has
     // no WordCraft mode: at least a 12 pt line and the leading, which also puts the extra space
     // above the text.
+    // LibreOffice also leaves the leading after the last line: space after the paragraph.
     if let Some(l) = len("style:line-spacing").filter(|l| *l >= 0.0) {
-        sp.line = Some(LineSpacing::AtLeast((LEADING_LINE + l.min(MAX_LEN)).clamp(0.7, MAX_LEN)));
+        let l = l.min(MAX_LEN);
+        sp.line = Some(LineSpacing::AtLeast((LEADING_LINE + l).clamp(0.7, MAX_LEN)));
+        sp.after = Some((sp.after.unwrap_or(0.0) + l).clamp(0.0, MAX_LEN));
     }
 }
 

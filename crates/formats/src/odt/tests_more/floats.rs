@@ -100,3 +100,48 @@ fn without_a_wrap_text_runs_on_both_sides() {
     let f = float(&open(r#"style:wrap="biggest""#, r#"text:anchor-type="paragraph""#));
     assert_eq!((f.wrap, f.wrap_text), (Wrap::Square, WrapText::Largest));
 }
+
+#[test]
+fn an_inline_frame_keeps_its_place_on_the_baseline() {
+    // A frame in line with the text, hanging from the baseline (`from-top` 0, as LibreOffice
+    // places a shape added by its API), centred on it or hanging from it (`bottom`): lowered by
+    // its run's position, as Word lowers a picture, drawn so and written back.
+    let pic = {
+        let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    };
+    for (vpos, y, want) in [
+        ("from-top", r#" svg:y="0in""#, -72.0),
+        ("from-top", r#" svg:y="-0.5in""#, -36.0),
+        ("middle", "", -36.0),
+        ("bottom", "", -72.0),
+        ("top", "", 0.0),
+    ] {
+        let content = format!(
+            r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="g1" style:family="graphic"><style:graphic-properties style:vertical-pos="{vpos}"/></style:style></office:automatic-styles><office:body><office:text><text:p>Line <draw:frame draw:style-name="g1" text:anchor-type="as-char" svg:width="1in" svg:height="1in"{y}><draw:image xlink:href="Pictures/p.png"/></draw:frame> text</text:p></office:text></office:body></office:document-content>"#,
+            NS = crate::odt::tests::NS_T
+        );
+        let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &pic)]);
+        let doc = crate::odt::import(&pkg).unwrap();
+        let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        let (off, _) = p.objects_with_offsets().next().unwrap();
+        let pos = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8()).position.unwrap_or(0.0);
+        assert_eq!((pos * 10.0).round() / 10.0, want, "{vpos}{y}");
+        // Saved: a lowered one says how far its top is from the baseline.
+        let saved = crate::odt::tests::content_of(&crate::odt::export(&doc).unwrap());
+        if want != 0.0 {
+            assert!(saved.contains(r#"style:vertical-pos="from-top" style:vertical-rel="baseline""#), "{saved}");
+            let top = -(72.0 + want);
+            assert!(saved.contains(&format!(r#"svg:y="{}pt""#, top)), "{vpos}{y}: {saved}");
+        }
+        let again = crate::odt::import(&crate::odt::export(&doc).unwrap()).unwrap();
+        let p2 = again.body.iter().find_map(|b| b.as_para()).unwrap();
+        let (off2, _) = p2.objects_with_offsets().next().unwrap();
+        assert_eq!(
+            p2.props_at(off2 + wordcraft_doc::para::OBJ.len_utf8()).position.map(|v| (v * 10.0).round() / 10.0),
+            (want != 0.0).then_some(want)
+        );
+    }
+}

@@ -476,8 +476,17 @@ impl<'a> Builder<'a> {
                 }
                 Inline::FieldEnd => append(&mut out, "", &CharProps::default(), Some(InlineObject::FieldEnd)),
                 Inline::Image(_) | Inline::Chart(_) | Inline::Shape { .. } | Inline::Group { .. } => {
-                    if let Some(obj) = self.drawing(i, 0) {
-                        append(&mut out, "", &CharProps::default(), Some(obj));
+                    if let Some(mut obj) = self.drawing(i, 0) {
+                        // In line, raised or lowered: its run's position (as Word keeps it).
+                        let mut cp = CharProps::default();
+                        if let Some(f) = obj.float_mut()
+                            && f.wrap == wordcraft_doc::para::Wrap::Inline
+                            && f.y != 0.0
+                        {
+                            cp.position = Some(f.y.clamp(-1584.0, 1584.0));
+                            f.y = 0.0;
+                        }
+                        append(&mut out, "", &cp, Some(obj));
                     }
                 }
                 // A bookmark once (the first of a name): a point, or the start of the text it covers.

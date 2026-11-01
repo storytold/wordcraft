@@ -183,4 +183,17 @@ fn leading_is_at_least_a_line_and_the_leading() {
         Some(LineSpacing::AtLeast(h)) => assert!((h - (14.0 + 3.0 * 72.0 / 25.4)).abs() < 0.01, "{h}"),
         other => panic!("{other:?}"),
     }
+    // LibreOffice leaves the leading after the last line too: space after the paragraph, on
+    // top of its own.
+    let after = |extra: &str| {
+        let d = import(&package(
+            &content(&p_style("P1", "Standard", &format!(r#"style:line-spacing="3mm"{extra}"#)), r#"<text:p text:style-name="P1">x</text:p>"#),
+            None,
+        ))
+        .unwrap();
+        let r = d.styles.resolve_para(&props(&d)[0]);
+        (r.space_after * 100.0).round() / 100.0
+    };
+    assert_eq!(after(""), 8.5);
+    assert_eq!(after(r#" fo:margin-bottom="6pt""#), 14.5);
 }

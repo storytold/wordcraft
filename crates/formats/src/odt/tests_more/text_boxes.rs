@@ -139,3 +139,15 @@ fn a_box_growing_from_nothing_stays_that_way() {
     let saved = crate::odt::tests::content_of(&export(&d).unwrap());
     assert!(saved.contains(r#"<draw:text-box fo:min-height="1pt">"#) && !saved.contains("svg:height"), "{saved}");
 }
+
+#[test]
+fn a_text_box_frame_derives_from_the_frame_style() {
+    // LibreOffice draws a frame's border (`fo:border`) only when its style derives from the
+    // Frame style; otherwise it outlines the box in its default shape line instead.
+    let d = open(r#"text:anchor-type="paragraph" svg:width="2in""#, "<text:p>In the box.</text:p>");
+    let pkg = export(&d).unwrap();
+    let content = crate::odt::tests::content_of(&pkg);
+    let style = content.split("<style:style ").find(|s| s.contains("fo:border")).unwrap_or_default();
+    assert!(style.contains(r#"style:parent-style-name="Frame""#), "{content}");
+    assert!(crate::odt::tests::styles_of(&pkg).contains(r#"<style:style style:name="Frame" style:family="graphic"/>"#));
+}

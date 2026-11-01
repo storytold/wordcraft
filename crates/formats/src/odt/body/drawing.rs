@@ -87,7 +87,8 @@ impl Body<'_> {
                 f.flip_v ^= v;
             }
             // Kept when it floats, or turns or mirrors the object in line.
-            let float = float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v);
+            let float =
+                float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let look = std::mem::take(&mut self.frame_look);

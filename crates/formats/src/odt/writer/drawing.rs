@@ -94,7 +94,16 @@ pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, St
         }
         Place::Text(f) => {
             let turn = f.filter(|f| crate::odt::frames::turned(f)).map(|f| crate::odt::frames::transform_attr(0.0, 0.0, w, h, f.rot));
-            (anchor("as-char"), " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), turn.unwrap_or_default())
+            // Raised or lowered (its float's `y`, points up): its top that far from the baseline
+            // (§20.387 `from-top`); else standing on it.
+            match f.map(|f| f.y).filter(|r| r.is_finite() && *r != 0.0 && turn.is_none()) {
+                Some(raise) => (
+                    anchor("as-char"),
+                    " style:vertical-pos=\"from-top\" style:vertical-rel=\"baseline\"".to_string(),
+                    format!(" svg:y=\"{}\"", pt(-(h + raise))),
+                ),
+                None => (anchor("as-char"), " style:vertical-pos=\"top\" style:vertical-rel=\"baseline\"".to_string(), turn.unwrap_or_default()),
+            }
         }
         Place::Member(_, _, f) => {
             let (x, y) = place.origin();
@@ -308,7 +317,7 @@ impl Writer {
         self.close_ins(out);
         let frame = box_look_attrs(look, &mut self.draw_defs, self.prefix);
         let (anchor, props, xy) = placement(place, size.0, size.1);
-        let style = self.graphic_style(format!("{props}{frame}"));
+        let style = self.graphic_style(format!("{}{props}{frame}", super::FRAME_PARENT));
         let mut body = self.story(blocks);
         if body.is_empty() {
             body.push_str("<text:p/>");

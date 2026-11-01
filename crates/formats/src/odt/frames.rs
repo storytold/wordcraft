@@ -268,8 +268,33 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
     if let Some((.., rot)) = turned {
         f.rot = rot;
     }
+    if f.wrap == Wrap::Inline {
+        f.y = inline_raise(g, y.as_deref().and_then(length), h);
+    }
     f
 }
+
+/// How far a frame `h` points tall in line with the text is raised from standing on the
+/// baseline (points, negative lowered; WordCraft keeps it in an inline [`Float`]'s `y`): its
+/// `style:vertical-pos` relative to the baseline (§20.387, §20.388; LibreOffice's placement
+/// when no `style:vertical-rel` is given) — `top` stands on it, `middle` is centred on it,
+/// `bottom` hangs from it, `from-top` has its top `svg:y` below it. Placement relative to the
+/// character or line stays on the baseline.
+fn inline_raise(g: &Graphic, y: Option<f32>, h: f32) -> f32 {
+    if !matches!(g.vrel.as_deref(), None | Some("baseline")) || !h.is_finite() {
+        return 0.0;
+    }
+    let raise = match g.vpos.as_deref() {
+        Some("middle") => -h / 2.0,
+        Some("bottom") => -h,
+        Some("from-top") => -(h + y.filter(|v| v.is_finite()).unwrap_or(0.0)),
+        _ => 0.0,
+    };
+    raise.clamp(-MAX_RAISE, MAX_RAISE)
+}
+
+/// Most an inline frame is raised or lowered, points (22 inches).
+const MAX_RAISE: f32 = 1584.0;
 
 /// Most operations of a `draw:transform` read.
 const MAX_TRANSFORMS: usize = 16;

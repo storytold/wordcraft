@@ -592,7 +592,8 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     }
     let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen(
         "</office:styles>",
-        &format!("{draw_xml}{named_text_xml}</office:styles>"),
+        // The Frame style text boxes derive from (it states nothing: their own styles do).
+        &format!("{draw_xml}{named_text_xml}<style:style style:name=\"Frame\" style:family=\"graphic\"/></office:styles>"),
         1,
     );
     w.pictures.append(&mut hw.pictures);

@@ -78,6 +78,10 @@ pub(super) const NS: &str = concat!(
     "office:version=\"1.3\""
 );
 
+/// Marks a graphic style (in `Writer::graphic_styles`) as a text box frame's: derived from the
+/// Frame style (see `Writer::automatic_styles`).
+pub(super) const FRAME_PARENT: &str = "\u{0}frame";
+
 pub(super) fn pt(v: f32) -> String {
     let s = format!("{:.2}", v);
     format!("{}pt", s.trim_end_matches('0').trim_end_matches('.'))
@@ -717,8 +721,14 @@ impl Writer {
             }
         }
         for (i, props) in self.graphic_styles.iter().enumerate() {
+            // A text box's frame derives from LibreOffice's Frame style, without which
+            // LibreOffice ignores its border (`fo:border`) and outlines it as a drawing shape.
+            let (parent, props) = match props.strip_prefix(FRAME_PARENT) {
+                Some(rest) => (" style:parent-style-name=\"Frame\"", rest),
+                None => ("", props.as_str()),
+            };
             s.push_str(&format!(
-                "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"><style:graphic-properties{props}/></style:style>",
+                "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"{parent}><style:graphic-properties{props}/></style:style>",
                 self.prefix,
                 i + 1
             ));
