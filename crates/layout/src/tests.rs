@@ -2752,8 +2752,18 @@ fn paragraphs_with_the_same_borders_join_in_one_shaded_box() {
     let items = &l.pages[0].items;
     let line_y: Vec<f32> = items.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).collect();
     let fills: Vec<Rect> = items.iter().filter_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).collect();
-    let bars: Vec<(f32, f32)> =
-        items.iter().filter_map(|i| if let Placed::Rule { x0, x1, y0, y1, .. } = i { (x0 == x1).then_some((*y0, *y1)) } else { None }).collect();
+    let bars: Vec<(f32, f32)> = items
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Rule { x0, x1, y0, y1, .. } if x0 == x1 => Some((*y0, *y1)),
+            Placed::BorderBox { rect, borders } if borders.left.is_some() => {
+                let top_w = borders.top.filter(|b| b.is_visible()).map_or(0.0, |b| b.width);
+                let bot_w = borders.bottom.filter(|b| b.is_visible()).map_or(0.0, |b| b.width);
+                Some((rect.y - top_w, rect.bottom() + bot_w))
+            }
+            _ => None,
+        })
+        .collect();
     assert_eq!(fills.len(), 3, "{fills:?}");
     // The title: shaded from the top border's outer edge, its line below the border's room.
     assert!((line_y[1] - fills[0].y - 6.25).abs() < 0.01, "{line_y:?} {fills:?}");
@@ -3533,7 +3543,7 @@ fn line_numbers_borders_text_boxes() {
     let p = &l.pages[0];
     let numbers = p.items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(u32::MAX), .. })).count();
     assert_eq!(numbers, 3);
-    assert!(p.items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count() >= 4);
+    assert!(p.items.iter().filter(|i| matches!(i, Placed::Rule { .. } | Placed::BorderBox { .. })).count() >= 1);
     assert!(l.caret(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }).is_some());
 }
 
@@ -10511,9 +10521,9 @@ fn a_paragraph_left_out_whole_draws_no_borders_or_shading() {
     d.format_range(&Pos::body(1, 0), &Pos::body(2, 0), &|c| c.del = Some(0)).unwrap();
     let decorations = |hide_deleted: bool| {
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
-        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. } | Placed::Rule { .. })).count()
+        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. } | Placed::Rule { .. } | Placed::BorderBox { .. })).count()
     };
-    assert_eq!(decorations(false), 5, "shading and four borders with markup");
+    assert_eq!(decorations(false), 2, "shading and border box with markup");
     assert_eq!(decorations(true), 0, "none in the final text");
 }
 

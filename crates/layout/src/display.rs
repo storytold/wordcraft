@@ -77,6 +77,8 @@ pub enum Draw {
         /// [`Draw::Glyphs`]; `None` for every other line.
         text_bg: Option<Rgb>,
     },
+    /// A rectangular border box (page borders, paragraph boxes) with joined continuous corners.
+    BorderBox { rect: Rect, top: Option<Border>, bottom: Option<Border>, left: Option<Border>, right: Option<Border>, alpha: f32 },
     Image {
         rect: Rect,
         media: String,

@@ -117,6 +117,7 @@ fn bounds(it: &Placed) -> Option<Rect> {
         | Placed::Graphic { rect, .. }
         | Placed::Clip { rect, .. }
         | Placed::Cell { rect, .. }
+        | Placed::BorderBox { rect, .. }
         | Placed::Object { rect, .. } => Some(*rect),
         Placed::Rule { x0, y0, x1, y1, .. } => Some(Rect::new(x0.min(*x1), y0.min(*y1), (x1 - x0).abs(), (y1 - y0).abs())),
     }

@@ -105,16 +105,100 @@ pub(crate) struct ColumnLines {
 
 /// Page borders, measured from the page edge (Word's default), so they surround the header,
 /// footer and line numbers. The first items of every printed page.
-pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
+fn page_border_thickness(b: &Option<wordcraft_doc::props::Border>) -> f32 {
+    b.filter(|b| b.is_visible()).map_or(0.0, |b| {
+        let w = if b.style == wordcraft_doc::props::BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) };
+        match b.style {
+            wordcraft_doc::props::BorderStyle::Double => {
+                let t = (w * 0.35).max(0.5);
+                let gap = (w * 0.3).max(0.4);
+                2.0 * t + gap
+            }
+            wordcraft_doc::props::BorderStyle::Triple => {
+                let t = (w * 0.22).max(0.4);
+                let gap = (w * 0.17).max(0.3);
+                3.0 * t + 2.0 * gap
+            }
+            wordcraft_doc::props::BorderStyle::ThinThickSmallGap | wordcraft_doc::props::BorderStyle::ThickThinSmallGap => {
+                let t_thin = (w * 0.28).max(0.4);
+                let t_thick = (w * 0.52).max(0.75);
+                let gap = (w * 0.15).max(0.3);
+                t_thin + gap + t_thick
+            }
+            wordcraft_doc::props::BorderStyle::ThinThickLargeGap | wordcraft_doc::props::BorderStyle::ThickThinLargeGap => {
+                let t_thin = (w * 0.28).max(0.4);
+                let t_thick = (w * 0.52).max(0.75);
+                let gap = (w * 0.45).max(0.8);
+                t_thin + gap + t_thick
+            }
+            wordcraft_doc::props::BorderStyle::ThinThick | wordcraft_doc::props::BorderStyle::ThickThin => {
+                let t_thin = (w * 0.28).max(0.4);
+                let t_thick = (w * 0.52).max(0.75);
+                let gap = (w * 0.25).max(0.5);
+                t_thin + gap + t_thick
+            }
+            wordcraft_doc::props::BorderStyle::ThinThickThinSmallGap => {
+                let t_thin = (w * 0.2).max(0.35);
+                let t_thick = (w * 0.4).max(0.6);
+                let gap = (w * 0.1).max(0.25);
+                2.0 * t_thin + t_thick + 2.0 * gap
+            }
+            wordcraft_doc::props::BorderStyle::ThinThickThinLargeGap => {
+                let t_thin = (w * 0.2).max(0.35);
+                let t_thick = (w * 0.4).max(0.6);
+                let gap = (w * 0.35).max(0.6);
+                2.0 * t_thin + t_thick + 2.0 * gap
+            }
+            wordcraft_doc::props::BorderStyle::ThinThickThin => {
+                let t_thin = (w * 0.2).max(0.35);
+                let t_thick = (w * 0.4).max(0.6);
+                let gap = (w * 0.2).max(0.4);
+                2.0 * t_thin + t_thick + 2.0 * gap
+            }
+            wordcraft_doc::props::BorderStyle::Wave => (w * 1.2).max(0.8) * 2.0,
+            wordcraft_doc::props::BorderStyle::DoubleWave => (w * 1.2).max(0.8) * 2.8,
+            _ => w,
+        }
+    })
+}
+
+pub(crate) fn page_border_rules(s: &SectionProps, is_first_page: bool) -> Vec<Placed> {
     let mut v = Vec::new();
     if let Some(b) = &s.page_borders {
-        let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
-        let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-        for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
-            if let Some(e) = e.filter(Border::is_visible) {
-                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
+        if !b.any_visible() {
+            return v;
+        }
+        let opts = s.page_border_options.as_ref();
+        if let Some(opt) = opts {
+            match opt.display {
+                wordcraft_doc::PageBorderDisplay::AllPages => {}
+                wordcraft_doc::PageBorderDisplay::FirstPage if !is_first_page => return v,
+                wordcraft_doc::PageBorderDisplay::NotFirstPage if is_first_page => return v,
+                _ => {}
             }
         }
+        let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
+        let offset = opts.map(|o| o.offset_from).unwrap_or(wordcraft_doc::PageBorderOffset::Text);
+        let (x0, x1, y0, y1) = match offset {
+            wordcraft_doc::PageBorderOffset::Page => {
+                let wt = page_border_thickness(&b.top);
+                let wb = page_border_thickness(&b.bottom);
+                let wl = page_border_thickness(&b.left);
+                let wr = page_border_thickness(&b.right);
+                (sp(&b.left) + wl, s.page_w - sp(&b.right) - wr, sp(&b.top) + wt, s.page_h - sp(&b.bottom) - wb)
+            }
+            wordcraft_doc::PageBorderOffset::Text => {
+                let sl = s.margin_left + s.gutter;
+                let sr = s.page_w - s.margin_right;
+                let surround_h = opts.map(|o| o.surround_header).unwrap_or(true);
+                let surround_f = opts.map(|o| o.surround_footer).unwrap_or(true);
+                let st = if surround_h { s.header.min(s.margin_top) } else { s.margin_top };
+                let sb = if surround_f { (s.page_h - s.footer).max(s.page_h - s.margin_bottom) } else { s.page_h - s.margin_bottom };
+                (sl - sp(&b.left), sr + sp(&b.right), st - sp(&b.top), sb + sp(&b.bottom))
+            }
+        };
+        let rect = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs());
+        v.push(Placed::BorderBox { rect, borders: *b });
     }
     v
 }
@@ -317,7 +401,8 @@ impl PageBuilder<'_> {
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
-            decor = page_border_rules(s);
+            let is_first_page = !self.pages.iter().any(|p| p.section == self.sect_idx);
+            decor = page_border_rules(s, is_first_page);
         }
         self.page_items_start = decor.len();
         self.block_marks.clear();

@@ -551,6 +551,9 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
                 out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
             }
+            Placed::BorderBox { rect, borders } if rect.y < limit => {
+                out.push(Placed::BorderBox { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), borders });
+            }
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
@@ -639,22 +642,23 @@ pub(crate) fn push_para(
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
-        // All four lines lie beyond their distance from the text; top and bottom reach the corners.
-        if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
-            let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
-        }
-        if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
-            let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
-        }
-        if let Some(t) = b.left.filter(Border::is_visible) {
-            let bx = lx + t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
-        }
-        if let Some(t) = b.right.filter(Border::is_visible) {
-            let bx = rx - t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
+        let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
+        let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
+        let top_y = b.top.filter(|_| e.top > 0.0).map(|t| y - t.space).unwrap_or(top);
+        let bot_y = b.bottom.filter(|_| e.bottom > 0.0).map(|t| y + h + t.space).unwrap_or(bottom);
+        let effective_top = if e.top > 0.0 { b.top } else { None };
+        let effective_bottom = if e.bottom > 0.0 { b.bottom } else { None };
+        let box_borders = wordcraft_doc::props::Borders {
+            top: effective_top,
+            bottom: effective_bottom,
+            left: b.left,
+            right: b.right,
+            between: None,
+            inside_v: None,
+        };
+        if box_borders.any_visible() {
+            let rect = Rect::new(lx.min(rx), top_y.min(bot_y), (rx - lx).abs(), (bot_y - top_y).abs());
+            items.push(Placed::BorderBox { rect, borders: box_borders });
         }
     }
     y + h

@@ -98,12 +98,30 @@ pub enum Stroke {
     Double,
     /// Three thin lines side by side (a `triple` border).
     Triple,
+    ThickThin,
+    ThinThick,
+    ThinThickThin,
+    ThickThinSmallGap,
+    ThinThickSmallGap,
+    ThinThickThinSmallGap,
+    ThickThinLargeGap,
+    ThinThickLargeGap,
+    ThinThickThinLargeGap,
     Wave,
+    DoubleWave,
     /// Word's border patterns (paragraph, cell and table borders): dots one width on, one off;
     /// dashes three on, one off; dash and dot.
     BorderDotted,
     BorderDashed,
+    BorderDashSmallGap,
     BorderDotDash,
+    BorderDotDotDash,
+    DashDotStroked,
+    DashLongDash,
+    ThreeDEmboss,
+    ThreeDEngrave,
+    Outset,
+    Inset,
 }
 
 impl Stroke {
@@ -115,8 +133,11 @@ impl Stroke {
             Stroke::Dashed => Some(&[4.0, 2.0]),
             Stroke::BorderDotted => Some(&[1.0, 1.0]),
             Stroke::BorderDashed => Some(&[3.0, 1.0]),
-            Stroke::BorderDotDash => Some(&[3.0, 1.0, 1.0, 1.0]),
-            Stroke::Solid | Stroke::Double | Stroke::Triple | Stroke::Wave => None,
+            Stroke::BorderDashSmallGap => Some(&[3.0, 0.75]),
+            Stroke::BorderDotDash | Stroke::DashDotStroked => Some(&[3.0, 1.0, 1.0, 1.0]),
+            Stroke::BorderDotDotDash => Some(&[3.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            Stroke::DashLongDash => Some(&[6.0, 2.0]),
+            _ => None,
         }
     }
 }

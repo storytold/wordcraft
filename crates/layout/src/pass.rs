@@ -146,6 +146,7 @@ fn reflow_sect(first: &SectionProps, opts: &LayoutOptions) -> SectionProps {
         s.page_h = if opts.read_height.is_finite() { opts.read_height.clamp(144.0, 20_000.0) } else { 500.0 };
         s.margin_bottom = 18.0;
         s.page_borders = None;
+        s.page_border_options = None;
         s.line_numbers = None;
     }
     s.margin_left = 18.0;
