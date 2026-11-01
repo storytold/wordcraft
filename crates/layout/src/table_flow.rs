@@ -104,7 +104,7 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
         return false;
     }
-    table::split_row(laid, room).is_some()
+    table::split_row_keeping_cells(laid, room).is_some()
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
@@ -171,7 +171,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row(row, room).is_some())) {
+        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row_keeping_cells(row, room).is_some()))
+        {
             pb.advance(block, body_top);
         }
     }
@@ -215,8 +216,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // An at-least row with less room than its minimum moves on whole, unless nothing
             // is above it on this page (moving on would gain nothing).
             let room = pb.bottom - pb.y;
-            let moves_on = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers && short_of_min(ri, room);
-            let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
+            // Its first part on a page that already holds something leaves no cell empty
+            // (#4272): moving on can give the cell room there.
+            let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
+            let moves_on = first_part && short_of_min(ri, room);
+            let split = match (splittable && !moves_on && !defer_kept, first_part) {
+                (false, _) => None,
+                (true, true) => table::split_row_keeping_cells(cur, room),
+                (true, false) => table::split_row(cur, room),
+            };
             match split {
                 Some((a, b)) => {
                     place(pb, &a);

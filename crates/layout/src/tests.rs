@@ -3931,7 +3931,7 @@ fn split_row_rejects_a_hostile_cut() {
         height,
         items: vec![line(0.0), line(150.0)],
         bottom,
-        cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0) }],
+        cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -3945,8 +3945,8 @@ fn split_row_rejects_a_hostile_cut() {
     }
     // Cell ranges past the items are ignored.
     let mut r = row(200.0, 4.0);
-    r.cells.push(CellPart { top: 2.0, items: 5..9, end: None });
-    r.cells.push(CellPart { top: 2.0, items: std::ops::Range { start: 2, end: 1 }, end: None });
+    r.cells.push(CellPart { top: 2.0, items: 5..9, end: None, align: None });
+    r.cells.push(CellPart { top: 2.0, items: std::ops::Range { start: 2, end: 1 }, end: None, align: None });
     assert!(split_row(&r, 100.0).is_some());
 }
 
@@ -7015,6 +7015,88 @@ fn repeated_header_moves_with_a_first_row_that_moves_on_whole() {
     assert_eq!(pages, vec![vec![], vec![0, 1]]);
 }
 
+/// #4272: a filler leaving `room` points, then a three-column table: a one-line heading row and
+/// a row at least `min` points tall (no minimum when 0) whose first cell holds only an inline picture `pic_h` points
+/// tall (one line, single spacing) and whose other cells hold `lines` short lines each. Returns
+/// the layout and, per page, the rows with a first cell there.
+fn picture_row(room: f32, min: f32, pic_h: f32, lines: usize) -> (DocLayout, Vec<Vec<usize>>) {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let (mut d, at) = at_least_rows_filler(room);
+    let mut t = Table::new(2, 3, 468.0);
+    if min > 0.0 {
+        t.rows[1].props.height = Some(min);
+        t.rows[1].props.height_rule = HeightRule::AtLeast;
+    }
+    for c in 1..3 {
+        t.rows[1].cells[c].blocks = lines_in_cell(lines, "N/A");
+    }
+    set_at_least_row_spacing(&mut t);
+    let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.insert_object(0, picture(114.0, pic_h, Default::default()), &Default::default()).unwrap();
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.insert_block(StoryRef::Body, &Path::top(at), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let pages = at_least_rows_pages(&l);
+    (l, pages)
+}
+
+/// The height of row `row`'s first cell on each page it has a part on.
+fn picture_row_parts(l: &DocLayout, row: usize) -> Vec<f32> {
+    l.pages
+        .iter()
+        .filter_map(|p| {
+            p.items.iter().find_map(|i| if let Placed::Cell { rect, row: r, cell: 0, .. } = i { (*r == row).then_some(rect.h) } else { None })
+        })
+        .collect()
+}
+
+#[test]
+fn an_at_least_row_grown_by_its_picture_moves_on_whole_rather_than_leave_the_picture_behind() {
+    // The report in #4272: a row at least 193.45 pt (3869 twips) with a 203 pt inline picture in
+    // its first cell and "N/A" in the others, so the picture makes the row taller than its
+    // minimum. With room for the minimum but not for the picture, the row used to split: the
+    // "N/A" cells stayed beside an empty picture cell and the picture went on alone. The picture
+    // is one line, which Word never splits, so the row moves on whole. The same goes for a row
+    // with no minimum height.
+    for min in [193.45, 0.0] {
+        let (l, pages) = picture_row(214.0, min, 203.0, 1);
+        assert_eq!(pages, vec![vec![0], vec![1]], "min {min}{}", pagination_fixture_diagnostics("picture_row/grown", None, &l));
+        assert_eq!(l.pages.len(), 2, "min {min}");
+        let parts = picture_row_parts(&l, 1);
+        assert_eq!(parts.len(), 1, "min {min}: the picture row is in one piece: {parts:?}");
+        assert!(parts[0] >= 203.0, "min {min}: the row holds its picture: {parts:?}");
+    }
+}
+
+#[test]
+fn a_picture_row_too_tall_for_any_page_splits_from_the_top_of_the_next_one() {
+    // A row of 60 lines beside a 700 pt picture (the body is 648 pt), under a heading row at the
+    // top of page 1: like an at-least row taller than a page (#1742), it starts page 2 rather
+    // than leave its picture cell empty under the heading, then splits from there, its text going
+    // on over the pages (at the top of a page moving on would gain nothing).
+    let (l, pages) = picture_row(648.0, 0.0, 700.0, 60);
+    let rows: Vec<&Vec<usize>> = pages.iter().filter(|p| !p.is_empty()).collect();
+    assert!(
+        rows.len() >= 3 && rows[0] == &vec![0] && rows[1..].iter().all(|p| p == &&vec![1]),
+        "{pages:?}{}",
+        pagination_fixture_diagnostics("picture_row/too_tall", None, &l)
+    );
+}
+
+#[test]
+fn a_picture_row_that_fits_stays_and_text_rows_beside_a_short_picture_still_split() {
+    // The same row with room for all of it stays on page 1.
+    let (_, pages) = picture_row(260.0, 193.45, 203.0, 1);
+    assert_eq!(pages, vec![vec![0, 1]]);
+    // A row of 30 lines beside a 40 pt picture, at least 100 pt: with 225 pt left the picture
+    // and the first lines fit, so the row still splits as before.
+    let (l, pages) = picture_row(225.0, 100.0, 40.0, 30);
+    assert_eq!(pages, vec![vec![0, 1], vec![1]], "{}", pagination_fixture_diagnostics("picture_row/text_splits", None, &l));
+}
+
 #[test]
 fn text_overflowing_an_exact_row_is_clipped_to_it() {
     use wordcraft_doc::props::HeightRule;
@@ -7100,7 +7182,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
-        cells: vec![CellPart { top: 2.0, items: 0..4, end: None }],
+        cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -10397,7 +10479,7 @@ fn split_cell_moves_image_frame() {
             bottom: 4.0,
             edge: 0.0,
             items: vec![kept, image, frame],
-            cells: vec![CellPart { top, items: 0..3, end: Some(170.0) }],
+            cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
@@ -10462,6 +10544,89 @@ fn row_keep_doc() -> Document {
     t.rows[1].cells[0].blocks = vec![para("", plain.clone()), para("Following row", plain.clone())];
     d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(190.0)), ..plain }), Arc::new(Block::Table(t))];
     d
+}
+
+/// The tops of the lines of each cell of a two-cell row split across pages, by page: the
+/// first cell aligned with `valign` and `left` lines long, the second 30 lines long, every line a
+/// paragraph with `after` points after it.
+fn split_valign_lines(valign: wordcraft_doc::props::VAlign, left: usize, after: f32) -> Vec<[Vec<f32>; 2]> {
+    use wordcraft_doc::props::LineSpacing;
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(after),
+        line_spacing: Some(LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 360.0;
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    d.last_section.margin_left = 36.0;
+    d.last_section.margin_right = 36.0;
+    let mut t = Table::new(1, 2, 328.0);
+    t.props.style = None;
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].cells[0].props.valign = Some(valign);
+    t.rows[0].cells[0].blocks = (0..left).map(|i| para(&format!("Label {i}"), plain.clone())).collect();
+    t.rows[0].cells[1].blocks = (0..30).map(|i| para(&format!("Line {i}"), plain.clone())).collect();
+    d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(100.0)), ..plain }), Arc::new(Block::Table(t))];
+    lay(&d)
+        .pages
+        .iter()
+        .map(|page| {
+            let mut cells = [Vec::new(), Vec::new()];
+            for item in &page.items {
+                if let Placed::Lines { path, y, .. } = item
+                    && path.0.len() == 4
+                    && path.0[0] == 1
+                {
+                    cells[path.0[2] as usize].push(*y);
+                }
+            }
+            cells
+        })
+        .collect()
+}
+
+#[test]
+fn a_middle_or_bottom_cell_of_a_split_row_lines_up_on_the_first_page() {
+    use wordcraft_doc::props::VAlign;
+    // Measured in Word: a centred or bottom cell whose text fits in the part of the row left on
+    // the page is aligned within that part (as tall as the other cells' text there), not left
+    // for the top of the next page.
+    for (valign, left) in [(VAlign::Center, 1), (VAlign::Center, 3), (VAlign::Bottom, 1)] {
+        let pages = split_valign_lines(valign, left, 0.0);
+        let [labels, lines] = &pages[0];
+        assert!(lines.len() > 5 && lines.len() < 30, "the row splits: {pages:?}");
+        assert_eq!(labels.len(), left, "{valign:?} {left}: all the labels stay on the first page: {pages:?}");
+        assert!(pages[1..].iter().all(|p| p[0].is_empty()), "{valign:?} {left}: nothing of the first cell moves on: {pages:?}");
+        let (top, bottom) = (lines[0], lines[lines.len() - 1] + 12.0);
+        let (first, last) = (labels[0], labels[left - 1] + 12.0);
+        let want = match valign {
+            VAlign::Bottom => bottom - 12.0 * left as f32,
+            _ => top + (bottom - top - 12.0 * left as f32) / 2.0,
+        };
+        assert!((first - want).abs() < 0.5, "{valign:?} {left}: first label at {first}, want {want}: {pages:?}");
+        assert!(last <= bottom + 0.01, "{valign:?} {left}: the labels end above the cut: {pages:?}");
+    }
+    // The other cells' text kept on the page ends with its last paragraph's space after: a bottom
+    // cell's last line lines up with theirs.
+    let pages = split_valign_lines(VAlign::Bottom, 1, 6.0);
+    let [labels, lines] = &pages[0];
+    assert_eq!(labels.last(), lines.last(), "{pages:?}");
+    // Text that doesn't all fit runs from the top of the cell, with the rest on the next page.
+    let pages = split_valign_lines(VAlign::Center, 25, 0.0);
+    let [labels, lines] = &pages[0];
+    assert_eq!(labels.first(), lines.first(), "a centred cell too long for the page starts at the top: {pages:?}");
+    assert_eq!(labels.len(), lines.len(), "{pages:?}");
+    assert_eq!(pages[1][0].len(), 25 - labels.len(), "{pages:?}");
 }
 
 fn row_keep_pages(d: &Document) -> Vec<usize> {
