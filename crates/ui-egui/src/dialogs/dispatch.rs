@@ -115,6 +115,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         spacing,
         kern,
         kern_at,
+        ligatures,
         ..
     } = d
     else {
@@ -193,6 +194,24 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let points_label = ui.label(tl!("Points and above"));
             points.labelled_by(points_label.id);
         });
+        ui.end_row();
+        // Word's Ligatures choices; WordCraft draws standard and contextual ones unless
+        // the text asks otherwise. Another combination from a file shows by its name.
+        const LIGATURES: [(&str, &str); 5] = [
+            ("none", "None"),
+            ("standard", "Standard only"),
+            ("standardContextual", "Standard and contextual"),
+            ("historicalDiscretional", "Historical and discretional"),
+            ("all", "All"),
+        ];
+        let ligatures_label = ui.label(tl!("Ligatures:"));
+        let shown = LIGATURES.iter().find(|(v, _)| v == ligatures).map_or(ligatures.as_str(), |(_, l)| tl!(l));
+        let combo = craft_ui::ComboBox::from_id_salt("fontdlg_ligatures").width(220.0).selected_text(shown).show_ui(ui, |ui| {
+            for (v, l) in LIGATURES {
+                ui.selectable_value(ligatures, v.to_string(), tl!(l));
+            }
+        });
+        combo.response.labelled_by(ligatures_label.id);
         ui.end_row();
     });
     ui.separator();

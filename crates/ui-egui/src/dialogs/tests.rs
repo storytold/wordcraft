@@ -824,6 +824,40 @@ fn font_dialog_sets_kerning_for_fonts() {
     assert_eq!((kern(&app, 0), kern(&app, 7)), (Some(14.0), Some(0.0)), "each run keeps its kerning");
 }
 
+/// Ligatures stay on by default (standard and contextual); choosing None in the Font dialog
+/// turns them off on the selection in one undo step. OK without touching the choice writes
+/// nothing, and mixed text keeps each run's own ligatures.
+#[test]
+fn font_dialog_turns_ligatures_off() {
+    use wordcraft_doc::props::Ligatures;
+    let mut app = app_with("office affine");
+    let _ = app.run("select.all", json!({}));
+    let lig = |app: &WordApp, off| app.session.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props_of_char(off).ligatures);
+    let Some(mut d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+    let Dialog::Font { ligatures, bold, .. } = &mut d else { panic!() };
+    assert_eq!(ligatures, "standardContextual", "on by default");
+    *bold = true;
+    apply_font(&mut app, &d);
+    assert_eq!(lig(&app, 0), None, "left alone, nothing is written");
+    let Some(mut d) = Dialog::open("font", &mut app) else { panic!() };
+    let Dialog::Font { ligatures, .. } = &mut d else { panic!() };
+    *ligatures = "none".into();
+    apply_font(&mut app, &d);
+    assert_eq!((lig(&app, 0), lig(&app, 8)), (Some(Ligatures::default()), Some(Ligatures::default())));
+    let _ = app.run("edit.undo", json!({}));
+    assert_eq!(lig(&app, 0), None, "one undo step");
+    let _ = app.run("edit.redo", json!({}));
+    let _ = app.run("select.text", json!({"text": "office"}));
+    let _ = app.run("format.set", json!({"props": {"ligatures": {"standard": true}}}));
+    let _ = app.run("select.all", json!({}));
+    let Some(mut d) = Dialog::open("font", &mut app) else { panic!() };
+    let Dialog::Font { ligatures, size, .. } = &mut d else { panic!() };
+    assert_eq!(ligatures, "", "mixed ligatures show no choice");
+    *size = "13".into();
+    apply_font(&mut app, &d);
+    assert_eq!((lig(&app, 0), lig(&app, 8)), (Some(Ligatures::from_ooxml("standard").unwrap_or_default()), Some(Ligatures::default())));
+}
+
 /// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the
 /// installed family instead of storing the typed text.
 #[test]

@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
-use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{Border, CharProps, Highlight, Ligatures, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_doc::{InlineObject, PartKind, Pos, RevisionKind, StoryRef};
 
@@ -884,6 +884,9 @@ pub fn state(s: &Session) -> Value {
         "spacing": same(&|r| json!(r.spacing)),
         // Kerning for fonts: the smallest kerned size, points; 0 = off.
         "kern": same(&|r| json!(r.kern)),
+        // The OpenType ligatures drawn, as their `w14:ligatures` name (`none`,
+        // `standardContextual`…); text that never asked shows WordCraft's default.
+        "ligatures": same(&|r| json!(r.ligatures.unwrap_or(Ligatures::DEFAULT).ooxml())),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
         "highlight": same(&|r| json!(r.highlight.map(|c| c.hex()))),
         "style": style,

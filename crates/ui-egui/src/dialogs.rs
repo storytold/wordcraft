@@ -88,6 +88,9 @@ pub enum Dialog {
         /// differs, shown neither on nor off; `kern_at` is its Points and above size.
         kern: Option<bool>,
         kern_at: f32,
+        /// Ligatures (`w14:ligatures`), from the Advanced tab, as their OOXML name (`none`,
+        /// `standardContextual`…); empty while the selected text differs.
+        ligatures: String,
         /// The properties the fields stood for when the dialog opened: OK sends only what the
         /// user changed, so formatting the dialog can't show (a double underline) or left
         /// alone stays as it is.
@@ -610,6 +613,7 @@ impl Dialog {
                     spacing: st.get("spacing").and_then(Value::as_f64).unwrap_or(0.0) as f32,
                     kern: kern.map(|k| k > 0.0),
                     kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
+                    ligatures: s("ligatures"),
                     start: serde_json::Map::new(),
                 };
                 let props = font_props(&d);

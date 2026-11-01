@@ -7325,6 +7325,23 @@ fn format_state_reports_kerning_for_fonts() {
     assert_eq!(run(&mut s, "format.state", json!({}))["kern"], serde_json::Value::Null);
 }
 
+/// Ligatures at the selection, for the Font dialog: text that never asked shows WordCraft's
+/// default (standard and contextual), turning them off is `none`, null when the text differs.
+#[test]
+fn format_state_reports_ligatures() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "office affine"}));
+    run(&mut s, "select.all", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["ligatures"], json!("standardContextual"));
+    run(&mut s, "format.set", json!({"props": {"ligatures": {}}}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["ligatures"], json!("none"));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props_of_char(0).ligatures), Some(Default::default()));
+    run(&mut s, "select.text", json!({"text": "office"}));
+    run(&mut s, "format.set", json!({"props": {"ligatures": {"standard": true}}}));
+    run(&mut s, "select.all", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["ligatures"], serde_json::Value::Null);
+}
+
 /// #606: the colour commands behind More Colors… take any `RRGGBB` (with or without `#`, any
 /// case), not only the palette's colours; junk is a params error and changes nothing.
 #[test]

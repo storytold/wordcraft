@@ -73,6 +73,8 @@ pub struct Ligatures {
 }
 
 impl Ligatures {
+    /// What WordCraft draws for a run without `w14:ligatures`: standard and contextual ligatures.
+    pub const DEFAULT: Ligatures = Ligatures { standard: true, contextual: true, historical: false, discretional: false };
     /// Every combination of the four flags.
     pub fn all() -> impl Iterator<Item = Ligatures> {
         (0u8..16).map(|b| Ligatures { standard: b & 1 != 0, contextual: b & 2 != 0, historical: b & 4 != 0, discretional: b & 8 != 0 })

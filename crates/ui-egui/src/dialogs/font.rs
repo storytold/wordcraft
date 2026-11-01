@@ -9,7 +9,24 @@ pub(super) fn preview_size(size: &str) -> f32 {
 /// The character properties the Font dialog's fields stand for.
 pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Font {
-        font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, kern, kern_at, ..
+        font,
+        font_ea,
+        size,
+        bold,
+        italic,
+        underline,
+        strike,
+        sup,
+        sub,
+        small_caps,
+        caps,
+        hidden,
+        color,
+        spacing,
+        kern,
+        kern_at,
+        ligatures,
+        ..
     } = d
     else {
         return serde_json::Map::new();
@@ -39,6 +56,9 @@ pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
             props.insert("kern".into(), json!(0.0));
         }
         None => {}
+    }
+    if let Some(l) = wordcraft_doc::props::Ligatures::from_ooxml(ligatures) {
+        props.insert("ligatures".into(), json!(l));
     }
     if !font.trim().is_empty() {
         props.insert("font".into(), json!(font.trim()));
