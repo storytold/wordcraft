@@ -125,7 +125,7 @@ files it was given rather than guarding against other software on the computer.
   one-line control refuses; at most 10,000 lines — the cap is `text.insert`'s own, so a
   control-channel or CLI call is held to it too) |
 | `select_text` | select the n-th occurrence of some text |
-| `get_text` / `inspect_document` | read the document back (verify without screenshots) |
+| `get_text` / `inspect_document` | read the document back (verify without screenshots); a header or footer's `fields` mark those with `perPage` (PAGE, NUMPAGES, STYLEREF…), whose stored result isn't what every page shows (`render_page` shows that); `fieldsTruncated` means a part has more than the 200 listed; a field kept as a range (a TOC, a bibliography) gives at most 2000 characters of its result, with `resultTruncated` when it has more |
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
