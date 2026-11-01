@@ -14,8 +14,8 @@
 //! Supported: one-character flags (at most 128 distinct, any Unicode character — `FLAG UTF-8`),
 //! `PFX`/`SFX` with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross
 //! products, continuation classes on suffixes (at most two suffixes in a row, as in Hunspell),
-//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP` (each capped,
-//! since an `.aff` file is untrusted input). Rejected: compounding,
+//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP` (each capped
+//! in entries and length, since an `.aff` file is untrusted input). Rejected: compounding,
 //! long or numeric flags, `NEEDAFFIX` and the other directives that change which words are correct.
 //!
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
@@ -293,7 +293,7 @@ fn cap_try(s: &str) -> String {
 /// call, so a hostile `.aff` with a huge table would make every suggestion slow (#4999). The
 /// largest tables shipped with LibreOffice's dictionaries have about a thousand (pt_BR 1,056,
 /// nl_NL 885).
-const MAX_REP_ENTRIES: usize = 4096;
+pub(crate) const MAX_REP_ENTRIES: usize = 4096;
 /// Most `MAP` groups kept; real dictionaries have a few dozen at most.
 const MAX_MAP_ENTRIES: usize = 256;
 /// Longest `REP` side or `MAP` group kept, in characters; real ones are under 30. Longer entries
@@ -316,6 +316,16 @@ impl Rules {
             self.map.push(chars);
         }
     }
+}
+
+/// Longest `KEY` value kept, in characters. Suggestions try each letter's neighbours on the
+/// keyboard rows, so an oversized value would slow every suggestion; real ones are a few rows of
+/// a keyboard, well under 200 characters.
+const MAX_KEY_CHARS: usize = 512;
+
+/// Keeps the first [`MAX_KEY_CHARS`] characters of a `KEY` value.
+fn cap_key(s: &str) -> String {
+    s.chars().take(MAX_KEY_CHARS).collect()
 }
 
 /// `0` means empty in Hunspell's strip and append fields.
@@ -364,7 +374,7 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                 }
             }
             "TRY" => r.try_chars = cap_try(at(1)),
-            "KEY" => r.key = at(1).to_string(),
+            "KEY" => r.key = cap_key(at(1)),
             "MAP" => {
                 if !map_header && at(1).parse::<usize>().is_ok() {
                     map_header = true;
@@ -996,7 +1006,7 @@ impl AffixDict {
             let at = |k: usize| f.get(k).copied().unwrap_or("");
             match at(0) {
                 "TRY" => rules.try_chars = cap_try(at(1)),
-                "KEY" => rules.key = at(1).to_string(),
+                "KEY" => rules.key = cap_key(at(1)),
                 "MAP" => rules.push_map(at(1)),
                 "REP" => rules.push_rep(at(1), at(2)),
                 directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
@@ -1132,6 +1142,20 @@ pub(crate) mod tests {
         let compact = AffixDict::from_bytes(&bytes).unwrap();
         assert_eq!(compact.rep().len(), MAX_REP_ENTRIES);
         assert_eq!(compact.map().len(), MAX_MAP_ENTRIES);
+    }
+
+    #[test]
+    fn key_is_capped() {
+        let aff = format!("KEY {}\n", "qwertyuiop|".repeat(1_000));
+        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.key().chars().count(), MAX_KEY_CHARS);
+        assert!(d.key().starts_with("qwertyuiop|asdf") || d.key().starts_with("qwertyuiop|qwerty"));
+        let raw = format!("{MAGIC}\nKEY {}\nWORDS\n\0kot\n", "a".repeat(10_000));
+        let bytes = miniz_oxide::deflate::compress_to_vec(raw.as_bytes(), 6);
+        assert_eq!(AffixDict::from_bytes(&bytes).unwrap().key().chars().count(), MAX_KEY_CHARS);
+        // A real keyboard layout is kept whole.
+        let d = AffixDict::from_hunspell("KEY qwertyuiop|asdfghjkl|zxcvbnm\n", "1\nkot\n", &[]).unwrap();
+        assert_eq!(d.key(), "qwertyuiop|asdfghjkl|zxcvbnm");
     }
 
     #[test]

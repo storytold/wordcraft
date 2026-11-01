@@ -441,19 +441,33 @@ mod tests {
 
     #[test]
     fn a_huge_rep_table_stays_fast() {
-        // #4999: 20,000 `REP a a{i}` lines took over a second for one suggestion of a long word;
-        // the table is capped when the dictionary is read, which bounds the REP round.
-        let mut aff = String::from("SET UTF-8\nTRY aeiou\nREP 20000\n");
-        for i in 0..20_000 {
-            aff.push_str(&format!("REP a a{i}\n"));
-        }
-        let d = AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap();
+        // #4999: 20,000 `REP a a{i}` lines took about a second for one suggestion of a long word.
+        // The table is capped when the dictionary is read, so the crafted dictionary costs no
+        // more than one whose table is exactly at the cap. Timed against that control rather than
+        // a fixed limit, so the check holds on slow and fast machines alike: without the cap the
+        // crafted table has five times the entries and takes about five times as long.
+        let dict = |entries: usize| {
+            let mut aff = String::from("SET UTF-8\nTRY aeiou\n");
+            for i in 0..entries {
+                aff.push_str(&format!("REP a a{i}\n"));
+            }
+            AffixDict::from_hunspell(&aff, "1\nkot\n", &[]).unwrap()
+        };
+        let (crafted, control) = (dict(20_000), dict(crate::affix::MAX_REP_ENTRIES.min(20_000)));
         let word = "a".repeat(40);
-        let t = std::time::Instant::now();
-        let _ = suggest_in(&d, &word, 6);
-        let ms = t.elapsed().as_secs_f64() * 1000.0;
-        eprintln!("one suggestion call with a capped REP table: {ms:.0} ms");
-        assert!(ms < 5_000.0, "{ms} ms");
+        let time = |d: &AffixDict| {
+            // The fastest of three runs, so a stall on a busy machine doesn't decide the result.
+            (0..3)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    let _ = suggest_in(d, &word, 6);
+                    t.elapsed().as_secs_f64()
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let (c, k) = (time(&crafted), time(&control));
+        eprintln!("crafted {:.0} ms, control {:.0} ms", c * 1000.0, k * 1000.0);
+        assert!(c < k * 2.0 + 0.05, "crafted {c:.3} s vs control {k:.3} s");
     }
 
     #[test]
