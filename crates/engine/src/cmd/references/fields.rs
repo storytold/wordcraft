@@ -1,5 +1,6 @@
 use super::properties::{
-    bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property, summary_property, text_result,
+    all_bookmarks, bookmark_text, count_text, date_picture, doc_property, doc_property_arg, new_property_value, set_summary_property,
+    summary_property, text_result,
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
@@ -163,11 +164,17 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     }
     let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
     let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
-    let marks = s.doc.bookmarks();
+    let marks = all_bookmarks(&s.doc);
+    let anchors = body_anchors(&s.doc);
     for (name, pos) in marks {
+        // Where the bookmark's page is measured; `None` (headers, footers, comments) is page 1.
+        let at = match pos.story {
+            StoryRef::Body => Some(pos),
+            StoryRef::Part(id) => anchors.get(&id).cloned(),
+        };
         let l = s.layout();
-        let page_info = l
-            .caret(&pos)
+        let page_info = at
+            .and_then(|at| l.caret(&at))
             .and_then(|c| l.pages.get(c.page))
             .map(|p| {
                 let format = formats.get(p.section).copied().unwrap_or_default();
@@ -277,6 +284,48 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     }
     crate::cmd::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// Where in the body each text box and note is anchored, for F9's PAGEREF (measured in Word for
+/// Windows): a text box's bookmarks are on the page of the box's anchor, a footnote's or
+/// endnote's on the page of its reference mark, a box or note inside another one taking the
+/// outer one's anchor. Headers, footers, comments and stories shown nowhere have none: Word's
+/// F9 puts page 1 for their bookmarks, even for a header first shown on a later page.
+fn body_anchors(doc: &wordcraft_doc::Document) -> std::collections::HashMap<u32, Pos> {
+    let mut out = std::collections::HashMap::new();
+    let mut todo: Vec<(u32, Pos)> = Vec::new();
+    let anchored = |o: &InlineObject| -> Vec<u32> {
+        let mut ids = o.text_boxes();
+        if let InlineObject::NoteRef { id, .. } = o {
+            ids.push(*id);
+        }
+        ids
+    };
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (off, o) in p.objects_with_offsets() {
+            for id in anchored(o) {
+                todo.push((id, Pos { story: StoryRef::Body, path: path.clone(), off }));
+            }
+        }
+    }
+    // Breadth first, each story once: one shown twice, or inside itself, keeps its first anchor.
+    let mut k = 0;
+    while let Some((id, at)) = todo.get(k).cloned() {
+        k += 1;
+        if out.contains_key(&id) {
+            continue;
+        }
+        out.insert(id, at.clone());
+        let story = StoryRef::Part(id);
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for o in &p.objects {
+                todo.extend(anchored(o).into_iter().map(|inner| (inner, at.clone())));
+            }
+        }
+    }
+    out
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,

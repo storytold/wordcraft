@@ -90,8 +90,10 @@ pub fn date_picture(instr: &str) -> Option<String> {
 
 /// The text a bookmark marks (field results included), up to its end in the same paragraph or
 /// the paragraph's end. `None` when there is no such bookmark.
+/// A bookmark in a header, footer, note, comment or text box counts too, as Word's F9 finds it
+/// (measured in Word for Windows); the body's come first.
 pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String> {
-    let (_, start) = doc.bookmarks().into_iter().find(|(n, _)| n == name)?;
+    let (_, start) = all_bookmarks(doc).into_iter().find(|(n, _)| n == name)?;
     let para = doc.para(start.story, &start.path)?;
     let end = para
         .object_offsets()
@@ -99,4 +101,22 @@ pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String
         .find(|o| *o > start.off && matches!(para.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
         .unwrap_or(para.len());
     Some(doc.copy_range(&start, &Pos { off: end, ..start.clone() }).plain_text().trim().to_string())
+}
+
+/// Every bookmark start in the document: the body's, then those of each header, footer, note,
+/// comment and text box in story order.
+pub(super) fn all_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
+    let mut out = doc.bookmarks();
+    for id in doc.parts.keys() {
+        let story = wordcraft_doc::StoryRef::Part(*id);
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for (off, o) in p.objects_with_offsets() {
+                if let InlineObject::BookmarkStart { name } = o {
+                    out.push((name.clone(), Pos { story, path: path.clone(), off }));
+                }
+            }
+        }
+    }
+    out
 }
