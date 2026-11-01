@@ -72,6 +72,9 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
     if ui.selectable_label(app.session.view.style_inspector, tl!("Style Inspector")).clicked() {
         let _ = app.run("styles.inspector", json!({}));
     }
+    // A solid scroll bar takes its own room beside the list instead of floating over the a / ¶ markers.
+    // Its handle keeps the text colour: the solid default fills it like a button, white on white here.
+    ui.spacing_mut().scroll = egui::style::ScrollStyle { foreground_color: true, ..egui::style::ScrollStyle::solid() };
     ui.separator();
     let mut list: Vec<(String, String, bool, bool)> = app
         .session
