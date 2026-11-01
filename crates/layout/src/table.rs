@@ -1398,7 +1398,9 @@ fn apply_pct_widths(t: &Table, grid: &mut [f32], avail: f32) {
         }
         return;
     }
-    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN } else { 0.0 };
+    // A grid too narrow for the floor in every column shares its width out instead, so the table
+    // keeps it.
+    let floor = if t.props.fixed { FIXED_PCT_MIN_COLUMN.min(total / pcts.len() as f32) } else { 0.0 };
     grid.copy_from_slice(&overfull_shares(&pcts, total, floor));
 }
 
