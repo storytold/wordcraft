@@ -2804,6 +2804,87 @@ fn right_clicking_a_link_hides_the_hover_tooltip() {
     assert_eq!(tips(&h), 0, "the link tooltip is gone, so it can't cover the menu");
 }
 
+/// #4560: a caret in a multiword link can remove it through the actual context menu.
+#[test]
+fn the_link_context_menu_removes_the_whole_hyperlink() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("See this linked phrase now")), Default::default());
+    a.run("select.text", json!({"text": "this linked phrase"})).unwrap();
+    a.run("insert.link", json!({"url": "https://example.org/"})).unwrap();
+    a.run("caret.set", json!({"pos": {"block": 0, "off": 11}})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 11)).unwrap();
+    let at = screen(&mut h, c.x, c.top + c.height / 2.0);
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    steps(&mut h, 2);
+    h.get_by_label_contains("Remove Hyperlink").click();
+    steps(&mut h, 3);
+    let s = &h.state().session;
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "See this linked phrase now");
+    assert!(p.run_ranges().all(|(_, c)| c.link.is_none()));
+    assert!(s.sel.is_collapsed());
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).link.as_deref(), Some("https://example.org/"));
+}
+
+#[test]
+fn the_link_context_menu_follows_column_pieces() {
+    use egui_kittest::kittest::Queryable;
+    // Reverse horizontal corners expose links the linear corner-to-corner range misses.
+    for (row, off, top, bottom, visible) in [(0, 2, 4, 2, true), (2, 3, 4, 2, true), (0, 4, 2, 4, false), (1, 1, 2, 4, false), (1, 2, 2, 2, false)] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("abcdef\nabcdef\nabcdef")), Default::default());
+        a.run("select.range", json!({"anchor": Pos::body(row, off), "focus": Pos::body(row, off + 1)})).unwrap();
+        a.run("insert.link", json!({"url": "#column"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        h.state_mut().run("select.column", json!({"anchor": Pos::body(0, top), "focus": Pos::body(2, bottom)})).unwrap();
+        let (doc, sel) = (h.state().session.doc.clone(), h.state().session.sel.clone());
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(&mut h, 3);
+        assert!(h.state().canvas.context_menu_open);
+        assert_eq!(h.query_by_label_contains("Remove Hyperlink").is_some(), visible, "row {row}, offset {off}, corners {top}/{bottom}");
+        if visible {
+            h.get_by_label_contains("Remove Hyperlink").click();
+            steps(&mut h, 3);
+            let mut expected = doc.clone();
+            expected
+                .format_range(&Pos::body(row, off), &Pos::body(row, off + 1), &|c| {
+                    c.link = None;
+                    c.style = None;
+                })
+                .unwrap();
+            assert_eq!(h.state().session.doc, expected);
+            assert_eq!(h.state().session.sel, sel);
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.state().session.doc, doc);
+            h.state_mut().run("edit.redo", json!({})).unwrap();
+            assert_eq!(h.state().session.doc, expected);
+        } else {
+            assert_eq!(h.state().session.doc, doc);
+        }
+    }
+}
+
 /// #688: the drag auto-scroll waits in the middle, ramps in from both edges and never leaves
 /// the scrollable range.
 #[test]

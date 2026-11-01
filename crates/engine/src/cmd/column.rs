@@ -139,7 +139,9 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         extend_to(s, to);
         return result(s);
     }
-    if matches!(id, "caret.set" | "select.collapse") || (mutates && !id.starts_with("format.") && !id.starts_with("para.")) {
+    if matches!(id, "caret.set" | "select.collapse")
+        || (mutates && !id.starts_with("format.") && !id.starts_with("para.") && id != "insert.removeLink")
+    {
         s.column_mode = false;
     }
     // Extending the selection (Shift+arrows, Shift+click, a drag) goes on from where it really
@@ -192,7 +194,7 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
             delete(s, &segs)?;
             super::sel_result(s)
         }
-        "format.changeCase" | "format.clear" | "format.resetChar" => per_row(s, run, v, &segs),
+        "format.changeCase" | "format.clear" | "format.resetChar" | "insert.removeLink" => per_row(s, run, v, &segs),
         _ if id.starts_with("format.") || id.starts_with("para.") || id == "select.column" => run(s, v),
         // Pasting formatting (the format painter) leaves the text alone.
         _ if mutates && (id.starts_with("text.") || (id.starts_with("edit.paste") && id != "edit.pasteFormat")) => {
