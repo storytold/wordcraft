@@ -141,13 +141,13 @@ pub fn tab_letter(tab: &str) -> &'static str {
     TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| *t == tab).map(|(_, l)| *l).unwrap_or("")
 }
 
-/// The tabs that carry a badge, in display order.
+/// The tabs that carry a badge, in display order: the tabs the strip shows (so a tab hidden in
+/// Customize Ribbon has no badge and cannot be picked from the slim bar, #1678), keeping the
+/// contextual ones while the selection may have moved away.
 pub fn badge_tabs(app: &WordApp) -> Vec<&'static str> {
-    let mut v: Vec<&'static str> = TAB_LETTERS.iter().filter(|(_, l)| !l.is_empty()).map(|(t, _)| *t).collect();
-    if crate::ribbon::in_table_public(app) {
-        v.extend_from_slice(&["Table Design", "Table Layout"]);
-    }
-    v
+    let user_tabs = app.session.ribbon.tabs().into_owned();
+    let tabs = crate::ribbon::visible_tabs(&user_tabs, &app.session);
+    tabs.iter().filter_map(|(tab, _)| TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| t == tab).map(|(t, _)| *t)).collect()
 }
 
 /// Letters Alt+letter already drives elsewhere; only Alt-only (or bare) shortcuts count, so

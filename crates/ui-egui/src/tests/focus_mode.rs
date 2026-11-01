@@ -180,6 +180,23 @@ fn keytips_in_focus_show_their_badges_on_the_slim_bar() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('x'), "typing reaches the page again");
 }
 
+/// A tab hidden in Customize Ribbon has no slim-bar badge in Focus: the badges follow the tabs the
+/// strip shows, so a keytip cannot select a tab that is not on display (#1678).
+#[test]
+fn a_tab_hidden_in_customize_ribbon_has_no_slim_bar_badge() {
+    let mut h = canvas_harness();
+    h.state_mut().run("view.focus", json!({})).unwrap();
+    h.run_steps(3);
+    h.state_mut().run("tools.customizeRibbon", json!({"hide": "Review"})).unwrap();
+    h.run_steps(3);
+    assert!(!crate::keytips::badge_tabs(h.state()).contains(&"Review"), "the hidden tab has no badge: {:?}", crate::keytips::badge_tabs(h.state()));
+    let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, crate::chrome::SCREEN_BAR_HEIGHT));
+    let badges = crate::keytips::slim_bar_badges(h.state(), bar, &[]);
+    let letters: Vec<&str> = badges.iter().map(|(_, l)| l.as_str()).collect();
+    assert!(!letters.contains(&"R"), "no badge for the hidden Review tab: {letters:?}");
+    assert!(letters.starts_with(&["F", "H", "N"]), "the visible tabs still badge in order: {letters:?}");
+}
+
 /// The operating system's own full-screen exit (the green button, the window manager) ends
 /// Focus.
 #[test]
