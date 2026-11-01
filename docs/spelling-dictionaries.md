@@ -21,6 +21,10 @@ The easiest way to proof another language is its **Language pack**: the language
 dictionary, hyphenation patterns and licence texts, installed and removed together. English is
 built in; every other language is a pack.
 
+> Language packs can be installed once the first set (language-packs-1) is published. Until then
+> the list of languages stays empty, unless WordCraft was started with a test list
+> (`CRAFT_LANGUAGE_PACK_INDEX`, for testing packs before they are published).
+
 - **File › Options › Language › Language packs** lists the packs, each with its size, its licence
   and a link to where it comes from. Click **Install** next to a language; **Remove** takes it out
   again. The first time, click **Show available languages** to get the list.
@@ -28,8 +32,9 @@ built in; every other language is a pack.
   *Dutch proofing isn't installed.* with an **Install** button showing the download size. ✕ hides
   it for that document. It never shows for a language that has no pack.
 - Installing needs **downloading** on: the same single setting as WordCraft's font downloads
-  (the font store). Clicking Install or Show available languages turns it on; nothing is
-  downloaded before. Each pack is checked against the pinned list's sha256 before it is used.
+  (the font store). Clicking Install, Show available languages or Refresh turns it on; nothing is
+  downloaded before. Each pack is checked against the sha256 in WordCraft's pinned list before it
+  is used.
 - Text in that language is checked and hyphenated as soon as the pack is installed: no restart.
 - **Help › About › Language data** shows the full licence text of the built-in English data and
   of every installed pack.
@@ -37,7 +42,7 @@ built in; every other language is a pack.
   uses the same ones.
 - Agents and scripts use the commands `proof.packs`, `proof.installPack {"locale": "nl"}` and
   `proof.removePack {"locale": "nl"}` (see [MCP](mcp.md#language-packs)). They install only while
-  downloading is on; only you can turn it on, in the app.
+  downloading is on; only you can turn it on, with your own click in the app.
 - The web version has no Language packs; it proofs English.
 
 A dictionary you install yourself (below) still wins: WordCraft looks in the dictionaries folder,

@@ -68,17 +68,28 @@ pub struct Installed {
     pub path: PathBuf,
 }
 
-/// Stops a download between chunks.
+/// Stops a download. On the desktop it is the font store's own flag, which a download watches
+/// even while the server sends nothing.
 #[derive(Clone, Debug, Default)]
-pub struct Cancel(Arc<AtomicBool>);
+pub struct Cancel(#[cfg(not(target_arch = "wasm32"))] pub(crate) craft_font_store::Cancel, #[cfg(target_arch = "wasm32")] Arc<AtomicBool>);
 
 impl Cancel {
     pub fn new() -> Self {
         Self::default()
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn cancel(&self) {
+        self.0.cancel();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+    #[cfg(target_arch = "wasm32")]
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
+    #[cfg(target_arch = "wasm32")]
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
@@ -114,12 +125,24 @@ pub trait Backend: Send + Sync {
 static BACKEND: RwLock<Option<Arc<dyn Backend>>> = RwLock::new(None);
 /// The index last read, so the bar and the list don't read the store's cache every frame.
 static INDEX: Mutex<Option<Vec<Pack>>> = Mutex::new(None);
+/// Bumped whenever [`INDEX`] changes.
+static INDEX_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn set_index(index: Option<Vec<Pack>>) {
+    *INDEX.lock().unwrap_or_else(PoisonError::into_inner) = index;
+    INDEX_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Changes whenever the list of available packs does (a fetch, another backend).
+pub fn index_generation() -> u64 {
+    INDEX_GENERATION.load(Ordering::Relaxed)
+}
 
 /// Use `backend` for packs from now on (`None`: no packs), and point proofing at its folder.
 pub fn set_backend(backend: Option<Arc<dyn Backend>>) {
     let dir = backend.as_ref().and_then(|b| b.packs_dir());
     *BACKEND.write().unwrap_or_else(PoisonError::into_inner) = backend;
-    *INDEX.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    set_index(None);
     jobs().errors.clear();
     wordcraft_proof::packs::set_packs_dir(dir);
 }
@@ -138,6 +161,12 @@ pub fn use_font_store(user: bool) -> bool {
         }
         None => false,
     }
+}
+
+/// [`use_font_store`] with the store in `dir` instead of the person's (`ui_shot`, tests).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn use_font_store_in(dir: PathBuf, user: bool) {
+    set_backend(Some(Arc::new(store::FontStoreBackend::in_dir(dir, user))));
 }
 
 /// The backend in use.
@@ -169,6 +198,8 @@ pub fn available() -> Vec<Pack> {
     }
     let index = clean_index(b.index().unwrap_or_default());
     *cached = Some(index.clone());
+    drop(cached);
+    INDEX_GENERATION.fetch_add(1, Ordering::Relaxed);
     index
 }
 
@@ -187,7 +218,7 @@ pub fn refresh(cancel: &Cancel) -> Result<Vec<Pack>, String> {
         return Err(network_off());
     }
     let index = clean_index(b.fetch_index(cancel)?);
-    *INDEX.lock().unwrap_or_else(PoisonError::into_inner) = Some(index.clone());
+    set_index(Some(index.clone()));
     Ok(index)
 }
 
@@ -639,20 +670,23 @@ impl Backend for FixedBackend {
 
 #[cfg(test)]
 mod tests {
-    /// CP4.4 (`cargo xtask language`): a default build embeds English Language data only; every
-    /// other language comes as a Language pack. A Language build names the locales it embeds in
-    /// `CRAFT_PROOF_EMBED`.
+    /// CP4.4 (`cargo xtask language`): a build embeds English Language data and nothing it
+    /// wasn't asked to. A Language build names the locales it embeds in `CRAFT_PROOF_EMBED`
+    /// (`en` alone: English only); the default embeds the carry-over locales too, until Language
+    /// packs are published and pinned (craft-proof's `DEFAULT_EMBED`; TODO(CP4.4): English only
+    /// then).
     #[test]
     fn the_default_build_embeds_only_english() {
-        if std::env::var_os("CRAFT_PROOF_EMBED").is_some_and(|v| !v.is_empty()) {
-            return;
-        }
-        // `ru-extra` is our own word list (the repository's licence), kept embedded.
-        const OWN_DATA: [&str; 1] = ["ru"];
+        const CARRY_OVER: [&str; 5] = ["de", "pl", "pt", "it", "ru"];
+        let named: Vec<String> = std::env::var("CRAFT_PROOF_EMBED")
+            .unwrap_or_default()
+            .split(',')
+            .map(|l| l.trim().to_ascii_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let allowed = |base: &str| base == "en" || if named.is_empty() { CARRY_OVER.contains(&base) } else { named.iter().any(|n| n == base) };
         let embedded = wordcraft_proof::packs::embedded_locales();
-        assert!(
-            embedded.iter().all(|l| l.starts_with("en-") || OWN_DATA.contains(l)),
-            "only en-* (and our own ru-extra) is embedded by default, got {embedded:?}"
-        );
+        let extra: Vec<&&str> = embedded.iter().filter(|l| !allowed(l.split('-').next().unwrap_or(l))).collect();
+        assert!(extra.is_empty(), "embedded beyond English and {named:?} (or the carry-over by default): {extra:?}");
     }
 }

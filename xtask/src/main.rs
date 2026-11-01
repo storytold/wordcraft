@@ -25,8 +25,8 @@ commands:
                   audit with its missing-translation report, then doctests
   i18n-report     the interface audit: fails on text that skips the catalog, and prints the
                   strings each language has no translation for (never a failure)
-  language        the default build embeds only English Language data (en-*, and our own ru-extra); the other
-                  languages come as Language packs. Skipped in a Language build (CRAFT_PROOF_EMBED set)
+  language        the build embeds English Language data plus only what CRAFT_PROOF_EMBED names (`en`: English
+                  only), or by default the carry-over locales (de, pl, pt, it, ru) until Language packs ship
   ci              fmt --check, clippy -D warnings, test, i18n-report, language, doctest, assets,
                   layers, wasm
                   (stops at first failure)
@@ -185,13 +185,10 @@ fn cmd_test() -> Result<(), String> {
 const LANGUAGE_CHECK: &str = "packs::tests::the_default_build_embeds_only_english";
 const LANGUAGE_CHECK_FILTER: &str = "package(wordcraft-engine) & test(=packs::tests::the_default_build_embeds_only_english)";
 
-/// CP4.4: the embedded locale list is `en-*` (and our own `ru-extra`) unless this is a Language build, which names the
-/// other locales it embeds in `CRAFT_PROOF_EMBED` (craft-proof's build.rs).
+/// CP4.4: the embedded locales are English plus what the build asked for: `CRAFT_PROOF_EMBED`
+/// (craft-proof's build.rs; `en` alone is the English-only build), else the carry-over locales
+/// until Language packs ship.
 fn cmd_language() -> Result<(), String> {
-    if let Some(v) = std::env::var_os("CRAFT_PROOF_EMBED").filter(|v| !v.is_empty()) {
-        eprintln!("language: a Language build (CRAFT_PROOF_EMBED={}), not checked", v.to_string_lossy());
-        return Ok(());
-    }
     test_run(&["-E", LANGUAGE_CHECK_FILTER], &["--exact", LANGUAGE_CHECK])
 }
 

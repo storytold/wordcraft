@@ -18,6 +18,33 @@ use crate::theme::{Tokens, semibold};
 
 /// How long the bar keeps what it worked out while the document is being typed in.
 const MISSING_REFRESH_SECS: f64 = 1.0;
+/// Most characters of a language's name the bar shows (an index may name it at any length).
+const MAX_BAR_NAME: usize = 40;
+
+/// Text from the pack index as shown: without control, bidi and other format characters (the
+/// index isn't ours to trust), and at most `max` characters.
+pub(crate) fn shown(text: &str, max: usize) -> String {
+    shown_keeping(text, max, false)
+}
+
+/// [`shown`] keeping line breaks and tabs: a licence's text.
+fn shown_text(text: &str) -> String {
+    shown_keeping(text, usize::MAX, true)
+}
+
+fn shown_keeping(text: &str, max: usize, lines: bool) -> String {
+    let format = |c: char| {
+        (c.is_control() && !(lines && matches!(c, '\n' | '\t')))
+            || matches!(c, '\u{061C}' | '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+    };
+    let clean: String = text.chars().filter(|c| !format(*c)).collect();
+    if clean.chars().count() <= max {
+        return clean;
+    }
+    let mut cut: String = clean.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
 
 /// The window's pack state.
 #[derive(Default)]
@@ -38,7 +65,8 @@ struct MissingKey {
     document: u64,
     rev: u64,
     generation: u64,
-    packs: usize,
+    /// [`packs::index_generation`]: the list changed.
+    packs: u64,
 }
 
 /// Bytes as people read them: `1.9 MB`, `640 KB`.
@@ -142,7 +170,7 @@ fn consent(app: &mut WordApp, ctx: &egui::Context, key: &str) -> bool {
         return true;
     }
     if app.input_from_control(ctx) {
-        let why = tl!("Only you can turn on downloading. Click Install yourself; agents can install once it is on.");
+        let why = tl!("Only you can turn on downloading: click the button yourself. Agents can install once it is on.");
         app.packs_rt.errors.insert(key.to_string(), why.to_string());
         return false;
     }
@@ -196,7 +224,7 @@ fn missing(app: &mut WordApp, now: f64) -> Vec<Pack> {
         document: app.session.document_id(),
         rev: app.session.rev(),
         generation: wordcraft_engine::proof::dictionary_generation(),
-        packs: packs::available_len(),
+        packs: packs::index_generation(),
     };
     if let Some((k, at, m)) = &app.packs_rt.missing
         && (*k == key || (MissingKey { rev: key.rev, ..*k } == key && now - at < MISSING_REFRESH_SECS))
@@ -230,7 +258,7 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
             let full = ui.max_rect();
             ui.painter().hline(full.x_range(), bottom - 0.5, egui::Stroke::new(1.0, t.border));
             ui.horizontal_centered(|ui| {
-                let language = language_of(&pack.locale, &pack.name);
+                let language = shown(&language_of(&pack.locale, &pack.name), MAX_BAR_NAME);
                 ui.label(RichText::new(crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)])).color(t.text));
                 match progress(&pack.locale) {
                     Some((done, total)) => {
@@ -256,8 +284,20 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// The bar's Install tooltip: the licence and source, that it turns on downloading when it is
+/// off, and the test source when packs come from one.
 fn licence_hover(pack: &Pack) -> String {
-    crate::i18n::fmt(tl!("Licence: {licence}. Source: {source}"), &[("licence", &pack.licence), ("source", pack.source_link())])
+    let mut lines = vec![crate::i18n::fmt(
+        tl!("Licence: {licence}. Source: {source}"),
+        &[("licence", &shown(&pack.licence, 300)), ("source", &shown(pack.source_link(), 300))],
+    )];
+    if packs::backend().is_some_and(|b| !b.network_on()) {
+        lines.push(tl!("Installing turns on downloading of fonts and Language packs from GitHub.").to_string());
+    }
+    if let Some(source) = packs::index_override() {
+        lines.push(crate::i18n::fmt(tl!("Language packs come from a test source: {source}"), &[("source", &shown(&source, 300))]));
+    }
+    lines.join("\n")
 }
 
 /// File › Options › Language › Language packs: every available and installed pack with its
@@ -277,7 +317,7 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
         return;
     };
     if let Some(source) = packs::index_override() {
-        let line = crate::i18n::fmt(tl!("Language packs come from a test source: {source}"), &[("source", &source)]);
+        let line = crate::i18n::fmt(tl!("Language packs come from a test source: {source}"), &[("source", &shown(&source, 300))]);
         ui.add(egui::Label::new(RichText::new(line).small().color(t.orange)).wrap());
     }
     let index = packs::available();
@@ -341,22 +381,23 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
             for (pack, is_installed) in &rows {
                 ui.vertical(|ui| {
                     ui.set_width(180.0);
-                    let language = language_of(&pack.locale, &pack.name);
+                    let language = shown(&language_of(&pack.locale, &pack.name), MAX_BAR_NAME);
+                    let name = shown(&pack.name, MAX_BAR_NAME);
                     // The pack's own name when it differs (Nederlands for Dutch), and its locale.
-                    let detail = if language == pack.name { pack.locale.clone() } else { format!("{} · {}", pack.name, pack.locale) };
+                    let detail = if language == name { pack.locale.clone() } else { format!("{name} · {}", pack.locale) };
                     ui.label(language);
                     ui.label(RichText::new(detail).small().weak());
                 });
                 ui.label(if pack.size > 0 { size_text(pack.size) } else { String::new() });
                 ui.vertical(|ui| {
                     ui.set_width(220.0);
-                    ui.add(egui::Label::new(RichText::new(pack.licence.as_str()).small()).wrap());
+                    ui.add(egui::Label::new(RichText::new(shown(&pack.licence, 300)).small()).wrap());
                 });
                 let source = pack.source_link();
                 if source.is_empty() {
                     ui.label("");
                 } else {
-                    ui.hyperlink_to(tl!("Source"), source).on_hover_text(source);
+                    ui.hyperlink_to(tl!("Source"), source).on_hover_text(shown(source, 300));
                 }
                 ui.horizontal(|ui| {
                     if let Some((done, total)) = progress(&pack.locale) {
@@ -390,21 +431,49 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Height of About › Language data's list.
+const ABOUT_HEIGHT: f32 = 420.0;
+
+/// The licence texts About shows, read again only when the dictionaries change (they can run to
+/// megabytes).
+static LICENCES: std::sync::Mutex<Option<(u64, Arc<Vec<(String, String)>>)>> = std::sync::Mutex::new(None);
+
+fn licence_texts() -> Arc<Vec<(String, String)>> {
+    let generation = wordcraft_engine::proof::dictionary_generation();
+    let mut cached = LICENCES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((g, texts)) = cached.as_ref()
+        && *g == generation
+    {
+        return texts.clone();
+    }
+    let texts: Arc<Vec<(String, String)>> =
+        Arc::new(packs::licence_texts().into_iter().map(|(title, text)| (shown(&title, 200), shown_text(&text))).collect());
+    *cached = Some((generation, texts.clone()));
+    texts
+}
+
 /// About › Language data: the full licence text of the embedded English data and of each
 /// installed pack.
 pub(crate) fn about_tab(ui: &mut Ui) {
     ui.label(RichText::new(tl!("The spelling and hyphenation data WordCraft uses, and their licences.")).small().weak());
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().id_salt("about_language_data").max_height(420.0).show(ui, |ui| {
-        for (title, text) in packs::licence_texts() {
-            egui::CollapsingHeader::new(RichText::new(title.as_str()).font(semibold(13.0))).id_salt(("language_data", title.as_str())).show(
-                ui,
-                |ui| {
-                    ui.add(egui::Label::new(RichText::new(text).small().monospace()).wrap());
-                },
-            );
-        }
-    });
+    let texts = licence_texts();
+    // A fixed height: entries open and long texts scroll inside it, and the dialog keeps its size.
+    egui::ScrollArea::vertical()
+        .id_salt("about_language_data")
+        .min_scrolled_height(ABOUT_HEIGHT)
+        .max_height(ABOUT_HEIGHT)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (title, text) in texts.iter() {
+                egui::CollapsingHeader::new(RichText::new(title.as_str()).font(semibold(13.0))).id_salt(("language_data", title.as_str())).show(
+                    ui,
+                    |ui| {
+                        ui.add(egui::Label::new(RichText::new(text).small().monospace()).wrap());
+                    },
+                );
+            }
+        });
 }
 
 #[cfg(test)]
@@ -477,6 +546,14 @@ mod tests {
         crate::theme::apply(&ctx, crate::theme::Appearance::Light);
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         ctx.enable_accesskit();
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                packs::set_background(None);
+                packs::set_backend(None);
+            }
+        }
+        let _reset = Reset;
         let backend = std::sync::Arc::new(FixedBackend::sample());
         packs::set_backend(Some(backend.clone() as std::sync::Arc<dyn Backend>));
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -501,7 +578,5 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(packs::is_installed("pl"));
-        packs::set_background(None);
-        packs::set_backend(None);
     }
 }

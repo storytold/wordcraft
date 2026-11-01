@@ -10,7 +10,8 @@
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766). A line
 //! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
-//! `{"demoPacks": "store"}` uses the real font store, as the desktop app does (with
+//! `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
+//! folder rather than the person's, or in `"storeDir"` given on the same line (with
 //! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 
 use wordcraft_engine::Session;
@@ -31,7 +32,13 @@ fn main() {
     };
     match lines.iter().find_map(|l| l.get("demoPacks")) {
         Some(serde_json::Value::String(s)) if s == "store" => {
-            wordcraft_engine::packs::use_font_store(true);
+            // `"storeDir"` on the same line names the folder (to show packs put there beforehand).
+            let dir = lines
+                .iter()
+                .find_map(|l| l.get("storeDir").and_then(|v| v.as_str()))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("ui_shot-font-store-{}", std::process::id())));
+            wordcraft_engine::packs::use_font_store_in(dir, true);
         }
         Some(_) => wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(wordcraft_engine::packs::FixedBackend::sample()))),
         None => {}

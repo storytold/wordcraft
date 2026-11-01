@@ -11,7 +11,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("proof.packs", "Language Packs", "File › Options › Language", list)
-            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on; in the app it runs in the background: see "refreshing")} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "installing": [{"locale", "done", "total"} (bytes)], "refreshing": bool, "errors": {locale or "" (the list): message} (the last failure of each), "network": bool (downloading on), "available": bool (a font store to install into)}"#)
+            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on; in the app it runs in the background: see "refreshing")} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "installing": [{"locale", "done", "total"} (bytes)], "refreshing": bool, "errors": {locale or "" (the list): message} (the last failure of each), "index_override": string|null (a test index in use instead of the pinned one), "network": bool (downloading on), "available": bool (a font store to install into)}"#)
             .pure(),
         CommandSpec::new("proof.installPack", "Install Language Pack", "File › Options › Language", install)
             .params(r#"{"locale": string (a pack's locale from proof.packs, like nl or pt-pt)} — downloads, verifies (sha256) and installs it; spelling and hyphenation in that language use it at once. Needs downloading on (only the person in the app can turn it on). Opens nothing. In the app it runs in the background and returns {"started": true}: follow it with proof.packs ("installing", then "installed" or "errors"); elsewhere it returns when installed."#)
@@ -60,6 +60,8 @@ fn list(_: &mut Session, v: &Value) -> CmdResult {
         "refreshing": packs::fetching(),
         "errors": packs::errors().into_iter().map(|(l, e)| (l, Value::String(e))).collect::<serde_json::Map<String, Value>>(),
         "network": backend.as_ref().is_some_and(|b| b.network_on()),
+        // The packs come from a test index (`CRAFT_LANGUAGE_PACK_INDEX`), not the pinned one.
+        "index_override": packs::index_override(),
         "available": backend.is_some(),
     }))
 }
@@ -97,15 +99,24 @@ mod tests {
     /// Tests that set the process-wide backend take turns.
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Puts the process back to no backend and no background thread when dropped, even when
+    /// the test panicked.
+    pub(crate) struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            packs::set_background(None);
+            packs::set_backend(None);
+        }
+    }
+
     fn with_backend<T>(b: FixedBackend, f: impl FnOnce(&mut Session, &FixedBackend) -> T) -> T {
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
         let b = Arc::new(b);
         packs::set_backend(Some(b.clone() as Arc<dyn Backend>));
         let mut s = Session::new(crate::sample::sample_document());
-        let r = f(&mut s, &b);
-        packs::set_background(None);
-        packs::set_backend(None);
-        r
+        f(&mut s, &b)
     }
 
     #[test]
@@ -114,6 +125,7 @@ mod tests {
             let r = s.run("proof.packs", &json!({})).unwrap();
             assert_eq!(r["packs"].as_array().unwrap().len(), 6);
             assert_eq!(r["network"], false);
+            assert_eq!(r["index_override"], Value::Null, "the pinned index");
             let nl = r["packs"].as_array().unwrap().iter().find(|p| p["locale"] == "nl").unwrap();
             assert_eq!(nl["licence"], "BSD-3-Clause");
             assert_eq!(nl["installed"], false);
@@ -161,6 +173,7 @@ mod tests {
     #[test]
     fn without_a_store_nothing_is_available() {
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
         packs::set_backend(None);
         let mut s = Session::new(crate::sample::sample_document());
         let r = s.run("proof.packs", &json!({})).unwrap();
@@ -266,6 +279,7 @@ mod tests {
     #[test]
     fn in_the_app_installs_run_in_the_background() {
         let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
         let (tx, rx) = std::sync::mpsc::channel();
         let slow = Arc::new(Slow { inner: FixedBackend::sample(), go: std::sync::Mutex::new(rx) });
         slow.inner.network.store(true, Ordering::Relaxed);
@@ -296,8 +310,46 @@ mod tests {
         assert_eq!(list["installing"], json!([]));
         assert_eq!(list["installed"][0]["locale"], "pl");
         assert!(s.ui_requests.is_empty(), "no dialog opens");
-        packs::set_background(None);
-        packs::set_backend(None);
+    }
+
+    /// A pack read from its folder proofs and hyphenates its language's runs, and leaves the
+    /// English runs to English: a tiny Lithuanian pack (`ProofLang::Pack`, no rules of its own).
+    #[test]
+    fn an_installed_pack_proofs_and_hyphenates_its_runs() {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
+        let dir = std::env::temp_dir().join(format!("wordcraft-pack-fixture-{}", std::process::id()));
+        let lt = dir.join("lt");
+        std::fs::create_dir_all(&lt).unwrap();
+        std::fs::write(lt.join("pack.toml"), "locale = \"lt\"\nname = \"Lietuvių\"\nlicence = \"MIT\"\nclass = \"Embeddable\"\n").unwrap();
+        std::fs::write(lt.join("spelling.aff"), "SET UTF-8\n").unwrap();
+        std::fs::write(lt.join("spelling.dic"), "2\nlabas\nrytas\n").unwrap();
+        // One break, laba-rytas; the other letters only make up the patterns' alphabet.
+        std::fs::write(lt.join("hyphenation.pat"), "a1r b l s t y z\n").unwrap();
+        wordcraft_proof::packs::set_packs_dir(Some(dir.clone()));
+        let text = "labas rytaz labarytas typography beautifull";
+        let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+        let eng = text.find("typography").unwrap();
+        s.doc.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, eng), &|c| c.lang = Some("lt-LT".into())).unwrap();
+        s.doc.format_range(&wordcraft_doc::Pos::body(0, eng), &wordcraft_doc::Pos::body(0, text.len()), &|c| c.lang = Some("en-US".into())).unwrap();
+        s.doc.settings.auto_hyphenation = true;
+        s.relayout();
+        let issues = s.run("review.issues", &json!({})).map(|v| v.to_string()).unwrap_or_default();
+        let layout = s.layout();
+        let ends: Vec<usize> = layout
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| if let wordcraft_layout::Placed::Lines { para, .. } = i { Some(para) } else { None })
+            .flat_map(|para| para.hyph_after.iter().filter_map(|&k| para.clusters.get(k as usize).map(|c| c.end)).collect::<Vec<_>>())
+            .collect();
+        wordcraft_proof::packs::set_packs_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let laba = text.find("labarytas").unwrap() + "laba".len();
+        assert!(ends.contains(&laba), "the pack's pattern breaks laba-rytas: {ends:?}");
+        assert!(issues.contains("rytaz"), "the Lithuanian misspelling, from the pack: {issues}");
+        assert!(issues.contains("beautifull"), "the English one: {issues}");
+        assert!(!issues.contains("\"labas\"") && !issues.contains("typography"), "{issues}");
     }
 
     use crate::packs::Pack;

@@ -8279,12 +8279,8 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     let para = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("a paragraph");
     // Byte offsets after which a hyphen may go.
     let ends: Vec<usize> = para.hyph_after.iter().filter_map(|&k| para.clusters.get(k as usize).map(|c| c.end)).collect();
-    // Polish patterns are embedded only in a Language build (`CRAFT_PROOF_EMBED`); otherwise
-    // they come from the Polish Language pack.
-    if wordcraft_proof::packs::embedded_locales().contains(&"pl") {
-        for prefix in ["Kon", "Konsty", "Konstytu", "Konstytucyj", "Konstytucyjne"] {
-            assert!(ends.contains(&prefix.len()), "Polish kon-sty-tu-cyj-ne-go: no break after {prefix:?} in {ends:?}");
-        }
+    for prefix in ["Kon", "Konsty", "Konstytu", "Konstytucyj", "Konstytucyjne"] {
+        assert!(ends.contains(&prefix.len()), "Polish kon-sty-tu-cyj-ne-go: no break after {prefix:?} in {ends:?}");
     }
     for prefix in ["ty", "typog", "typogra"] {
         assert!(ends.contains(&(eng + prefix.len())), "English ty-pog-ra-phy: no break after {prefix:?} in {ends:?}");

@@ -176,8 +176,12 @@ pinned pack index and installed through the font store into `<font store>/langua
   offering it; it never shows for a language without a pack, and closes per document.
 - Help › About › Language data shows the full licence texts of the embedded English data and the
   installed packs.
-- The default build embeds `en-*` data only, plus our own Russian word additions (`ru-extra`) (`cargo xtask language`); a Language build embeds the
-  locales named in `CRAFT_PROOF_EMBED`. The web build is English only.
+- Until language-packs-1 is published and pinned, the default build keeps the carry-over data
+  embedded (English, plus the German, Polish, Portuguese and Italian patterns and `ru-extra`), and
+  Install works only with a test index (`CRAFT_LANGUAGE_PACK_INDEX`); after that the default is
+  English only. A Language build embeds English plus the locales named in `CRAFT_PROOF_EMBED`
+  (`en` alone: English only); `cargo xtask language` checks nothing else is embedded. The web
+  build is English only.
 - Lithuanian [#4707](https://github.com/storytold/wordcraft/issues/4707) and Romanian [#3438](https://github.com/storytold/wordcraft/issues/3438) are available as a Language pack once language-packs-1 is published (with Polish, Portuguese, Italian, Russian, Czech, Spanish, Bulgarian, Bosnian, Slovenian, Ukrainian and the other packs that pass CI); the packs for Dutch [#4145](https://github.com/storytold/wordcraft/issues/4145)/[#2505](https://github.com/storytold/wordcraft/issues/2505) and Catalan [#2895](https://github.com/storytold/wordcraft/issues/2895)/[#4947](https://github.com/storytold/wordcraft/issues/4947) are defined but wait on craft-proof engine support (two-character flags, `FLAG long`), French [#1325](https://github.com/storytold/wordcraft/issues/1325) on `OCONV`, Greek [#2561](https://github.com/storytold/wordcraft/issues/2561) on ISO 8859-7 decoding, Slovak [#3806](https://github.com/storytold/wordcraft/issues/3806) on `CIRCUMFIX`, Serbian [#4968](https://github.com/storytold/wordcraft/issues/4968) on numeric flags (`FLAG num`), and Latvian [#4438](https://github.com/storytold/wordcraft/issues/4438) on `FULLSTRIP` (and `CIRCUMFIX`, `NEEDAFFIX`). A language craft-proof has no rules of its own for
   (Lithuanian, Romanian, Dutch…) is spell-checked from its pack alone (`ProofLang::Pack`: the
   shared affix engine with default tuning, the pack's hyphenation, no grammar rules).

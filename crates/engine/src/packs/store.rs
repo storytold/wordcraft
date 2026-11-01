@@ -32,6 +32,12 @@ impl FontStoreBackend {
         Some(Self { store, index: Mutex::new(None) })
     }
 
+    /// A store in `dir`.
+    pub(super) fn in_dir(dir: PathBuf, user: bool) -> Self {
+        let caller = if user { craft_font_store::Caller::User } else { craft_font_store::Caller::Agent };
+        Self { store: FontStore::new(dir, caller), index: Mutex::new(None) }
+    }
+
     fn keep(&self, index: PackIndex) -> Vec<Pack> {
         let packs = index.packs.iter().map(pack).collect();
         *self.index.lock().unwrap_or_else(PoisonError::into_inner) = Some(index);
@@ -55,21 +61,13 @@ fn pack(e: &PackEntry) -> Pack {
     }
 }
 
-fn cancel_of(c: &Cancel) -> craft_font_store::Cancel {
-    let out = craft_font_store::Cancel::new();
-    if c.is_cancelled() {
-        out.cancel();
-    }
-    out
-}
-
 impl super::Backend for FontStoreBackend {
     fn index(&self) -> Result<Vec<Pack>, String> {
         Ok(self.store.cached_language_pack_index(&PACK_INDEX).map(|i| self.keep(i)).unwrap_or_default())
     }
 
     fn fetch_index(&self, cancel: &Cancel) -> Result<Vec<Pack>, String> {
-        let index = self.store.fetch_language_pack_index(&PACK_INDEX, &cancel_of(cancel)).map_err(|e| e.to_string())?;
+        let index = self.store.fetch_language_pack_index(&PACK_INDEX, &cancel.0).map_err(|e| e.to_string())?;
         Ok(self.keep(index))
     }
 
@@ -90,19 +88,7 @@ impl super::Backend for FontStoreBackend {
             }
         };
         let entry = index.pack(&pack.locale).ok_or_else(|| format!("there is no language pack for {}", pack.locale))?.clone();
-        // The store's cancel is its own flag: a cancel during the download is passed on between
-        // progress reports.
-        let store_cancel = cancel_of(cancel);
-        let watch = store_cancel.clone();
-        self.store
-            .install_language_pack(&index, &entry, &store_cancel, &mut |p| {
-                if cancel.is_cancelled() {
-                    watch.cancel();
-                }
-                progress(p.done, p.total);
-            })
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        self.store.install_language_pack(&index, &entry, &cancel.0, &mut |p| progress(p.done, p.total)).map(|_| ()).map_err(|e| e.to_string())
     }
 
     fn remove(&self, locale: &str) -> Result<(), String> {
