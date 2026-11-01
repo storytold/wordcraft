@@ -573,6 +573,10 @@ fn nested_lists_of_different_kinds_keep_their_kinds() {
     let src = "- a\n  1. x\n  2. y\n- b\n  - z\n    1. deep\n";
     let want = "- a\n    1. x\n    2. y\n- b\n    - z\n        1. deep";
     assert_eq!(export(&import(src)).trim_end(), want);
+    // Kinds that mix only deeper down: each sub-list keeps its own kind there too.
+    let src = "- parent\n  - one\n    - bullet\n  - two\n    1. numbered\n    2. again\n";
+    let want = "- parent\n    - one\n        - bullet\n    - two\n        1. numbered\n        2. again";
+    assert_eq!(export(&import(src)).trim_end(), want);
     // Consistent nesting is left as it was: one list, its numbering unbroken.
     let doc = import("1. a\n   1. b\n   2. c\n2. d\n   1. e\n");
     assert_eq!(doc.numbering.nums.len(), 1, "one list when no level mixes kinds");

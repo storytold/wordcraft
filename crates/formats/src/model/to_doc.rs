@@ -290,21 +290,42 @@ impl<'a> Builder<'a> {
     }
 
     /// The list each item of `group` belongs to when a nested level mixes kinds: `top` for the
-    /// top-level items, one new list for each run of consecutive nested items.
+    /// top-level items, and a list of its own for each nested sub-list (consecutive siblings of
+    /// one kind under one parent item, their own sub-lists aside). Each list then has one kind at
+    /// the one level it uses, however deep the kinds mix.
     fn nested_run_lists(&mut self, group: &[ListInfo], top: u32) -> Vec<u32> {
         let mut ids = Vec::with_capacity(group.len());
-        let mut at = 0;
-        while let Some(item) = group.get(at) {
-            if item.level == 0 {
+        // The sub-list open at each level: its list and whether it is numbered.
+        let mut open: [Option<(u32, bool)>; 9] = [None; 9];
+        for (at, item) in group.iter().enumerate() {
+            let level = item.level.min(8) as usize;
+            // An item closes the sub-lists below it, and one of the other kind at its own level.
+            for o in open.iter_mut().skip(level + 1) {
+                *o = None;
+            }
+            if level == 0 {
                 ids.push(top);
-                at += 1;
                 continue;
             }
-            let end = group.get(at..).unwrap_or(&[]).iter().position(|g| g.level == 0).map_or(group.len(), |n| at + n);
-            let run = group.get(at..end).unwrap_or(&[]);
-            let id = self.new_list(run);
-            ids.extend(std::iter::repeat_n(id, run.len()));
-            at = end;
+            let id = match open.get(level).copied().flatten() {
+                Some((id, ordered)) if ordered == item.ordered => id,
+                _ => {
+                    let siblings: Vec<ListInfo> = group
+                        .get(at..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take_while(|g| g.level.min(8) as usize > level || (g.level.min(8) as usize == level && g.ordered == item.ordered))
+                        .filter(|g| g.level.min(8) as usize == level)
+                        .copied()
+                        .collect();
+                    let id = self.new_list(&siblings);
+                    if let Some(o) = open.get_mut(level) {
+                        *o = Some((id, item.ordered));
+                    }
+                    id
+                }
+            };
+            ids.push(id);
         }
         ids
     }
