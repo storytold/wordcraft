@@ -42,6 +42,8 @@ pub enum Phase {
     /// Partway through a legacy menu key sequence (#1697); the letters so far are in
     /// `keytip_prefix`, and a hint stands in for the badges.
     Legacy,
+    /// Badges over the Backstage side menu, after Alt, F (#4960).
+    Backstage,
 }
 
 /// Which ribbon item a letter is bound to, and what pressing it does.
@@ -602,8 +604,8 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                         match hit {
                             Some(tab) => {
                                 let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
-                                // File opens the Backstage: no ribbon commands to badge.
-                                app.ui.keytips = if tab == "File" { Phase::Off } else { Phase::Commands };
+                                // File opens the Backstage: its pages get the badges (Alt, F, P prints).
+                                app.ui.keytips = if tab == "File" && app.ui.backstage { Phase::Backstage } else { Phase::Commands };
                             }
                             // Q is the title bar's Search box, as in Word (#819).
                             None if name == SEARCH_LETTER => {
@@ -621,6 +623,12 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                     Phase::Legacy => {
                         legacy_key(app, &name);
                         return true;
+                    }
+                    Phase::Backstage => {
+                        app.ui.keytips = Phase::Off;
+                        if let Some(page) = crate::backstage::keytip_page(&name) {
+                            crate::backstage::go_to_page(app, page);
+                        }
                     }
                     Phase::Commands => {
                         let tab = app.ui.tab.clone();
@@ -694,11 +702,16 @@ pub fn activate(app: &mut WordApp) {
 
 use crate::keys;
 
-/// Keytips are suppressed while the Backstage or a modal dialog is open, or while a text field
+/// Keytips are suppressed while the Backstage (except for its own badges, Alt, F) or a modal dialog is open, or while a text field
 /// (not the canvas) has focus; the canvas lets Alt open keytips and `canvas_events` swallows
-/// typing while they show.
+/// typing while they show. The Backstage's badges end with it (its back chevron, a mouse Save),
+/// so the next letter is typed and never picks a page that is no longer there.
 pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
-    !app.ui.keytips_enabled || app.ui.backstage || app.dialog.is_some() || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
+    !app.ui.keytips_enabled
+        || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
+        || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
+        || app.dialog.is_some()
+        || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
 }
 
 /// Native backends report Alt through both key and modifier events, in either order. Track
