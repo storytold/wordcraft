@@ -511,3 +511,120 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// F9 fills a body REF to a bookmark in a header, footer, footnote, endnote, comment or text box
+/// with the bookmarked text, and a PAGEREF with the page Word gives (measured in Word for
+/// Windows, every result stored as "stale"): a text box's anchor's page, a note's reference
+/// mark's page (the endnote is referred to on page 2, the footnote on page 3), and 1 for a
+/// header, footer or comment.
+#[test]
+fn update_fields_finds_bookmarks_outside_the_body() {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml""#;
+    let mark = |name: &str, id: u32| {
+        format!(r#"<w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>Target {name}</w:t></w:r><w:bookmarkEnd w:id="{id}"/>"#)
+    };
+    let field = |instr: &str| {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stale</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        )
+    };
+    let names = ["HDR", "FTR", "FN", "EN", "CMT", "BOX", "BODY3"];
+    let mut body: String =
+        names.iter().map(|n| format!("<w:p>{}{}</w:p>", field(&format!("REF {n} \\h")), field(&format!("PAGEREF {n} \\h")))).collect();
+    let page_break = r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#;
+    let text_box = format!(
+        r##"<w:r><w:pict><v:shape type="#_x0000_t202" style="position:absolute;margin-left:300pt;width:150pt;height:30pt"><v:textbox><w:txbxContent><w:p>{}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"##,
+        mark("BOX", 6)
+    );
+    body.push_str(&format!(
+        r#"{page_break}<w:p><w:r><w:t xml:space="preserve">Two </w:t></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>{page_break}"#
+    ));
+    body.push_str(&format!(
+        r#"<w:p>{}{text_box}<w:r><w:footnoteReference w:id="1"/></w:r><w:commentRangeStart w:id="0"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
+        mark("BODY3", 7)
+    ));
+    let document = format!(
+        r#"<w:document {ns}><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/></w:sectPr></w:body></w:document>"#
+    );
+    let header = format!(r#"<w:hdr {ns}><w:p>{}</w:p></w:hdr>"#, mark("HDR", 1));
+    let footer = format!(r#"<w:ftr {ns}><w:p>{}</w:p></w:ftr>"#, mark("FTR", 2));
+    let footnotes =
+        format!(r#"<w:footnotes {ns}><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>{}</w:p></w:footnote></w:footnotes>"#, mark("FN", 3));
+    let endnotes = format!(r#"<w:endnotes {ns}><w:endnote w:id="1"><w:p><w:r><w:endnoteRef/></w:r>{}</w:p></w:endnote></w:endnotes>"#, mark("EN", 4));
+    let comments = format!(r#"<w:comments {ns}><w:comment w:id="0" w:author="probe"><w:p>{}</w:p></w:comment></w:comments>"#, mark("CMT", 5));
+    let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="{rel}/header" Target="header1.xml"/><Relationship Id="rIdF" Type="{rel}/footer" Target="footer1.xml"/><Relationship Id="rIdN" Type="{rel}/footnotes" Target="footnotes.xml"/><Relationship Id="rIdE" Type="{rel}/endnotes" Target="endnotes.xml"/><Relationship Id="rIdC" Type="{rel}/comments" Target="comments.xml"/></Relationships>"#
+    );
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let files = [
+        ("_rels/.rels", root.to_string()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/document.xml", document),
+        ("word/header1.xml", header),
+        ("word/footer1.xml", footer),
+        ("word/footnotes.xml", footnotes),
+        ("word/endnotes.xml", endnotes),
+        ("word/comments.xml", comments),
+    ];
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in &files {
+        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+    }
+    let mut s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    assert_eq!(s.layout().pages.len(), 3);
+    update_fields(&mut s).unwrap();
+    let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    let pages = ["1", "1", "3", "2", "1", "3", "3"];
+    let expected: Vec<String> = names.iter().zip(pages).flat_map(|(n, p)| [format!("Target {n}"), p.to_string()]).collect();
+    assert_eq!(got, expected);
+}
+
+/// A bookmark ending in a later paragraph, in the body or a header, keeps its REF's result on F9:
+/// Word shows its paragraphs as paragraphs of the result, which a field's one-paragraph result
+/// can't hold, rather than the start paragraph's text alone. One ending in its own paragraph is
+/// filled in.
+#[test]
+fn update_fields_keeps_references_to_bookmarks_spanning_paragraphs() {
+    let mark = |name: &str, end: bool| {
+        let name = name.to_string();
+        if end { InlineObject::BookmarkEnd { name } } else { InlineObject::BookmarkStart { name } }
+    };
+    let para = |text: &str, before: Vec<InlineObject>, after: Vec<InlineObject>| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, CharProps::default());
+        // Each at the start, the last first, so they stand in order.
+        for o in before.into_iter().rev() {
+            p.insert_object(0, o, &CharProps::default()).unwrap();
+        }
+        for o in after {
+            let at = p.len();
+            p.insert_object(at, o, &CharProps::default()).unwrap();
+        }
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = wordcraft_doc::Document::new();
+    let header = d.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![para("one", vec![mark("Head", false)], vec![]), para("two", vec![], vec![mark("Head", true)])],
+    );
+    d.last_section.headers.default = Some(header);
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: "stale".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    d.body = vec![
+        para("alpha", vec![mark("Span", false)], vec![]),
+        para("beta", vec![], vec![mark("Span", true)]),
+        para("gamma", vec![mark("Own", false)], vec![mark("Own", true)]),
+        para("", vec![field("REF Span \\h"), field("REF Head \\h"), field("REF Own \\h")], vec![]),
+    ];
+    let mut s = Session::new(d);
+    update_fields(&mut s).unwrap();
+    let got: Vec<String> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["stale", "stale", "gamma"]);
+}
