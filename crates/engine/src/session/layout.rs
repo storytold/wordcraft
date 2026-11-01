@@ -184,7 +184,8 @@ impl Session {
     /// malformed tag: US English). A document nobody has touched yet — untitled, unchanged, no
     /// undo steps, no text — switches too, so the blank document a session starts with follows
     /// the saved proofing default, or the interface language when none is saved. Nothing else
-    /// changes and no undo step is added.
+    /// changes and no undo step is added. Viewing leaves even an untouched blank document
+    /// unchanged; the language preference still applies to documents created afterwards.
     pub fn set_editing_language(&mut self, tag: Option<&str>) {
         let tag = self
             .prefs

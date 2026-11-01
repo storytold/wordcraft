@@ -113,6 +113,8 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
 }
 
+/// Let editing tools claim the pointer, or return it for ordinary text selection.
+/// Viewing bypasses editing tools while keeping the pointer available to the selection path.
 fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
     if app.session.view.viewing {
         return resp.interact_pointer_pos().or_else(|| resp.hover_pos());

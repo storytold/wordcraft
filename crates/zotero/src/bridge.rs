@@ -183,6 +183,8 @@ impl Bridge {
     }
 
     /// Answer one call. Errors become `ERR:` replies; Zotero shows them and cancels.
+    /// Viewing refuses direct document writes before parameter parsing or checkpoints,
+    /// while read queries and completion notifications remain available.
     pub fn handle(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
         // Zotero writes directly rather than dispatching engine commands.
         if s.view.viewing

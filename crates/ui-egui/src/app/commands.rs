@@ -9,10 +9,11 @@ impl WordApp {
     pub(crate) fn viewing_blocks_command(&self, id: &str, params: &Value) -> bool {
         self.session.viewing_blocks_command(id, params)
             || (self.session.view.viewing
-                && (matches!(id, "ui.crop" | "ui.linkTextBox")
+                && (matches!(id, "ui.crop" | "ui.linkTextBox" | "ui.changePicture")
                     || (id.starts_with("ui.zotero.") && !matches!(id, "ui.zotero.status" | "ui.zotero.answer"))))
     }
 
+    /// Refuse an edit and publish its localized status before dispatch can start a UI side effect.
     fn check_viewing(&mut self, id: &str, params: &Value) -> Result<(), String> {
         if self.viewing_blocks_command(id, params) {
             let reason = tl!("Editing is blocked in Viewing mode.").to_string();

@@ -54,7 +54,8 @@ impl WindowView {
 impl Session {
     /// Take the active document's view out of the session, for a window that stops being drawn.
     /// The session is left with a caret at the start of the document and the default view
-    /// until [`Session::put_view`] puts a view back.
+    /// until [`Session::put_view`] puts a view back. The document's Viewing lock stays active
+    /// even while no window view is installed.
     pub fn take_view(&mut self) -> WindowView {
         use std::mem::{replace, take};
         let start = self.doc.start_of(StoryRef::Body);
@@ -113,7 +114,8 @@ impl Session {
     /// (another window edited it, or `v` is of another document), its positions are clamped into
     /// the document, what only made sense for the text it was taken from (a column block, a
     /// widened table selection, more selected objects, the word being typed) is dropped, and the
-    /// window's typing no longer joins its last undo step.
+    /// window's typing no longer joins its last undo step. The active document retains its
+    /// current Viewing choice, so an older window snapshot cannot unlock it.
     pub fn put_view(&mut self, v: WindowView) {
         let WindowView {
             sel,

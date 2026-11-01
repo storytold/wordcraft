@@ -113,10 +113,12 @@ impl Session {
         self.typing_open = false;
     }
 
+    /// Whether undo is available now; Viewing retains the history but prevents replaying it.
     pub fn can_undo(&self) -> bool {
         !self.view.viewing && !self.history.is_empty()
     }
 
+    /// Whether redo is available now; leaving Viewing makes retained redo steps available again.
     pub fn can_redo(&self) -> bool {
         !self.view.viewing && !self.redo.is_empty()
     }
