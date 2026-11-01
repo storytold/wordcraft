@@ -164,8 +164,22 @@ pub struct CanvasState {
     pub context_synonyms: Option<serde_json::Value>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
-    /// Shift+F10 (or `ui.contextMenu`) asked for the context menu at the caret (#821).
+    /// Shift+F10, the Menu key (or `ui.contextMenu`) asked for the context menu at the caret (#821).
     pub context_menu_from_keys: bool,
+    /// The context menu was opened from the keyboard: its items have the keyboard, and the page
+    /// takes it back when the menu closes (#4977).
+    pub context_menu_keyboard: bool,
+    /// The context menu's first item still has to take the keyboard (#4977).
+    pub context_menu_focus_first: bool,
+    /// A dialog has just opened, and its first control still has to take the keyboard (its sizing
+    /// pass draws its controls hidden), as in Word (#4977).
+    pub dialog_focus_first: bool,
+    /// The context menu's items in order, with the layer they're drawn on (the menu's, or a
+    /// submenu's), rebuilt each frame the menu is drawn.
+    pub context_menu_items: Vec<(egui::LayerId, egui::Id)>,
+    /// The item whose submenu has the keyboard: Escape closes that submenu only and goes back to
+    /// it, as in Word (#4977).
+    pub context_menu_submenu_item: Option<egui::Id>,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the
@@ -384,6 +398,11 @@ impl Default for CanvasState {
             ink_ui: Default::default(),
             context_menu_open: false,
             context_menu_from_keys: false,
+            context_menu_keyboard: false,
+            context_menu_focus_first: false,
+            dialog_focus_first: false,
+            context_menu_items: Vec::new(),
+            context_menu_submenu_item: None,
             context_menu_at: None,
             eq_options: None,
             mini_anchor: None,
@@ -711,7 +730,9 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    // A menu opened from the keyboard has the keys, also in the frames before the page sees it
+    // lose the focus (#4977).
+    if app.canvas.focused && !app.canvas.context_menu_keyboard && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -1170,7 +1191,8 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     let secondary_clicked = resp.secondary_clicked() && !middle_gesture;
     handle_secondary_selection(app, &resp, &rects, layout, geo, secondary_clicked);
-    // Shift+F10 opens the same menu below the caret, for the selection or the word there (#821).
+    // Shift+F10 or the Menu key opens the same menu below the caret, for the selection or the word
+    // there (#821).
     let from_keys = std::mem::take(&mut app.canvas.context_menu_from_keys);
     // A click on the equation frame's options strip opens the equation's menu below the strip.
     let eq_strip = app.canvas.eq_options.map(|f| f.strip).filter(|r| resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| r.contains(p)));
@@ -1182,19 +1204,35 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     } else if secondary_clicked {
         app.canvas.context_menu_at = resp.interact_pointer_pos();
     }
+    // Opened from the keyboard, the menu takes the keyboard, as Word's does: otherwise the arrows
+    // move the caret behind it and a screen reader never hears it (#4977).
+    if from_keys || secondary_clicked || eq_strip.is_some() {
+        // A click that opens the menu over one opened from the keyboard gives the keyboard back to
+        // the page: the item that had it stays focused otherwise.
+        if !from_keys && app.canvas.context_menu_keyboard {
+            app.canvas.want_focus = true;
+        }
+        app.canvas.context_menu_keyboard = from_keys;
+        app.canvas.context_menu_focus_first = from_keys;
+        app.canvas.context_menu_submenu_item = None;
+    }
     // Keep the parent independently of egui's one memory popup: the toolbar's font, size and
     // colour controls use that slot for their own lists (as in a collapsed ribbon group).
     let mut open = app.canvas.context_menu_open;
+    let clicked_outside = open
+        && ui.input(|i| i.pointer.any_click())
+        && !ui
+            .input(|i| i.pointer.interact_pos())
+            .and_then(|p| ui.ctx().layer_id_at(p))
+            .is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip));
     if secondary_clicked || from_keys || eq_strip.is_some() {
         egui::Popup::close_all(ui.ctx());
         open = true;
-    } else if open && ui.input(|i| i.pointer.any_click()) {
-        let layer = ui.input(|i| i.pointer.interact_pos()).and_then(|p| ui.ctx().layer_id_at(p));
-        if !layer.is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip)) {
-            open = false;
-        }
+    } else if clicked_outside {
+        open = false;
     }
     let child_open = egui::Popup::is_any_open(ui.ctx());
+    let dialog_before = app.dialog.as_ref().map(|d| d.name());
     let mut shown = open;
     if open {
         app.escape_free = false;
@@ -1224,11 +1262,38 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         }
     });
     // Escape closes the child list first; a second Escape closes the context menu.
-    if open && !shown && child_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if open && !shown && child_open && escape {
         shown = true;
+    }
+    // Escape in a submenu the keyboard is in closes that submenu only, as in Word: the menu stays,
+    // with the keyboard on the submenu's item (#4977).
+    if open
+        && !shown
+        && escape
+        && app.canvas.context_menu_keyboard
+        && let Some(item) = app.canvas.context_menu_submenu_item.take()
+    {
+        shown = true;
+        ui.memory_mut(|m| m.request_focus(item));
+    }
+    if !shown {
+        app.canvas.context_menu_submenu_item = None;
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
+    // A menu that had the keyboard gives it back to the page as it closes, unless the item chosen
+    // opened a dialog, whose first control takes it, or a click elsewhere closed it: what was
+    // clicked takes it (#4977). A dialog that was open before the menu takes nothing.
+    if !shown && std::mem::take(&mut app.canvas.context_menu_keyboard) && !clicked_outside {
+        if app.dialog.is_some() && app.dialog.as_ref().map(|d| d.name()) != dialog_before {
+            // The Enter that chose the item would be the dialog's OK too: the dialog is drawn
+            // after the page, in this same frame.
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        } else {
+            app.canvas.want_focus = true;
+        }
+    }
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
     } else if resp.hovered() || app.canvas.obj_drag.is_some() {

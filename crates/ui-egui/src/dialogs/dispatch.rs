@@ -536,11 +536,11 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     egui::Grid::new("it").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(cols).range(1..=63));
+        let label = ui.label(tl!("Number of columns:"));
+        ui.add(egui::DragValue::new(cols).range(1..=63)).labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.add(egui::DragValue::new(rows).range(1..=1000));
+        let label = ui.label(tl!("Number of rows:"));
+        ui.add(egui::DragValue::new(rows).range(1..=1000)).labelled_by(label.id);
         ui.end_row();
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
