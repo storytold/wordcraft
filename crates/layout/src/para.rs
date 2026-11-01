@@ -356,6 +356,7 @@ mod label_spacing_tests {
 
     #[test]
     fn fallback_label_ascent() {
+        crate::test_fonts();
         let body = (1921.0 / 2048.0 * 11.0, 434.0 / 2048.0 * 11.0);
         let low = measured_label_lines(LineSpacing::Multiple(1.15), (9.802246, 2.379395), 9.802246, false, body);
         let tall = measured_label_lines(LineSpacing::Multiple(1.15), (11.0, 3.586), 11.0, false, body);
@@ -365,6 +366,7 @@ mod label_spacing_tests {
 
     #[test]
     fn large_label_overflow_is_not_multiplied() {
+        crate::test_fonts();
         for (multiple, expected) in [(1.0, 25.20), (1.25, 28.80), (2.0, 39.36)] {
             let lines = measured_label_lines(LineSpacing::Multiple(multiple), (22.265625, 5.859375), 22.265625, false, ROBOTO_METRICS);
             assert!((lines[0].height - expected).abs() <= 0.25, "{multiple}: {} vs {expected}", lines[0].height);
@@ -376,12 +378,14 @@ mod label_spacing_tests {
 
     #[test]
     fn small_label_descent_does_not_inflate_text_spacing() {
+        crate::test_fonts();
         let lines = measured_label_lines(LineSpacing::Multiple(1.25), (8.499023, 3.5009766), 9.0, false, ROBOTO_METRICS);
         assert!((lines[0].height - 17.52).abs() <= 0.25, "{}", lines[0].height);
     }
 
     #[test]
     fn label_leading_and_earlier_font_ascent_are_retained() {
+        crate::test_fonts();
         // Apple Symbols 24 pt: full leading gives an 18 pt label ascent. The text
         // pitch is still Roboto 12 pt. A shorter final fallback run must not hide it.
         for metrics in [(16.998047, 7.001953), (8.0, 3.0)] {
@@ -392,6 +396,7 @@ mod label_spacing_tests {
 
     #[test]
     fn minimum_spacing_keeps_text_descent_and_label_leading() {
+        crate::test_fonts();
         for (metrics, ascent, expected) in
             [((22.265625, 5.859375), 22.265625, 25.20), ((8.499023, 3.5009766), 9.0, 13.92), ((16.998047, 7.001953), 18.0, 20.88)]
         {
@@ -402,6 +407,7 @@ mod label_spacing_tests {
 
     #[test]
     fn labels_keep_fixed_and_minimum_spacing_rules() {
+        crate::test_fonts();
         for (spacing, expected) in [(LineSpacing::Exactly(24.0), 24.0), (LineSpacing::AtLeast(30.0), 30.0)] {
             let lines = measured_label_lines(spacing, (22.265625, 5.859375), 22.265625, false, ROBOTO_METRICS);
             assert!((lines[0].height - expected).abs() < 0.001);
@@ -410,6 +416,7 @@ mod label_spacing_tests {
 
     #[test]
     fn label_overflow_only_affects_the_first_wrapped_line() {
+        crate::test_fonts();
         let lines = measured_label_lines(LineSpacing::Multiple(1.25), (22.265625, 5.859375), 22.265625, true, ROBOTO_METRICS);
         assert!(lines.len() > 1);
         assert!((lines[0].height - 28.80).abs() <= 0.25);
@@ -441,6 +448,7 @@ mod tests {
 
     #[test]
     fn symbols_ignore_roman_hint() {
+        crate::test_fonts();
         let mut d = Document::new();
         d.settings.roman_fonts = vec!["Symbol (PCL6)".into(), "Wingdings".into(), "No Such Roman Font".into()];
         for family in ["Symbol (PCL6)", "Wingdings"] {

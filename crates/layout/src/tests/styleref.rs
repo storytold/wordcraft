@@ -52,6 +52,7 @@ const CHAPTERS: &[(&str, &str, bool)] = &[
 
 #[test]
 fn each_page_s_header_shows_its_chapter() {
+    crate::test_fonts();
     let d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1" \* MERGEFORMAT"#, "STYLEREF 1", "STYLEREF heading1 \\l"]);
     let h = headers(&d);
     assert_eq!(h.len(), 4);
@@ -62,6 +63,7 @@ fn each_page_s_header_shows_its_chapter() {
 
 #[test]
 fn search_from_the_bottom_with_l() {
+    crate::test_fonts();
     let paras = [("Heading2", "First", false), ("Heading2", "Second", false), ("Normal", "Body", false), ("Heading2", "Third", true)];
     let d = doc(&paras, &[r#"STYLEREF "Heading 2""#, r#"STYLEREF "Heading 2" \l"#]);
     assert_eq!(headers(&d), [vec!["First", "Second"], vec!["Third", "Third"]]);
@@ -69,6 +71,7 @@ fn search_from_the_bottom_with_l() {
 
 #[test]
 fn a_missing_style_or_no_paragraph_of_it_is_an_error() {
+    crate::test_fonts();
     let d = doc(CHAPTERS, &[r#"STYLEREF "No Such Style""#, r#"STYLEREF "Heading 3""#, "STYLEREF 12"]);
     let err = styleref::NO_TEXT;
     assert_eq!(headers(&d)[0], [err, err, err]);
@@ -77,6 +80,7 @@ fn a_missing_style_or_no_paragraph_of_it_is_an_error() {
 
 #[test]
 fn before_the_first_heading_the_next_one_shows() {
+    crate::test_fonts();
     let paras = [("Normal", "Preface", false), ("Heading1", "Chapter", true)];
     let d = doc(&paras, &[r#"STYLEREF "Heading 1""#, r#"STYLEREF "Heading 1" \p"#]);
     assert_eq!(headers(&d), [vec!["Chapter", "below"], vec!["Chapter", "below"]]);
@@ -84,6 +88,7 @@ fn before_the_first_heading_the_next_one_shows() {
 
 #[test]
 fn character_styles_and_paragraph_numbers() {
+    crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF Strong"#, r#"STYLEREF "Heading 1" \n"#, r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 1" \s"#]);
     // Bold a word on page 2 with the Strong character style.
     d.format_range(&Pos::body(3, 8), &Pos::body(3, 11), &|c: &mut CharProps| c.style = Some("Strong".into())).unwrap();
@@ -100,6 +105,7 @@ fn character_styles_and_paragraph_numbers() {
 /// Editing a heading updates the headers that show it, through the paragraph cache.
 #[test]
 fn headers_follow_heading_edits() {
+    crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1""#]);
     let mut c = LayoutCache::new();
     let first = layout(&d, &mut c, &LayoutOptions::default());
@@ -115,6 +121,7 @@ fn headers_follow_heading_edits() {
 /// documents lay out on every keystroke); an edited heading or a changed style rebuilds it.
 #[test]
 fn style_index_is_reused_until_the_body_or_styles_change() {
+    crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1""#]);
     let mut c = LayoutCache::new();
     let index = |c: &LayoutCache| c.styleref.as_ref().map(|(_, _, ix)| ix.clone()).unwrap();
@@ -143,6 +150,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
 /// `STYLEREF 1` finds the style named `heading 1` when its id is localized (#1286).
 #[test]
 fn heading_level_matches_a_localized_style_id() {
+    crate::test_fonts();
     let paras: Vec<(&str, &str, bool)> = CHAPTERS.iter().map(|(s, t, b)| (if *s == "Heading1" { "berschrift1" } else { *s }, *t, *b)).collect();
     let mut d = doc(&paras, &["STYLEREF 1"]);
     let st = d.styles.styles.iter_mut().find(|s| s.id == "Heading1").unwrap();
@@ -157,6 +165,7 @@ fn heading_level_matches_a_localized_style_id() {
 /// edited heading still updates the headers that show it.
 #[test]
 fn body_edits_keep_styleref_headers_cached() {
+    crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1""#, r#"STYLEREF "Heading 1" \p"#]);
     let mut c = LayoutCache::new();
     let opts = LayoutOptions::default();
@@ -201,6 +210,7 @@ fn field_char_xs(d: &Document) -> Vec<(String, Vec<f32>)> {
 /// also in a right-to-left header paragraph.
 #[test]
 fn hebrew_styleref_result_reads_right_to_left() {
+    crate::test_fonts();
     let d = doc(&[("Heading1", "פרק א", false), ("Normal", "Text.", false)], &[r#"STYLEREF "Heading 1""#]);
     let got = field_char_xs(&d);
     let (text, xs) = &got[0];
@@ -269,6 +279,7 @@ fn rtl_header(d: &mut Document) {
 /// Hebrew word in brackets in a left-to-right result draws its brackets the right way round.
 #[test]
 fn field_results_mirror_brackets_with_their_bidi_runs() {
+    crate::test_fonts();
     let mut got = Vec::new();
     // The field-code view of a PAGE field in a right-to-left header.
     let mut d = doc(&[("Normal", "Text.", false)], &["PAGE"]);
