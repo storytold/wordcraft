@@ -20,6 +20,41 @@ pub(crate) struct RawStyle {
     pub(crate) chpx: Vec<u8>,
 }
 
+/// The stylesheet's standard fonts, the ones text takes when neither its style nor its own
+/// formatting names a font: font-table indexes of the ASCII, East Asian and other
+/// (non-East-Asian, non-ASCII) fonts (`Stshif.rgftcStandardChpStsh`, [MS-DOC] §2.9.273) and the
+/// complex-script font (`Stshi.ftcBi`, §2.9.272). `None` where the header is too short for one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StandardFonts {
+    pub(crate) ascii: Option<u16>,
+    pub(crate) east_asian: Option<u16>,
+    pub(crate) other: Option<u16>,
+    pub(crate) bidi: Option<u16>,
+}
+
+/// `StshiLsd.cbLSD`: the size of a latent style's `LSD` ([MS-DOC] `StshiLsd`).
+const LSD_SIZE: u16 = 4;
+
+/// The [`StandardFonts`] in the header (`Stshi`) of the `STSH` at `table[fc..fc+lcb]`: Word 365
+/// writes Aptos there while the font table's first entry is still Times New Roman (#5066).
+pub(crate) fn standard_fonts(table: &[u8], fc: u32, lcb: u32) -> StandardFonts {
+    let Some(stsh) = (fc as usize).checked_add(lcb as usize).and_then(|end| table.get(fc as usize..end)) else { return StandardFonts::default() };
+    let cb_stshi = stsh.get(0..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let stshi = stsh.get(2..).map_or(&[][..], |s| s.get(..cb_stshi.min(s.len())).unwrap_or(&[]));
+    // Stshif: cstd, cbSTDBaseInFile, flags, stiMaxWhenSaved, istdMaxFixedWhenSaved,
+    // nVerBuiltInNamesWhenSaved (2 bytes each), then rgftcStandardChpStsh (3 × 2); ftcBi follows.
+    let at = |o: usize| stshi.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    // ftcBi is optional, and the latent style data (`StshiLsd`, whose `cbLSD` MUST be 4) follows
+    // it: a 4 right after it says it is there, a 4 in its place with more data after says it was
+    // left out. A header that ends right after the field (as Word 97's) has it, a 4 included.
+    let bidi = match (at(18), at(20)) {
+        (b, Some(LSD_SIZE) | None) => b,
+        (Some(LSD_SIZE), Some(_)) => None,
+        (b, _) => b,
+    };
+    StandardFonts { ascii: at(12), east_asian: at(14), other: at(16), bidi }
+}
+
 /// Parse the `STSH` at `table[fc..fc+lcb]`.
 pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, DocbinError> {
     let fc = fc as usize;
