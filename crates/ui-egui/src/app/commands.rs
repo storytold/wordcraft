@@ -301,12 +301,13 @@ impl WordApp {
     /// User commands can ask for a supported Save As target or an opening password (#55).
     /// Scripts and agents use [`WordApp::execute`], which never opens these dialogs.
     pub(crate) fn execute_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        // Legacy Word files are import-only (#2445). Only a user's implicit Save asks for
-        // a supported target; scripts and explicitly supplied paths keep their normal errors.
+        // Legacy Word files (#2445) and other import-only formats (e.g. EPUB, #3117) have a
+        // reader but no writer. Only a user's implicit Save asks for a supported target;
+        // scripts and explicitly supplied paths keep their normal errors.
         if id == "file.save"
             && params.get("path").and_then(Value::as_str).is_none()
             && self.has_document()
-            && self.legacy_word_path()
+            && self.import_only_path()
             && self.services.download.is_none()
         {
             return match self.save_as(file_dialogs::AfterSave::Nothing) {
