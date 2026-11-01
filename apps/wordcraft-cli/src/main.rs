@@ -216,10 +216,11 @@ fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session
         }
         s.run("file.save", &params)
     };
-    r.map_err(|e| e.to_string())?;
+    let result = r.map_err(|e| e.to_string())?;
     eprintln!("wrote {o}");
     if report {
-        write_report(&s, &i, &o, markup)?;
+        let export_report = result.get("exportReport").ok_or("PDF save returned no export report")?;
+        write_report(&s, &i, &o, export_report)?;
     }
     Ok(())
 }
@@ -230,32 +231,17 @@ fn convert(rest: &[String], open: &impl Fn(&str, Option<&str>) -> Result<Session
 /// version, tagged state, embedded fonts, the epoch in effect — and this layer adds
 /// what the session knows: the file names and the fonts the document's runs request.
 ///
-/// The document is exported a second time to build the report, with the options
-/// built by the same constructor the save command used (`cmd::file::export_options`
-/// over this session, with the markup this command was passed), so the report
-/// describes the export that was written, not a near copy of it. The first save
-/// has already stamped the session document, so its creation date is fixed, and
-/// the exporter hashes content for its file IDs: the second export is the same
-/// bytes. Threading the report up through `file.save` instead of re-exporting
-/// remains the follow-up.
-fn write_report(s: &Session, source: &str, target: &str, markup: bool) -> Result<(), String> {
-    let opts = wordcraft_engine::cmd::file::export_options(s, &json!({ "markup": markup }));
-    let (_, report) = wordcraft_engine::io::export_pdf(&s.doc, &opts)?;
-    let value = json!({
-        "source": source,
-        "target": target,
-        "format": "pdf",
-        "pages": report.pages,
-        "pdfVersion": report.pdf_version,
-        "tagged": report.tagged,
-        "pdfUa": report.pdf_ua,
-        "sourceDateEpoch": report.source_date_epoch,
-        "requestedFonts": requested_fonts(&s.doc),
-        "embeddedFonts": report.embedded_fonts,
-    });
+/// `file.save` supplies the report from the bytes it wrote, including its saved-copy
+/// normalization. This path performs no second layout or PDF export.
+fn write_report(s: &Session, source: &str, target: &str, report: &Value) -> Result<(), String> {
+    let mut value = report.clone();
+    value["source"] = json!(source);
+    value["target"] = json!(target);
+    value["format"] = json!("pdf");
+    value["requestedFonts"] = json!(requested_fonts(&s.doc));
     let sidecar = format!("{target}.report.json");
     let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    std::fs::write(&sidecar, text).map_err(|e| format!("{sidecar}: {e}"))?;
+    wordcraft_engine::io::write_file(&sidecar, text.as_bytes())?;
     eprintln!("wrote {sidecar}");
     Ok(())
 }

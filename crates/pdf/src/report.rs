@@ -3,7 +3,8 @@
 //! here is inferred after the fact — each field is read off the work as it finished.
 
 /// A record of one PDF export.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportReport {
     /// Pages written (after any page selection in the options).
     pub pages: usize,

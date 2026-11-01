@@ -372,10 +372,13 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let report = match crate::io::save_path_with_report(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
+        Ok(report) => report,
+        Err(e) => {
+            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+            return Err(CmdError::Failed(e));
+        }
+    };
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
@@ -385,7 +388,11 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.dirty = false;
         s.relayout();
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+    let mut result = json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted});
+    if let Some(report) = report {
+        result["exportReport"] = json!(report);
+    }
+    Ok(result)
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?

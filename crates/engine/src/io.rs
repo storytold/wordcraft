@@ -779,15 +779,38 @@ pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
 }
 
 /// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
+    save_path_with_report(path, doc, password, opts).map(|_| ())
+}
+
+/// Save once and return the report for the PDF bytes successfully written. Other formats
+/// return `None`; an export or write failure returns no report.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_path_with_report(
+    path: &std::path::Path,
+    doc: &Document,
+    password: Option<&str>,
+    opts: &ExportOptions,
+) -> Result<Option<wordcraft_pdf::ExportReport>, String> {
     crate::file_access::check_write(&path.to_string_lossy())?;
-    let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts)?;
-    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    let name = path.to_string_lossy();
+    let (bytes, report) = if ext_of(&name) == "pdf" {
+        let (bytes, report) = export_pdf(doc, opts)?;
+        (bytes, Some(report))
+    } else {
+        (save_bytes_with(&name, doc, password, opts)?, None)
+    };
+    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(report)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_with_report(
+    path: &std::path::Path,
+    _doc: &Document,
+    _password: Option<&str>,
+    _opts: &ExportOptions,
+) -> Result<Option<wordcraft_pdf::ExportReport>, String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 

@@ -14,6 +14,14 @@ Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed com
 document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
 connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
+## PDF save reports
+
+A successful `file.save` or `file.saveAs` to a PDF also returns `exportReport`, with
+`pages`, `pdfVersion`, `tagged`, `pdfUa`, `sourceDateEpoch` and `embeddedFonts`. It
+describes the bytes that were written, including save-time normalization. Other
+formats omit this field, and a failed write returns an error. The CLI uses this
+report for `convert --report`; it does not export the document a second time.
+
 ## Keys
 
 Any local program (and possibly a web page) can reach a loopback port, so every request needs the

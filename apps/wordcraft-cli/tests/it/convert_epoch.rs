@@ -7,13 +7,12 @@ use std::process::Command;
 
 #[test]
 fn convert_is_byte_identical_under_source_date_epoch() {
-    let dir = std::env::temp_dir().join(format!("wc-convert-epoch-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let input = dir.join("in.txt");
+    let dir = tempfile::Builder::new().prefix("wc-convert-epoch-").tempdir().unwrap();
+    let input = dir.path().join("in.txt");
     std::fs::write(&input, "Hello from a reproducibility check.\n").unwrap();
     let mut outputs = Vec::new();
     for name in ["one.pdf", "two.pdf"] {
-        let out = dir.join(name);
+        let out = dir.path().join(name);
         let run = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"))
             .arg("convert")
             .arg(&input)
