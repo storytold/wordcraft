@@ -95,6 +95,47 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
+        // The pen (#4589): Draw Table, the Borders menu and Border Painter draw with it.
+        let pen = app.canvas.table_pen.clone();
+        stack(ui, |ui| {
+            let style = crate::table_pen::LINE_STYLES.iter().find(|(_, s)| *s == pen.style).map_or("Single", |(l, _)| *l);
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("lineStyle", Some(style), "Line Style", false, "table.borders"),
+                |ui, app| {
+                    for (label, s) in crate::table_pen::LINE_STYLES {
+                        if ui.selectable_label(pen.style == s, tl!(label)).clicked() {
+                            let _ = app.run("ui.tablePen", json!({"style": s}));
+                            ui.close();
+                        }
+                    }
+                },
+            );
+            let weight = crate::table_pen::Pen::weight_label(pen.width);
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("lineWeight", Some(&weight), "Line Weight", false, "table.borders"),
+                |ui, app| {
+                    for w in crate::table_pen::LINE_WEIGHTS {
+                        if ui.selectable_label((pen.width - w).abs() < 0.01, crate::table_pen::Pen::weight_label(w)).clicked() {
+                            let _ = app.run("ui.tablePen", json!({"width": w}));
+                            ui.close();
+                        }
+                    }
+                },
+            );
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("pen", Some("Pen Color"), "Pen Color", false, "table.borders"), |ui, app| {
+                if ui.selectable_label(pen.color.is_none(), tl!("Automatic")).clicked() {
+                    let _ = app.run("ui.tablePen", json!({"color": "auto"}));
+                    ui.close();
+                }
+                let theme = app.session.doc.settings.theme_colors.clone();
+                crate::colors::menu(ui, app, &theme, Target::cmd("ui.tablePen"));
+            });
+        });
+        let pen = pen.params();
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("borders", Some("Borders"), "Borders", true, "table.borders"), |ui, app| {
             for (l, k) in [
                 ("All Borders", "all"),
@@ -104,10 +145,12 @@ pub(super) fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 ("Top Border", "top"),
                 ("Bottom Border", "bottom"),
             ] {
-                mi(ui, app, l, "table.borders", json!({"kind": k}));
+                let mut params = pen.clone();
+                params["kind"] = json!(k);
+                mi(ui, app, l, "table.borders", params);
             }
         });
-        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", json!({}), false);
+        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", pen, false);
     });
 }
 

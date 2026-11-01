@@ -5,7 +5,7 @@
 //! finished stroke or click here, so every stroke is one undo step.
 
 use serde_json::Value;
-use wordcraft_doc::props::{HeightRule, VMerge};
+use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule, Rgb, VMerge};
 use wordcraft_doc::table::{MAX_COLS, MAX_ROWS};
 use wordcraft_doc::{Block, Cell, Path, Pos, StoryRef, Table, para_block};
 use wordcraft_geom::Rect;
@@ -26,7 +26,7 @@ const MIN_LINE: f32 = 6.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("table.draw", "Draw Table", "Insert › Tables", draw).params(
-            r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. In the app the button turns the pen on.)"#,
+            r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef, "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "width"?: pt, "color"?: "RRGGBB"} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. `style`, `width` (1/4 to 6 pt) and `color` are the pen (Table Design > Borders > Line Style, Line Weight, Pen Color): the new table's borders, or the border the line draws; without them the borders are left to the table style. In the app the button turns the pen on.)"#,
         ),
         CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", eraser).params(
             r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point: cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
@@ -97,6 +97,17 @@ pub fn stroke(l: &DocLayout, page: usize, x0: f32, y0: f32, x1: f32, y1: f32) ->
     (dx >= MIN_RECT && dy >= MIN_RECT).then(|| Stroke::Rect(Rect::new(x0.min(x1), y0.min(y1), dx, dy)))
 }
 
+/// The pen a stroke draws with (`style`, `width`, `color`), or `None` when the call names none of
+/// them. The width is clamped to Word's 1/4 to 6 pt; an unknown style is a single line.
+pub fn pen(v: &Value) -> Option<Border> {
+    if !["style", "width", "color"].iter().any(|k| v.get(k).is_some_and(|x| !x.is_null())) {
+        return None;
+    }
+    let style = p::str(v, "style").map_or(BorderStyle::Single, BorderStyle::from_ooxml);
+    let width = p::f32(v, "width").filter(|w| w.is_finite()).unwrap_or(0.5).clamp(0.25, 6.0);
+    Some(Border { style, width, color: p::str(v, "color").and_then(Rgb::parse), space: 0.0 })
+}
+
 fn page_param(v: &Value) -> Result<usize, CmdError> {
     p::u64(v, "page").map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| CmdError::Params("`page` (number) is required".into()))
 }
@@ -110,8 +121,8 @@ fn draw(s: &mut Session, v: &Value) -> CmdResult {
     }
     match stroke(&l, page, x0, y0, x1, y1) {
         Some(Stroke::Rect(r)) => draw_table(s, v, &l, page, (x0, y0), r),
-        Some(Stroke::Vertical { x, y0, y1 }) => split_columns(s, &l, page, x, (y0, y1)),
-        Some(Stroke::Horizontal { y, x0, x1 }) => split_rows(s, &l, page, y, (x0, x1)),
+        Some(Stroke::Vertical { x, y0, y1 }) => split_columns(s, &l, page, x, (y0, y1), pen(v)),
+        Some(Stroke::Horizontal { y, x0, x1 }) => split_rows(s, &l, page, y, (x0, x1), pen(v)),
         None => Err(CmdError::Failed(
             "draw a rectangle (at least 12 pt each way) outside a table, or a straight horizontal or vertical line across table cells".into(),
         )),
@@ -131,6 +142,9 @@ fn draw_table(s: &mut Session, v: &Value, l: &DocLayout, page: usize, start: (f3
     let w = r.w.clamp(18.0, tw);
     let mut t = Table::new(1, 1, w);
     t.props.width = Some(w);
+    if let Some(b) = pen(v) {
+        t.props.borders = Some(Borders::all(b));
+    }
     let body_x = l.pages.get(page).map_or(0.0, |pg| pg.body.x);
     let indent = r.x - body_x;
     if indent > 1.0 {
@@ -276,7 +290,7 @@ fn hide_edge(t: &mut Table, vertical: bool, line: usize, (lo, hi): (usize, usize
 }
 
 /// A vertical line at page `x`: split each crossed cell into two columns there.
-fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): (f32, f32)) -> CmdResult {
+fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): (f32, f32), pen: Option<Border>) -> CmdResult {
     let boxes = cell_boxes(l, page);
     let hit = |r: &Rect| {
         let overlap = yb.min(r.bottom()) - ya.max(r.y);
@@ -328,6 +342,7 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
                     let mut nc = Cell::empty();
                     nc.props = cell.props.clone();
                     nc.props.span = (a + span - j) as u32;
+                    split_edges(&mut cell.props.borders, &mut nc.props.borders, true, pen);
                     row.cells.insert(c + 1, nc);
                     changed = true;
                 }
@@ -355,6 +370,7 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
                     let mut nc = Cell::empty();
                     nc.props = cell.props.clone();
                     nc.props.span = (a + span - k) as u32;
+                    split_edges(&mut cell.props.borders, &mut nc.props.borders, true, pen);
                     row.cells.insert(ci + 1, nc);
                 } else {
                     cell.props.span = cell.props.span.saturating_add(1);
@@ -372,7 +388,7 @@ fn split_columns(s: &mut Session, l: &DocLayout, page: usize, x: f32, (ya, yb): 
 
 /// A horizontal line at page `y`: split the row it crosses there. Crossed cells become two;
 /// the row's other cells span both rows (a vertical merge).
-fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f32, f32)) -> CmdResult {
+fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f32, f32), pen: Option<Border>) -> CmdResult {
     let boxes = cell_boxes(l, page);
     let hit = |r: &Rect| {
         let overlap = xb.min(r.right()) - xa.max(r.x);
@@ -419,6 +435,7 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
         nc.props = cell.props.clone();
         if crossed_set.contains(&ci) {
             nc.props.vmerge = VMerge::None;
+            split_edges(&mut cell.props.borders, &mut nc.props.borders, false, pen);
         } else {
             if cell.props.vmerge == VMerge::None {
                 cell.props.vmerge = VMerge::Restart;
@@ -429,6 +446,22 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     }
     t.rows.insert(r + 1, new_row);
     finish(s, story, &tp, r + 1, c0)
+}
+
+/// The borders of a cell split in two, `second` a copy of `first`: the line drawn between them
+/// takes the pen on both halves (right and left, or bottom and top when `across` is false), and
+/// the second half keeps the far side. Without a pen the halves keep the cell's own borders, as
+/// before there was a pen.
+fn split_edges(first: &mut Option<Borders>, second: &mut Option<Borders>, across: bool, pen: Option<Border>) {
+    if pen.is_none() {
+        return;
+    }
+    let (a, b) = (first.get_or_insert_with(Default::default), second.get_or_insert_with(Default::default));
+    if across {
+        (a.right, b.left) = (pen, pen);
+    } else {
+        (a.bottom, b.top) = (pen, pen);
+    }
 }
 
 /// Put the caret in cell (`r`, `c`) of the table (clamped) and re-lay its paragraphs out.
@@ -581,6 +614,23 @@ fn eraser(s: &mut Session, v: &Value) -> CmdResult {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// #4589: the pen each call names: every Line Style the menu offers, Word's default ½ pt when
+    /// no weight is given, weights clamped to Word's ¼–6 pt, an unknown style drawn single, and no
+    /// pen at all when the call names none of style, width and colour.
+    #[test]
+    fn the_pen_takes_each_style_a_default_weight_and_clamps() {
+        for style in ["single", "double", "dotted", "dashed", "thick", "triple", "dotDash", "wave"] {
+            let b = pen(&json!({"style": style})).unwrap();
+            assert_eq!((b.style.ooxml(), b.width, b.color), (style, 0.5, None), "{style}");
+        }
+        assert_eq!(pen(&json!({"style": "zigzag"})).map(|b| b.style), Some(BorderStyle::Single));
+        assert_eq!(pen(&json!({"width": 99.0})).map(|b| b.width), Some(6.0));
+        assert_eq!(pen(&json!({"width": 0.0})).map(|b| b.width), Some(0.25));
+        assert_eq!(pen(&json!({"width": "x", "color": "FF0000"})).map(|b| (b.width, b.color)), Some((0.5, Rgb::parse("FF0000"))));
+        assert_eq!(pen(&json!({"x0": 1.0})), None);
+        assert_eq!(pen(&json!({"style": null})), None);
+    }
 
     /// Each row's cell spans.
     fn shape(t: &Table) -> Value {
@@ -787,5 +837,79 @@ mod tests {
         };
         assert!(vis(1, 1, false) && vis(2, 1, true) && vis(2, 2, true), "both sides along the whole edge");
         assert!(!vis(2, 0, true), "the first column is not part of the edge");
+    }
+
+    /// #4589: Draw Table draws with the pen of Table Design > Borders (Line Style, Line Weight,
+    /// Pen Color): a new table gets it on every side, a line on both cells beside it, and the
+    /// Borders menu and Border Painter apply its style. Without a pen the borders are left to the
+    /// table style, as before.
+    #[test]
+    fn the_pen_draws_tables_lines_and_borders() {
+        let red = Rgb::parse("C00000");
+        let double = Border { style: BorderStyle::Double, width: 1.5, color: red, space: 0.0 };
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("document.setText", &json!({"text": "Above the table"})).unwrap();
+        let body = s.layout().pages[0].body;
+        let (x0, y0) = (body.x + 40.0, body.y + 2.0);
+        let stroke = json!({"page": 0, "x0": x0, "y0": y0, "x1": x0 + 200.0, "y1": y0 + 60.0, "style": "double", "width": 1.5, "color": "C00000"});
+        s.run("table.draw", &stroke).unwrap();
+        assert_eq!(first_table(&s).props.borders, Some(Borders::all(double)), "the new table");
+        // A vertical line splits the cell: both cells beside it get the pen there.
+        let r = cell_rect(&mut s, 0, 0);
+        let x = r.x + r.w / 2.0;
+        let line = json!({"page": 0, "x0": x, "y0": r.y + 1.0, "x1": x, "y1": r.bottom() - 1.0, "style": "dotted", "width": 3, "color": null});
+        s.run("table.draw", &line).unwrap();
+        let dotted = Border { style: BorderStyle::Dotted, width: 3.0, color: None, space: 0.0 };
+        let t = first_table(&s);
+        let side = |t: &Table, r: usize, c: usize| t.rows[r].cells[c].props.borders.unwrap_or_default();
+        assert_eq!((side(&t, 0, 0).right, side(&t, 0, 1).left), (Some(dotted), Some(dotted)));
+        assert_eq!(side(&t, 0, 0).left, None, "the other sides keep the table's borders");
+        // A horizontal line across the right cell: under the upper half, over the lower one.
+        let r = cell_rect(&mut s, 0, 1);
+        let y = r.y + r.h / 2.0;
+        s.run("table.draw", &json!({"page": 0, "x0": r.x + 1.0, "y0": y, "x1": r.right() - 1.0, "y1": y, "width": 0.75})).unwrap();
+        let thin = Border { style: BorderStyle::Single, width: 0.75, color: None, space: 0.0 };
+        let t = first_table(&s);
+        assert_eq!((side(&t, 0, 1).bottom, side(&t, 1, 1).top), (Some(thin), Some(thin)));
+        // Without a pen both halves keep the cell's own borders, as before.
+        let own = side(&first_table(&s), 1, 1);
+        let r = cell_rect(&mut s, 1, 1);
+        let x = r.x + r.w / 2.0;
+        s.run("table.draw", &json!({"page": 0, "x0": x, "y0": r.y + 1.0, "x1": x, "y1": r.bottom() - 1.0})).unwrap();
+        let t = first_table(&s);
+        assert_eq!((side(&t, 1, 1), side(&t, 1, 2)), (own, own));
+        // The Borders menu and Border Painter take the pen's style too.
+        s.run("table.borders", &json!({"kind": "all", "style": "dashed", "width": 2, "color": "0000FF"})).unwrap();
+        let dashed = Border { style: BorderStyle::Dashed, width: 2.0, color: Rgb::parse("0000FF"), space: 0.0 };
+        assert_eq!(first_table(&s).props.borders, Some(Borders::all(dashed)));
+        s.run("table.borderPainter", &json!({"kind": "outside", "style": "triple", "width": 0.5})).unwrap();
+        assert_eq!(first_table(&s).props.borders.and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Triple));
+        // A hostile pen is clamped, never a panic.
+        assert_eq!(pen(&json!({"width": 1e6, "style": "nonsense"})).map(|b| (b.style, b.width)), Some((BorderStyle::Single, 6.0)));
+        assert_eq!(pen(&json!({"width": -5})).map(|b| b.width), Some(0.25));
+        assert_eq!(pen(&json!({"page": 0, "color": null})), None);
+    }
+
+    /// Splitting a cell with its own borders: the line between the halves takes the pen and the
+    /// far side stays with the second half; without a pen nothing changes.
+    #[test]
+    fn a_split_cell_hands_its_far_border_to_the_new_half() {
+        let outer = Border { style: BorderStyle::Thick, width: 3.0, color: None, space: 0.0 };
+        let pen = Border { style: BorderStyle::Dashed, width: 1.0, color: None, space: 0.0 };
+        let own = Some(Borders::all(outer));
+        let (mut a, mut b) = (own, own);
+        split_edges(&mut a, &mut b, true, Some(pen));
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!((a.left, a.right, b.left, b.right), (Some(outer), Some(pen), Some(pen), Some(outer)));
+        let (mut a, mut b) = (own, own);
+        split_edges(&mut a, &mut b, false, Some(pen));
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!((a.top, a.bottom, b.top, b.bottom), (Some(outer), Some(pen), Some(pen), Some(outer)));
+        let (mut a, mut b) = (own, own);
+        split_edges(&mut a, &mut b, false, None);
+        assert_eq!((a, b), (own, own), "without a pen the halves keep the cell's borders");
+        let (mut a, mut b) = (None, None);
+        split_edges(&mut a, &mut b, true, None);
+        assert_eq!((a, b), (None, None), "a cell without borders of its own gets none");
     }
 }

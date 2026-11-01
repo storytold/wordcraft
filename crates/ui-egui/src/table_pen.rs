@@ -28,6 +28,98 @@ impl TableTool {
     }
 }
 
+/// Table Design > Borders > Line Style: the styles the pen offers, as `(label, style)`.
+pub const LINE_STYLES: [(&str, &str); 8] = [
+    ("Single", "single"),
+    ("Dotted", "dotted"),
+    ("Dashed", "dashed"),
+    ("Dot Dash", "dotDash"),
+    ("Double", "double"),
+    ("Triple", "triple"),
+    ("Thick", "thick"),
+    ("Wave", "wave"),
+];
+
+/// Table Design > Borders > Line Weight: Word's weights, in points.
+pub const LINE_WEIGHTS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
+
+/// The pen of Table Design > Borders (Line Style, Line Weight, Pen Color, #4589): what Draw
+/// Table, the Borders menu and Border Painter draw with. It belongs to the window, not the
+/// document, like the colours last applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pen {
+    pub style: &'static str,
+    pub width: f32,
+    /// `RRGGBB`, or `None` for Automatic.
+    pub color: Option<String>,
+}
+
+impl Default for Pen {
+    /// Word's: a single ½ pt line in the automatic colour.
+    fn default() -> Self {
+        Pen { style: "single", width: 0.5, color: None }
+    }
+}
+
+impl Pen {
+    /// The pen as the params `table.draw`, `table.borders` and `table.borderPainter` take.
+    pub fn params(&self) -> Value {
+        json!({"style": self.style, "width": self.width, "color": self.color})
+    }
+
+    /// The weight as Word lists it (½ pt, 2¼ pt…).
+    pub fn weight_label(width: f32) -> String {
+        let whole = width.trunc();
+        let frac = match ((width - whole) * 4.0).round() as u8 {
+            1 => "\u{bc}",
+            2 => "\u{bd}",
+            3 => "\u{be}",
+            _ => "",
+        };
+        let n = match (whole as u32, frac) {
+            (0, "") => "0".to_string(),
+            (0, f) => f.to_string(),
+            (w, f) => format!("{w}{f}"),
+        };
+        crate::i18n::fmt(tl!("{n} pt"), &[("n", &n)])
+    }
+}
+
+/// `ui.tablePen {"style"?, "width"?, "color"?}`: set the pen (`color` "auto" or null is
+/// Automatic). A style or colour it doesn't know, or a width that isn't a number, is refused
+/// and the pen stays as it was. Returns the pen.
+pub fn set_pen(app: &mut WordApp, p: &Value) -> Result<Value, String> {
+    let mut pen = app.canvas.table_pen.clone();
+    if let Some(v) = p.get("style").filter(|v| !v.is_null()) {
+        let name = v.as_str().unwrap_or_default();
+        pen.style =
+            LINE_STYLES.iter().find(|(_, s)| s.eq_ignore_ascii_case(name)).map(|(_, s)| *s).ok_or_else(|| format!("unknown line style `{name}`"))?;
+    }
+    if let Some(v) = p.get("width").filter(|v| !v.is_null()) {
+        let w = v.as_f64().filter(|w| w.is_finite()).ok_or("`width` must be a number of points")?;
+        pen.width = (w as f32).clamp(0.25, 6.0);
+    }
+    if let Some(v) = p.get("color") {
+        pen.color = match v {
+            Value::Null => None,
+            Value::String(c) if c == "auto" => None,
+            Value::String(c) => Some(wordcraft_doc::Rgb::parse(c).map(|c| c.hex()).ok_or_else(|| format!("unknown colour `{c}`"))?),
+            other => return Err(format!("`color` must be \"RRGGBB\", \"auto\" or null, not {other}")),
+        };
+    }
+    app.canvas.table_pen = pen;
+    Ok(app.canvas.table_pen.params())
+}
+
+/// `table.draw`'s params for a finished stroke, drawn with `pen`.
+fn draw_params(pen: &Pen, st: &PenStroke) -> Value {
+    let mut params = pen.params();
+    for (k, v) in [("page", json!(st.page)), ("x0", json!(st.from.0)), ("y0", json!(st.from.1)), ("x1", json!(st.to.0)), ("y1", json!(st.to.1))] {
+        params[k] = v;
+    }
+    params
+}
+
 /// A stroke in progress: its page and its start and current end (page points).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PenStroke {
@@ -108,7 +200,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             if (st.to.0 - st.from.0).abs() < 2.0 && (st.to.1 - st.from.1).abs() < 2.0 {
                 return true;
             }
-            json!({"page": st.page, "x0": st.from.0, "y0": st.from.1, "x1": st.to.0, "y1": st.to.1})
+            draw_params(&app.canvas.table_pen, &st)
         }
         TableTool::Erase => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
     };
@@ -219,5 +311,38 @@ mod tests {
         assert_eq!(a.canvas.table_tool, Some(TableTool::Erase));
         a.run("table.deleteRow", json!({})).unwrap();
         assert_eq!(a.canvas.table_tool, None);
+    }
+
+    /// #4589: Line Style, Line Weight and Pen Color set the pen (`ui.tablePen`); junk is refused
+    /// and leaves it as it was; a stroke draws with it; it outlasts a switch to another document.
+    #[test]
+    fn the_pen_is_set_from_the_ribbon_and_strokes_draw_with_it() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert_eq!(a.canvas.table_pen, Pen::default());
+        a.run("ui.tablePen", json!({"style": "double", "width": 2.25})).unwrap();
+        // Pen Color goes through the colour menu's target.
+        let (cmd, p) = crate::colors::Target::cmd("ui.tablePen").command("c00000").unwrap();
+        a.run(&cmd, p).unwrap();
+        let red = Pen { style: "double", width: 2.25, color: Some("C00000".into()) };
+        assert_eq!(a.canvas.table_pen, red);
+        for junk in [json!({"style": "zigzag"}), json!({"width": "thick"}), json!({"color": "purple"}), json!({"color": false}), json!({"color": 12})]
+        {
+            assert!(a.run("ui.tablePen", junk.clone()).is_err(), "{junk}");
+        }
+        assert_eq!(a.canvas.table_pen, red, "refused values change nothing");
+        a.run("ui.tablePen", json!({"width": 1e9})).unwrap();
+        assert_eq!(a.canvas.table_pen.width, 6.0, "clamped to Word's heaviest");
+        a.run("ui.tablePen", json!({"width": 2.25, "color": "auto"})).unwrap();
+        assert_eq!(a.canvas.table_pen.color, None);
+        let st = PenStroke { page: 0, from: (10.0, 20.0), to: (110.0, 80.0) };
+        let p = draw_params(&a.canvas.table_pen, &st);
+        assert_eq!((&p["style"], &p["width"], &p["color"], &p["x1"]), (&json!("double"), &json!(2.25), &Value::Null, &json!(110.0)));
+        assert_eq!(table_draw::pen(&p).map(|b| (b.style, b.width)), Some((wordcraft_doc::props::BorderStyle::Double, 2.25)));
+        // The weights as Word lists them.
+        let labels: Vec<String> = LINE_WEIGHTS.iter().map(|&w| Pen::weight_label(w)).collect();
+        assert_eq!(labels, ["\u{bc} pt", "\u{bd} pt", "\u{be} pt", "1 pt", "1\u{bd} pt", "2\u{bc} pt", "3 pt", "4\u{bd} pt", "6 pt"]);
+        // Another document keeps the pen.
+        a.canvas.show_other_document(false);
+        assert_eq!(a.canvas.table_pen.style, "double");
     }
 }
