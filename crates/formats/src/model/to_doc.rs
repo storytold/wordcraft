@@ -65,6 +65,10 @@ impl WithExtra for CharProps {
         self.shadow = x.shadow;
         self.emboss = x.emboss;
         self.engrave = x.engrave;
+        self.border = x.border.filter(|b| b.is_visible() && b.width.is_finite()).map(|mut b| {
+            (b.width, b.space) = (b.width.clamp(0.0, 12.0), if b.space.is_finite() { b.space.clamp(0.0, 31.0) } else { 0.0 });
+            b
+        });
         self.lang = x.lang.as_deref().map(clean_text).filter(|l| !l.is_empty() && l.len() <= 64);
         let name = |s: &Option<String>, max: usize| s.as_deref().map(clean_text).filter(|v| !v.is_empty() && v.len() <= max);
         self.font_cs = name(&x.font_cs, super::types::MAX_FONT_NAME);

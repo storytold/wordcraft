@@ -123,6 +123,7 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         shadow: set(e.shadow),
         emboss: set(e.emboss),
         engrave: set(e.engrave),
+        border: e.border.filter(|b| b.is_visible()),
         lang: e.lang.clone().filter(|l| !l.is_empty()),
         font_cs: e.font_cs.clone().filter(|f| !f.is_empty()),
         font_ea: e.font_ea.clone().filter(|f| !f.is_empty()),

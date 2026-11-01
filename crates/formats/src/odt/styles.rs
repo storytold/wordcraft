@@ -147,6 +147,16 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     if let Some(t) = get(a, "style:text-line-through-type") {
         x.double_strike = Some(t.trim() == "double");
     }
+    // A border around the text (LibreOffice's `loext:border`, or its sides): Word's text border,
+    // one line all round (the first side with a line), its padding the border's distance.
+    let side = ["loext:border", "loext:border-top", "loext:border-left", "loext:border-bottom", "loext:border-right"]
+        .into_iter()
+        .find_map(|k| get(a, k).and_then(parse_border).filter(|b| b.is_visible()));
+    if let Some(mut b) = side {
+        let pad = ["loext:padding", "loext:padding-top", "loext:padding-left"].into_iter().find_map(|k| get(a, k).and_then(length));
+        b.space = pad.filter(|p| p.is_finite()).map_or(0.0, |p| p.clamp(0.0, 31.0));
+        x.border = Some(b);
+    }
     if let Some(t) = get(a, "fo:text-transform") {
         x.caps = Some(t.trim() == "uppercase");
     }

@@ -176,6 +176,11 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
     if let Some(e) = extra {
         p.push_str(&extra_props(e, f.size));
     }
+    // A border around the text (Word's `w:bdr`): LibreOffice's text border, which ODF 1.3 has no
+    // attribute of its own for (`loext:border`, `loext:padding`).
+    if let Some(b) = extra.and_then(|e| e.border).filter(|b| b.is_visible()) {
+        p.push_str(&format!(" loext:border=\"{}\" loext:padding=\"{}\"", odf_border(Some(b)), pt(b.space.clamp(0.0, 31.0))));
+    }
     if f.sup {
         p.push_str(" style:text-position=\"super 58%\"");
     } else if f.sub {

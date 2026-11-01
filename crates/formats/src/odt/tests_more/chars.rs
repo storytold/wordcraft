@@ -206,3 +206,18 @@ fn the_default_styles_script_fonts_are_the_document_defaults() {
     let c = &back.styles.default_chr;
     assert_eq!((c.font_ea.as_deref(), c.font_cs.as_deref(), c.lang_bidi.as_deref()), (Some("WenQuanYi Zen Hei"), Some("FreeSans"), Some("hi-IN")));
 }
+
+#[test]
+fn a_border_around_text_is_read_and_written() {
+    // LibreOffice's text border (`loext:border`, or its sides, and `loext:padding`): Word's border
+    // around text, one line all round.
+    let content = format!(
+        r#"<office:document-content {NS_T} xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties loext:padding="0.02in" loext:border-left="none" loext:border-top="0.74pt solid #ff0000"/></style:style></office:automatic-styles><office:body><office:text><text:p>A <text:span text:style-name="T1">boxed</text:span> word.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = crate::odt::import(&crate::odt::tests::package(&content, None)).unwrap();
+    let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
+    let b = p.runs.iter().find_map(|r| r.props.border).expect("a text border");
+    assert_eq!((b.color, (b.width * 100.0).round(), (b.space * 100.0).round()), (Some(wordcraft_doc::props::Rgb(255, 0, 0)), 74.0, 144.0));
+    let c = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    assert!(c.contains(r#"loext:border="0.74pt solid #ff0000" loext:padding="1.44pt""#), "{c}");
+}
