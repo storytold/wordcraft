@@ -204,20 +204,28 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
 /// Apply the new value of a Layout › Paragraph box (Indent Left/Right, Spacing Before/After)
 /// with `cmd` and `params`. A drag changes it frame by frame: every change after the drag's
 /// first joins the undo step before it, so one Undo takes the whole drag back (#5171), not 0.1 cm
-/// of it. The first change starts its own step, whatever frame it comes on.
+/// of it. The first change starts its own step, whatever frame it comes on. A change joins only
+/// while the undo history stands where the drag's last change left it: an edit that came in
+/// between (a control-channel command, say) keeps its own step, and the drag goes on in a new one.
 fn apply_box(app: &mut WordApp, ui: &Ui, r: &egui::Response, cmd: &str, params: serde_json::Value) {
     let applied = r.id.with("drag_applied");
     if !r.dragged() {
-        ui.data_mut(|d| d.remove::<bool>(applied));
+        ui.data_mut(|d| d.remove::<u64>(applied));
     }
     if !r.changed() {
         return;
     }
-    if r.dragged() {
-        if ui.data(|d| d.get_temp::<bool>(applied)).is_some() {
-            app.session.join_next_undo();
-        }
-        ui.data_mut(|d| d.insert_temp(applied, true));
+    let drag = r.dragged();
+    let before = app.session.undo_mark();
+    let join = drag && ui.data(|d| d.get_temp::<u64>(applied)) == Some(before);
+    if join {
+        app.session.join_next_undo();
     }
     let _ = app.run(cmd, params);
+    let after = app.session.undo_mark();
+    // The newest step is the drag's when this change joined it or made it; a change that made
+    // none leaves the next one to start the drag's step.
+    if drag && (join || after != before) {
+        ui.data_mut(|d| d.insert_temp(applied, after));
+    }
 }
