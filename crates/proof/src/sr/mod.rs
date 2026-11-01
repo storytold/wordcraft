@@ -503,6 +503,9 @@ mod tests {
 
     #[test]
     fn user_dictionary_applies_in_both_scripts() {
+        // The user dictionary is shared by the whole test run: hold the lock the other tests that
+        // change it hold, so these adds can't land between another test's remove and its check.
+        let _guard = crate::tests::DICTIONARY_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         test_dict::install();
         let opts = crate::Options::default();
         assert!(!is_correct_with_options("зкмојареч", &opts) && !is_correct_with_options("zkmojareč", &opts));

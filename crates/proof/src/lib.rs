@@ -1081,8 +1081,9 @@ mod tests {
 
     use super::*;
 
-    /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test.
-    static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Held by tests that swap or rely on the shared Spanish dictionary, so a folder reset can't land mid-test,
+    /// and by tests that change the shared user dictionary, so an add can't undo another test's remove.
+    pub(crate) static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// #1063: the dictionaries folder is searched before the system locations; the dictionaries
     /// in it are reported and used, and cached checks are dropped. The folder holds the same test
