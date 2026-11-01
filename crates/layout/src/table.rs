@@ -16,6 +16,8 @@ const MAX_WIDTH_SHARE: f32 = 10.0;
 
 pub struct RowLayout {
     pub height: f32,
+    /// Minimum retained on continuation fragments that can hold it.
+    pub(crate) min_height: f32,
     /// Items relative to the table's top-left (x) and the row's top (y).
     pub items: Vec<Placed>,
     /// The room the row keeps below its text: the bottom cell margin and border band. Part of a
@@ -509,6 +511,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut rows: Vec<Vec<CellBox>> = Vec::with_capacity(nrows);
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
+    let mut minimums = Vec::with_capacity(nrows);
     let mut edges: Vec<f32> = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
@@ -688,13 +691,17 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
+        minimums.push(match (row.props.height, row.props.height_rule) {
+            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_insets,
+            _ => 0.0,
+        });
         bottoms.push(row_below);
         edges.push(row_edge);
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
     }
     grow_vertical_merges(&rows, &mut heights);
-    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
+    finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, minimums, edges, x, total })
 }
 
 fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {
@@ -726,13 +733,14 @@ struct TableRows<'a> {
     rows: Vec<Vec<CellBox>>,
     heights: Vec<f32>,
     bottoms: Vec<f32>,
+    minimums: Vec<f32>,
     edges: Vec<f32>,
     x: f32,
     total: f32,
 }
 
 fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
-    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total } = input;
+    let TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, minimums, edges, x, total } = input;
     // Grid columns holding a vertical-merge continuation, per row.
     let cont: Vec<Vec<usize>> = t
         .rows
@@ -862,6 +870,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         }
         out.push(RowLayout {
             height: rh,
+            min_height: minimums.get(ri).copied().unwrap_or(0.0),
             items,
             bottom: bottoms.get(ri).copied().unwrap_or(0.0),
             edge: edges.get(ri).copied().unwrap_or(0.0),
@@ -985,7 +994,10 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
             need = need.max(c.end.map_or(row.height, |e| e + row.bottom) - s);
         }
     }
-    let height = need.clamp(4.0, full);
+    // Word reapplies an at-least height on the continuation. Oversized minimums
+    // that cannot fit the first fragment keep their existing distributed height.
+    let min_height = if row.min_height <= cut + 0.01 { row.min_height } else { 0.0 };
+    let height = need.clamp(4.0, full).max(min_height);
     // What runs to the row's bottom (cell areas, shading, side borders) ends at the
     // continuation's.
     let rest = (row.height - height).max(0.0);
@@ -1092,8 +1104,8 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
+        RowLayout { height: cut, min_height: 0.0, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
+        RowLayout { height, min_height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
     ))
 }
 
