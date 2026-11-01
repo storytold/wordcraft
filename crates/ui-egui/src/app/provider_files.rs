@@ -34,19 +34,37 @@ impl WordApp {
             .iter()
             .map(|doc| {
                 json!({"id":doc.id.to_string(), "title":doc.title,
-            "dirty":doc.dirty, "provider":host.bound(doc.id), "pending":host.pending_for(doc.id)})
+            "dirty":doc.dirty||self.has_comment_drafts_in(doc.id), "provider":host.bound(doc.id), "pending":host.pending_for(doc.id)})
             })
             .collect::<Vec<_>>();
         host.publish_documents(json!(snapshot), &ids);
     }
     fn provider_save(&mut self, host: &Host, command: Command) {
         let Command::Save { request, doc, destination, name, save_as } = command else { return };
+        if self.session.document_id() == doc {
+            if let Err(error) = crate::panes::flush_comment_drafts(self) {
+                host.failed(&request, &error);
+                self.status(error);
+                return;
+            }
+        } else if self.has_comment_drafts_in(doc) {
+            let error = "Activate the document and finish its comment drafts before saving it";
+            host.failed(&request, error);
+            self.status(error);
+            return;
+        }
         let encoded = self
             .session
             .with_document(doc, |session| {
                 let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 if !wordcraft_engine::io::is_word_package(&ext) {
                     return Err("Provider Save requires a Word package (.docx, .docm, .dotx, .dotm). Use Export for other formats.".to_string());
+                }
+                if destination == "provider"
+                    && matches!(ext.as_str(), "docx" | "dotx")
+                    && session.doc.passthrough.get("word/vbaProject.bin").is_some_and(|bytes| !bytes.is_empty())
+                {
+                    return Err("This document contains VBA. Choose .docm or .dotm to preserve it.".into());
                 }
                 // The same serializer as ordinary Save, including embedded pictures,
                 // comments, headers, macros and the document's existing encryption.
@@ -104,11 +122,13 @@ impl WordApp {
             let aliases = host.bind(&capture, resource);
             for alias in aliases {
                 let _ = self.session.with_document(alias, |session| {
-                    session.dirty = true;
+                    // Invalidate captures created before another tab overwrote this resource.
+                    session.touch();
                 });
             }
+            let drafts = self.has_comment_drafts_in(capture.doc);
             let _ = self.session.with_document(capture.doc, |session| {
-                if session.rev() == capture.revision {
+                if session.rev() == capture.revision && !drafts {
                     session.dirty = false;
                     if session.path.is_none() {
                         session.file_name = Some(capture.name.clone());
@@ -202,5 +222,56 @@ mod tests {
         host.result(request, "failed".into(), String::new()).unwrap();
         app.provider_tick();
         assert!(app.session.dirty);
+    }
+
+    #[test]
+    fn resource_overwrite_invalidates_the_alias_revision_before_its_old_ack() {
+        let (mut app, host) = app();
+        let first = app.session.document_id();
+        let (request, bytes) = save(&mut app, &host);
+        host.result(request, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        let read = host.request_open("shared").unwrap();
+        host.open(read, "Document.docx".into(), bytes).unwrap();
+        app.provider_tick();
+        let second = app.session.document_id();
+        assert_ne!(first, second);
+        app.show_document(first).unwrap();
+        app.session.run("text.insert", &json!({"text":"First capture"})).unwrap();
+        let (old, _) = save(&mut app, &host);
+        app.show_document(second).unwrap();
+        app.session.run("text.insert", &json!({"text":"New overwrite"})).unwrap();
+        let (new, _) = save(&mut app, &host);
+        host.result(new, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        host.result(old, "saved".into(), "shared".into()).unwrap();
+        app.provider_tick();
+        assert!(app.session.with_document(first, |session| session.dirty).unwrap(), "a late ACK cannot undo alias invalidation");
+    }
+    #[test]
+    fn provider_macro_free_name_is_rejected_without_dropping_opaque_vba() {
+        let (mut app, host) = app();
+        let vba = std::sync::Arc::new(vec![0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+        app.session.doc.passthrough.insert("word/vbaProject.bin".into(), vba.clone());
+        assert!(app.choose_provider_save(true));
+        let events = host.take_events();
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "provider", "Macro-free.docx").unwrap();
+        app.provider_tick();
+        let events = host.take_events();
+        assert!(events.iter().any(|e| e.metadata["type"] == "saveFailed"));
+        assert!(!events.iter().any(|e| e.metadata["type"] == "save"));
+        assert_eq!(app.session.doc.passthrough.get("word/vbaProject.bin"), Some(&vba));
+        assert!(app.session.dirty);
+        assert!(!host.busy());
+        assert!(app.choose_provider_save(true));
+        let events = host.take_events();
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        host.resolve_dialog(request, "provider", "Macro-preserving.docm").unwrap();
+        app.provider_tick();
+        let events = host.take_events();
+        let bytes = events.iter().find(|e| e.metadata["type"] == "save").unwrap().bytes.as_ref().unwrap();
+        let restored = wordcraft_engine::io::open_bytes("Macro-preserving.docm", bytes).unwrap();
+        assert_eq!(restored.passthrough.get("word/vbaProject.bin"), Some(&vba));
     }
 }

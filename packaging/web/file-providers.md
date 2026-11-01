@@ -108,3 +108,10 @@ coalescing, choices, exact captures, cancellation, identity changes, aliases and
 reads. `crates/ui-egui/src/app/provider_files.rs` includes native package round-trip and
 late-edit/failure regressions. They are source fixtures; execution results belong in the PR's
 validation report after running the repository's checks.
+
+Comment/reply drafts are committed again when a destination is resolved, including text typed
+while the choice was open. A refused draft fails the save; an inactive document with parked
+comment drafts must be activated and finished first. ACKs do not clear newer comment drafts.
+Resource overwrites advance alias revisions so delayed ACKs cannot clean an invalidated tab.
+Provider saves with opaque VBA require a macro-enabled .docm/.dotm filename; Device retains the
+official writer and format behavior.
