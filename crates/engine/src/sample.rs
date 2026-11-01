@@ -337,4 +337,46 @@ mod tests {
             assert!(!l.pages.is_empty());
         }
     }
+
+    #[test]
+    fn gost_report_is_laid_out_per_gost_732() {
+        const MM: f32 = 72.0 / 25.4;
+        let d = gost_report();
+        // A4 with the margins the standard names: left 30, right 15, top and bottom 20 mm (§6.1.1).
+        let s = &d.last_section;
+        assert!((s.page_w - 210.0 * MM).abs() < 0.1, "A4 width");
+        assert!((s.page_h - 297.0 * MM).abs() < 0.1, "A4 height");
+        assert!((s.margin_left - 30.0 * MM).abs() < 0.1);
+        assert!((s.margin_right - 15.0 * MM).abs() < 0.1);
+        assert!((s.margin_top - 20.0 * MM).abs() < 0.1);
+        assert!((s.margin_bottom - 20.0 * MM).abs() < 0.1);
+        // The title page counts in the numbering but carries no page number (§6.3.1).
+        assert!(s.title_page);
+        // The structural elements §6.2.1 names, each from a new page: the structural-element
+        // headings are centred with a page break (§6.2.2), and СОДЕРЖАНИЕ lists the sections.
+        let headings: Vec<&str> = d
+            .body
+            .iter()
+            .filter_map(|b| {
+                let p = b.as_para()?;
+                (p.props.page_break_before == Some(true)).then(|| p.text.as_str())
+            })
+            .collect();
+        for name in ["РЕФЕРАТ", "СОДЕРЖАНИЕ", "ВВЕДЕНИЕ", "ЗАКЛЮЧЕНИЕ", "СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ"]
+        {
+            assert!(headings.contains(&name), "{name} is missing: {headings:?}");
+        }
+        // Numbered section and subsection headings carry their numbers (§6.2.2–6.2.3).
+        let sections: Vec<String> = d
+            .body
+            .iter()
+            .filter_map(|b| {
+                let p = b.as_para()?;
+                let style = p.props_of_char(0).style.as_deref()?;
+                matches!(style, "Heading1" | "Heading2").then(|| p.text.clone())
+            })
+            .collect();
+        assert!(sections.iter().any(|t| t.starts_with("1 ")), "{sections:?}");
+        assert!(sections.iter().any(|t| t.starts_with("1.1 ")), "{sections:?}");
+    }
 }
