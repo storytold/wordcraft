@@ -27,6 +27,8 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) carry: Vec<NoteBox>,
     /// Page bottom before footnotes took space.
     pub(crate) orig_bottom: f32,
+    /// The physical page body ends above the margin because of its footer.
+    pub(crate) footer_limited: bool,
     /// The paragraph above: its style, contextual spacing, space after, whether that is automatic
     /// and whether it is a list item.
     pub(crate) prev: Option<(String, bool, f32, bool, bool)>,
@@ -325,6 +327,7 @@ impl PageBuilder<'_> {
         self.page_top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
+        self.footer_limited = !self.web && bottom < s.page_h - s.margin_bottom;
         self.y = self.top;
         // Notes continued from the page before come first in this page's note area.
         // (`cap_columns` below keeps the columns above them.)

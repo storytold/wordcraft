@@ -74,6 +74,7 @@ pub(super) fn even_row(row: &mut [Line]) -> f32 {
     let h = row.iter().map(|l| l.height).fold(0.0f32, f32::max);
     for l in row {
         l.baseline += h - l.height;
+        l.fit_height += h - l.height;
         l.height = h;
     }
     h

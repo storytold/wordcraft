@@ -570,6 +570,322 @@ fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum FooterFitCase {
+    Margin,
+    Short,
+    Tall,
+    FirstTall,
+    FirstShort,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FooterFitPage {
+    First,
+    Following,
+}
+
+fn footer_fit_para(text: &str) -> Paragraph {
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(11.0), ..Default::default() };
+    let mut p = Paragraph::with_text(text, chr);
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.widow_control = Some(false);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.15));
+    p
+}
+
+fn footer_fit_part(d: &mut Document, height: f32) -> u32 {
+    let mut p = footer_fit_para("Footer");
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(height));
+    d.add_part(PartKind::Footer, vec![para_block(p)])
+}
+
+fn footer_fit_doc(case: FooterFitCase) -> Document {
+    let mut d = Document::new();
+    d.last_section.page_h = 300.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 40.0;
+    d.last_section.footer = 10.0;
+    let height = match case {
+        FooterFitCase::Margin => None,
+        FooterFitCase::Short | FooterFitCase::FirstTall => Some(10.0),
+        FooterFitCase::Tall | FooterFitCase::FirstShort => Some(80.0),
+    };
+    d.last_section.footers.default = height.map(|h| footer_fit_part(&mut d, h));
+    let first = match case {
+        FooterFitCase::FirstTall => Some(80.0),
+        FooterFitCase::FirstShort => Some(10.0),
+        _ => None,
+    };
+    if let Some(height) = first {
+        d.last_section.title_page = true;
+        d.last_section.footers.first = Some(footer_fit_part(&mut d, height));
+    }
+    d.body = vec![para_block(footer_fit_para("Target"))];
+    d
+}
+
+fn footer_fit_metrics() -> (f32, f32) {
+    let d = footer_fit_doc(FooterFitCase::Margin);
+    let layout = lay(&d);
+    let Some(Placed::Lines { para, .. }) = layout.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+    let line = &para.lines[0];
+    assert!(line.height - line.fit_height > 0.1, "control requires automatic leading");
+    ((line.height + line.fit_height) / 2.0, line.height)
+}
+
+fn footer_target_page(l: &DocLayout, block: usize) -> usize {
+    let pages: Vec<_> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, page)| {
+            page.items.iter().filter_map(move |item| match item {
+                Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(block) => Some(pi),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(pages.len(), 1, "target must occur once: {pages:?}");
+    pages[0]
+}
+
+fn quiet_footer_doc() -> Document {
+    use wordcraft_doc::{props::LineSpacing, section::SectionStart};
+    let (room, _) = footer_fit_metrics();
+    let mut doc = footer_fit_doc(FooterFitCase::Tall);
+    let boundary = lay(&doc).pages[0].body.bottom();
+    let first = doc.last_section.clone();
+    doc.last_section.start = SectionStart::Continuous;
+    let mut filler = footer_fit_para("Before");
+    filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - first.margin_top - room));
+    let mut mark = footer_fit_para("");
+    mark.section = Some(Box::new(first));
+    doc.body = vec![para_block(filler), para_block(mark), para_block(footer_fit_para("After"))];
+    doc
+}
+
+#[test]
+fn quiet_footer_mark_stays() {
+    let mut failures = Vec::new();
+    for (keep_lines, keep_next) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut doc = quiet_footer_doc();
+        let mark = doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        mark.props.keep_lines = Some(keep_lines);
+        mark.props.keep_next = Some(keep_next);
+        let layout = lay(&doc);
+        let page = footer_target_page(&layout, 1);
+        if page != 0 {
+            failures.push(format!("keep_lines={keep_lines}, keep_next={keep_next}: mark moved to page {page}"));
+        }
+        assert_eq!(footer_target_page(&layout, 2), 1, "visible content still respects the physical footer");
+        assert_eq!(layout.pages.len(), 2);
+    }
+    assert!(failures.is_empty(), "a quiet closing mark must stay after the preceding content: {failures:#?}");
+}
+
+#[test]
+fn quiet_footer_state_restored() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut doc = quiet_footer_doc();
+    // This mark already fits the footer floor. The following visible line fits by text
+    // height but its full box does not: leaking the temporary exemption would admit it.
+    doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(1.0));
+    let layout = lay(&doc);
+    assert_eq!(footer_target_page(&layout, 1), 0);
+    assert_eq!(footer_target_page(&layout, 2), 1, "the physical footer still reserves the next line's full box");
+    let page = &layout.pages[1];
+    let (_, bottom) = extent(&page.items, StoryRef::Body).unwrap();
+    let (footer, _) = extent(&page.footer, StoryRef::Part(page.footer_story.unwrap())).unwrap();
+    assert!(bottom <= footer + 0.01, "visible body {bottom}, footer {footer}");
+}
+
+#[test]
+fn auto_footer_fit_bounds() {
+    use wordcraft_doc::props::LineSpacing;
+    let (room, height) = footer_fit_metrics();
+    for (case, slot, spacing, expected_page) in [
+        (FooterFitCase::Margin, FooterFitPage::First, LineSpacing::Multiple(1.15), 0),
+        (FooterFitCase::Short, FooterFitPage::First, LineSpacing::Multiple(1.15), 0),
+        (FooterFitCase::Tall, FooterFitPage::First, LineSpacing::Multiple(1.15), 1),
+        (FooterFitCase::Margin, FooterFitPage::First, LineSpacing::Exactly(height), 1),
+        (FooterFitCase::Tall, FooterFitPage::First, LineSpacing::Exactly(height), 1),
+        (FooterFitCase::Tall, FooterFitPage::First, LineSpacing::AtLeast(height), 1),
+        (FooterFitCase::FirstTall, FooterFitPage::First, LineSpacing::Multiple(1.15), 1),
+        (FooterFitCase::FirstShort, FooterFitPage::First, LineSpacing::Multiple(1.15), 0),
+        (FooterFitCase::FirstTall, FooterFitPage::Following, LineSpacing::Multiple(1.15), 1),
+        (FooterFitCase::FirstShort, FooterFitPage::Following, LineSpacing::Multiple(1.15), 2),
+    ] {
+        let mut d = footer_fit_doc(case);
+        let (page, block) = match slot {
+            FooterFitPage::First => (0, 1),
+            FooterFitPage::Following => {
+                let mut probe = footer_fit_para("Probe");
+                probe.props.page_break_before = Some(true);
+                d.body.push(para_block(probe));
+                (1, 2)
+            }
+        };
+        let probe = lay(&d);
+        let boundary = probe.pages[page].body.bottom();
+        let mut filler = footer_fit_para("Filler");
+        filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - d.last_section.margin_top - room));
+        if matches!(slot, FooterFitPage::Following) {
+            filler.props.page_break_before = Some(true);
+        }
+        let mut target = footer_fit_para("Target");
+        target.props.line_spacing = Some(spacing);
+        d.body.truncate(block - 1);
+        d.body.extend([para_block(filler), para_block(target)]);
+        let layout = lay(&d);
+        assert_eq!(footer_target_page(&layout, block), expected_page, "{case:?}, {slot:?}, {spacing:?}");
+        if boundary < 260.0 {
+            let p = &layout.pages[page];
+            let (_, bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            let (top, _) = extent(&p.footer, StoryRef::Part(p.footer_story.unwrap())).unwrap();
+            assert!(bottom <= top + 0.01, "body {bottom}, footer {top}");
+        }
+    }
+}
+
+#[test]
+fn footer_continuous_owner() {
+    use wordcraft_doc::{props::LineSpacing, section::SectionStart};
+    let (room, _) = footer_fit_metrics();
+    for (first_case, next_height, expected_page) in [(FooterFitCase::Tall, 10.0, 1), (FooterFitCase::Short, 80.0, 0)] {
+        let mut d = footer_fit_doc(first_case);
+        let boundary = lay(&d).pages[0].body.bottom();
+        let first = d.last_section.clone();
+        let next = footer_fit_part(&mut d, next_height);
+        d.last_section.footers.default = Some(next);
+        d.last_section.start = SectionStart::Continuous;
+        let mut filler = footer_fit_para("First section");
+        filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - first.margin_top - room));
+        filler.section = Some(Box::new(first));
+        d.body = vec![para_block(filler), para_block(footer_fit_para("Target"))];
+        let layout = lay(&d);
+        assert_eq!(footer_target_page(&layout, 1), expected_page, "{first_case:?}");
+        let page = &layout.pages[0];
+        let (_, bottom) = extent(&page.items, StoryRef::Body).unwrap();
+        let (top, _) = extent(&page.footer, StoryRef::Part(page.footer_story.unwrap())).unwrap();
+        assert!(bottom <= top + 0.01, "body {bottom}, footer {top}");
+    }
+}
+
+#[test]
+fn footer_balanced_cut_unchanged() {
+    use wordcraft_doc::section::SectionStart;
+    let make = |case| {
+        let mut d = footer_fit_doc(case);
+        let mut first = d.last_section.clone();
+        first.columns.count = 2;
+        d.last_section.start = SectionStart::Continuous;
+        d.body = (0..10).map(|i| para_block(footer_fit_para(&format!("Column {i}")))).collect();
+        d.para_mut(StoryRef::Body, &Path::top(9)).unwrap().section = Some(Box::new(first));
+        d.body.push(para_block(footer_fit_para("After")));
+        d
+    };
+    let plain = lay(&make(FooterFitCase::Margin));
+    let tall = lay(&make(FooterFitCase::Tall));
+    let boxes = |l: &DocLayout| -> Vec<_> {
+        l.pages
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, page)| {
+                page.items.iter().filter_map(move |item| match item {
+                    Placed::Lines { story: StoryRef::Body, path, x, y, para, l0, l1, .. } => {
+                        Some((pi, path.clone(), *x, *y, item_bottom(*y, para, *l0, *l1).unwrap()))
+                    }
+                    _ => None,
+                })
+            })
+            .collect()
+    };
+    let a = boxes(&plain);
+    let b = boxes(&tall);
+    assert_eq!(a, b, "a footer below the balanced text must not change any body placement");
+    assert_eq!(tall.pages.len(), 1);
+    assert!(a.iter().any(|v| v.2 > a[0].2 + 1.0), "control must use the second column");
+    let (_, bottom) = extent(&tall.pages[0].items, StoryRef::Body).unwrap();
+    let (top, _) = extent(&tall.pages[0].footer, StoryRef::Part(tall.pages[0].footer_story.unwrap())).unwrap();
+    assert!(bottom < top - 1.0, "balanced text must stay clear of the physical footer");
+}
+
+#[test]
+fn footer_fresh_top_overflow() {
+    use wordcraft_doc::props::LineSpacing;
+    for columns in [1, 2] {
+        let mut d = footer_fit_doc(FooterFitCase::Tall);
+        d.last_section.columns.count = columns;
+        let probe = lay(&d);
+        let room = probe.pages[0].body.h;
+        let mut target = footer_fit_para("Oversized first line");
+        target.props.line_spacing = Some(LineSpacing::Exactly(room + 10.0));
+        let block = if columns == 2 {
+            let mut filler = footer_fit_para("First column");
+            filler.props.line_spacing = Some(LineSpacing::Exactly(room));
+            d.body = vec![para_block(filler), para_block(target)];
+            1
+        } else {
+            d.body = vec![para_block(target)];
+            0
+        };
+        let l = lay(&d);
+        assert_eq!(footer_target_page(&l, block), 0, "fresh top in {columns} columns");
+        assert_eq!(l.pages.len(), 1);
+        let (x, y, bottom) = l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, x, y, para, l0, l1, .. } if *path == Path::top(block) => {
+                    Some((*x, *y, item_bottom(*y, para, *l0, *l1).unwrap()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!((y - l.pages[0].body.y).abs() < 0.01);
+        assert!(bottom > l.pages[0].body.bottom() + 1.0, "unavoidable overflow must remain visible");
+        if columns == 2 {
+            assert!(x > l.pages[0].body.x + 1.0, "oversized target belongs to the fresh second column");
+        }
+    }
+}
+
+#[test]
+fn footer_widow_keeps_lines() {
+    use wordcraft_doc::props::LineSpacing;
+    let (_, height) = footer_fit_metrics();
+    for widow in [false, true] {
+        let mut d = footer_fit_doc(FooterFitCase::Tall);
+        let boundary = lay(&d).pages[0].body.bottom();
+        let mut filler = footer_fit_para("Filler");
+        filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - d.last_section.margin_top - 2.0 * height - 0.5));
+        let mut target = footer_fit_para("One\nTwo\nThree");
+        target.props.widow_control = Some(widow);
+        d.body = vec![para_block(filler), para_block(target)];
+        let l = lay(&d);
+        let pieces: Vec<_> = l
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page, p)| {
+                p.items.iter().filter_map(move |item| match item {
+                    Placed::Lines { story: StoryRef::Body, path, l0, l1, .. } if *path == Path::top(1) => Some((page, *l0, *l1)),
+                    _ => None,
+                })
+            })
+            .collect();
+        let expected = if widow { vec![(1, 0, 3)] } else { vec![(0, 0, 2), (1, 2, 3)] };
+        assert_eq!(pieces, expected, "widow control {widow}");
+        for p in &l.pages {
+            let (_, bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            let (top, _) = extent(&p.footer, StoryRef::Part(p.footer_story.unwrap())).unwrap();
+            assert!(bottom <= top + 0.01, "body {bottom}, footer {top}");
+        }
+    }
+}
+
 #[test]
 fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
     // Multiple spacing puts its extra leading below the text, and Word lets that leading of a
@@ -611,4 +927,108 @@ fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
         }
         assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
+}
+
+#[test]
+fn kept_lines_use_final_fit() {
+    use wordcraft_doc::props::LineSpacing;
+
+    for case in [FooterFitCase::Margin, FooterFitCase::Short, FooterFitCase::Tall] {
+        for spacing in [
+            LineSpacing::Multiple(1.15),
+            LineSpacing::Multiple(1.5),
+            LineSpacing::Multiple(2.0),
+            LineSpacing::Exactly(24.0),
+            LineSpacing::AtLeast(24.0),
+        ] {
+            for text in ["One", "One\nTwo\nThree"] {
+                let mut d = footer_fit_doc(case);
+                let mut target = footer_fit_para(text);
+                target.props.line_spacing = Some(spacing);
+                target.props.keep_lines = Some(true);
+                d.body = vec![para_block(target.clone())];
+                let measured = lay(&d);
+                let Some(Placed::Lines { para, .. }) = measured.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+                let last = para.lines.last().unwrap();
+                let full = last.top + last.height;
+                let fit = last.top + last.fit_height;
+                let room = if full - fit > 0.01 { (full + fit) / 2.0 } else { full - 0.5 };
+                let boundary = measured.pages[0].body.bottom();
+                let mut filler = footer_fit_para("Filler");
+                filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - d.last_section.margin_top - room));
+                d.body = vec![para_block(filler), para_block(target)];
+
+                let layout = lay(&d);
+                let expected = usize::from(matches!(case, FooterFitCase::Tall) || !matches!(spacing, LineSpacing::Multiple(_)));
+                assert_eq!(footer_target_page(&layout, 1), expected, "{case:?}, {spacing:?}, {text:?}");
+                if matches!(case, FooterFitCase::Tall) {
+                    for page in &layout.pages {
+                        let (_, bottom) = extent(&page.items, StoryRef::Body).unwrap();
+                        let (top, _) = extent(&page.footer, StoryRef::Part(page.footer_story.unwrap())).unwrap();
+                        assert!(bottom <= top + 0.01, "body {bottom}, footer {top}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn kept_pair_clears_footer() {
+    use wordcraft_doc::props::LineSpacing;
+
+    let (natural_room, height) = footer_fit_metrics();
+    let full_pair = 2.0 * height;
+    for case in [FooterFitCase::Margin, FooterFitCase::Short, FooterFitCase::Tall] {
+        for room in [height + natural_room, full_pair + 1.0] {
+            let mut d = footer_fit_doc(case);
+            let boundary = lay(&d).pages[0].body.bottom();
+            let mut filler = footer_fit_para("Filler");
+            filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - d.last_section.margin_top - room));
+            let mut kept = footer_fit_para("Target");
+            kept.props.keep_lines = Some(false);
+            kept.props.keep_next = Some(true);
+            d.body = vec![para_block(filler), para_block(kept), para_block(footer_fit_para("Target"))];
+
+            // The narrow room fits either line alone and the reduced preflight, but not both boxes.
+            assert!(room > height);
+            let expected = usize::from(matches!(case, FooterFitCase::Tall) && room < full_pair);
+            let layout = lay(&d);
+            assert_eq!(footer_target_page(&layout, 1), expected, "kept paragraph: {case:?}, room {room}");
+            assert_eq!(footer_target_page(&layout, 2), expected, "successor: {case:?}, room {room}");
+            assert_eq!(layout.pages.len(), expected + 1);
+            if matches!(case, FooterFitCase::Tall) {
+                for page in &layout.pages {
+                    let (_, bottom) = extent(&page.items, StoryRef::Body).unwrap();
+                    let (top, _) = extent(&page.footer, StoryRef::Part(page.footer_story.unwrap())).unwrap();
+                    assert!(bottom <= top + 0.01, "body {bottom}, footer {top}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn kept_lines_clear_notes() {
+    use wordcraft_doc::props::LineSpacing;
+
+    let (room, height) = footer_fit_metrics();
+    let mut d = footer_fit_doc(FooterFitCase::Margin);
+    let note = d.add_part(PartKind::Footnote, vec![para_block(footer_fit_para("Note"))]);
+    let mut filler = footer_fit_para("Filler");
+    filler
+        .insert_object(filler.len(), InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &Default::default())
+        .unwrap();
+    // Measure the body floor after this note reserves its separator and content.
+    d.body = vec![para_block(filler.clone())];
+    let measured = lay(&d);
+    let (note_top, _) = extent(&measured.pages[0].items, StoryRef::Part(note)).unwrap();
+    let boundary = note_top - NOTE_SEP;
+    filler.props.line_spacing = Some(LineSpacing::Exactly(boundary - d.last_section.margin_top - height - room));
+    let mut target = footer_fit_para("One\nTwo");
+    target.props.keep_lines = Some(true);
+    d.body = vec![para_block(filler), para_block(target)];
+
+    let layout = lay(&d);
+    assert_eq!(footer_target_page(&layout, 1), 1, "kept lines reserve their full boxes above notes");
 }

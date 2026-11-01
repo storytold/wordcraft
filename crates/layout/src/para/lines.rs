@@ -1,10 +1,10 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
-use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
+use super::model::{ClKind, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
-use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
+use super::{Align, Arc, Cluster, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
 
 /// Narrow cells and float spans must retain their usable width.
 const MIN_LINE_WIDTH: f32 = 1.0;
@@ -349,6 +349,7 @@ impl<'e> Breaker<'e> {
         let mut line = Line {
             top: self.top,
             height: v.height,
+            fit_height: v.fit_height,
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
@@ -490,7 +491,14 @@ impl<'e> Breaker<'e> {
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        let (c0, c1) = range;
+        let fit_height = if !centred && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) {
+            let desc = if obj_asc > asc && (!self.first || pl.label.is_none()) && picture_clusters_only(pl, c0, c1) { 0.0 } else { desc };
+            (baseline - self.top + desc).min(height)
+        } else {
+            height
+        };
+        Measure { height, fit_height, baseline, text_asc, text_desc }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -570,6 +578,7 @@ impl<'e> Breaker<'e> {
         self.lines.push(Line {
             top: self.top,
             height: h,
+            fit_height: if grid.is_none() && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) { natural } else { h },
             baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
             text_asc: asc,
             text_desc: desc,
@@ -639,6 +648,7 @@ struct Extents {
 /// A line's height and baseline, and the extent of its text.
 struct Measure {
     height: f32,
+    fit_height: f32,
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
@@ -1021,4 +1031,15 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
     Ok(spans.into())
+}
+
+fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
+    pl.clusters.get(c0..c1).is_some_and(|cs| {
+        cs.iter().all(|c| match c.kind {
+            // Hidden and floating anchors have no inline extent or font height.
+            ClKind::Object(_) => c.picture || (c.adv == 0.0 && c.obj_h == 0.0),
+            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
+            _ => false,
+        })
+    })
 }

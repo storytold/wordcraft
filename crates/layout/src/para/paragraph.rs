@@ -4,11 +4,11 @@ use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
-use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
+use super::model::{ClKind, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Arc, COLUMN_BREAK, CharProps, Cluster, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase,
+    ParaLayout, Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
 
 /// A run's formatting resolved in the paragraph's style and table.
@@ -58,6 +58,7 @@ impl Slot {
             obj_h,
             obj_d,
             dot: false,
+            picture: false,
         }
     }
 }
@@ -333,6 +334,13 @@ impl<'a> Shaped<'a> {
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
             self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            if let Some(c) = self.b.clusters.last_mut() {
+                c.picture = match o {
+                    InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Group { .. } => true,
+                    InlineObject::Shape { kind, story, .. } => *kind != wordcraft_doc::para::ShapeKind::TextBox && story.is_none(),
+                    _ => false,
+                };
+            }
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -672,6 +680,7 @@ fn collapse(pl: &mut ParaLayout) {
     for l in &mut pl.lines {
         l.top = 0.0;
         l.height = 0.0;
+        l.fit_height = 0.0;
         l.baseline = 0.0;
     }
     pl.height = 0.0;

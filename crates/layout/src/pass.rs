@@ -173,6 +173,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         notes: Vec::new(),
         carry: Vec::new(),
         orig_bottom: 0.0,
+        footer_limited: false,
         prev: None,
         after_break_mark: false,
         next_starts_page: false,
