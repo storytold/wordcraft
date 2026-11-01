@@ -278,6 +278,10 @@ pub enum Dialog {
         /// The line the border choices draw.
         pen: crate::dialogs_table_style::BorderPen,
     },
+    /// View › Macros: the recorded macros to run or delete, and Record (#4327).
+    Macros {
+        name: String,
+    },
     Commands {
         query: String,
         /// Opened by a shortcut that may also send its key's text (Alt+Q's "q", in the same frame
@@ -502,6 +506,7 @@ impl Dialog {
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::Macros { .. } => "macros",
             Dialog::Insert(d) => d.name(),
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
@@ -732,6 +737,7 @@ impl Dialog {
             "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
             "newTableStyle" | "modifyTableStyle" => crate::dialogs_table_style::open(app, name)?,
             "commands" => Dialog::Commands { query: String::new(), swallow: true },
+            "macros" => Dialog::Macros { name: String::new() },
             "icons" => Dialog::Icons { query: String::new(), category: String::new(), selected: String::new() },
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
