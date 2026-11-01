@@ -71,6 +71,8 @@ impl Session {
             typing_word: typing,
             filename: filename.clone(),
             filepath: filepath.clone(),
+            // The editor shows a body page reference as stored until fields are updated.
+            output_page_refs: false,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
@@ -154,7 +156,8 @@ impl Session {
         layout.map(|l| (copy.doc, copy.sel, l))
     }
 
-    /// A layout for output (PDF, images, print): no proofing marks, print view.
+    /// A layout for output (PDF, images, print): no proofing marks, print view, and page
+    /// references in the body showing their bookmarks' pages, as Word prints them.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)
     }
@@ -169,6 +172,7 @@ impl Session {
             numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
             filename: Some(Arc::from(fn_name.as_str())),
             filepath: Some(Arc::from(fn_path.as_str())),
+            output_page_refs: true,
             ..Default::default()
         };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))

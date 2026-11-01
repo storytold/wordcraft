@@ -2488,3 +2488,24 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
+
+/// The exported PDF shows a body page reference's page and Word's error for a missing bookmark,
+/// as Word's export does, where the document stores "9" for both.
+#[test]
+fn exported_page_references_show_the_page_or_words_error() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut d = Document::from_text("See \nMissing \nTarget");
+    for (i, instr) in [(0, "PAGEREF Target"), (1, "PAGEREF NoSuchMark")] {
+        let p = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr), &CharProps::default()).unwrap();
+    }
+    let target = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap();
+    target.props.page_break_before = Some(true);
+    target.insert_object(0, InlineObject::BookmarkStart { name: "Target".into() }, &CharProps::default()).unwrap();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    let first = squash(&text[0]);
+    assert!(first.contains("See 2"), "{first}");
+    assert!(first.contains("Missing Error! Bookmark not defined."), "{first}");
+}

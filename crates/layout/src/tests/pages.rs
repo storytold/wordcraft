@@ -337,6 +337,151 @@ fn page_references_in_footers_show_their_bookmarks_page() {
     assert_eq!(texts, ["9"]);
 }
 
+/// Output (PDF, print, page images) shows each body `PAGEREF` its bookmark's page, counted from
+/// the section's restart, as Word fills them in when it prints or exports; the editor keeps the
+/// stored result until fields are updated, and a locked reference keeps it in output too.
+/// Measured in Word for Microsoft 365: references stored as "9" to a heading on the third page
+/// print and export as 3, or 2 when the second page starts a section numbered from 1; a locked
+/// one stays 9, in the body and in a footer.
+#[test]
+fn page_references_in_the_body_show_their_bookmarks_page_in_output() {
+    let field = |instr: &str, locked: bool| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("See page \nLocked \nBlank\nHeading");
+    for (i, instr, locked) in [(0, "PAGEREF _Toc1 \\h", false), (1, "PAGEREF _Toc1", true)] {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        let n = p.len();
+        p.insert_object(n, field(instr, locked), &Default::default()).unwrap();
+    }
+    for i in [2, 3] {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    let heading = d.para_mut(StoryRef::Body, &Path::top(3)).unwrap();
+    heading.insert_object(0, InlineObject::BookmarkStart { name: "_Toc1".into() }, &Default::default()).unwrap();
+    let refs = |l: &DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+            .collect()
+    };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    // Only an unlocked reference calls for the extra pass: a locked one keeps its result.
+    assert!(crate::headers::body_refers_to_pages(&d));
+    let mut all_locked = d.clone();
+    if let Some(InlineObject::Field { locked, .. }) = all_locked.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.last_mut() {
+        *locked = true;
+    }
+    assert!(!crate::headers::body_refers_to_pages(&all_locked));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3);
+    assert_eq!(refs(&l), ["9", "9"]);
+    assert_eq!(refs(&layout(&d, &mut LayoutCache::new(), &output)), ["3", "9"]);
+    // The second page starts a section that numbers its pages from 1.
+    let first = d.last_section.clone();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(first));
+    d.last_section.page_num_start = Some(1);
+    let l = layout(&d, &mut LayoutCache::new(), &output);
+    assert_eq!(l.pages.iter().map(|p| p.number).collect::<Vec<_>>(), [1, 1, 2]);
+    assert_eq!(refs(&l), ["2", "9"]);
+    assert_eq!(refs(&lay(&d)), ["9", "9"]);
+    // A footer's references: the unlocked one shows the page, the locked one keeps its result.
+    let mut fp = Paragraph::new();
+    fp.insert_object(0, field("PAGEREF _Toc1", false), &Default::default()).unwrap();
+    fp.insert_object(fp.len(), field("PAGEREF _Toc1", true), &Default::default()).unwrap();
+    d.last_section.footers.default = Some(d.add_part(PartKind::Footer, vec![para_block(fp)]));
+    assert_eq!(footer_shown(&lay(&d)).last().map(String::as_str), Some("2/9"));
+}
+
+/// Printed or exported, a reference to a bookmark the document doesn't have shows Word's error,
+/// whether or not the document has other bookmarks (measured in Word for Windows: "Error!
+/// Bookmark not defined."); the editor keeps the stored result, and so does a reference that
+/// shows "above" or "below" (`\p`).
+#[test]
+fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    for other_mark in [false, true] {
+        let mut d = Document::from_text("See \nAbove \nTarget");
+        for (i, instr) in [(0, "PAGEREF NoSuchMark \\h"), (1, "PAGEREF NoSuchMark \\p")] {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            let n = p.len();
+            p.insert_object(n, field(instr), &Default::default()).unwrap();
+        }
+        if other_mark {
+            let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+            p.insert_object(0, InlineObject::BookmarkStart { name: "Elsewhere".into() }, &Default::default()).unwrap();
+        }
+        let shown = |l: &DocLayout| -> Vec<String> {
+            l.pages[0]
+                .items
+                .iter()
+                .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+                .collect()
+        };
+        assert_eq!(shown(&layout(&d, &mut LayoutCache::new(), &output)), [crate::fields::BOOKMARK_NOT_DEFINED, "9"], "other bookmark: {other_mark}");
+        assert_eq!(shown(&lay(&d)), ["9", "9"], "the editor, other bookmark: {other_mark}");
+        // One cache for the editor's layout and then output's: output doesn't reuse the
+        // editor's paragraphs, and the editor doesn't reuse output's after it.
+        let mut cache = LayoutCache::new();
+        let editor = LayoutOptions::default();
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"]);
+        assert_eq!(
+            shown(&layout(&d, &mut cache, &output)),
+            [crate::fields::BOOKMARK_NOT_DEFINED, "9"],
+            "a shared cache, other bookmark: {other_mark}"
+        );
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"], "the editor after output, other bookmark: {other_mark}");
+    }
+}
+
+/// Printed or exported, a reference to a bookmark in a text box shows the page of the box's
+/// anchor (measured in Word for Windows), not "Error! Bookmark not defined.".
+#[test]
+fn a_page_reference_to_a_bookmark_in_a_text_box_shows_its_anchors_page_in_output() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let mut d = Document::from_text("See \nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    let mut inner = Paragraph::with_text("Caption", Default::default());
+    inner.insert_object(0, InlineObject::BookmarkStart { name: "Boxed".into() }, &Default::default()).unwrap();
+    let story = d.add_part(PartKind::TextBox, vec![para_block(inner)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape, &Default::default()).unwrap();
+    let field =
+        InlineObject::Field { instr: "PAGEREF Boxed \\h".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let n = p.len();
+    p.insert_object(n, field, &Default::default()).unwrap();
+    let output = layout(&d, &mut LayoutCache::new(), &LayoutOptions { output_page_refs: true, ..Default::default() });
+    let shown: Vec<String> = output.pages[0]
+        .items
+        .iter()
+        .flat_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+            _ => vec![],
+        })
+        .collect();
+    assert_eq!(shown, ["2"]);
+}
 /// The fields' text in each page's footer, joined with "/".
 fn footer_shown(l: &DocLayout) -> Vec<String> {
     l.pages

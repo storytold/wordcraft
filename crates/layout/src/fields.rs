@@ -31,6 +31,9 @@ pub struct FieldCtx {
     pub bookmark_pages: Arc<BookmarkPages>,
     /// A key for caches standing for `bookmark_pages` (0 when it's empty).
     pub bookmarks_key: u64,
+    /// Output ([`crate::LayoutOptions::output_page_refs`]): a `PAGEREF` whose bookmark isn't in
+    /// `bookmark_pages` shows Word's "Error! Bookmark not defined." instead of its result.
+    pub output: bool,
     /// Where a paragraph runs onto later pages: from text offset `.0` on, its fields are on page
     /// `.1` (ascending offsets). Empty except during the layout of a body paragraph split across
     /// pages, for its later pages (#1352); nothing else laid out meanwhile sees it.
@@ -295,6 +298,11 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         "SECTION" => (field_number(instr, fmt.unwrap_or(NumFormat::Decimal), ctx.section), true),
         "PAGEREF" => match pageref_page(instr, ctx) {
             Some((n, page_format)) => (field_number(instr, fmt.unwrap_or(page_format), n), true),
+            // Printed or exported, a reference to a bookmark the document lacks shows Word's
+            // error (measured in Word for Windows).
+            None if ctx.output && !has_switch(instr, 'p') && pageref_target(instr).is_some_and(|t| !ctx.bookmark_pages.contains_key(t)) => {
+                (BOOKMARK_NOT_DEFINED.to_string(), true)
+            }
             None => (result.to_string(), false),
         },
         "TITLE" if result.is_empty() => (apply_case_switch(instr, ctx.title.to_string()), false),
@@ -318,6 +326,9 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         _ => (result.to_string(), false),
     }
 }
+
+/// What Word prints for a `PAGEREF` to a bookmark the document doesn't have.
+pub const BOOKMARK_NOT_DEFINED: &str = "Error! Bookmark not defined.";
 
 /// Extract the bookmark target from a `PAGEREF` instruction.
 fn pageref_target(instr: &str) -> Option<&str> {

@@ -9,10 +9,17 @@ use super::{
 
 /// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
 /// deletions are left out, as in Word's "No Markup" view. With `comments` each page carries the
-/// markup area with the comment balloons.
+/// markup area with the comment balloons. Page references in the body show their bookmarks'
+/// pages, as Word's export fills them in.
 pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     write::guard(|| {
-        let lo = LayoutOptions { hide_deleted: !opts.include_markup, comment_balloons: opts.comments, numeral: opts.numeral, ..Default::default() };
+        let lo = LayoutOptions {
+            hide_deleted: !opts.include_markup,
+            comment_balloons: opts.comments,
+            numeral: opts.numeral,
+            output_page_refs: true,
+            ..Default::default()
+        };
         let lay = layout(doc, &mut LayoutCache::new(), &lo);
         export_layout_inner(doc, &lay, opts)
     })
