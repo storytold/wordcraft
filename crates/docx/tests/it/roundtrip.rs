@@ -1477,6 +1477,7 @@ fn settings_core_theme_round_trip() {
     d.settings.hyphenation_zone = 27.0;
     d.settings.hyphenate_caps = false;
     d.settings.consecutive_hyphen_limit = 2;
+    d.settings.char_spacing = wordcraft_doc::CharSpacing::CompressPunctuation;
     d.settings.page_color = Some(Rgb(250, 240, 230));
     d.settings.major_font = "Cambria".into();
     d.settings.minor_font = "Calibri".into();

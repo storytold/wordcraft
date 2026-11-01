@@ -1053,6 +1053,23 @@ fn with_settings(settings: Option<&str>) -> Document {
     }
 }
 
+/// `w:characterSpacingControl` (ECMA-376 §17.15.1.18): documents from Chinese and Japanese
+/// editors usually ask for punctuation compression; an absent or unknown value means none.
+#[test]
+fn character_spacing_control_is_read() {
+    use wordcraft_doc::CharSpacing;
+    assert_eq!(with_settings(None).settings.char_spacing, CharSpacing::DoNotCompress);
+    for (val, want) in [
+        ("compressPunctuation", CharSpacing::CompressPunctuation),
+        ("compressPunctuationAndJapaneseKana", CharSpacing::CompressPunctuationAndJapaneseKana),
+        ("doNotCompress", CharSpacing::DoNotCompress),
+        ("bogus", CharSpacing::DoNotCompress),
+    ] {
+        let d = with_settings(Some(&format!(r#"<w:characterSpacingControl w:val="{val}"/>"#)));
+        assert_eq!(d.settings.char_spacing, want, "{val}");
+    }
+}
+
 #[test]
 fn table_contextual_spacing_compatibility_flag_is_read() {
     assert!(!with_settings(None).settings.allow_space_of_same_style_in_table);

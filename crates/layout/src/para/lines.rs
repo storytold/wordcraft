@@ -497,11 +497,14 @@ impl<'e> Breaker<'e> {
     fn align(&mut self, pl: &mut ParaLayout, sc: &mut Scan, c1: usize) {
         let rp = &self.rp;
         let c0 = sc.c0;
+        let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
+        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
+        if display.is_none() && last_tab.is_none() {
+            squeeze_line(pl, sc, c1);
+        }
         let content_end = content_end(pl, sc, c1);
         let slack = sc.right_edge - content_end;
-        let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
         let shift = match (display, rp.align) {
             (Some(MathJc::Left), _) => 0.0,
             (Some(MathJc::Right), _) => slack,
@@ -642,6 +645,38 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+}
+
+/// Punctuation compression: a line that overflows (it fitted only by counting its marks' squeeze
+/// room) takes the overflow out of its compressible marks, each in proportion to its room and
+/// never more, so it ends at the margin as WPS lays it out. An opening mark moves left itself;
+/// after a closing mark the rest of the line does.
+fn squeeze_line(pl: &ParaLayout, sc: &mut Scan, c1: usize) {
+    let c0 = sc.c0;
+    let over = content_end(pl, sc, c1) - sc.right_edge;
+    let room = pl.squeeze_room(c0, c1);
+    if over <= 0.0 || room <= 0.0 {
+        return;
+    }
+    let f = (over / room).min(1.0);
+    let from = pl.squeeze.partition_point(|s| s.k < c0);
+    let marks = pl.squeeze.get(from..).unwrap_or_default();
+    let (mut shift, mut m) = (0.0, 0);
+    for k in c0..=c1 {
+        let mut after = 0.0;
+        while let Some(s) = marks.get(m).filter(|s| s.k == k) {
+            if s.left {
+                shift += f * s.room;
+            } else {
+                after += f * s.room;
+            }
+            m += 1;
+        }
+        if let Some(x) = sc.xs.get_mut(k - c0) {
+            *x -= shift;
+        }
+        shift += after;
+    }
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.
@@ -814,8 +849,10 @@ impl Scan {
         } else {
             0.0
         };
+        // Punctuation compression: the marks so far may give up room for this cluster.
+        let squeeze = pl.squeeze_room(c0, j + 1);
         let fits = absorbs
-            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
+            || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + squeeze + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
         if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
@@ -833,7 +870,7 @@ impl Scan {
             return true;
         }
         if c.break_after {
-            self.note_break(bk, pl, c, shrink);
+            self.note_break(bk, pl, c, shrink + squeeze);
         }
         self.j += 1;
         false

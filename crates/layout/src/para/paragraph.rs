@@ -1,7 +1,7 @@
 use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
-use super::grid::{auto_space, snap_chars};
+use super::grid::{auto_space, compress_punct, snap_chars};
 use super::justify::hyphenation_points;
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
@@ -568,9 +568,21 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if rp.snap_to_grid {
         snap_chars(&mut sh.b, &p.text, &env.grid);
     }
-    // Text on a character grid keeps to its cells.
-    let auto_space =
+    // Text on a character grid keeps to its cells; compression applies there too (WPS).
+    let mut auto_space =
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
+    let squeeze = if doc.settings.char_spacing.compresses_punctuation() {
+        let (squeeze, end_blank) = compress_punct(&sh.b, &p.text);
+        for (k, room) in end_blank {
+            match auto_space.binary_search_by_key(&k, |a| a.0) {
+                Ok(i) => auto_space.get_mut(i).into_iter().for_each(|a| a.1 += room),
+                Err(i) => auto_space.insert(i, (k, room)),
+            }
+        }
+        squeeze
+    } else {
+        Vec::new()
+    };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
@@ -603,6 +615,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        squeeze,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
