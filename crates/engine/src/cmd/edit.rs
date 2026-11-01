@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::{Path, Pos, StoryRef};
 
-use super::{delete_selection, find_pattern, pos_json, sel_result};
+use super::{delete_selection, find_fold, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// Undo several steps at once: the Undo button's list (#701). `count` is validated here and
@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
+            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "matchPrefix"?: bool, "matchSuffix"?: bool, "ignorePunct"?: bool, "ignoreSpace"?: bool, "matchDiacritics"?: bool (default true; false: é finds e, Hebrew points and Arabic harakat are skipped), "matchKashida"?: bool (default true; false skips the tatweel), "matchAlefHamza"?: bool (default true; false: أ إ آ ٱ find ا) — the three apply to a normal search, not wildcards or regex, "wildcards"?: bool, "special"?: bool (^p ^t ^# … codes, default true), "regex"?: bool}"#)
             .pure(),
         CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
             .params(r#"{"text"?: string, …options of edit.find, "in"?: "main|selection", "highlight"?: bool}"#)
@@ -478,6 +478,7 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
         wildcards: f.wildcards,
         regex: f.regex,
         literal: f.literal,
+        fold: find_fold::Fold { diacritics: f.ignore_diacritics, kashida: f.ignore_kashida, alef_hamza: f.ignore_alef_hamza },
     }
 }
 
@@ -562,19 +563,32 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
         cuts.push(hay.len());
+        // With a Match option off, the search reads the paragraph folded once (#4800) and maps
+        // each match back to the original characters.
+        let folded = opts.folds().then(|| find_fold::fold(&hay, &cuts, opts.fold));
+        let (text, cuts) = match &folded {
+            Some(fd) => (fd.text.as_str(), fd.cuts.clone()),
+            None => (hay.as_str(), cuts),
+        };
+        let orig = |x: usize, end: bool| match &folded {
+            Some(fd) if end => fd.end(x),
+            Some(fd) => fd.start(x),
+            None => x,
+        };
+        let orig_range = |r: std::ops::Range<usize>| orig(r.start, false)..orig(r.end, true);
         let mut from = 0;
         for cut in cuts {
             if cut <= from {
                 continue;
             }
-            let mut input = Input::new(&hay).range(from..cut);
+            let mut input = Input::new(text).range(from..cut);
             from = cut;
             loop {
                 re.search_captures(&input, &mut caps);
                 let Some(m) = caps.get_match() else { break };
                 // Step past an empty match so the search moves on.
                 let next = if m.is_empty() {
-                    hay.get(m.end()..).and_then(|t| t.chars().next()).map_or(m.end() + 1, |c| m.end() + c.len_utf8())
+                    text.get(m.end()..).and_then(|t| t.chars().next()).map_or(m.end() + 1, |c| m.end() + c.len_utf8())
                 } else {
                     m.end()
                 };
@@ -585,10 +599,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 if m.is_empty() {
                     continue;
                 }
-                let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
+                let (Some(a), Some(b)) = (pos_of(orig(m.start(), false), false), pos_of(orig(m.end(), true), true)) else { continue };
                 let rep = pieces.as_ref().map(|pc| {
-                    let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
-                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                    let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(orig_range(g.range()))).map(str::to_string);
+                    find_pattern::expand(pc, hay.get(orig_range(m.range())).unwrap_or(""), &group, &s.clipboard_text)
                 });
                 out.push(Found { a, b, rep });
                 if out.len() >= 100_000 {
@@ -632,6 +646,16 @@ fn read_opts(s: &mut Session, v: &Value) {
     }
     if let Some(b) = p::bool(v, "ignoreSpace") {
         s.find.ignore_space = b;
+    }
+    // Word's Match Diacritics / Kashida / Alef Hamza (#4800): on by default (exact search).
+    if let Some(b) = p::bool(v, "matchDiacritics") {
+        s.find.ignore_diacritics = !b;
+    }
+    if let Some(b) = p::bool(v, "matchKashida") {
+        s.find.ignore_kashida = !b;
+    }
+    if let Some(b) = p::bool(v, "matchAlefHamza") {
+        s.find.ignore_alef_hamza = !b;
     }
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();

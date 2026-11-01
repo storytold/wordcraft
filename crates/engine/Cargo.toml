@@ -32,6 +32,7 @@ log = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 regex-automata = { workspace = true }
+unicode-normalization = "0.1"
 image = { workspace = true }
 zeroize = { workspace = true }
 

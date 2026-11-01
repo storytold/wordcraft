@@ -14,6 +14,7 @@ pub mod edit;
 pub mod equation;
 pub mod fields;
 pub mod file;
+pub mod find_fold;
 pub mod find_pattern;
 pub mod fmt_revisions;
 pub mod font;
