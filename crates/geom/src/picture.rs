@@ -63,8 +63,8 @@ const TIFF_COMPRESSIONS: [u16; 6] = [1, 4, 5, 8, 32946, 32773];
 /// # Errors
 ///
 /// Returns `Refusal::NotAPicture` for an unsupported format, `Refusal::Unsupported` for a TIFF
-/// whose compression cannot be budgeted, `Refusal::TooLarge` on size arithmetic overflow, and
-/// `Refusal::Broken` for an invalid header.
+/// whose compression cannot be read or budgeted (including a truncated TIFF), `Refusal::TooLarge`
+/// on size arithmetic overflow, and `Refusal::Broken` for an invalid header of another format.
 pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let format = image::guess_format(bytes).map_err(|_| Refusal::NotAPicture)?;
     let held = match format {
