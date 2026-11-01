@@ -357,6 +357,38 @@ fn three_column_table_with_distinctive_text() {
 }
 
 #[test]
+fn table_cells_past_the_document_limits_are_not_built() {
+    // Every body row was padded to the header's width before any cap (#3701).
+    let wide = format!("{}|\n{}|\n|\n| b |\n", "|a".repeat(50_000), "|-".repeat(50_000));
+    let flow = parse(&wide);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows.len(), 3);
+    assert!(t.rows.iter().all(|r| r.len() == MAX_COLS));
+    assert_eq!(t.rows[2][0].text(), "b");
+    // Rows past the limit still belong to the table, so the text after it reads as before.
+    let tall = format!("| a |\n| - |\n{}\nafter\n", "| x |\n".repeat(MAX_ROWS + 10));
+    let flow = parse(&tall);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows.len(), MAX_ROWS);
+    let FBlock::Para(p) = &flow.blocks[1] else { panic!("expected paragraph") };
+    assert_eq!(p.text(), "after");
+    assert_eq!(flow.blocks.len(), 2);
+}
+
+#[test]
+fn a_wide_table_still_checks_every_header_and_delimiter_cell() {
+    // Only the first 63 cells are kept, but every one is counted and checked.
+    let head = "|a".repeat(100) + "|\n";
+    let delim = |bad: Option<usize>| (0..100).map(|i| if Some(i) == bad { "|x" } else { "|-" }).collect::<String>() + "|\n";
+    let is_table = |md: String| matches!(parse(&md).blocks.first(), Some(FBlock::Table(_)));
+    assert!(is_table(format!("{head}{}| b |\n", delim(None))));
+    assert!(!is_table(format!("{head}{}| b |\n", delim(Some(80)))), "a bad delimiter cell past the kept ones");
+    assert!(!is_table(format!("{}|\n{}| b |\n", "|a".repeat(99), delim(None))), "99 header cells, 100 delimiter cells");
+    let (cells, n) = split_row(r"| a | b \| c | d |", 2);
+    assert_eq!((cells, n), (vec!["a".to_string(), "b | c".to_string()], 3));
+}
+
+#[test]
 fn regular_table_cells_containing_escaped_pipes() {
     let md = "| Option | Description |\n| --- | --- |\n| Regular \\| Pipe | Normal text cell |\n";
     let flow = parse(md);

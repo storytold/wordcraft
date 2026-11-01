@@ -1,5 +1,5 @@
 use super::inlines::parse_inlines;
-use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, Para, model};
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, MAX_COLS, MAX_ROWS, Para, model};
 
 /// Nesting limit for block containers (quotes, list items) and inline links.
 pub(super) const MAX_NEST: usize = 32;
@@ -271,47 +271,69 @@ fn list_marker(t: &str) -> Option<Marker> {
     if rest.is_empty() || rest.starts_with([' ', '\t']) { Some(m) } else { None }
 }
 
-fn split_row(l: &str) -> Vec<String> {
+/// A table row without its leading and trailing pipes (an escaped last pipe stays).
+fn row_body(l: &str) -> &str {
     let t = l.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
-    let t = if let Some(before) = t.strip_suffix('|') {
+    if let Some(before) = t.strip_suffix('|') {
         let num_bs = before.chars().rev().take_while(|&c| c == '\\').count();
         if num_bs % 2 == 0 { before } else { t }
     } else {
         t
-    };
+    }
+}
+
+/// The first `keep` cells of a table row, and how many cells it has: the rest are only counted.
+pub(super) fn split_row(l: &str, keep: usize) -> (Vec<String>, usize) {
     let mut cells = Vec::new();
+    let mut count = 0usize;
     let mut cur = String::new();
-    let mut chars = t.chars().peekable();
+    let mut chars = row_body(l).chars().peekable();
     while let Some(c) = chars.next() {
+        let full = cells.len() >= keep;
         match c {
             '\\' => match chars.peek() {
                 Some(&'|') => {
-                    cur.push('|');
+                    if !full {
+                        cur.push('|');
+                    }
                     chars.next();
                 }
                 Some(&'\\') => {
-                    cur.push('\\');
-                    cur.push('\\');
+                    if !full {
+                        cur.push_str("\\\\");
+                    }
                     chars.next();
                 }
-                _ => cur.push('\\'),
+                _ if !full => cur.push('\\'),
+                _ => {}
             },
-            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
-            _ => cur.push(c),
+            '|' => {
+                if !full {
+                    cells.push(std::mem::take(&mut cur).trim().to_string());
+                }
+                count += 1;
+            }
+            _ if !full => cur.push(c),
+            _ => {}
         }
     }
-    cells.push(cur.trim().to_string());
-    cells
+    if cells.len() < keep {
+        cells.push(cur.trim().to_string());
+    }
+    (cells, count + 1)
 }
 
-fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
+/// The alignments of the first `keep` cells of a delimiter row, and how many cells it has; every
+/// cell is checked, so a bad one past `keep` still means it isn't a delimiter row.
+fn delimiter_row(l: &str, keep: usize) -> Option<(Vec<Option<Align>>, usize)> {
     if !l.contains('-') {
         return None;
     }
-    let cells = split_row(l);
     let mut out = Vec::new();
-    for c in cells {
+    let mut count = 0usize;
+    // A valid cell is only dashes, colons and spaces, so an escaped pipe can't be in one.
+    for c in row_body(l).split('|') {
         let c = c.trim();
         let left = c.starts_with(':');
         let right = c.ends_with(':');
@@ -319,14 +341,17 @@ fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
         if core.is_empty() || !core.chars().all(|x| x == '-') {
             return None;
         }
-        out.push(match (left, right) {
-            (true, true) => Some(Align::Center),
-            (false, true) => Some(Align::Right),
-            (true, false) => Some(Align::Left),
-            _ => None,
-        });
+        if out.len() < keep {
+            out.push(match (left, right) {
+                (true, true) => Some(Align::Center),
+                (false, true) => Some(Align::Right),
+                (true, false) => Some(Align::Left),
+                _ => None,
+            });
+        }
+        count += 1;
     }
-    Some(out)
+    Some((out, count))
 }
 
 /// Does this line start a block that interrupts a paragraph?
@@ -465,24 +490,28 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
         }
         if para.is_empty()
             && t.contains('|')
-            && let Some(aligns) = lines.get(i + 1).and_then(|l| delimiter_row(l))
+            && let Some((aligns, width)) = lines.get(i + 1).and_then(|l| delimiter_row(l, MAX_COLS))
         {
-            let head = split_row(t);
-            if head.len() == aligns.len() {
+            let (head, head_width) = split_row(t, MAX_COLS);
+            if head_width == width {
                 let mut table = FTable::default();
                 let cell = |s: &str, header: bool, a: Option<Align>| {
                     let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
                     Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
                 };
+                // The document keeps no more columns or rows than this, so cells past them aren't built.
+                let cols = aligns.len();
                 table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
                 i += 2;
                 while let Some(l) = lines.get(i) {
                     if is_blank(l) || !l.contains('|') || interrupts(l) {
                         break;
                     }
-                    let mut cells = split_row(l);
-                    cells.resize(aligns.len(), String::new());
-                    table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
+                    if table.rows.len() < MAX_ROWS {
+                        let (mut cells, _) = split_row(l, cols);
+                        cells.resize(cols, String::new());
+                        table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
+                    }
                     i += 1;
                 }
                 out.push(FBlock::Table(table));

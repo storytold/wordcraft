@@ -290,6 +290,44 @@ fn leading_space_survives_round_trip() {
     assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), " lead");
 }
 
+#[test]
+fn css_escapes_read_every_kind_of_newline() {
+    // A backslash before CR LF, CR, LF or form feed continues the line; after hex digits, one
+    // of them (CR LF as one) ends the escape.
+    assert_eq!(css_unescape("A\\\r\nB\\\rC\\\nD\\\u{C}E"), "ABCDE");
+    assert_eq!(css_unescape("\\41\r\nB \\42\u{C}C \\43 D"), "AB BC CD");
+    assert_eq!(css_unescape("x\\'y\\"), "x'y");
+}
+
+#[test]
+fn font_names_are_written_as_css_strings() {
+    // A font name could end the CSS string or the declaration and add CSS of its own (#3739).
+    let fonts = ["Arial\n;position:fixed", "Back\\slash", "O'Brien \"Sans\"", "A,B", "Times New Roman", "M+ 1p"];
+    let mut p = Para::default();
+    for (i, font) in fonts.iter().enumerate() {
+        p.push_text(&format!("t{i}"), &Fmt { font: Some((*font).into()), ..Default::default() });
+    }
+    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() }));
+    assert!(html.contains("font-family:'Times New Roman'") && html.contains("font-family:'M+ 1p'"), "{html}");
+    let styles: Vec<&str> = html.split(" style=\"").skip(1).filter_map(|s| s.split('"').next()).filter(|s| s.contains("font-family")).collect();
+    assert_eq!(styles.len(), fonts.len(), "{html}");
+    for s in styles {
+        assert!(!s.contains([';', '\n']) && s.matches('\'').count() == 2, "{s}");
+    }
+    // Read back, each run has its font as it was.
+    let back = parse(&html);
+    let runs: Vec<(String, Option<String>)> = back
+        .blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| p.inlines.iter())
+        .filter_map(|i| if let Inline::Text(t, f) = i { Some((t.clone(), f.font.as_deref().map(String::from))) } else { None })
+        .collect();
+    for (i, font) in fonts.iter().enumerate() {
+        assert!(runs.contains(&(format!("t{i}"), Some(font.to_string()))), "{font:?} in {runs:?}");
+    }
+}
+
 /// A document that reads "I read " then a phonetic guide over `base`, then " daily.".
 fn ruby_doc(base: &str, ruby: &str) -> Document {
     let props = wordcraft_doc::CharProps::default();

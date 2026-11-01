@@ -159,7 +159,7 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
         return false;
     }
     let rest = t.trim_start_matches(['.', '!', '?']).trim_start_matches(['"', '”', '’', '\'', ')', '»', ']']);
-    rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '«' | '(' | '[' | '\'' | '—'))
+    rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| matches!(c, '"' | '“' | '‘' | '«' | '(' | '[' | '\'' | '—'))
 }
 
 fn repeated_words(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
@@ -210,13 +210,15 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
 
 fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: &mut Vec<Issue>) {
     let mut after_end = capital_first;
-    for (a, b) in ws {
+    for (i, (a, b)) in ws.iter().enumerate() {
         let Some(w) = text.get(*a..*b) else { continue };
         if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
             v.push(issue(*a, *b, "Maiuscola a inizio frase".into(), vec![fixed]));
         }
-        after_end = ends_sentence(text.get(*b..).unwrap_or(""), w);
+        // Only the gap up to the next word: `ends_sentence` wants nothing but space and quotes after the stop.
+        let next = ws.get(i + 1).map_or(text.len(), |n| n.0);
+        after_end = ends_sentence(text.get(*b..next).unwrap_or(""), w);
     }
 }
 
@@ -373,6 +375,17 @@ mod tests {
             check("Vado a Roma. Il dott. Rossi è già lì... piano piano!")
         );
         assert!(check("Sì sì, bene bene :)").is_empty());
+    }
+
+    /// #3675: a small letter after any sentence end in the paragraph is flagged, not only at its end.
+    #[test]
+    fn a_small_letter_after_each_sentence_end_is_flagged() {
+        test_dict_install();
+        // A quote opening the next sentence doesn't hide it.
+        assert_eq!(fixes("Vado a Roma. poi torno! e tu? «bene», dice."), vec![pair("poi", "Poi"), pair("e", "E"), pair("bene", "Bene")]);
+        assert_eq!(fixes("Vado. ‘poi’ torno."), vec![pair("poi", "Poi")]);
+        // An abbreviation or an ellipsis doesn't end a sentence.
+        assert!(fixes("Il dott. rossi è qui... forse.").is_empty(), "{:?}", fixes("Il dott. rossi è qui... forse."));
     }
 
     /// The fixes the rules offer for `t`, in order.

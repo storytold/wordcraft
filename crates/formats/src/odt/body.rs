@@ -1,5 +1,5 @@
 use super::import::Pages;
-use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
+use super::limits::{MAX_EXTRA_SPACES, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
@@ -116,6 +116,8 @@ pub(super) struct Body<'a> {
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
     xml_space_end: bool,
+    /// What is left of [`MAX_EXTRA_SPACES`].
+    pub(super) spaces_left: usize,
     para_cont: bool,
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
@@ -169,6 +171,7 @@ impl<'a> Body<'a> {
             fmt: Vec::new(),
             para: None,
             xml_space_end: false,
+            spaces_left: MAX_EXTRA_SPACES,
             para_cont: false,
             lists: Vec::new(),
             lists_saved: Vec::new(),
@@ -821,9 +824,12 @@ impl Body<'_> {
                 }
                 self.fmt.push(fmt);
             }
-            "s" => {
+            // Outside a paragraph `push_text` drops spaces, so they cost no budget.
+            "s" if self.para.is_some() => {
                 let count = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
-                self.push_text(&" ".repeat(count));
+                let extra = count.saturating_sub(1).min(self.spaces_left);
+                self.spaces_left -= extra;
+                self.push_text(&" ".repeat(1 + extra));
             }
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
