@@ -5776,6 +5776,60 @@ fn a_table_from_word_2013_ends_at_the_borders_its_cells_draw() {
     assert!(near(row_off[0].0, left) && near(row_off[1].1, right), "outer borders off in the row {row_off:?}, plain {plain:?}");
 }
 
+/// Measured in Word for Windows (compatibility mode 15): a table style with 6pt borders whose
+/// first-row part turns the left and right borders off gives its one-row 100% table its whole
+/// width while the table shows the first row's formatting, and takes the borders' halves off it
+/// when it doesn't.
+#[test]
+fn a_table_from_word_2013_takes_its_outer_borders_from_its_style_s_parts() {
+    use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart, TableStyleParts};
+    let six = Some(Border { style: BorderStyle::Single, width: 6.0, color: None, space: 0.0 });
+    let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let cells = |style: bool, header_row: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut st = Style {
+            id: "Cond".into(),
+            name: "Cond".into(),
+            kind: StyleKind::Table,
+            table: Some(TableStyleParts {
+                borders: Some(Borders { top: six, left: six, bottom: six, right: six, between: six, inside_v: six }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        st.set_table_part(
+            TablePart::FirstRow,
+            PartFormat { borders: Some(Borders { left: none, right: none, ..Default::default() }), ..Default::default() },
+        );
+        d.styles.upsert(st);
+        let mut t = Table::new(1, 2, 200.0);
+        t.props.width_pct = Some(100.0);
+        t.props.fixed = true;
+        if style {
+            t.props.style = Some("Cond".into());
+            t.props.borders = None;
+        } else {
+            let off = Borders { top: none, left: none, bottom: none, right: none, between: none, inside_v: none };
+            t.props.borders = Some(off);
+        }
+        t.props.look.header_row = header_row;
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(false, true);
+    let (left, right) = (plain[0].0, plain[1].1);
+    let on = cells(true, true);
+    assert!(near(on[0].0, left) && near(on[1].1, right), "first row's borders off {on:?}, plain {plain:?}");
+    let off = cells(true, false);
+    assert!(near(off[0].0, left + 3.0) && near(off[1].1, right - 3.0), "the table's borders {off:?}, plain {plain:?}");
+}
+
 #[test]
 fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     use wordcraft_doc::para::Anchor;
