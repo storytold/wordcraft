@@ -36,10 +36,20 @@ pub fn is_word_char(c: char) -> bool {
 
 /// A character of the Indic blocks (Devanagari … Sinhala, U+0900–U+0DFF) that Unicode doesn't
 /// class as a letter or digit but that sits inside a word: the viramas that form conjuncts
-/// (क्ष), the nuktas (ज़), the Vedic accents, and the scripts' few signs and symbols. Only their
-/// punctuation (the danda ।, the double danda ॥, the abbreviation signs) separates words.
+/// (क्ष), the nuktas (ज़) and the Vedic accents. Their punctuation (the danda ।, the double danda
+/// ॥, the abbreviation signs), currency signs (৳, ૱, ௹) and other symbols (ISSHAR, the Tamil day
+/// and month signs) are not part of a word: `৳১০০` is a sign and a number.
 fn is_indic_word_sign(c: char) -> bool {
-    matches!(u32::from(c), 0x0900..=0x0DFF) && !matches!(u32::from(c), 0x0964 | 0x0965 | 0x0970 | 0x09FD | 0x0A76 | 0x0AF0 | 0x0C77 | 0x0C84 | 0x0DF4)
+    matches!(u32::from(c), 0x0900..=0x0DFF)
+        && !matches!(
+            u32::from(c),
+            // Punctuation (Po).
+            0x0964 | 0x0965 | 0x0970 | 0x09FD | 0x0A76 | 0x0AF0 | 0x0C77 | 0x0C84 | 0x0DF4
+            // Currency signs (Sc).
+            | 0x09F2 | 0x09F3 | 0x09FB | 0x0AF1 | 0x0BF9
+            // Other symbols (So).
+            | 0x09FA | 0x0B70 | 0x0BF3..=0x0BF8 | 0x0BFA | 0x0C7F | 0x0D4F | 0x0D79
+        )
 }
 
 /// Does `text` contain a right-to-left character?
@@ -106,6 +116,11 @@ mod tests {
         for c in ['।', '॥', '॰', '\u{0DF4}'] {
             assert!(!is_word_char(c), "{c}");
         }
+        // Currency signs and symbols aren't word characters either: ৳১০০ is a sign and a number.
+        for c in ['৲', '৳', '৻', '૱', '௹', '৺', '୰', '௳', '௺', '౿', '൏', '൹'] {
+            assert!(!is_word_char(c), "{c}");
+        }
+        assert!("১০০".chars().all(is_word_char));
         assert!("१२३".chars().all(is_word_char), "Devanagari digits");
     }
 }

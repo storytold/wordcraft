@@ -1425,12 +1425,15 @@ fn nepali_caret_word_moves_and_word_count() {
     assert_eq!(s.sel.focus.off, text.find("र्म").unwrap());
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, text.find("कर्म").unwrap());
-    // Ctrl+Left from inside क्षेत्र goes to its start, not to the conjunct's second consonant.
-    run(&mut s, "caret.docEnd", json!({}));
-    run(&mut s, "caret.wordLeft", json!({}));
-    run(&mut s, "caret.wordLeft", json!({}));
+    // Ctrl+Left from inside क्षेत्र (after क्षे) goes to its start, not to a consonant after a
+    // virama; Ctrl+Right from there goes past the whole word.
     let kshetra = text.find("क्षेत्र").unwrap();
-    assert!(s.sel.focus.off <= kshetra, "Ctrl+Left stops at a word start, not inside क्षेत्र: {}", s.sel.focus.off);
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्षे".len()));
+    run(&mut s, "caret.wordLeft", json!({}));
+    assert_eq!(s.sel.focus.off, kshetra, "Ctrl+Left lands on the start of क्षेत्र");
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्".len()));
+    run(&mut s, "caret.wordRight", json!({}));
+    assert!(s.sel.focus.off >= kshetra + "क्षेत्र".len(), "Ctrl+Right passes the whole of क्षेत्र: {}", s.sel.focus.off);
     // Select Word takes the whole word, without the danda.
     s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्षे".len()));
     run(&mut s, "select.word", json!({}));
