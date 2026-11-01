@@ -428,6 +428,17 @@ fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
         };
         assert_eq!(shown(&layout(&d, &mut LayoutCache::new(), &output)), [crate::fields::BOOKMARK_NOT_DEFINED, "9"], "other bookmark: {other_mark}");
         assert_eq!(shown(&lay(&d)), ["9", "9"], "the editor, other bookmark: {other_mark}");
+        // One cache for the editor's layout and then output's: output doesn't reuse the
+        // editor's paragraphs, and the editor doesn't reuse output's after it.
+        let mut cache = LayoutCache::new();
+        let editor = LayoutOptions::default();
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"]);
+        assert_eq!(
+            shown(&layout(&d, &mut cache, &output)),
+            [crate::fields::BOOKMARK_NOT_DEFINED, "9"],
+            "a shared cache, other bookmark: {other_mark}"
+        );
+        assert_eq!(shown(&layout(&d, &mut cache, &editor)), ["9", "9"], "the editor after output, other bookmark: {other_mark}");
     }
 }
 /// The fields' text in each page's footer, joined with "/".
