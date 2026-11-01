@@ -161,6 +161,13 @@ impl Sh {
                 *p = Paint::Rgb(c, tint);
             }
         }
+        // Readable text on the fill as it shows: after the tint and transparency lighten it.
+        if let Paint::Rgb(c, tint) = self.fill {
+            let shown = tint.map_or(c, |t| c.modified("tint", f64::from(t) / 100_000.0));
+            let a = self.alpha.map_or(1.0, |a| a as f32 / 100_000.0).clamp(0.0, 1.0);
+            let luma = shown.luma() * a + 255.0 * (1.0 - a);
+            self.dark_text = luma > 160.0;
+        }
     }
 
     fn item(mut self, spec: &SmartArtSpec, i: usize) -> Sh {
@@ -1200,6 +1207,18 @@ mod tests {
         assert_eq!(drawing.matches("<a:srgbClr val=\"123456\"").count(), 2, "the step and the arrow after it");
         let plain = drawing_xml(&SmartArtSpec::sample(SmartArtLayout::Process), 400.0, 250.0);
         assert!(!plain.contains("srgbClr"));
+    }
+
+    #[test]
+    fn a_light_custom_fill_gets_dark_text_and_a_dark_one_keeps_light_text() {
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
+        spec.items[0].color = Some(Rgb(0xFF, 0xF2, 0x99));
+        let light = drawing_xml(&spec.sanitized(), 400.0, 250.0);
+        assert!(light.contains("<a:schemeClr val=\"tx1\"/>"), "dark text on a light fill");
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
+        spec.items[0].color = Some(Rgb(0x12, 0x34, 0x56));
+        let dark = drawing_xml(&spec.sanitized(), 400.0, 250.0);
+        assert!(!dark.contains("val=\"tx1\""), "light text stays on a dark fill");
     }
 
     #[test]
