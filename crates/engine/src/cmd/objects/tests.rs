@@ -79,6 +79,84 @@ fn moving_a_level_line_keeps_it_level() {
     assert_eq!(s.layout().object(&Pos::body(0, 0), 0).unwrap().rect.h, min_size(&selected(&s).unwrap().1));
 }
 
+/// Connect Shapes is offered for the lines and connectors it moves: floating ones in the body
+/// text, not one In Line with Text or in a header.
+#[test]
+fn connect_is_offered_only_for_floating_lines_in_the_body() {
+    use wordcraft_doc::para::ShapeKind;
+    let shape = |kind, wrap| InlineObject::Shape {
+        kind,
+        w: 200.0,
+        h: 0.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: wordcraft_doc::para::Float { wrap, x: 50.0, y: 100.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (wrap, offered) in [(Wrap::InFrontOfText, true), (Wrap::Inline, false)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            s.doc.insert_object(&Pos::body(0, 0), shape(kind, wrap), &Default::default()).unwrap();
+            s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+            assert_eq!(s.why_disabled("shape.connect").is_none(), offered, "{kind:?} {wrap:?}");
+            assert_eq!(s.run("shape.connect", &json!({"end": {"x": 300.0, "y": 150.0}})).is_ok(), offered, "{kind:?} {wrap:?}: runs when offered");
+        }
+    }
+}
+
+/// Moving one end of a slanted, flipped line leaves the other where the page shows it: the ends
+/// `shape.connect` reads and writes are the drawn ones (checked on the rendered page).
+#[test]
+fn moving_an_end_of_a_flipped_slanted_line_keeps_the_other() {
+    use wordcraft_doc::para::ShapeKind;
+    // Flipped vertically, a line in the frame (300, 600) 100 × 100 runs from its bottom-left
+    // (300, 700) to its top-right (400, 600), as in Word.
+    let line = InlineObject::Shape {
+        kind: ShapeKind::Line,
+        w: 100.0,
+        h: 100.0,
+        fill: None,
+        stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+        stroke_width: 3.0,
+        float: wordcraft_doc::para::Float {
+            wrap: Wrap::InFrontOfText,
+            h_rel: wordcraft_doc::para::Anchor::Page,
+            v_rel: wordcraft_doc::para::Anchor::Page,
+            x: 300.0,
+            y: 600.0,
+            flip_v: true,
+            ..Default::default()
+        },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+    s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+    let inked = |s: &Session, x: f32, y: f32| {
+        let l = s.export_layout();
+        let r = wordcraft_render::render_page(&s.doc, &l.pages[0], 1.0, &Default::default());
+        let dark = |px: i64, py: i64| {
+            let i = ((py * i64::from(r.width) + px) * 4) as usize;
+            r.pixels.get(i..i + 3).is_some_and(|p| p.iter().all(|&c| c < 128))
+        };
+        (-3..=3).any(|dx| (-3..=3).any(|dy| dark(x as i64 + dx, y as i64 + dy)))
+    };
+    assert!(inked(&s, 302.0, 698.0) && inked(&s, 398.0, 602.0), "drawn from bottom-left to top-right");
+    assert!(!inked(&s, 302.0, 602.0), "not from the top-left");
+    // Its end goes to (450, 650): the start stays at (300, 700).
+    s.run("shape.connect", &json!({"end": {"x": 450.0, "y": 650.0}})).unwrap();
+    assert!(inked(&s, 303.0, 699.0), "the start stays where it was drawn");
+    assert!(inked(&s, 447.0, 651.0), "the end is where it was dragged");
+    assert!(!inked(&s, 398.0, 602.0), "the end left its old place");
+}
+
 /// Ctrl+drag: a copy lands where dropped and is selected; the original stays, the clipboard
 /// is untouched, and it is one undo step.
 #[test]

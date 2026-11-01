@@ -20,9 +20,12 @@ pub const SNAP: f32 = 12.0;
 /// Largest offset a routed connector gets, points.
 const MAX_OFFSET: f32 = 4000.0;
 
+/// `shape.connect` is offered for what it runs on: a floating connector or line in the body text.
 fn has_connector(s: &Session) -> Option<&'static str> {
     match super::objects::selected(s) {
-        Some((_, InlineObject::Shape { kind, .. })) if kind.is_open() => None,
+        Some((pos, InlineObject::Shape { kind, float, .. })) if kind.is_open() => {
+            (pos.story != StoryRef::Body || float.wrap == Wrap::Inline).then_some("only floating connectors in the body text can be glued")
+        }
         _ => Some("select a connector first"),
     }
 }
