@@ -1,0 +1,184 @@
+//! Date and time styles (ODF 1.3 §16.27 `number:date-style`, `number:time-style`) and Word's
+//! date-time pictures (`DATE \@ "dddd, MMMM d, yyyy"`), both ways: the parts — day, month,
+//! year, weekday, hours, minutes, seconds, AM/PM — and the text between them.
+
+use super::writer::x;
+
+/// Longest picture kept, characters.
+const MAX_PICTURE: usize = 200;
+
+/// A part of a date or time.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Part {
+    /// Day of the month (long: two digits).
+    Day(bool),
+    /// Month: long, and by name.
+    Month(bool, bool),
+    /// Year (long: four digits).
+    Year(bool),
+    /// Day of the week by name (long: in full).
+    Weekday(bool),
+    Hours(bool),
+    Minutes(bool),
+    Seconds(bool),
+    AmPm,
+    Text(String),
+}
+
+/// The part element `name` (local, in the number namespace) stands for; its text, if any,
+/// comes after.
+pub(super) fn part(name: &str, long: bool, textual: bool) -> Option<Part> {
+    Some(match name {
+        "day" => Part::Day(long),
+        "month" => Part::Month(long, textual),
+        "year" => Part::Year(long),
+        "day-of-week" => Part::Weekday(long),
+        "hours" => Part::Hours(long),
+        "minutes" => Part::Minutes(long),
+        "seconds" => Part::Seconds(long),
+        "am-pm" => Part::AmPm,
+        _ => return None,
+    })
+}
+
+/// The Word picture for `parts`: 12-hour hours when an AM/PM shows, text in single quotes when
+/// it holds letters (a quote doubled); quotes and backslashes, which would end the field's
+/// argument, left out.
+pub(super) fn picture(parts: &[Part]) -> String {
+    let ampm = parts.contains(&Part::AmPm);
+    let pick = |long: bool, a: &'static str, b: &'static str| if long { a } else { b };
+    let mut s = String::new();
+    for p in parts {
+        match p {
+            Part::Day(l) => s.push_str(pick(*l, "dd", "d")),
+            Part::Month(l, true) => s.push_str(pick(*l, "MMMM", "MMM")),
+            Part::Month(l, false) => s.push_str(pick(*l, "MM", "M")),
+            Part::Year(l) => s.push_str(pick(*l, "yyyy", "yy")),
+            Part::Weekday(l) => s.push_str(pick(*l, "dddd", "ddd")),
+            Part::Hours(l) if ampm => s.push_str(pick(*l, "hh", "h")),
+            Part::Hours(l) => s.push_str(pick(*l, "HH", "H")),
+            Part::Minutes(l) => s.push_str(pick(*l, "mm", "m")),
+            Part::Seconds(l) => s.push_str(pick(*l, "ss", "s")),
+            Part::AmPm => s.push_str("AM/PM"),
+            Part::Text(t) => {
+                let t: String = t.chars().filter(|c| !matches!(c, '"' | '\\')).collect();
+                if t.chars().any(|c| c.is_alphabetic() || c == '\'') {
+                    s.push('\'');
+                    s.push_str(&t.replace('\'', "''"));
+                    s.push('\'');
+                } else {
+                    s.push_str(&t);
+                }
+            }
+        }
+    }
+    s.chars().take(MAX_PICTURE).collect()
+}
+
+/// The parts of Word picture `pic` (the reverse of [`picture`]).
+fn parts_of(pic: &str) -> Vec<Part> {
+    let chars: Vec<char> = pic.chars().take(MAX_PICTURE).collect();
+    let mut out: Vec<Part> = Vec::new();
+    let mut text = String::new();
+    let mut i = 0;
+    let flush = |text: &mut String, out: &mut Vec<Part>| {
+        if !text.is_empty() {
+            out.push(Part::Text(std::mem::take(text)));
+        }
+    };
+    while let Some(&c) = chars.get(i) {
+        if c == '\'' {
+            i += 1;
+            while let Some(&q) = chars.get(i) {
+                i += 1;
+                if q != '\'' {
+                    text.push(q);
+                } else if chars.get(i) == Some(&'\'') {
+                    text.push('\'');
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
+            flush(&mut text, &mut out);
+            out.push(Part::AmPm);
+            i += 5;
+            continue;
+        }
+        let mut n = 1;
+        while chars.get(i + n) == Some(&c) {
+            n += 1;
+        }
+        let p = match (c, n) {
+            ('y' | 'Y', 4..) => Some(Part::Year(true)),
+            ('y' | 'Y', _) => Some(Part::Year(false)),
+            ('M', 4..) => Some(Part::Month(true, true)),
+            ('M', 3) => Some(Part::Month(false, true)),
+            ('M', 2) => Some(Part::Month(true, false)),
+            ('M', _) => Some(Part::Month(false, false)),
+            ('d' | 'D', 4..) => Some(Part::Weekday(true)),
+            ('d' | 'D', 3) => Some(Part::Weekday(false)),
+            ('d' | 'D', 2) => Some(Part::Day(true)),
+            ('d' | 'D', _) => Some(Part::Day(false)),
+            ('h' | 'H', n) => Some(Part::Hours(n >= 2)),
+            ('m', n) => Some(Part::Minutes(n >= 2)),
+            ('s', n) => Some(Part::Seconds(n >= 2)),
+            _ => None,
+        };
+        match p {
+            Some(p) => {
+                flush(&mut text, &mut out);
+                out.push(p);
+            }
+            None => {
+                for _ in 0..n {
+                    text.push(c);
+                }
+            }
+        }
+        i += n;
+    }
+    flush(&mut text, &mut out);
+    out
+}
+
+/// A data style named `name` for Word picture `pic`: a date style when it shows any part of a
+/// date, a time style otherwise. `None` for a picture with no part.
+pub(super) fn style_xml(name: &str, pic: &str) -> Option<String> {
+    let parts = parts_of(pic);
+    if !parts.iter().any(|p| !matches!(p, Part::Text(_))) {
+        return None;
+    }
+    let dated = parts.iter().any(|p| matches!(p, Part::Day(_) | Part::Month(..) | Part::Year(_) | Part::Weekday(_)));
+    let long = |l: bool| if l { " number:style=\"long\"" } else { "" };
+    let body: String = parts
+        .iter()
+        .map(|p| match p {
+            Part::Day(l) => format!("<number:day{}/>", long(*l)),
+            Part::Month(l, t) => format!("<number:month{}{}/>", long(*l), if *t { " number:textual=\"true\"" } else { "" }),
+            Part::Year(l) => format!("<number:year{}/>", long(*l)),
+            Part::Weekday(l) => format!("<number:day-of-week{}/>", long(*l)),
+            Part::Hours(l) => format!("<number:hours{}/>", long(*l)),
+            Part::Minutes(l) => format!("<number:minutes{}/>", long(*l)),
+            Part::Seconds(l) => format!("<number:seconds{}/>", long(*l)),
+            Part::AmPm => "<number:am-pm/>".to_string(),
+            Part::Text(t) => format!("<number:text>{}</number:text>", x(t)),
+        })
+        .collect();
+    let el = if dated { "number:date-style" } else { "number:time-style" };
+    Some(format!("<{el} style:name=\"{name}\">{body}</{el}>"))
+}
+
+/// The `\@` picture of Word field code `instr`, if it has one.
+pub(super) fn picture_of(instr: &str) -> Option<String> {
+    let at = instr.find("\\@")?;
+    let rest = instr.get(at + 2..)?.trim_start();
+    let pic = match rest.strip_prefix('"') {
+        Some(q) => q.split('"').next()?,
+        None => rest.split_whitespace().next()?,
+    };
+    (!pic.is_empty()).then(|| pic.chars().take(MAX_PICTURE).collect())
+}

@@ -14,6 +14,7 @@ mod indexes;
 mod lists;
 mod named_styles;
 mod notes;
+mod numbering_fields;
 mod outline;
 mod para_borders;
 mod polygons;

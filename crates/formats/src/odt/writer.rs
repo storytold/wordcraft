@@ -69,6 +69,7 @@ pub(super) const NS: &str = concat!(
     "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" ",
     "xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" ",
     "xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" ",
+    "xmlns:number=\"urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0\" ",
     "xmlns:loext=\"urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0\" ",
     "office:version=\"1.3\""
 );
@@ -87,6 +88,10 @@ pub(super) struct Writer {
     pub(super) ranged: std::collections::HashSet<String>,
     bookmarks: std::collections::HashSet<String>,
     bookmark_ends: std::collections::HashSet<String>,
+    /// The date and time styles fields are shown in: (Word picture, style name, definition).
+    data_styles: Vec<(String, String, String)>,
+    /// The sequences (`SEQ`) fields count, declared at the start of the text.
+    pub(super) sequences: std::collections::BTreeSet<String>,
     /// Indexes written so far (their names).
     pub(super) indexes: usize,
     /// An index's entries are being written: their links are in LibreOffice's Index Link style.
@@ -350,7 +355,7 @@ impl Writer {
                 // A field around content: an index's is its element (see `index_at`).
                 Inline::FieldStart(_) | Inline::FieldEnd => {}
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
-                Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
+                Inline::Field { instr, result, fmt } => match self.field_element(instr, result) {
                     Some(el) => {
                         match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
                             Some(n) => out.push_str(&format!("<text:span text:style-name=\"{n}\">{el}</text:span>")),
@@ -543,13 +548,35 @@ impl Writer {
         }
     }
 
+    /// The ODF element for field `instr` showing `result`, with the date style and sequence
+    /// declaration it needs; `None` when ODF has none.
+    fn field_element(&mut self, instr: &str, result: &str) -> Option<String> {
+        let ds = self.data_style(instr);
+        if let Some(seq) = super::fields::sequence_name(instr) {
+            self.sequences.insert(seq.to_string());
+        }
+        super::fields::element(instr, &x(result), ds.as_deref())
+    }
+
+    /// The date or time style for field code `instr`'s `\@` picture (one per picture).
+    fn data_style(&mut self, instr: &str) -> Option<String> {
+        let pic = super::datastyle::picture_of(instr)?;
+        if let Some((_, name, _)) = self.data_styles.iter().find(|(p, ..)| *p == pic) {
+            return Some(name.clone());
+        }
+        let name = format!("{}N{}", self.prefix, self.data_styles.len() + 1);
+        let xml = super::datastyle::style_xml(&name, &pic)?;
+        self.data_styles.push((pic, name.clone(), xml));
+        Some(name)
+    }
+
     pub(super) fn automatic_styles(&self) -> String {
         format!("<office:automatic-styles>{}</office:automatic-styles>", self.style_defs())
     }
 
     /// The automatic styles made so far, without their `office:automatic-styles` element.
     pub(super) fn style_defs(&self) -> String {
-        let mut s = String::new();
+        let mut s: String = self.data_styles.iter().map(|(.., xml)| xml.as_str()).collect();
         for (props, n) in &self.text_styles {
             let (props, parent) = match props.split_once('\u{1}') {
                 Some((p, parent)) => (p, format!(" style:parent-style-name=\"{parent}\"")),

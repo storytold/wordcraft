@@ -380,6 +380,67 @@ pub(super) struct NamedStyle {
     pub(super) look: ParaLook,
 }
 
+/// Reads date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
+#[derive(Default)]
+struct DateStyles {
+    /// The style being read: its name and parts.
+    data: Option<(String, Vec<super::datastyle::Part>)>,
+    /// In its `number:text`.
+    in_text: bool,
+}
+
+impl DateStyles {
+    /// Event `ev` of a style file, into `out` (name → picture); false when it isn't one of a
+    /// date or time style.
+    fn event(&mut self, ev: &Ev, out: &mut HashMap<String, String>) -> bool {
+        use super::datastyle::{Part, part, picture};
+        match ev {
+            Ev::Start(q, a) => match local(q) {
+                "date-style" | "time-style" => self.data = get(a, "style:name").map(|n| (n.to_string(), Vec::new())),
+                "text" => self.in_text = self.data.is_some(),
+                name => {
+                    let on = |k: &str, v: &str| get(a, k).is_some_and(|x| x.trim() == v);
+                    if let (Some((_, parts)), Some(p)) = (&mut self.data, part(name, on("number:style", "long"), on("number:textual", "true")))
+                        && parts.len() < 64
+                    {
+                        parts.push(p);
+                    }
+                }
+            },
+            Ev::End(q) => match local(q) {
+                "text" => self.in_text = false,
+                "date-style" | "time-style" => {
+                    if let Some((name, parts)) = self.data.take()
+                        && out.len() < MAX_DATA_STYLES
+                    {
+                        out.insert(name, picture(&parts));
+                    }
+                }
+                _ => {}
+            },
+            Ev::Text(t) => {
+                if !self.in_text {
+                    return false;
+                }
+                if let Some((_, parts)) = &mut self.data {
+                    let n = parts.len();
+                    if let Some(Part::Text(s)) = parts.last_mut()
+                        && s.len() < 200
+                    {
+                        s.push_str(t);
+                    } else if n < 64 {
+                        parts.push(Part::Text(t.chars().take(200).collect()));
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+/// Most date and time styles kept (hostile files).
+const MAX_DATA_STYLES: usize = 10_000;
+
 /// Longest style id made, in characters.
 const MAX_STYLE_ID: usize = 64;
 
@@ -755,6 +816,8 @@ pub(super) struct Styles {
     default_graphic: super::frames::Graphic,
     /// The named dashes and gradients graphic styles use.
     pub(super) defs: super::strokes::Defs,
+    /// Date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
+    data_styles: HashMap<String, String>,
 }
 
 impl Styles {
@@ -763,11 +826,14 @@ impl Styles {
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
+        let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
         let mut level_at: Option<usize> = None;
         let mut outline_at: Option<usize> = None;
         events(xml, |ev| match ev {
+            Ev::Start(q, _) | Ev::End(q) if q.starts_with("number:") && dates.event(&ev, &mut self.data_styles) => {}
+            Ev::Text(_) if dates.event(&ev, &mut self.data_styles) => {}
             Ev::Start(q, a) => match local(&q) {
                 "automatic-styles" => in_auto = true,
                 "style" if q.starts_with("style:") => {
@@ -1002,6 +1068,11 @@ impl Styles {
     /// over its chain and then the default graphic style.
     pub(super) fn shape_graphic(&self, name: Option<&str>) -> super::frames::Graphic {
         name.map(|n| self.graphic(n)).unwrap_or_default().or(&self.default_graphic)
+    }
+
+    /// The Word date-time picture of date or time style `name`.
+    pub(super) fn date_picture(&self, name: &str) -> Option<&str> {
+        self.data_styles.get(name).map(String::as_str).filter(|p| !p.is_empty())
     }
 
     /// Vertical alignment of a table-cell style (whole chain).

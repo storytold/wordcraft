@@ -58,7 +58,7 @@ fn fields_open_as_fields_with_their_shown_text() {
 
 #[test]
 fn a_fixed_date_and_unknown_fields_are_plain_text() {
-    let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:sequence text:name="Figure">4</text:sequence>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
+    let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:variable-get text:name="v">4</text:variable-get>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
     assert!(fields(&d).is_empty());
     assert_eq!(d.body[0].as_para().unwrap().text, "1 May, 4, 5");
 }
@@ -104,7 +104,8 @@ fn fields_round_trip() {
     let xml = export(&d).unwrap();
     let back = import(&xml).unwrap();
     let got: Vec<String> = fields(&back).into_iter().map(|(c, _)| c).collect();
-    assert_eq!(got, ["PAGE", "NUMPAGES", "DATE", "TITLE", "PAGEREF intro \\h"]);
+    // The date keeps its picture (as a date style).
+    assert_eq!(got, ["PAGE", "NUMPAGES", "DATE \\@ \"d MMMM yyyy\"", "TITLE", "PAGEREF intro \\h"]);
     assert_eq!(back.body[0].as_para().unwrap().text.matches(wordcraft_doc::para::OBJ).count(), 5);
 }
 

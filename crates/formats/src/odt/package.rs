@@ -550,8 +550,16 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     } else {
         format!("<text:tracked-changes text:track-changes=\"{}\">{}</text:tracked-changes>\n", doc.settings.track_changes, w.regions.concat())
     };
+    // The sequences fields count (§7.4.11), declared after any tracked changes.
+    let decls = if w.sequences.is_empty() {
+        String::new()
+    } else {
+        let d: String =
+            w.sequences.iter().map(|n| format!("<text:sequence-decl text:display-outline-level=\"0\" text:name=\"{}\"/>", x(n))).collect();
+        format!("<text:sequence-decls>{d}</text:sequence-decls>")
+    };
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{tracked}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{tracked}{decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles()
     );
     let mut hw = Writer::with_prefix("M");

@@ -725,9 +725,12 @@ impl Body<'_> {
         }
         if q.starts_with("text:")
             && self.frame.is_none()
-            && let Some(instr) = super::fields::instr_of(local(q), a)
+            && let Some(instr) = super::fields::instr_of(local(q), a, |n| self.styles.date_picture(n).map(String::from))
         {
-            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt() });
+            let anchor = (local(q) == "sequence")
+                .then(|| get(a, "text:ref-name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 1024).map(String::from))
+                .flatten();
+            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt(), anchor });
             return true;
         }
         match local(q) {
@@ -753,10 +756,11 @@ impl Body<'_> {
             "tab" => self.push_text("\t"),
             "line-break" => self.push_text("\n"),
             // A bookmark (§6.2.1): a point, or the start or end of the text it covers.
-            "bookmark" | "bookmark-start" | "bookmark-end" => {
+            // A reference mark (§7.6) is a bookmark too: references to it are Word's to bookmarks.
+            "bookmark" | "bookmark-start" | "bookmark-end" | "reference-mark" | "reference-mark-start" | "reference-mark-end" => {
                 if let Some(name) = get(a, "text:name").filter(|n| !n.is_empty()) {
                     let name = name.to_string();
-                    self.push_inline(if local(q) == "bookmark-end" { Inline::AnchorEnd(name) } else { Inline::Anchor(name) });
+                    self.push_inline(if local(q).ends_with("-end") { Inline::AnchorEnd(name) } else { Inline::Anchor(name) });
                 }
             }
             _ => return false,

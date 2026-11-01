@@ -55,3 +55,19 @@ fn a_reference_to_a_bookmark_updates_to_its_text() {
     s2.run("references.updateFields", &json!({"all": true})).unwrap();
     assert_eq!(results(&s2), ["Planning ahead"]);
 }
+
+#[test]
+fn captions_chapters_and_dates_update_as_words() {
+    // Stale results, as a file can hold them: they are recomputed.
+    let doc = io::open_bytes(
+        "fields.odt",
+        &odt(r#"<text:h text:outline-level="1">Methods</text:h>
+        <text:p>Figure <text:sequence text:ref-name="refFigure0" text:name="Figure" text:formula="ooow:Figure+1" style:num-format="1">7</text:sequence>: a cat</text:p>
+        <text:p>Figure <text:sequence text:ref-name="refFigure1" text:name="Figure" text:formula="ooow:Figure+1" style:num-format="1">9</text:sequence>: a dog</text:p>
+        <text:p>See <text:sequence-ref text:reference-format="category-and-value" text:ref-name="refFigure1">Figure 9</text:sequence-ref> in <text:chapter text:display="name" text:outline-level="1">Old</text:chapter>.</text:p>"#),
+    )
+    .unwrap();
+    let mut s = Session::new(doc);
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(results(&s), ["1", "2", "Figure 2", "Methods"], "{:?}", text(&s));
+}

@@ -106,6 +106,9 @@ pub(in crate::odt) struct OpenField {
     pub(in crate::odt) depth: usize,
     /// The formatting it is in.
     pub(in crate::odt) fmt: Fmt,
+    /// A sequence's reference name: a bookmark over the caption's label and number, which
+    /// references to it show.
+    pub(in crate::odt) anchor: Option<String>,
 }
 
 impl Body<'_> {
@@ -304,13 +307,24 @@ impl Body<'_> {
 
     /// Put the field read so far into the paragraph.
     pub(in crate::odt) fn end_field(&mut self) {
-        let Some(OpenField { instr, result, mut fmt, .. }) = self.field.take() else { return };
+        let Some(OpenField { instr, result, mut fmt, anchor, .. }) = self.field.take() else { return };
         fmt.ins = self.open_insertion();
         if self.para.is_none() {
             self.start_para(None, None);
         }
         if let Some(p) = &mut self.para {
+            if let Some(name) = &anchor {
+                // From the start of the paragraph when only the label is before the number (a
+                // caption, "Figure 1"), else from the number.
+                let label = crate::odt::fields::sequence_name(&instr).unwrap_or("");
+                let before: String = p.inlines.iter().map(|i| if let Inline::Text(t, _) = i { t.as_str() } else { "\u{1}" }).collect();
+                let at = if before.trim() == label { 0 } else { p.inlines.len() };
+                p.inlines.insert(at, Inline::Anchor(name.clone()));
+            }
             p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
+            if let Some(name) = anchor {
+                p.inlines.push(Inline::AnchorEnd(name));
+            }
         }
         self.xml_space_end = false;
     }
