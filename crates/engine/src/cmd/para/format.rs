@@ -218,10 +218,13 @@ fn indent_props(s: &Session, p: &wordcraft_doc::Paragraph, story: StoryRef, path
 }
 
 /// Move the leading text edge to the adjacent default tab stop while retaining a hanging
-/// first-line offset. Outdent stops with that edge at the text margin.
+/// first-line offset. Outdent stops at the margin and keeps an edge already before it.
 fn adjacent_tab_indent(left: f32, first: f32, tab: f32, increase: bool) -> f32 {
     let hanging = first.min(0.0);
     let origin = left + hanging;
+    if !increase && origin <= 0.0 {
+        return left;
+    }
     let target = if increase { ((origin / tab).floor() + 1.0) * tab } else { (((origin / tab).ceil() - 1.0) * tab).max(0.0) };
     target - hanging
 }

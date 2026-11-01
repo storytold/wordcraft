@@ -3953,3 +3953,44 @@ fn paragraph_indent_anchor_uses_table_conditional_mark_size() {
         assert_eq!(s.doc.para(StoryRef::Body, &path).unwrap().props.indent_left, Some(left));
     }
 }
+
+/// Outdent must not move a leading edge rightward from before the margin or
+/// consume history/redo when it has already reached that boundary.
+#[test]
+fn paragraph_outdent_at_or_before_the_margin_keeps_indents_and_redo() {
+    for character_units in [false, true] {
+        for (left, first) in [(0.0, -6.0), (-12.0, -6.0), (6.0, -12.0), (6.0, -6.0), (0.0, 0.0)] {
+            let mut s = typed("BEFORE MARGIN — ă â î ș ț");
+            let path = s.sel.focus.path.clone();
+            let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+            if character_units {
+                p.mark.size = Some(24.0);
+                p.props.indent_left_chars = Some(left / 24.0);
+                p.props.indent_first_chars = Some(first / 24.0);
+            } else {
+                p.props.indent_left = Some(left);
+                p.props.indent_first = Some(first);
+            }
+            p.touch();
+            let expected_left = p.props.indent_left;
+            let before = s.doc.clone();
+            run(&mut s, "select.all", json!({}));
+            run(&mut s, "format.bold", json!({}));
+            let bold = s.doc.clone();
+            run(&mut s, "edit.undo", json!({}));
+            let history = s.undo_labels();
+            for _ in 0..2 {
+                run(&mut s, "para.outdent", json!({}));
+                assert_eq!(
+                    s.doc.para(StoryRef::Body, &path).unwrap().props.indent_left,
+                    expected_left,
+                    "left={left}, first={first}, character_units={character_units}"
+                );
+                assert_eq!(s.doc, before);
+                assert_eq!(s.undo_labels(), history);
+            }
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc, bold);
+        }
+    }
+}
