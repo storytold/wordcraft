@@ -88,10 +88,10 @@ fn run(r: &MRun, o: &mut String, eq_arr: bool) {
     let cs: Vec<char> = r.text.chars().collect();
     let mut i = 0;
     while let Some(&c) = cs.get(i) {
-        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
+        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(char::is_ascii_digit)) {
             let mut num = String::new();
             while let Some(&d) =
-                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(|n| n.is_ascii_digit()))
+                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(char::is_ascii_digit))
             {
                 num.push(d);
                 i += 1;
@@ -133,61 +133,123 @@ fn func_name(name: &[MNode], o: &mut String, depth: usize) {
     }
 }
 
+fn fraction(kind: FracKind, num: &[MNode], den: &[MNode], o: &mut String, depth: usize) {
+    match kind {
+        FracKind::Bar | FracKind::NoBar => {
+            o.push_str(if kind == FracKind::NoBar { "<mfrac linethickness=\"0\">" } else { "<mfrac>" });
+            group(num, o, depth);
+            group(den, o, depth);
+            o.push_str("</mfrac>");
+        }
+        FracKind::Skewed | FracKind::Linear => {
+            o.push_str("<mrow>");
+            group(num, o, depth);
+            mo(if kind == FracKind::Skewed { '⁄' } else { '/' }, "", o);
+            group(den, o, depth);
+            o.push_str("</mrow>");
+        }
+    }
+}
+
+fn script(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], o: &mut String, depth: usize) {
+    match kind {
+        ScriptKind::Sup => {
+            o.push_str("<msup>");
+            group(base, o, depth);
+            group(sup, o, depth);
+            o.push_str("</msup>");
+        }
+        ScriptKind::Sub => {
+            o.push_str("<msub>");
+            group(base, o, depth);
+            group(sub, o, depth);
+            o.push_str("</msub>");
+        }
+        ScriptKind::SubSup => {
+            o.push_str("<msubsup>");
+            group(base, o, depth);
+            group(sub, o, depth);
+            group(sup, o, depth);
+            o.push_str("</msubsup>");
+        }
+        ScriptKind::Pre => {
+            o.push_str("<mmultiscripts>");
+            group(base, o, depth);
+            o.push_str("<mprescripts/>");
+            if sub.is_empty() {
+                o.push_str("<none/>");
+            } else {
+                group(sub, o, depth);
+            }
+            if sup.is_empty() {
+                o.push_str("<none/>");
+            } else {
+                group(sup, o, depth);
+            }
+            o.push_str("</mmultiscripts>");
+        }
+    }
+}
+
+fn write_nary(n: &MNode, o: &mut String, depth: usize) {
+    let MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } = n else { return };
+    let under_over = match lim_loc {
+        Some(l) => *l == LimLoc::UndOvr,
+        None => !is_integral(*chr),
+    };
+    let has_sub = !*sub_hide && !sub.is_empty();
+    let has_sup = !*sup_hide && !sup.is_empty();
+    let tag = match (under_over, has_sub, has_sup) {
+        (_, false, false) => "",
+        (true, true, true) => "munderover",
+        (true, true, false) => "munder",
+        (true, false, true) => "mover",
+        (false, true, true) => "msubsup",
+        (false, true, false) => "msub",
+        (false, false, true) => "msup",
+    };
+    o.push_str("<mrow>");
+    if !tag.is_empty() {
+        o.push_str(&format!("<{tag}>"));
+    }
+    mo(*chr, " largeop=\"true\" movablelimits=\"false\"", o);
+    if has_sub {
+        group(sub, o, depth);
+    }
+    if has_sup {
+        group(sup, o, depth);
+    }
+    if !tag.is_empty() {
+        o.push_str(&format!("</{tag}>"));
+    }
+    group(e, o, depth);
+    o.push_str("</mrow>");
+}
+
+fn delimiters(n: &MNode, o: &mut String, depth: usize) {
+    let MNode::Delim { beg, end, sep, grow, elems, .. } = n else { return };
+    let stretchy = if *grow { "" } else { " stretchy=\"false\"" };
+    o.push_str("<mrow>");
+    if let Some(begin) = beg {
+        mo(*begin, &format!(" fence=\"true\" form=\"prefix\"{stretchy}"), o);
+    }
+    for (i, element) in elems.iter().enumerate() {
+        if i > 0 {
+            mo(sep.unwrap_or('|'), &format!(" separator=\"true\"{stretchy}"), o);
+        }
+        group(element, o, depth);
+    }
+    if let Some(close) = end {
+        mo(*close, &format!(" fence=\"true\" form=\"postfix\"{stretchy}"), o);
+    }
+    o.push_str("</mrow>");
+}
+
 fn node(n: &MNode, o: &mut String, depth: usize, eq_arr: bool) {
     match n {
         MNode::Run(r) => run(r, o, eq_arr),
-        MNode::Frac { kind, num, den } => match kind {
-            FracKind::Bar | FracKind::NoBar => {
-                o.push_str(if *kind == FracKind::NoBar { "<mfrac linethickness=\"0\">" } else { "<mfrac>" });
-                group(num, o, depth);
-                group(den, o, depth);
-                o.push_str("</mfrac>");
-            }
-            FracKind::Skewed | FracKind::Linear => {
-                o.push_str("<mrow>");
-                group(num, o, depth);
-                mo(if *kind == FracKind::Skewed { '⁄' } else { '/' }, "", o);
-                group(den, o, depth);
-                o.push_str("</mrow>");
-            }
-        },
-        MNode::Script { kind, base, sub, sup } => match kind {
-            ScriptKind::Sup => {
-                o.push_str("<msup>");
-                group(base, o, depth);
-                group(sup, o, depth);
-                o.push_str("</msup>");
-            }
-            ScriptKind::Sub => {
-                o.push_str("<msub>");
-                group(base, o, depth);
-                group(sub, o, depth);
-                o.push_str("</msub>");
-            }
-            ScriptKind::SubSup => {
-                o.push_str("<msubsup>");
-                group(base, o, depth);
-                group(sub, o, depth);
-                group(sup, o, depth);
-                o.push_str("</msubsup>");
-            }
-            ScriptKind::Pre => {
-                o.push_str("<mmultiscripts>");
-                group(base, o, depth);
-                o.push_str("<mprescripts/>");
-                if sub.is_empty() {
-                    o.push_str("<none/>");
-                } else {
-                    group(sub, o, depth);
-                }
-                if sup.is_empty() {
-                    o.push_str("<none/>");
-                } else {
-                    group(sup, o, depth);
-                }
-                o.push_str("</mmultiscripts>");
-            }
-        },
+        MNode::Frac { kind, num, den } => fraction(*kind, num, den, o, depth),
+        MNode::Script { kind, base, sub, sup } => script(*kind, base, sub, sup, o, depth),
         MNode::Rad { deg, deg_hide, e } => {
             if *deg_hide || deg.is_empty() {
                 o.push_str("<msqrt>");
@@ -200,56 +262,8 @@ fn node(n: &MNode, o: &mut String, depth: usize, eq_arr: bool) {
                 o.push_str("</mroot>");
             }
         }
-        MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } => {
-            let under_over = match lim_loc {
-                Some(l) => *l == LimLoc::UndOvr,
-                None => !is_integral(*chr),
-            };
-            let has_sub = !*sub_hide && !sub.is_empty();
-            let has_sup = !*sup_hide && !sup.is_empty();
-            let tag = match (under_over, has_sub, has_sup) {
-                (_, false, false) => "",
-                (true, true, true) => "munderover",
-                (true, true, false) => "munder",
-                (true, false, true) => "mover",
-                (false, true, true) => "msubsup",
-                (false, true, false) => "msub",
-                (false, false, true) => "msup",
-            };
-            o.push_str("<mrow>");
-            if !tag.is_empty() {
-                o.push_str(&format!("<{tag}>"));
-            }
-            mo(*chr, " largeop=\"true\" movablelimits=\"false\"", o);
-            if has_sub {
-                group(sub, o, depth);
-            }
-            if has_sup {
-                group(sup, o, depth);
-            }
-            if !tag.is_empty() {
-                o.push_str(&format!("</{tag}>"));
-            }
-            group(e, o, depth);
-            o.push_str("</mrow>");
-        }
-        MNode::Delim { beg, end, sep, grow, elems, .. } => {
-            let stretchy = if *grow { "" } else { " stretchy=\"false\"" };
-            o.push_str("<mrow>");
-            if let Some(b) = beg {
-                mo(*b, &format!(" fence=\"true\" form=\"prefix\"{stretchy}"), o);
-            }
-            for (i, e) in elems.iter().enumerate() {
-                if i > 0 {
-                    mo(sep.unwrap_or('|'), &format!(" separator=\"true\"{stretchy}"), o);
-                }
-                group(e, o, depth);
-            }
-            if let Some(c) = end {
-                mo(*c, &format!(" fence=\"true\" form=\"postfix\"{stretchy}"), o);
-            }
-            o.push_str("</mrow>");
-        }
+        MNode::Nary { .. } => write_nary(n, o, depth),
+        MNode::Delim { .. } => delimiters(n, o, depth),
         MNode::Func { name, e } => {
             o.push_str("<mrow>");
             func_name(name, o, depth);
@@ -578,8 +592,11 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             vec![MNode::Run(MRun { text: t, nor: true, ..Default::default() })]
         }
         "mfrac" => {
-            let thin = e.attr("linethickness").is_some_and(|t| t.trim().trim_end_matches(|c: char| c.is_alphabetic()).trim() == "0");
-            let kind = if e.attr("bevelled") == Some("true") {
+            let thin = e.attr("linethickness").is_some_and(|t| {
+                let s = t.trim();
+                s.eq_ignore_ascii_case("none") || s.trim_end_matches(|c: char| c.is_alphabetic() || c == '%').trim() == "0"
+            });
+            let kind = if e.attr("bevelled").is_some_and(|b| b.eq_ignore_ascii_case("true")) {
                 FracKind::Skewed
             } else if thin {
                 FracKind::NoBar
@@ -743,19 +760,25 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
         "mphantom" => vec![MNode::Phant { show: false, zero_wid: false, zero_asc: false, zero_desc: false, e: children(e, d, budget) }],
         "menclose" => {
             let n = e.attr("notation").unwrap_or("longdiv");
-            let has = |k: &str| n.split_whitespace().any(|w| w == k);
+            let has = |k: &str| n.split_whitespace().any(|w| w.eq_ignore_ascii_case(k));
+            if has("radical") {
+                return vec![MNode::Rad { deg: Vec::new(), deg_hide: true, e: children(e, d, budget) }];
+            }
+            // An actuarial symbol is the top and right edges.
+            let actuarial = has("actuarial");
             let is_box = has("box") || has("roundedbox") || has("circle");
-            let has_border = is_box || has("top") || has("bottom") || has("left") || has("right");
-            let has_strike = has("horizontalstrike") || has("verticalstrike") || has("updiagonalstrike") || has("downdiagonalstrike");
-            if has_border || has_strike {
+            let (top, right) = (has("top") || actuarial, has("right") || actuarial);
+            let has_border = is_box || top || has("bottom") || has("left") || right;
+            let strike =
+                [has("horizontalstrike"), has("verticalstrike"), has("updiagonalstrike") || has("cross"), has("downdiagonalstrike") || has("cross")];
+            if has_border || strike.iter().any(|&s| s) {
                 let hide = if is_box {
                     [false; 4]
                 } else if has_border {
-                    [!has("top"), !has("bottom"), !has("left"), !has("right")]
+                    [!top, !has("bottom"), !has("left"), !right]
                 } else {
                     [true; 4]
                 };
-                let strike = [has("horizontalstrike"), has("verticalstrike"), has("updiagonalstrike"), has("downdiagonalstrike")];
                 return vec![MNode::BorderBox { hide, strike, e: children(e, d, budget) }];
             }
             children(e, d, budget)
@@ -984,5 +1007,47 @@ mod tests {
         }
         let m = to_mathml(&n, false, "z");
         assert!(m.ends_with("</math>"));
+    }
+
+    #[test]
+    fn test_mfrac_linethickness_none_and_menclose_notations() {
+        let el_frac = El {
+            name: "mfrac".into(),
+            attrs: vec![("linethickness".into(), "none".into())],
+            children: vec![
+                Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("n".into())] }),
+                Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("k".into())] }),
+            ],
+        };
+        let mut budget = MAX_NODES;
+        let tree_frac = elem(&el_frac, 0, &mut budget);
+        assert!(matches!(tree_frac.as_slice(), [MNode::Frac { kind: FracKind::NoBar, .. }]), "{tree_frac:?}");
+
+        let el_strike = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "horizontalstrike".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_strike = elem(&el_strike, 0, &mut budget);
+        assert!(matches!(tree_strike.as_slice(), [MNode::BorderBox { strike: [true, false, false, false], .. }]), "{tree_strike:?}");
+
+        let el_cross = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "cross".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_cross = elem(&el_cross, 0, &mut budget);
+        assert!(matches!(tree_cross.as_slice(), [MNode::BorderBox { strike: [false, false, true, true], .. }]), "{tree_cross:?}");
+
+        let el_rad = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "radical".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_rad = elem(&el_rad, 0, &mut budget);
+        assert!(matches!(tree_rad.as_slice(), [MNode::Rad { deg_hide: true, .. }]), "{tree_rad:?}");
     }
 }
