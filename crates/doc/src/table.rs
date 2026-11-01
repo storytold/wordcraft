@@ -48,6 +48,12 @@ impl Row {
     pub fn first_grid(&self) -> usize {
         (self.props.grid_before as usize).min(MAX_COLS)
     }
+
+    /// Grid columns `w:gridAfter` leaves empty after the row's last cell, bounded as the DOCX
+    /// reader bounds them (a native document can say anything).
+    pub fn grid_after(&self) -> usize {
+        (self.props.grid_after as usize).min(MAX_COLS)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -71,6 +77,80 @@ pub const MAX_COLS: usize = 63;
 pub const MAX_TABLE_DEPTH: usize = 24;
 
 impl Table {
+    /// Grid columns `lo..hi` that [`Table::slice`] copies for `rows`/`cols` (widened over merged cells),
+    /// and whether any cell touches them (Cut clears the same cells it copies).
+    pub fn slice_bounds(&self, rows: (usize, usize), cols: (usize, usize)) -> (usize, usize, bool) {
+        let ((r0, r1), (g0, g1)) = (rows, cols);
+        let kept = || self.rows.iter().take(r1.saturating_add(1)).skip(r0);
+        // Grid columns `lo..hi` the cells touching them cover: a cell merged across that is partly
+        // in them widens them, for every row, so the copy isn't ragged. Each round only widens
+        // (at most once per grid column), so a bound of the grid's width plus one round is enough.
+        let (mut lo, mut hi) = (g0, g1.saturating_add(1));
+        let mut any = false;
+        for _ in 0..=MAX_COLS.saturating_add(1) {
+            let (mut nlo, mut nhi, mut found) = (lo, hi, false);
+            for row in kept() {
+                let mut g = 0usize;
+                for cell in &row.cells {
+                    let end = g.saturating_add(cell.span());
+                    if g < hi && end > lo {
+                        (nlo, nhi, found) = (nlo.min(g), nhi.max(end), true);
+                    }
+                    g = end;
+                }
+            }
+            any = found;
+            if (nlo, nhi) == (lo, hi) {
+                break;
+            }
+            (lo, hi) = (nlo, nhi);
+        }
+        (lo, hi, any)
+    }
+
+    /// A copy of rows `rows` of this table holding, of each row, the cells that reach into grid
+    /// columns `cols` (both inclusive): what Copy takes from selected rows or cells. Content
+    /// controls around rows and the table aren't copied (they'd lose their other end); a cell
+    /// that continues a vertical merge from a row left out starts the merge instead.
+    pub fn slice(&self, rows: (usize, usize), cols: (usize, usize)) -> Table {
+        let (r0, r1) = rows;
+        let kept = || self.rows.iter().take(r1.saturating_add(1)).skip(r0);
+        let (lo, hi, any) = self.slice_bounds(rows, cols);
+        let mut out_rows = Vec::new();
+        for row in kept() {
+            let mut g = 0usize;
+            let mut cells = Vec::new();
+            for cell in &row.cells {
+                let end = g.saturating_add(cell.span());
+                if any && g < hi && end > lo {
+                    cells.push(cell.clone());
+                }
+                g = end;
+            }
+            if !cells.is_empty() {
+                out_rows.push(Row { props: row.props.clone(), cells, controls: ControlWrap::default() });
+            }
+        }
+        if let Some(first) = out_rows.first_mut() {
+            for c in &mut first.cells {
+                if c.props.vmerge == VMerge::Continue {
+                    c.props.vmerge = VMerge::Restart;
+                }
+            }
+        }
+        let whole = lo == 0 && hi >= self.grid.len();
+        let grid = if whole { self.grid.clone() } else { self.grid.get(lo..hi.min(self.grid.len())).map(<[f32]>::to_vec).unwrap_or_default() };
+        let mut props = self.props.clone();
+        if !whole {
+            // Part of the columns: as wide as they are, not the whole table's width.
+            if props.width.is_some() || props.width_pct.is_some() {
+                props.width = Some(grid.iter().sum());
+            }
+            props.width_pct = None;
+        }
+        Table { props, grid, rows: out_rows, controls: ControlWrap::default() }
+    }
+
     /// A `rows × cols` table spanning `width` points, "Table Grid" style.
     pub fn new(rows: usize, cols: usize, width: f32) -> Table {
         let rows = rows.clamp(1, MAX_ROWS);
@@ -97,7 +177,8 @@ impl Table {
     }
 
     pub fn cols(&self) -> usize {
-        let row_cols = |r: &Row| r.first_grid() + r.cells.iter().map(Cell::span).sum::<usize>() + r.props.grid_after as usize;
+        let row_cols =
+            |r: &Row| r.first_grid().saturating_add(r.cells.iter().map(Cell::span).fold(0, usize::saturating_add)).saturating_add(r.grid_after());
         self.grid.len().max(self.rows.iter().map(row_cols).max().unwrap_or(0))
     }
 
@@ -558,6 +639,69 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 3×3 table, 100 pt columns: (0,0)–(0,1) merged across, (1,2)–(2,2) merged down.
+    fn merged() -> Table {
+        let mut t = Table::new(3, 3, 300.0);
+        t.merge(0, 0, 0, 1);
+        t.merge(1, 2, 2, 2);
+        assert_eq!(t.rows[0].cells.iter().map(Cell::span).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!((t.rows[1].cells[2].props.vmerge, t.rows[2].cells[2].props.vmerge), (VMerge::Restart, VMerge::Continue));
+        t
+    }
+
+    fn spans(t: &Table) -> Vec<Vec<usize>> {
+        t.rows.iter().map(|r| r.cells.iter().map(Cell::span).collect()).collect()
+    }
+
+    /// #1744 review: a cell merged across that is partly selected takes its whole width, and the
+    /// other rows widen with it, so the copy isn't ragged.
+    #[test]
+    fn slice_widens_to_a_merged_cell_in_every_row() {
+        let t = merged().slice((0, 1), (1, 2));
+        assert_eq!(t.grid, [100.0, 100.0, 100.0]);
+        assert_eq!(spans(&t), [vec![2, 1], vec![1, 1, 1]]);
+        // Rows without the merged cell: just the selected columns.
+        let t = merged().slice((1, 2), (1, 2));
+        assert_eq!(t.grid, [100.0, 100.0]);
+        assert_eq!(spans(&t), [vec![1, 1], vec![1, 1]]);
+    }
+
+    /// #1744 review: a cell continuing a vertical merge from a row left out starts it instead.
+    #[test]
+    fn slice_starts_a_vertical_merge_whose_first_row_is_left_out() {
+        let t = merged().slice((2, 2), (0, 2));
+        assert_eq!(t.rows.len(), 1);
+        assert_eq!(t.rows[0].cells[2].props.vmerge, VMerge::Restart);
+        // Both rows kept: the merge is kept as it is.
+        let t = merged().slice((1, 2), (2, 2));
+        assert_eq!((t.rows[0].cells[0].props.vmerge, t.rows[1].cells[0].props.vmerge), (VMerge::Restart, VMerge::Continue));
+    }
+
+    /// #1744 review: part of the columns is as wide as they are; content controls around rows
+    /// and the table aren't copied.
+    #[test]
+    fn slice_width_and_controls() {
+        let mut t = Table::new(3, 3, 300.0);
+        (t.props.width, t.props.width_pct) = (Some(300.0), Some(50.0));
+        let wrap = ControlWrap { open: vec![crate::control::ContentControl::default()], close: 1 };
+        t.controls = wrap.clone();
+        t.rows[1].controls = wrap;
+        let part = t.slice((0, 2), (2, 2));
+        assert_eq!((part.grid.len(), part.props.width, part.props.width_pct), (1, Some(100.0), None));
+        let whole = t.slice((0, 2), (0, 2));
+        assert_eq!((whole.props.width, whole.props.width_pct), (Some(300.0), Some(50.0)), "all columns keep the table's width");
+        let row = t.slice((1, 1), (0, 2));
+        assert!(row.controls.is_empty() && row.rows[0].controls.is_empty());
+        // A table sized only by a percentage keeps a width for the part.
+        let mut pct = Table::new(3, 3, 300.0);
+        (pct.props.width, pct.props.width_pct) = (None, Some(50.0));
+        let part = pct.slice((0, 2), (2, 2));
+        assert_eq!((part.props.width, part.props.width_pct), (Some(100.0), None));
+        // Nothing in range: no rows.
+        assert!(t.slice((5, 6), (0, 2)).rows.is_empty());
+        assert!(t.slice((0, 2), (9, 9)).rows.is_empty());
+    }
 
     #[test]
     fn grid_before_shifts_the_row() {

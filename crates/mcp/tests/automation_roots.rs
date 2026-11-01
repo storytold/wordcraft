@@ -2,8 +2,6 @@
 //! the MCP protocol, files open and load only from inside the read root and are saved and
 //! exported only inside the write root; paths that leave a root (`..`, another folder, a sibling
 //! with the same prefix, a link) are refused, and nothing is written outside.
-// Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
 
@@ -207,4 +205,32 @@ fn links_out_of_a_root_are_refused() {
     refused(&mut server, "open_document", json!({"path": s(&base.join("in/leak.txt"))}), "outside the read root");
     refused(&mut server, "save_document", json!({"path": s(&base.join("out/away/doc.docx"))}), "outside the write root");
     assert!(!base.join("outside/doc.docx").exists());
+}
+
+/// The names in `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    names
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_outside_the_write_root_into_it_is_not_written() {
+    // #3735: the link's target is inside the write root, but a save replaces the link itself,
+    // and its temporary file would sit beside it, outside.
+    let (mut server, base) = confined("link-in", true, true);
+    std::fs::write(base.join("out/doc.docx"), "inside").unwrap();
+    std::os::unix::fs::symlink(base.join("out/doc.docx"), base.join("outside/alias.docx")).unwrap();
+    let before = names(&base.join("outside"));
+    ok(&mut server, "type_text", json!({"text": "Hello"}));
+    refused(&mut server, "save_document", json!({"path": s(&base.join("outside/alias.docx"))}), "outside the write root");
+    let (error, text) = run(&mut server, "file.exportPdf", json!({"path": s(&base.join("outside/alias.docx"))}));
+    assert!(error && text.contains("outside the write root"), "{text}");
+    assert_eq!(names(&base.join("outside")), before, "no temporary file, nothing replaced");
+    assert!(std::fs::symlink_metadata(base.join("outside/alias.docx")).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_to_string(base.join("out/doc.docx")).unwrap(), "inside");
+    // Saving to the real file inside still works.
+    ok(&mut server, "save_document", json!({"path": s(&base.join("out/doc.docx"))}));
+    assert_ne!(std::fs::read(base.join("out/doc.docx")).unwrap(), b"inside");
 }

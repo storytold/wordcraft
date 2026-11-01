@@ -112,23 +112,65 @@ pub(crate) struct Blip {
 /// The picture of an `OfficeArtFBSE` body: its embedded BLIP, or the BLIP stored at `foDelay`
 /// in `delay` (the WordDocument stream for the document's BLIP store, the Data stream for
 /// inline pictures). `limit` caps the bytes produced.
-pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize) -> Option<Blip> {
+#[cfg(test)]
+pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize, work: &mut Decode) -> Option<Blip> {
+    let (rec, _) = fbse_record(fbse, delay)?;
+    blip(&rec, limit, work)
+}
+
+/// The document's decode budget: bytes of inflating and pixel decoding left, and how many
+/// attempts it has refused (only the first few are logged).
+pub(crate) struct Decode {
+    pub(crate) left: usize,
+    refused: usize,
+}
+
+impl Decode {
+    pub(crate) fn new(left: usize) -> Self {
+        Decode { left, refused: 0 }
+    }
+
+    /// Take `cost` off the budget; `false` (and a log line) when it doesn't fit.
+    fn charge(&mut self, cost: usize, what: &str) -> bool {
+        match self.left.checked_sub(cost) {
+            Some(left) if cost > 0 => {
+                self.left = left;
+                true
+            }
+            _ => {
+                if self.refused < 10 {
+                    log::warn!(
+                        "docbin: a {what} needing {cost} bytes of decode work is over the decode budget ({} left) and was not decoded",
+                        self.left
+                    );
+                }
+                self.refused = self.refused.saturating_add(1);
+                false
+            }
+        }
+    }
+}
+
+/// The BLIP record of an `OfficeArtFBSE`: embedded after it, or in the delay stream, where
+/// its (`foDelay`, record length) location is returned too (entries can share one record,
+/// whatever sizes their FBSEs claim: the record's own header is what counts).
+pub(crate) fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Option<(usize, usize)>)> {
     // btWin32, btMacOS, rgbUid[16], tag, size, cRef, foDelay, unused, cbName, unused×2.
-    let size = u32_at(fbse, 20)? as usize;
     let fo_delay = u32_at(fbse, 28)? as usize;
     let cb_name = *fbse.get(33)? as usize;
     let at = 36usize.checked_add(cb_name)?;
     if let Some((rec, _)) = fbse.get(at..).and_then(record) {
-        return blip(&rec, limit);
+        return Some((rec, None));
     }
     // Not embedded: the record sits in the delay stream.
-    let end = fo_delay.checked_add(size.max(8))?.min(delay.len());
-    let (rec, _) = record(delay.get(fo_delay..end)?)?;
-    blip(&rec, limit)
+    let (rec, used) = record(delay.get(fo_delay..)?)?;
+    Some((rec, Some((fo_delay, used))))
 }
 
-/// Decode one `OfficeArtBlip*` record ([MS-ODRAW] §2.2.23-§2.2.31).
-pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
+/// Decode one `OfficeArtBlip*` record ([MS-ODRAW] §2.2.23-§2.2.31). `work` is the
+/// document's decode budget: inflating a metafile or decoding a DIB is charged to it before
+/// it runs, whether it succeeds or not, and nothing is decoded once it is spent.
+pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
     // Each type has two instance values; the odd one carries a second 16-byte UID.
     let uids = if rec.inst & 1 == 1 { 32 } else { 16 };
     match rec.typ {
@@ -141,7 +183,7 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
                 rt::BLIP_PNG => Some(Blip { bytes: data.to_vec(), ext: "png", placeholder: false }),
                 rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK => Some(Blip { bytes: data.to_vec(), ext: "jpeg", placeholder: false }),
                 rt::BLIP_TIFF => Some(Blip { bytes: data.to_vec(), ext: "tiff", placeholder: false }),
-                _ => dib_to_png(data, limit),
+                _ => dib_to_png(data, limit, work),
             }
         }
         rt::BLIP_EMF | rt::BLIP_WMF | rt::BLIP_PICT => {
@@ -155,6 +197,11 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
             let cap = limit.min(MAX_METAFILE);
             let bytes = if compression == 0 {
                 let want = if cb_size > 0 { cb_size.min(cap) } else { cap };
+                // The compressed stream is read whole whatever it inflates to: a record that
+                // claims to inflate to nothing still costs its input (#3871).
+                if !work.charge(want.max(raw.len()), "metafile") {
+                    return None;
+                }
                 miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(raw, want).ok()?
             } else {
                 if raw.len() > cap {
@@ -177,8 +224,9 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
 
 /// A device-independent bitmap (BITMAPINFOHEADER + palette + pixels) as a PNG: the DIB gets
 /// the 14-byte BMP file header it lacks, is decoded with size limits and re-encoded. When the
-/// bitmap can't be decoded the BMP bytes are kept (and render as a grey placeholder).
-fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
+/// bitmap can't be decoded, or its declared pixels (4 bytes each) don't fit in `work`, the
+/// BMP bytes are kept (and render as a grey placeholder).
+fn dib_to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Blip> {
     let header = u32_at(dib, 0)? as usize;
     if !(12..=124).contains(&header) {
         return None;
@@ -197,12 +245,30 @@ fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
     let masks = if header == 40 && (compression == 3 || compression == 6) { if compression == 3 { 12 } else { 16 } } else { 0 };
     let off_bits = 14usize.checked_add(header)?.checked_add(colors * entry)?.checked_add(masks)?;
     let file_size = 14usize.checked_add(dib.len()).filter(|&size| size <= limit)?;
+    // The declared size is what decoding allocates, however small the (RLE) data is.
+    let (w, h) = if header == 12 {
+        (u64::from(u16_at(dib, 4)?), u64::from(u16_at(dib, 6)?))
+    } else {
+        (u64::from(u32_at(dib, 4)?), u64::from((u32_at(dib, 8)? as i32).unsigned_abs()))
+    };
+    let cost = w.saturating_mul(h).saturating_mul(4).try_into().unwrap_or(usize::MAX);
+    // Copying the DIB into a BMP is work too, however few pixels it declares: it is charged
+    // before the copy is made (#3871). A bitmap whose pixels don't fit still keeps its BMP
+    // bytes as a placeholder, if the copy fits.
+    let decode = work.charge(cost.max(dib.len()), "bitmap");
+    if !decode && !work.charge(dib.len(), "bitmap") {
+        return None;
+    }
     let mut bmp = Vec::with_capacity(file_size);
     bmp.extend_from_slice(b"BM");
     bmp.extend_from_slice(&u32::try_from(file_size).ok()?.to_le_bytes());
     bmp.extend_from_slice(&[0, 0, 0, 0]);
     bmp.extend_from_slice(&u32::try_from(off_bits).ok()?.to_le_bytes());
     bmp.extend_from_slice(dib);
+    let placeholder = |bmp| Some(Blip { bytes: bmp, ext: "bmp", placeholder: true });
+    if !decode {
+        return placeholder(bmp);
+    }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(&bmp));
     reader.set_format(image::ImageFormat::Bmp);
     let mut limits = image::Limits::default();
@@ -217,7 +283,7 @@ fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
         {
             Some(Blip { bytes: png.bytes, ext: "png", placeholder: false })
         }
-        _ => Some(Blip { bytes: bmp, ext: "bmp", placeholder: true }),
+        _ => placeholder(bmp),
     }
 }
 
@@ -311,21 +377,15 @@ impl Props {
                 }
                 0x0104 => self.pib = Some(op),
                 0x0181 => self.fill_color = color(op),
-                0x01BF => {
-                    // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
-                    if op & (1 << 20) != 0 {
-                        self.filled = Some(op & (1 << 4) != 0);
-                    }
-                }
+                // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
+                0x01BF if op & (1 << 20) != 0 => self.filled = Some(op & (1 << 4) != 0),
+                0x01BF => {}
                 0x01C0 => self.line_color = color(op),
                 0x01CB => self.line_width = Some(op),
                 0x01D0 | 0x01D1 => self.arrowhead |= op != 0,
-                0x01FF => {
-                    // fLine (bit 3) is valid when fUsefLine (bit 19) is set.
-                    if op & (1 << 19) != 0 {
-                        self.line = Some(op & (1 << 3) != 0);
-                    }
-                }
+                // fLine (bit 3) is valid when fUsefLine (bit 19) is set.
+                0x01FF if op & (1 << 19) != 0 => self.line = Some(op & (1 << 3) != 0),
+                0x01FF => {}
                 0x0384..=0x0387 => self.wrap_dist[(pid - 0x0384) as usize] = Some(op),
                 0x038F => self.posh = Some(op),
                 0x0390 => self.posrelh = Some(op),
