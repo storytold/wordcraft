@@ -1,4 +1,5 @@
 use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
+use crate::lang::{self, Langs, Slot};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -77,9 +78,24 @@ pub(super) struct Writer {
     /// and which of them the text being written belongs to.
     chain: Vec<String>,
     part: usize,
+    /// The document's languages (the default style's): what text without its own has.
+    pub(super) langs: Langs,
 }
 
-fn text_props(f: &Fmt) -> String {
+/// The ODF language attributes of `langs` (ODF 1.3 §20.188 and its `-asian` / `-complex`
+/// variants), in a fixed order.
+pub(super) fn lang_props(langs: &Langs) -> String {
+    let mut p = String::new();
+    for slot in [Slot::Latin, Slot::Ea, Slot::Bidi] {
+        if let Some(t) = langs.get(slot) {
+            p.push_str(&lang::odf_attrs(slot, t, x));
+        }
+    }
+    p
+}
+
+/// The text properties of `f`; its languages unless they are the document's (`defaults`).
+fn text_props(f: &Fmt, defaults: &Langs) -> String {
     let mut p = String::new();
     if f.bold {
         p.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\" style:font-weight-complex=\"bold\"");
@@ -112,6 +128,7 @@ fn text_props(f: &Fmt) -> String {
     } else if let Some(fam) = &f.font {
         p.push_str(&format!(" fo:font-family=\"'{}'\"", x(&fam.replace('\'', ""))));
     }
+    p.push_str(&lang_props(&f.lang.without(defaults)));
     p
 }
 
@@ -132,7 +149,7 @@ fn parent_style(k: Kind) -> &'static str {
 
 impl Writer {
     fn text_style(&mut self, f: &Fmt) -> Option<String> {
-        let props = text_props(f);
+        let props = text_props(f, &self.langs);
         if props.is_empty() {
             return None;
         }

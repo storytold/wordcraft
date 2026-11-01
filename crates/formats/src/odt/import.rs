@@ -131,7 +131,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         pages = read_pages(s);
     }
     styles.read(&content, true);
-    let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
+    let mut meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
+    meta.lang = styles.doc_langs();
     let mut pictures = Pictures::new(MAX_ENTRY);
     let mut fetch = |path: &str| -> Option<Vec<u8>> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.

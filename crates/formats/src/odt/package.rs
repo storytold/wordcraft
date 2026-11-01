@@ -1,4 +1,4 @@
-use super::writer::{NS, Writer, pt, x};
+use super::writer::{NS, Writer, lang_props, pt, x};
 use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart, Write, model};
 
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
@@ -9,11 +9,13 @@ fn columns_xml(c: &Columns) -> String {
 
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…
 /// (§16.5, §16.9); the first is the default one, "Standard".
-fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str) -> String {
+fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str, langs: &crate::lang::Langs) -> String {
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
+    // The document's languages are the default style's (ODF 1.3 §16.4).
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties fo:margin-bottom=\"8pt\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\"/></style:default-style>",
-        x(body_font)
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties fo:margin-bottom=\"8pt\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\"{}/></style:default-style>",
+        x(body_font),
+        lang_props(langs)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     s.push_str("<style:style style:name=\"Heading\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"text\"><style:paragraph-properties fo:margin-top=\"12pt\" fo:margin-bottom=\"4pt\" fo:keep-with-next=\"always\"/><style:text-properties fo:color=\"#0f4761\"/></style:style>");
@@ -101,6 +103,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_tracked(doc);
     let mut w = Writer::default();
+    w.langs = flow.meta.lang.clone();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);
     // One master page per section that starts a page; the first one is "Standard".
@@ -155,7 +158,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         w.automatic_styles()
     );
     let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
-    let styles = styles_xml(&pages, &body_font);
+    let styles = styles_xml(&pages, &body_font, &flow.meta.lang);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n",

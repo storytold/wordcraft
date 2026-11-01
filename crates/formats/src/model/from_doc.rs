@@ -3,6 +3,7 @@ use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
     VMerge, VertAlign,
 };
+use crate::lang::Langs;
 
 pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
     depth <= MAX_DEPTH
@@ -65,6 +66,7 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
         size: e.size,
         font: if code || in_code { None } else { e.shown_font().map(Arc::from) },
         background: e.highlight.and_then(|h| h.rgb()).or(e.shading),
+        lang: langs_of(&e),
         ins: None,
         del: None,
         fmt_change: None,
@@ -353,8 +355,16 @@ fn flow_of(doc: &Document, tracked: bool) -> Flow {
             keywords: c.keywords.clone(),
             description: c.description.clone(),
             created: c.created.clone(),
+            lang: langs_of(&doc.styles.default_chr),
         },
     }
+}
+
+/// The languages `cp` sets, checked as an importer checks them (a hand-made document may hold
+/// anything).
+fn langs_of(cp: &CharProps) -> Langs {
+    let t = |v: &Option<String>| v.as_deref().and_then(crate::lang::tag);
+    Langs { latin: t(&cp.lang), bidi: t(&cp.lang_bidi), ea: t(&cp.lang_ea) }
 }
 
 /// List labels in document order for list paragraphs of a flow ("1.", "a.", "•"), computed by a

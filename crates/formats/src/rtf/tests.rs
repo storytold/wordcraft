@@ -1047,6 +1047,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
         base: Fmt::default(),
         sections: Vec::new(),
         sect_i: 0,
+        langs: Default::default(),
     };
     let mut out = String::new();
     w.para(&p, false, None, "\\par", &mut out);

@@ -1,8 +1,27 @@
 use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
+use crate::lang::Slot;
 
 impl Reader {
+    /// A language word (RTF 1.9.1, Windows language IDs): of the text, of East Asian text and of
+    /// complex-script text (`\alang`, the associated property), and the document's
+    /// (`\deflang…`); `\langnp` and `\langfenp` say the same for readers that don't know the
+    /// others. 1024 is none: the text has the document's. An ID the table doesn't know is ignored.
+    fn lang_word(&mut self, w: &str, pv: i32) {
+        let slot = match w {
+            "lang" | "langnp" | "deflang" => Slot::Latin,
+            "alang" | "adeflang" => Slot::Bidi,
+            _ => Slot::Ea,
+        };
+        let langs = if w.starts_with("def") || w == "adeflang" { &mut self.meta.lang } else { &mut self.st.fmt.lang };
+        if pv == i32::from(crate::lang::LCID_NONE) {
+            *langs.slot_mut(slot) = None;
+        } else if let Some(t) = crate::lang::tag_of_lcid(pv) {
+            *langs.slot_mut(slot) = Some(t);
+        }
+    }
+
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -145,6 +164,7 @@ impl Reader {
             "pc" if self.ansicpg == 0 => self.ansicpg = 437,
             "pca" if self.ansicpg == 0 => self.ansicpg = 850,
             "deff" => self.deff = pv,
+            "lang" | "langnp" | "langfe" | "langfenp" | "alang" | "deflang" | "deflangfe" | "adeflang" => self.lang_word(w, pv),
             "f" => {
                 self.st.cp = self.font_cps.get(&pv).copied();
                 let name = self.fonts.get(&pv).cloned();

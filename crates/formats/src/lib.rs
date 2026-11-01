@@ -11,6 +11,7 @@
 
 pub mod comments;
 pub mod html;
+pub mod lang;
 pub mod latex;
 pub mod markdown;
 pub mod mathml;
@@ -91,6 +92,8 @@ pub fn export_with(ext: &str, doc: &Document, opts: &ExportOptions) -> Option<Re
     Some(out.map(|bytes| comments::append(&ext, doc, bytes)))
 }
 
+#[cfg(test)]
+mod lang_tests;
 #[cfg(test)]
 mod test_log;
 #[cfg(test)]

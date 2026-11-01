@@ -1,4 +1,5 @@
 use super::{Align, Arc, InlineObject, OBJ, REPORTED, Rgb, RubyAlign, VAlign, ruby_raise};
+use crate::lang::Langs;
 
 /// Font used for code spans and code blocks.
 pub const MONO_FONT: &str = "Courier New";
@@ -62,7 +63,9 @@ impl Dropped {
             Dropped::Font => format!("import: font names longer than {MAX_FONT_NAME} bytes are dropped; that text keeps the surrounding font"),
             Dropped::Link => format!("import: links longer than {MAX_LINK} bytes are dropped; their text is kept"),
             Dropped::RunStrings => {
-                format!("import: the document's runs carry more than {MAX_RUN_STRINGS} bytes of links and font names; later runs lose them")
+                format!(
+                    "import: the document's runs carry more than {MAX_RUN_STRINGS} bytes of links, font names and languages; later runs lose them"
+                )
             }
             Dropped::StyleName => format!("import: style names longer than {MAX_FONT_NAME} bytes are cut short"),
         }
@@ -102,6 +105,9 @@ pub struct Fmt {
     pub font: Option<Arc<str>>,
     /// Background (highlight / shading).
     pub background: Option<Rgb>,
+    /// The text's languages (`CharProps::lang`, `lang_bidi`, `lang_ea`); `None` = the
+    /// document's ([`Meta::lang`]).
+    pub lang: Langs,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
     pub ins: Option<RevMark>,
     /// Tracked deletion of this text. Only [`from_doc_tracked`] keeps deleted text in a flow.
@@ -431,6 +437,9 @@ pub struct Meta {
     pub keywords: String,
     pub description: String,
     pub created: String,
+    /// The document's default languages (`StyleSheet::default_chr`); `None` = the format
+    /// doesn't say (a new document's then).
+    pub lang: Langs,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

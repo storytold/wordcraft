@@ -28,6 +28,9 @@ pub fn char_props(f: &Fmt) -> CharProps {
         size: f.size.filter(|s| s.is_finite() && *s >= 1.0 && *s <= 1638.0),
         font: if f.code { Some(MONO_FONT.to_string()) } else { f.font.as_deref().filter(|s| !s.is_empty()).map(str::to_string) },
         shading: f.background,
+        lang: f.lang.latin.as_deref().map(str::to_string),
+        lang_bidi: f.lang.bidi.as_deref().map(str::to_string),
+        lang_ea: f.lang.ea.as_deref().map(str::to_string),
         ..Default::default()
     }
 }
@@ -110,7 +113,7 @@ struct Builder<'a> {
     doc: &'a mut Document,
     /// Revisions already in `doc` by (kind, author, date), so each change is added once.
     revs: std::collections::HashMap<(u8, RevMark), u32>,
-    /// Link and font bytes given to runs so far ([`MAX_RUN_STRINGS`]).
+    /// Link, font and language bytes given to runs so far ([`MAX_RUN_STRINGS`]).
     run_strings: usize,
 }
 
@@ -149,14 +152,22 @@ impl<'a> Builder<'a> {
     /// `cp` as a run may keep it: without its link and font once the runs' copies of them are
     /// over budget.
     fn budget(&mut self, mut cp: CharProps) -> CharProps {
-        let n = cp.link.as_ref().map_or(0, String::len).saturating_add(cp.font.as_ref().map_or(0, String::len));
+        // A language the document gives all its text anyway is inherited, not repeated per run.
+        let d = &self.doc.styles.default_chr;
+        for (v, dv) in [(&mut cp.lang, &d.lang), (&mut cp.lang_bidi, &d.lang_bidi), (&mut cp.lang_ea, &d.lang_ea)] {
+            if v.is_some() && v == dv {
+                *v = None;
+            }
+        }
+        let len = |v: &Option<String>| v.as_ref().map_or(0, String::len);
+        let n = [&cp.link, &cp.font, &cp.lang, &cp.lang_bidi, &cp.lang_ea].into_iter().map(len).fold(0usize, usize::saturating_add);
         match self.run_strings.checked_add(n).filter(|&t| t <= MAX_RUN_STRINGS) {
             Some(t) => self.run_strings = t,
             None => {
-                if cp.link.is_some() || cp.font.is_some() {
+                if n > 0 {
                     dropped(Dropped::RunStrings);
                 }
-                (cp.link, cp.font) = (None, None);
+                (cp.link, cp.font, cp.lang, cp.lang_bidi, cp.lang_ea) = (None, None, None, None, None);
             }
         }
         cp
@@ -418,9 +429,16 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     if uses_code {
         doc.styles.upsert(code_style());
     }
+    let m = &flow.meta;
+    // The document's languages first: runs that only repeat them inherit them.
+    let d = &mut doc.styles.default_chr;
+    for (v, dv) in [(&m.lang.latin, &mut d.lang), (&m.lang.bidi, &mut d.lang_bidi), (&m.lang.ea, &mut d.lang_ea)] {
+        if let Some(v) = v {
+            *dv = Some(v.to_string());
+        }
+    }
     let body = Builder::new(&mut doc).blocks(&flow.blocks, 0);
     doc.body = body;
-    let m = &flow.meta;
     doc.core.title = m.title.clone();
     doc.core.creator = m.author.clone();
     doc.core.subject = m.subject.clone();
