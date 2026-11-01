@@ -36,7 +36,7 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-fn broken(e: image::ImageError) -> Refusal {
+fn broken(e: &image::ImageError) -> Refusal {
     Refusal::Broken(e.to_string())
 }
 
@@ -54,11 +54,18 @@ pub struct Probe<'a> {
 }
 
 /// TIFF compressions decoded within the caller's limits: none, CCITT Group 4, LZW, Deflate (both
-/// codes) and PackBits. The `tiff` crate decodes a JPEG strip (7) with a decoder of its own and
+/// codes) and `PackBits`. The `tiff` crate decodes a JPEG strip (7) with a decoder of its own and
 /// default limits, whatever size the TIFF declares, so such a TIFF is not decoded (#3645).
 const TIFF_COMPRESSIONS: [u16; 6] = [1, 4, 5, 8, 32946, 32773];
 
 /// Read a picture's header: PNG, JPEG, GIF, WebP, BMP or TIFF.
+///
+/// # Errors
+///
+/// Returns `Refusal::NotAPicture` for an unsupported format, `Refusal::Unsupported` for a TIFF
+/// whose compression cannot be read or budgeted (including truncation that prevents reading
+/// its compression metadata), `Refusal::TooLarge`
+/// on size arithmetic overflow, and `Refusal::Broken` for an invalid header of another format.
 pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
     let format = image::guess_format(bytes).map_err(|_| Refusal::NotAPicture)?;
     let held = match format {
@@ -72,7 +79,7 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
         }
         _ => return Err(Refusal::NotAPicture),
     };
-    let decoder = image::ImageReader::with_format(Cursor::new(bytes), format).into_decoder().map_err(broken)?;
+    let decoder = image::ImageReader::with_format(Cursor::new(bytes), format).into_decoder().map_err(|error| broken(&error))?;
     let (width, height, peak) = measure(&decoder, held)?;
     Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak })
 }
@@ -80,10 +87,15 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
 /// one (`CF_DIB`, `CF_DIBV5`). Its layout is first made the one the decoder reads (see
 /// [`dib_layout`]).
+///
+/// # Errors
+///
+/// Returns `Refusal::Broken` for an invalid DIB header and `Refusal::TooLarge` on size arithmetic
+/// overflow.
 pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
     let dib = dib_layout(dib);
     let (width, height, peak) = {
-        let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib.as_slice())).map_err(broken)?;
+        let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib.as_slice())).map_err(|error| broken(&error))?;
         measure(&decoder, 0)?
     };
     Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak })
@@ -113,6 +125,11 @@ impl Probe<'_> {
 
     /// Decode, refused before anything is allocated when the peak would pass `budget` bytes. The
     /// decoder is held to the header's size and to `budget` as well.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Refusal::TooLarge` when the picture does not fit `budget` and `Refusal::Broken`
+    /// when the decoder rejects its input or limits.
     pub fn decode(&self, budget: u64) -> Result<DynamicImage, Refusal> {
         if !self.fits(budget) {
             return Err(Refusal::TooLarge { width: self.width, height: self.height });
@@ -122,17 +139,21 @@ impl Probe<'_> {
         limits.max_image_height = Some(self.height);
         limits.max_alloc = Some(budget);
         if self.dib {
-            let mut decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).map_err(broken)?;
-            decoder.set_limits(limits).map_err(broken)?;
-            return DynamicImage::from_decoder(decoder).map_err(broken);
+            let mut decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).map_err(|error| broken(&error))?;
+            decoder.set_limits(limits).map_err(|error| broken(&error))?;
+            return DynamicImage::from_decoder(decoder).map_err(|error| broken(&error));
         }
         let mut reader = image::ImageReader::with_format(Cursor::new(&*self.bytes), self.format);
         reader.limits(limits);
-        reader.decode().map_err(broken)
+        reader.decode().map_err(|error| broken(&error))
     }
 }
 
 /// [`probe`], then [`Probe::decode`] within `budget` bytes.
+///
+/// # Errors
+///
+/// Returns the probing or decoding `Refusal`; see [`probe`] and [`Probe::decode`].
 pub fn decode(bytes: &[u8], budget: u64) -> Result<DynamicImage, Refusal> {
     probe(bytes)?.decode(budget)
 }
@@ -368,6 +389,7 @@ mod tests {
             let mut s = vec![8];
             s.extend(h.to_be_bytes());
             s.extend(w.to_be_bytes());
+            #[expect(clippy::cast_possible_truncation, reason = "These fixtures contain at most four three-byte component records.")]
             s.push((comps.len() / 3) as u8);
             s.extend(comps);
             s
@@ -382,6 +404,7 @@ mod tests {
         // A marker walk over SOI, an APP0 segment, SOF2, then the scan.
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2];
         let f = sof(64, 64, &[1, 0x11, 0]);
+        #[expect(clippy::cast_possible_truncation, reason = "This fixture's nine-byte frame header and length field fit u16.")]
         jpeg.extend(((f.len() + 2) as u16).to_be_bytes());
         jpeg.extend(&f);
         jpeg.extend([0xFF, 0xDA]);
