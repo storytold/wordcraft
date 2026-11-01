@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocLayout, PartKind, Rect, StoryRef, WordApp, pos2, vec2};
 
 /// Whether the caret is in a text box's story.
 pub fn in_text_box(app: &WordApp) -> bool {

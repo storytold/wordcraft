@@ -328,6 +328,56 @@ fn create_and_edit_source() {
     assert_eq!(a.session.doc.sources.len(), 1);
 }
 
+/// #4848: Create Source's Corporate Author box swaps Author for one organisation's name; OK keeps
+/// that name whole (a comma doesn't split it) and drops the person authors, and Edit Source opens
+/// with the box checked.
+#[test]
+fn create_source_with_a_corporate_author() {
+    let mut a = app("Hearing loss is common ");
+    a.run("caret.docEnd", json!({})).unwrap();
+    assert_eq!(a.run("references.citation", json!({})).unwrap(), json!({"pending": "createSource"}));
+    let RefsDialog::Source(mut f) = form(&a) else { panic!() };
+    *field_mut(&mut f.source, "author").unwrap() = "Rivera, Alex".into();
+    f.corporate = true;
+    *field_mut(&mut f.source, "corporate").unwrap() = "Harbor Guild, Inc.".into();
+    f.source.year = "2024".into();
+    a.run("references.citation", json!({"source": serde_json::to_value(f.finished()).unwrap()})).unwrap();
+    let src = &a.session.doc.sources[0];
+    assert_eq!((src.corporate.as_str(), src.author.as_str()), ("Harbor Guild, Inc.", ""));
+    assert!(a.session.doc.plain_text(StoryRef::Body).contains("(Harbor Guild, Inc., 2024)"), "{}", a.session.doc.plain_text(StoryRef::Body));
+    let edit = SourceForm::of(src.clone(), true, false, true);
+    assert!(edit.corporate, "Edit Source shows the corporate author");
+    let mut people = edit.clone();
+    people.corporate = false;
+    people.source.author = "Rivera, Alex".into();
+    assert_eq!((people.finished().author.as_str(), people.finished().corporate.as_str()), ("Rivera, Alex", ""));
+
+    // Drawn: the checkbox is there under Author, and checking it relabels the box.
+    a.dialog = None;
+    a.run("ui.dialog", json!({"name": "createSource"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    {
+        use egui_kittest::kittest::Queryable;
+        assert!(h.query_by_label("Corporate Author:").is_none());
+        h.get_by_label("Corporate Author").click();
+    }
+    for _ in 0..4 {
+        h.step();
+    }
+    use egui_kittest::kittest::Queryable;
+    assert!(h.query_by_label("Corporate Author:").is_some(), "checked, the Author box is the corporate author's");
+}
+
 /// #2640: the Source Manager's Import… asks the host's file dialog for a Word bibliography
 /// file (`b:Sources`, Word's own `Sources.xml`) and adds its sources to the document, shown
 /// in the list at once.

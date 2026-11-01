@@ -1,6 +1,6 @@
 use super::common::{BUILT_IN_LABELS, NUMBER_FORMATS, SEPARATORS, choice};
 use super::shell::{Next, go};
-use super::*;
+use super::{Block, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 /// The Caption dialog's fields.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -108,7 +108,7 @@ pub(super) fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) ->
     egui::Grid::new("cap_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         let label_label = ui.label(tl!("Label:"));
         let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
-        let combo = egui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
             for (v, l) in &labels {
                 ui.selectable_value(&mut f.label, v.clone(), tl!(l));
             }
@@ -162,7 +162,7 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
             let chapter_label = ui.label(tl!("Chapters begin at:"));
             let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
             let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();
-            let combo = egui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+            let combo = craft_ui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
                 for (l, s) in &opts {
                     ui.selectable_value(&mut f.chapter_level, *l, s);
                 }

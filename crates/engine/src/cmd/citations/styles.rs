@@ -103,8 +103,10 @@ pub static STYLES: [CiteStyle; 12] = [
         et_al_from: 3,
         order: Order::Author,
         names: names(Name::LastInitials, Name::LastInitials, ", ", ", & ", ", & "),
-        book: "⟦{names} ⟧({year}). {title}.⟦ {publisher}.⟧⟦ {url}⟧",
-        article: "⟦{names} ⟧({year}). {title}. {journal}⟦, {volume}⟧⟦, {pages}⟧.⟦ {url}⟧",
+        // The names end with a full stop: an initial's, or one added after a group author or a
+        // name without initials ("World Health Organization. (2021).", #4848).
+        book: "⟦{names}. ⟧({year}). {title}.⟦ {publisher}.⟧⟦ {url}⟧",
+        article: "⟦{names}. ⟧({year}). {title}. {journal}⟦, {volume}⟧⟦, {pages}⟧.⟦ {url}⟧",
         bib_title: "References",
     },
     CiteStyle {

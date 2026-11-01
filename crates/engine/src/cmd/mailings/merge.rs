@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Block, Blocks, CmdError, CmdResult, Document, InlineObject, Paragraph, Part, PartKind, SectionProps, SectionStart, Session, StoryRef, Value,
+    json, p, para_block,
+};
 
 pub(super) fn step(s: &mut Session, d: i64) -> CmdResult {
     go_to(s, (s.merge.record as i64).saturating_add(d))

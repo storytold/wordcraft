@@ -1,5 +1,5 @@
 use super::options::PdfOptions;
-use super::*;
+use super::{DateTime, Document, Metadata};
 
 pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     let c = &doc.core;

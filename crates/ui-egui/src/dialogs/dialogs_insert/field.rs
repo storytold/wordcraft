@@ -1,4 +1,4 @@
-use super::*;
+use super::{Serialize, Stroke, Tokens, Ui, Value, WordApp, buttons, json, semibold};
 
 // ---------------------------------------------------------------------------------------------
 // Field
@@ -271,7 +271,7 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
             ui.label(egui::RichText::new(tl!("Pick a field from the list")).font(semibold(12.5)));
             ui.label(tl!("Categories:"));
             let shown = tl!(f.category.as_str()).to_string();
-            egui::ComboBox::from_id_salt("field_category").selected_text(shown).width(190.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("field_category").selected_text(shown).width(190.0).show_ui(ui, |ui| {
                 for c in FIELD_CATEGORIES {
                     ui.selectable_value(&mut f.category, (*c).to_string(), tl!(c));
                 }
@@ -355,7 +355,7 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
             }
             ui.label(tl!("Format:"));
             let shown = NUMBER_FORMATS.iter().find(|(v, _)| *v == f.number_format).map(|(_, l)| *l).unwrap_or("(none)");
-            egui::ComboBox::from_id_salt("field_number").selected_text(if shown == "(none)" { tl!(shown) } else { shown }).width(200.0).show_ui(
+            craft_ui::ComboBox::from_id_salt("field_number").selected_text(if shown == "(none)" { tl!(shown) } else { shown }).width(200.0).show_ui(
                 ui,
                 |ui| {
                     for (v, l) in NUMBER_FORMATS {
@@ -370,7 +370,7 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
                 ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0));
                 ui.label(egui::RichText::new(tl!("The document has no bookmarks yet.")).small().color(t.text_dim));
             } else {
-                egui::ComboBox::from_id_salt("field_bookmark").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("field_bookmark").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
                     for b in &f.bookmarks {
                         ui.selectable_value(&mut f.target, b.clone(), b);
                     }
@@ -392,7 +392,7 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
         }
         FieldKind::Style => {
             ui.label(tl!("Style name:"));
-            egui::ComboBox::from_id_salt("field_style").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("field_style").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
                 for n in &f.styles {
                     ui.selectable_value(&mut f.target, n.clone(), n);
                 }

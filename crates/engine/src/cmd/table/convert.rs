@@ -1,6 +1,9 @@
 use super::cells::{cell, cell_lang, cell_text, selected_cells, with_table};
 use super::layout::autofit;
-use super::*;
+use super::{
+    Block, CmdError, CmdResult, InlineObject, Paragraph, Path, Pos, Selection, Session, SortKey, StoryRef, Table, Value, json, p, para_block,
+    parse_number, sel_result, sort_key,
+};
 
 /// Sort the table's rows by a column. Numbers are read in each cell's language (`1,5` is one and
 /// a half in Polish) and sort first, numerically; other text sorts in the column's language.

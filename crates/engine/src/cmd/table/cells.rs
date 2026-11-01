@@ -1,5 +1,5 @@
 use super::layout::touch_cells;
-use super::*;
+use super::{CmdError, CmdResult, Document, Paragraph, Path, Pos, Session, StoryRef, Table, sel_result};
 
 pub(super) fn cell(s: &Session) -> Result<(Path, usize, usize), CmdError> {
     s.sel.focus.path.cell().ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))

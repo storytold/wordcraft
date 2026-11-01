@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    Arc, Block, CharProps, CmdError, CmdResult, Document, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p, para_block,
+};
 
 /// Compare and Combine take the same settings.
 pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;

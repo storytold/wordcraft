@@ -1,5 +1,5 @@
 use super::select::{obj_size, selected, with_obj};
-use super::*;
+use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
 
 /// `picture.crop`: the crop, and optionally the new display size, as one edit. With a size, a
 /// floating picture positioned by offsets moves by what the crop on its left/top side on the page

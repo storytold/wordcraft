@@ -1,4 +1,4 @@
-use super::*;
+use super::{ENVELOPE_SIZES, LABEL_PRODUCTS, Serialize, Ui, Value, WordApp, buttons, heading, json, run};
 
 // ---------------------------------------------------------------------------------------------
 // Envelopes
@@ -39,7 +39,7 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     ui.horizontal(|ui| {
         ui.label(tl!("Envelope size:"));
         let label = |i: usize| ENVELOPE_SIZES.get(i).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("env_size").selected_text(label(f.size)).width(220.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("env_size").selected_text(label(f.size)).width(220.0).show_ui(ui, |ui| {
             for i in 0..ENVELOPE_SIZES.len() {
                 ui.selectable_value(&mut f.size, i, label(i));
             }
@@ -156,7 +156,7 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
     });
     ui.horizontal(|ui| {
         ui.label(tl!("Label:"));
-        egui::ComboBox::from_id_salt("label_product").selected_text(product_label(f.product)).width(300.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("label_product").selected_text(product_label(f.product)).width(300.0).show_ui(ui, |ui| {
             for i in 0..LABEL_PRODUCTS.len() {
                 ui.selectable_value(&mut f.product, i, product_label(i));
             }

@@ -76,7 +76,7 @@ fn triple_strokes_draw_three_lines() {
     };
     // Dark runs met walking across the line at its middle.
     let runs = |it: Draw, vertical: bool| {
-        let r = render_items(&Document::new(), &[it], 0.0, 0.0, 20.0, 20.0, 8.0, &RenderOptions::default());
+        let r = render_items(&Document::new(), &[it], wordcraft_geom::Rect::new(0.0, 0.0, 20.0, 20.0), 8.0, &RenderOptions::default());
         let mut n = 0;
         let mut inside = false;
         for i in 0..r.width.min(r.height) {

@@ -1,4 +1,4 @@
-use super::*;
+use super::{CmdError, CmdResult, Float, GraphicKind, InlineObject, Pos, Selection, Session, Spin, StoryRef, Value, Wrap, json, p};
 
 pub(super) fn has_picture(s: &Session) -> Option<&'static str> {
     match selected(s) {

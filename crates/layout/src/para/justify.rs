@@ -1,6 +1,6 @@
 use super::model::ClKind;
 use super::proof::{ProofRun, lang_at};
-use super::*;
+use super::{ParaLayout, SOFT_HYPHEN};
 
 /// Word's default hyphenation zone (0.25"), points.
 pub(super) const HYPHENATION_ZONE: f32 = wordcraft_doc::DEFAULT_HYPHENATION_ZONE;

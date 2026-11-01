@@ -1,6 +1,9 @@
 use super::geometry::{FLOAT_WIDTH, floating_comments, markup_width, shown_comment};
 use super::pages::page_screen_scale;
-use super::*;
+use super::{
+    Color32, CommentDisplay, DocLayout, HashMap, PX_PER_PT, Pos, Pos2, Rect, Sense, StoryRef, Stroke, Tokens, Ui, WordApp, json, pos2, regular,
+    semibold, vec2,
+};
 
 /// Comment balloons in the markup area right of each page, joined to their anchors, with each
 /// comment's replies under it. Clicking a balloon selects it, like Word: its text becomes editable
@@ -19,49 +22,7 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
     let clip = view;
     let only_shown = app.session.prefs.markup.comment_display == CommentDisplay::Selected;
     let shown = shown_comment(app);
-    // Replies hang under the comment they answer rather than getting balloons of their own.
-    let is_reply = |c: &wordcraft_doc::Comment| c.parent.is_some_and(|p| app.session.doc.comments.contains_key(&p));
-    let mut replies: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (id, c) in &app.session.doc.comments {
-        if let Some(p) = c.parent.filter(|_| is_reply(c)) {
-            replies.entry(p).or_default().push(*id);
-        }
-    }
-    // (page, anchor x, anchor y, item) for each anchored, unresolved-or-not comment, each
-    // tracked formatting change (Word's default shows those in balloons too) and, when revisions
-    // go in balloons, each tracked deletion.
-    let mut by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>> = HashMap::new();
-    let m = &app.session.prefs.markup;
-    let comments = if m.comments { wordcraft_engine::cmd::review::comment_list(&app.session) } else { Vec::new() };
-    for (id, pos) in comments {
-        let Some(pos) = pos else { continue };
-        if app.session.doc.comments.get(&id).is_some_and(is_reply) || (only_shown && shown != Some(id)) {
-            continue;
-        }
-        let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Comment(id), pos));
-    }
-    let formats = if m.formatting { wordcraft_engine::cmd::review::format_changes(&app.session) } else { Vec::new() };
-    for (pos, author, props) in formats.into_iter().take(500) {
-        let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
-        let what = crate::panes::describe_props(&props).join(", ");
-        let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
-    }
-    // Each end of a tracked move.
-    let moves = if m.insertions_deletions { wordcraft_engine::cmd::review::move_changes(&app.session) } else { Vec::new() };
-    for (pos, author, from) in moves.into_iter().take(500) {
-        let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
-        let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
-    }
-    // Show revisions in balloons: each tracked deletion, taken out of the text, at its place.
-    let deletions = if app.session.revisions_in_balloons() { wordcraft_engine::cmd::review::deletion_balloons(&app.session) } else { Vec::new() };
-    for d in deletions {
-        let Some(c) = layout.caret_on(&d.at, app.session.page_hint) else { continue };
-        let text = format!("{}: {}", tl!("Deleted"), d.text);
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(d.author, text), d.at));
-    }
+    let BalloonItems { replies, mut by_page } = collect_items(app, layout, only_shown, shown);
     let palette = t.author_colors;
     let leaders = t.leader_colors;
     let mut authors: Vec<String> = Vec::new();
@@ -179,7 +140,7 @@ pub(super) fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, 
                 painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
             }
             let card = if active {
-                active_balloon(app, ui, painter, *id, &thread, card, fs, color)
+                active_balloon(app, ui, painter, ActiveBalloon { id: *id, thread: &thread, card, font_size: fs, color })
             } else {
                 card_shapes(painter, &t, card, color, selected, None);
                 let text_painter = painter.with_clip_rect(card.intersect(clip));
@@ -221,6 +182,66 @@ enum Balloon {
     Format(String, String),
 }
 
+struct BalloonItems {
+    replies: HashMap<u32, Vec<u32>>,
+    by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>>,
+}
+
+fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Option<u32>) -> BalloonItems {
+    let comments_by_id = &app.session.doc.comments;
+    // Replies hang under the comment they answer rather than getting balloons of their own.
+    let is_reply = |comment: &wordcraft_doc::Comment| comment.parent.is_some_and(|parent| comments_by_id.contains_key(&parent));
+    let mut replies: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (id, comment) in comments_by_id {
+        if let Some(parent) = comment.parent.filter(|_| is_reply(comment)) {
+            replies.entry(parent).or_default().push(*id);
+        }
+    }
+    let mut by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>> = HashMap::new();
+    let markup = &app.session.prefs.markup;
+    let comments = if markup.comments { wordcraft_engine::cmd::review::comment_list(&app.session) } else { Vec::new() };
+    for (id, pos) in comments {
+        let Some(pos) = pos else { continue };
+        if comments_by_id.get(&id).is_some_and(is_reply) || (only_shown && shown != Some(id)) {
+            continue;
+        }
+        add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Comment(id));
+    }
+    if markup.formatting {
+        for (pos, author, props) in wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().take(500) {
+            let what = crate::panes::describe_props(&props).join(", ");
+            let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
+            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
+        }
+    }
+    if markup.insertions_deletions {
+        for (pos, author, from) in wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().take(500) {
+            let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
+            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
+        }
+    }
+    if app.session.revisions_in_balloons() {
+        for deletion in wordcraft_engine::cmd::review::deletion_balloons(&app.session) {
+            let text = format!("{}: {}", tl!("Deleted"), deletion.text);
+            add_balloon_anchor(&mut by_page, layout, app.session.page_hint, deletion.at, Balloon::Format(deletion.author, text));
+        }
+    }
+    BalloonItems { replies, by_page }
+}
+
+fn add_balloon_anchor(by_page: &mut HashMap<usize, Vec<(f32, f32, Balloon, Pos)>>, layout: &DocLayout, page_hint: usize, pos: Pos, item: Balloon) {
+    let Some(caret) = layout.caret_on(&pos, page_hint) else { return };
+    by_page.entry(caret.page).or_default().push((caret.x, caret.top + caret.height, item, pos));
+}
+
+struct ActiveBalloon<'a> {
+    id: u32,
+    thread: &'a [u32],
+    card: Rect,
+    font_size: f32,
+    color: Color32,
+}
+
 fn author_name(a: &str) -> String {
     if a.is_empty() { tl!("Author").to_string() } else { a.to_string() }
 }
@@ -259,8 +280,8 @@ pub(super) fn balloon_text(painter: &egui::Painter, text: String, font: egui::Fo
 /// editable fields (each edit is one undo step via `review.editComment`), an optional reply
 /// field, and Reply / Resolve / Delete.
 /// `card` carries last frame's size; returns this frame's.
-#[allow(clippy::too_many_arguments)]
-fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, id: u32, thread: &[u32], card: Rect, fs: f32, color: Color32) -> Rect {
+fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, balloon: ActiveBalloon<'_>) -> Rect {
+    let ActiveBalloon { id, thread, card, font_size: fs, color } = balloon;
     let t = Tokens::get(ui.ctx());
     let slot = painter.add(egui::Shape::Noop);
     // The card's own click area sits under its fields, so a click on its padding stays here.

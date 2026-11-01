@@ -1,6 +1,6 @@
 use super::export::HEAD_SIZES;
 use super::state::St;
-use super::*;
+use super::{Fmt, Kind, ListInfo, Para, Reader, model};
 
 impl Reader {
     pub(super) fn commit_style(&mut self) {

@@ -1,5 +1,5 @@
 use super::structure::{del_col, del_row};
-use super::*;
+use super::{CmdError, CmdResult, Paragraph, Path, Pos, RevisionKind, Selection, Session, StoryRef, Value, sel_result};
 
 /// Backspace with whole cells selected (#1844): whole rows go like Delete Rows (every row: the
 /// table, like Delete Table), whole columns like Delete Columns, with their undo and Track
@@ -28,6 +28,30 @@ pub(crate) fn backspace_cells(s: &mut Session) -> Option<CmdResult> {
     };
     s.column = None;
     Some(r)
+}
+
+/// Clear the text of the cells `range` selects, leaving the cells (Cut of rows or cells, #1744);
+/// tracked when Track Changes is on. The caret goes to the first cell.
+pub(in crate::cmd) fn clear_range_cells(s: &mut Session, range: &crate::CellRange) -> Result<(), CmdError> {
+    let Some(t) = s.doc.table(range.story, &range.table) else { return Ok(()) };
+    // The cells Copy takes: columns widened over merged cells, as `Table::slice` does.
+    let (lo, hi, any) = t.slice_bounds(range.rows, range.cols);
+    let cells = if any { crate::CellRange { cols: (lo, hi.saturating_sub(1)), ..range.clone() }.cells(t) } else { Vec::new() };
+    let prefixes: Vec<Vec<u32>> = cells.into_iter().map(|(r, c)| cell_prefix(&range.table, r, c)).collect();
+    let spans = text_spans(s, range.story, &prefixes);
+    let first = spans.first().map(|(a, _)| a.clone());
+    if guard_delete(s, &spans)?.is_none() {
+        for (a, b) in spans.iter().rev() {
+            if a != b {
+                s.doc.delete_range(a, b)?;
+            }
+        }
+    }
+    s.column = None;
+    if let Some(a) = first {
+        s.sel = Selection::caret(s.doc.clamp(&a));
+    }
+    Ok(())
 }
 
 /// Delete with whole cells selected (#2802): each cell is emptied to one empty paragraph, as in

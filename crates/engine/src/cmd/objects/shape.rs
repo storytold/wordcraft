@@ -1,5 +1,5 @@
 use super::select::{all_objects, edit_obj, picked_objects, selected, selected_all};
-use super::*;
+use super::{CmdError, CmdResult, InlineObject, Pos, Rgb, Session, StoryRef, TextBody, Value, json, p};
 
 pub(super) const NO_TEXT_BOX: &str = "select a text box first";
 

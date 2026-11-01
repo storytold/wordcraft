@@ -1,4 +1,4 @@
-use super::*;
+use super::{Serialize, Ui, Value, WordApp, buttons, heading, json, run, unit};
 
 // ---------------------------------------------------------------------------------------------
 // Formula
@@ -55,7 +55,7 @@ pub(super) fn formula_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FormulaForm) ->
     ui.horizontal(|ui| {
         ui.label(tl!("Paste function:"));
         let mut picked = None;
-        egui::ComboBox::from_id_salt("formula_paste").selected_text("").width(140.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("formula_paste").selected_text("").width(140.0).show_ui(ui, |ui| {
             for name in FORMULA_FUNCTIONS {
                 if ui.selectable_label(false, name).clicked() {
                     picked = Some(name);
@@ -120,7 +120,7 @@ impl SortForm {
 pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
     heading(ui, "Sort by");
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
             for i in 0..f.headers.len() {
                 let label = f.column_label(i);
                 ui.selectable_value(&mut f.column, i, label);

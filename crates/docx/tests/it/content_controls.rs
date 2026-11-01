@@ -109,7 +109,13 @@ fn by_id(d: &Document, id: i64) -> ContentControl {
 #[test]
 fn every_kind_reads_with_its_properties() {
     let d = read(&form()).unwrap();
-    let intro = controls(&d).into_iter().find(|c| c.title == "Intro").unwrap();
+    assert_intro_control(&d);
+    assert_control_kinds(&d);
+    assert_table_controls(&d);
+}
+
+fn assert_intro_control(d: &Document) {
+    let intro = controls(d).into_iter().find(|c| c.title == "Intro").unwrap();
     assert!(intro.block && intro.showing_placeholder);
     assert_eq!((intro.tag.as_str(), intro.id, intro.lock), ("intro", Some(-1201), ControlLock::SdtLocked));
     assert_eq!(intro.placeholder, "DefaultPlaceholder_1");
@@ -119,13 +125,15 @@ fn every_kind_reads_with_its_properties() {
     let ranges = d.control_ranges(StoryRef::Body);
     let r = ranges.iter().find(|r| r.control.title == "Intro").unwrap();
     assert_eq!(d.control_text(r), "Write the introduction.\nSecond paragraph");
+}
 
-    assert_eq!(by_id(&d, 7).kind, ControlKind::Text { multi_line: true });
-    assert!(!by_id(&d, 7).block);
+fn assert_control_kinds(d: &Document) {
+    assert_eq!(by_id(d, 7).kind, ControlKind::Text { multi_line: true });
+    assert!(!by_id(d, 7).block);
     assert!(
-        matches!(by_id(&d, 8).kind, ControlKind::CheckBox { checked: true, checked_char: '\u{2612}', ref checked_font, .. } if checked_font == "Symbola")
+        matches!(by_id(d, 8).kind, ControlKind::CheckBox { checked: true, checked_char: '\u{2612}', ref checked_font, .. } if checked_font == "Symbola")
     );
-    let dd = by_id(&d, 9);
+    let dd = by_id(d, 9);
     assert_eq!(dd.lock, ControlLock::ContentLocked);
     assert_eq!(
         dd.kind,
@@ -135,14 +143,17 @@ fn every_kind_reads_with_its_properties() {
         }
     );
     assert!(
-        matches!(by_id(&d, 10).kind, ControlKind::Date { ref full_date, ref format, .. } if full_date == "2026-10-11T00:00:00Z" && format == "d.M.yyyy")
+        matches!(by_id(d, 10).kind, ControlKind::Date { ref full_date, ref format, .. } if full_date == "2026-10-11T00:00:00Z" && format == "d.M.yyyy")
     );
-    assert_eq!(by_id(&d, 10).extra.len(), 1, "data binding kept");
-    assert_eq!(by_id(&d, 12).kind, ControlKind::RichText);
-    assert!(matches!(by_id(&d, 13).kind, ControlKind::Gallery { list: false, ref gallery, unique: true, .. } if gallery == "Cover Pages"));
-    assert!(matches!(by_id(&d, 20).kind, ControlKind::RepeatingSection { ref title, .. } if title == "Items"));
-    assert_eq!(by_id(&d, 21).kind, ControlKind::RepeatingSectionItem);
-    assert_eq!(by_id(&d, 23).kind, ControlKind::Picture);
+    assert_eq!(by_id(d, 10).extra.len(), 1, "data binding kept");
+    assert_eq!(by_id(d, 12).kind, ControlKind::RichText);
+    assert!(matches!(by_id(d, 13).kind, ControlKind::Gallery { list: false, ref gallery, unique: true, .. } if gallery == "Cover Pages"));
+    assert!(matches!(by_id(d, 20).kind, ControlKind::RepeatingSection { ref title, .. } if title == "Items"));
+    assert_eq!(by_id(d, 21).kind, ControlKind::RepeatingSectionItem);
+    assert_eq!(by_id(d, 23).kind, ControlKind::Picture);
+}
+
+fn assert_table_controls(d: &Document) {
     // Row-level controls sit on the rows, the cell-level one on its cell, the table's on the table.
     let tables: Vec<_> = d.body.iter().filter_map(|b| b.as_table()).collect();
     assert_eq!(tables.len(), 2);

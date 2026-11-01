@@ -1,5 +1,5 @@
 use super::typing::{INITIAL_CAPS_EXCEPTIONS, NOT_SENTENCE_END};
-use super::*;
+use super::{CmdError, CmdResult, Deserialize, Pos, Serialize, Session, Value, json, p};
 
 /// Smileys replaced even when typed straight after a word ("ok:)"), as Word does.
 pub(super) const SMILEYS: &[&str] = &[":-)", ":-(", ":)", ":(", ":|"];

@@ -1,5 +1,6 @@
 use super::format::fmt;
-use super::*;
+use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use std::sync::Arc;
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {

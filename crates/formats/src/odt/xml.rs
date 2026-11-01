@@ -1,4 +1,4 @@
-use super::*;
+use super::{BytesStart, Event, XmlVersion};
 
 /// Length → points.
 pub(super) fn length(v: &str) -> Option<f32> {

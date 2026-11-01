@@ -5,7 +5,9 @@ use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, 
 use super::position::{Path, Pos, StoryRef};
 use super::settings::{CoreProps, CustomProp, Settings};
 use super::text_walk::{TextMode, notes_and_boxes, story_word_count_of, text_of, walk};
-use super::*;
+use std::sync::Arc;
+
+use super::{BTreeMap, CharProps, Document, InlineObject, Paragraph, SectionProps, StyleSheet, Table, edit, numbering, para, section};
 
 /// [`Document::media`] by content, so adding media is linear in the bytes added rather than a
 /// scan of every earlier image (CWE-407). Rebuilt whenever `media` changed size behind its back;
@@ -441,8 +443,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Count words like Word's status bar (whitespace-separated tokens containing a letter or digit,
-    /// including generated numbered-list labels).
+    /// Count words like Word's status bar ([`crate::count_words`], plus generated numbered-list labels).
     pub fn word_count(&self) -> usize {
         self.story_word_count(StoryRef::Body)
     }
@@ -793,7 +794,9 @@ impl Document {
                 p.kind = "lpwstr".into();
                 p.value = value.to_string();
             }
-            None => self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string() }),
+            None => {
+                self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string(), ..Default::default() })
+            }
         }
     }
 
