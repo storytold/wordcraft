@@ -149,4 +149,70 @@ mod tests {
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
     }
+
+    /// Byte offsets where a line may *start* after UAX #14 + [`apply`].
+    fn start_offsets(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<usize> {
+        let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
+        apply(text, &mut opps, kinsoku, word_wrap);
+        opps
+    }
+
+    /// Closing punctuation must not begin a line when kinsoku is on.
+    ///
+    /// Rules: Word/OOXML Asian typography (`w:kinsoku`); aligns with JLREQ prohibited line-start
+    /// characters for 、。」 etc. UAX #14 already forbids many of these (LB13/LB14 family); the
+    /// kinsoku lists reinforce the Japanese/Chinese sets.
+    #[test]
+    fn kinsoku_forbids_line_start_on_closing_japanese_punctuation() {
+        // 「今日は、晴れです。」— break must not start at 、 or 。
+        let t = "今日は、晴れです。";
+        let opps = start_offsets(t, true, true);
+        for punct in ['、', '。'] {
+            let i = t.find(punct).unwrap();
+            assert!(!opps.contains(&i), "UAX#14+kinsoku: no line start at {punct} (off {i}): {opps:?}");
+        }
+        // A line may still start at 晴, after the comma.
+        let hare = t.find('晴').unwrap();
+        assert!(opps.contains(&hare), "{opps:?}");
+    }
+
+    /// Opening punctuation must not end a line when kinsoku is on (no opportunity *after* it
+    /// that would leave it at the line end alone as the previous character of a break).
+    ///
+    /// JLREQ / Word kinsoku: 「『【（ must not sit at line end.
+    #[test]
+    fn kinsoku_forbids_break_after_opening_japanese_punctuation() {
+        let t = "彼は「こんにちは」と言った。";
+        let opps = start_offsets(t, true, true);
+        // Opportunity immediately after 「 would make 「 the last character of the previous line.
+        let after_open = t.find('「').unwrap() + '「'.len_utf8();
+        assert!(!opps.contains(&after_open), "no break after opening 「: {opps:?}");
+    }
+
+    /// Mixed Latin/CJK: Latin word breaks still follow UAX #14; CJK characters remain East Asian
+    /// for kinsoku classification (`is_east_asian`).
+    #[test]
+    fn mixed_latin_cjk_break_opportunities_respect_kinsoku_punctuation() {
+        let t = "WordCraftは「open」です。";
+        let opps = start_offsets(t, true, true);
+        assert!(!opps.contains(&t.find('。').unwrap()), "{opps:?}");
+        let after_open = t.find('「').unwrap() + '「'.len_utf8();
+        assert!(!opps.contains(&after_open), "{opps:?}");
+        // Latin "open" may break before its letters when word_wrap is off.
+        let any = start_offsets(t, true, false);
+        assert!(any.iter().any(|&i| t.get(i..).is_some_and(|s| s.starts_with('p'))), "{any:?}");
+    }
+
+    /// SIP ideographs participate in East Asian kinsoku classification.
+    #[test]
+    fn supplementary_ideograph_counts_as_east_asian_for_kinsoku() {
+        use super::is_east_asian;
+        assert!(is_east_asian('\u{20000}'));
+        assert!(is_east_asian('漢') && is_east_asian('あ') && is_east_asian('。'));
+        assert!(!is_east_asian('A') && !is_east_asian(' '));
+        // Between two EA characters, kinsoku-off inserts a break opportunity.
+        let t = "漢\u{20000}";
+        let off = start_offsets(t, false, true);
+        assert!(off.contains(&"漢".len()), "{off:?}");
+    }
 }
