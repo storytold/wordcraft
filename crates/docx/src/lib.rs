@@ -16,6 +16,8 @@ mod fonts;
 mod package;
 mod read;
 mod smart_art;
+#[cfg(test)]
+mod test_log;
 mod units;
 mod wordml2003;
 mod wordml2003_write;
@@ -25,8 +27,8 @@ mod xml;
 pub use bibliography::{MAX_SOURCES, Sources, read_sources};
 pub use chart_spec::{chart_items, chart_xml};
 pub use crypt::{
-    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_with_spin_count,
-    is_encrypted, protection_hash,
+    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
+    encrypt_with_spin_count, is_encrypted, protection_hash,
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
 pub use fonts::{EmbeddedFont, embedded_fonts};

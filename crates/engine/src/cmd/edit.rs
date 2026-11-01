@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -27,8 +27,14 @@ fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
-fn has_sel(s: &Session) -> Option<&'static str> {
+/// Something the Spike can collect: text (it doesn't take empty cells).
+fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
+}
+
+/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+fn has_sel(s: &Session) -> Option<&'static str> {
+    if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -63,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
         // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
         // Parts and AutoText insert it without emptying it, as in Word.
-        CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_sel),
+        CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_text_sel),
         CommandSpec::new("edit.insertSpike", "Insert Spike", "Editing", insert_spike).key("Mod+Shift+F3").when(|s| {
             if s.math.is_some() {
                 Some("leave the equation first")
@@ -134,7 +140,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 t @ ("find" | "replace" | "goto") => t,
                 other => return Err(CmdError::Params(format!("`tab` is find, replace or goto, not `{other}`"))),
             };
-            s.ui_requests.push(json!({"open": tab}));
+            s.push_ui_request(json!({"open": tab}));
             Ok(json!({"open": tab}))
         })
         // Word for Mac's own key is ⌃H.
@@ -142,7 +148,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"tab"?: "find|replace|goto" (default replace)}"#)
         .pure(),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards), …options of edit.find}"#),
+            .params(r#"{"text": string, "with": string (^p ^t ^& ^c …; \\1 with wildcards; with regex also $1 ${n} ${name} $0 $$ \\1 \\n (paragraph mark) \\t), …options of edit.find}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "pageBy"?: int (pages forward, negative back, from the caret's page), "bookmark"?: string (selects its text), "paragraph"?: n}; none opens Find and Replace on its Go To tab"#)
@@ -167,11 +173,25 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    copy_with(s, whole.as_ref())
+}
+
+/// Copy, `whole` being the table the selection covers whole, if it does.
+fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     let (a, b) = s.sel.ordered();
-    if a == b {
-        return Ok(json!({"text": ""}));
-    }
-    let f = s.doc.copy_range(&a, &b);
+    // Whole table cells selected copy as a table, even empty ones (their selection has no
+    // length): the whole table, or a table of just the selected rows or cells (#1744).
+    let table = match (whole, s.cell_range()) {
+        (Some(tp), _) => s.doc.copy_block(a.story, tp),
+        (None, Some(r)) => s.doc.copy_table_cells(r.story, &r.table, r.rows, r.cols),
+        (None, None) => None,
+    };
+    let f = match table {
+        Some(f) => f,
+        None if a == b => return Ok(json!({"text": ""})),
+        None => s.doc.copy_range(&a, &b),
+    };
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
@@ -200,8 +220,26 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     r
 }
 
-fn cut(s: &mut Session, v: &Value) -> CmdResult {
-    let r = copy(s, v)?;
+fn cut(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    let r = copy_with(s, whole.as_ref())?;
+    // A whole table selected: Cut removes the table, as Delete Table does (#1744). With Track
+    // Changes on, the cut below marks its text deleted (a tracked cut may become a move).
+    if !s.doc.settings.track_changes
+        && let Some(tp) = &whole
+    {
+        super::table::delete_table_at(s, tp)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
+    // Whole rows or some cells: their text goes, the rows and cells stay, as in Word.
+    if whole.is_none()
+        && let Some(range) = s.cell_range().cloned()
+    {
+        super::table::clear_range_cells(s, &range)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
     // A tracked cut of a paragraph or sentence may become a move when pasted.
     if !super::moves::cut_tracked(s)? {
         delete_selection(s)?;
@@ -459,7 +497,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
         .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
         .build(&c.pattern)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
-    let pieces = with_rep.then(|| find_pattern::parse_replace(&f.replace, &opts));
+    let pieces = with_rep.then(|| {
+        let index = |name: &str| re.group_info().to_index(regex_automata::PatternID::ZERO, name);
+        find_pattern::resolve_names(find_pattern::parse_replace(&f.replace, &opts), &index)
+    });
     let paths = s.doc.para_paths(story);
     // Paragraphs read as one text: consecutive siblings when the pattern spans paragraphs.
     let mut chunks: Vec<std::ops::Range<usize>> = Vec::new();
@@ -603,7 +644,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
-        s.ui_requests.push(json!({"focus": "navSearch"}));
+        s.push_ui_request(json!({"focus": "navSearch"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     let story = s.sel.focus.story;
@@ -624,7 +665,7 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
     if p::str(v, "text").is_none() && v.get("highlight").is_none() {
-        s.ui_requests.push(json!({"open": "find"}));
+        s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
     read_opts(s, v);
@@ -735,7 +776,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     });
     if let Some(pg) = rel.or_else(|| p::u64(v, "page")) {
         let l = s.layout();
-        let idx = (pg.max(1) as usize - 1).min(l.pages.len().saturating_sub(1));
+        let idx = crate::p::page_index(pg).min(l.pages.len().saturating_sub(1));
         let target = l.pages.get(idx).and_then(|page| {
             page.items.iter().find_map(|it| match it {
                 wordcraft_layout::Placed::Lines { story, path, para, l0, .. } if *story == StoryRef::Body => {
@@ -748,7 +789,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
             s.sel = Selection::caret(t);
             s.page_hint = idx;
         }
-        s.ui_requests.push(json!({"scrollTo": "caret"}));
+        s.push_ui_request(json!({"scrollTo": "caret"}));
         return sel_result(s);
     }
     if let Some(name) = p::str(v, "bookmark") {
@@ -769,7 +810,7 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
         }
         return sel_result(s);
     }
-    s.ui_requests.push(json!({"open": "goto"}));
+    s.push_ui_request(json!({"open": "goto"}));
     sel_result(s)
 }
 

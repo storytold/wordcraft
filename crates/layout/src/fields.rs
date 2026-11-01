@@ -125,7 +125,8 @@ pub(crate) fn reference_link(instr: &str) -> Option<String> {
     None
 }
 
-/// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal…).
+/// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal,
+/// ArabicDash, DollarText, Hex…). `{ PAGE \* ArabicDash }` shows "- 31 -".
 pub fn format_switch(instr: &str) -> Option<NumFormat> {
     let mut it = instr.split_whitespace();
     while let Some(w) = it.next() {
@@ -141,6 +142,9 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 "OrdText" | "ordtext" => NumFormat::OrdinalText,
                 "Ordinal" | "ordinal" => NumFormat::Ordinal,
                 "Arabic" | "arabic" => NumFormat::Decimal,
+                "ArabicDash" | "arabicdash" | "ARABICDASH" => NumFormat::NumberInDash,
+                "DollarText" | "dollartext" | "DOLLARTEXT" => NumFormat::DollarText,
+                "Hex" | "hex" | "HEX" => NumFormat::Hex,
                 // Chinese numerals: counting (一百零一), legal (壹佰零壹), digit by digit (一〇一).
                 v if v.eq_ignore_ascii_case("ChineseNum1") => NumFormat::ChineseCountingThousand,
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
@@ -151,6 +155,120 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
         }
     }
     None
+}
+
+/// A field's capitalization switch (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaseSwitch {
+    Upper,
+    Lower,
+    Caps,
+    FirstCap,
+}
+
+/// The capitalization switches in a field code, in the order they appear. Quoted text in the code
+/// is not a switch.
+fn case_switches(instr: &str) -> Vec<CaseSwitch> {
+    let mut chars = instr.chars().peekable();
+    let mut quoted = false;
+    let mut cases = Vec::new();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if quoted => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '\\' if chars.peek() == Some(&'*') => {
+                chars.next();
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                let mut word = String::new();
+                while let Some(c) = chars.next_if(|c| !c.is_whitespace() && *c != '\\' && *c != '"') {
+                    word.push(c);
+                }
+                let case = match word.to_ascii_lowercase().as_str() {
+                    "upper" => CaseSwitch::Upper,
+                    "lower" => CaseSwitch::Lower,
+                    "caps" => CaseSwitch::Caps,
+                    "firstcap" => CaseSwitch::FirstCap,
+                    _ => continue,
+                };
+                cases.push(case);
+            }
+            _ => {}
+        }
+    }
+    cases
+}
+
+/// `text` with the field's capitalization switches applied in the order they appear, so
+/// `\* Lower \* Caps` shows "WEEKLY REPORT" as "Weekly Report". `\* Upper` capitalizes every
+/// letter, `\* Lower` makes every letter lowercase, `\* Caps` capitalizes the first letter of each
+/// word, and `\* FirstCap` capitalizes the first letter of the first word. A word's first letter is
+/// its first letter or digit, after any leading quote, bracket or other punctuation. Without a
+/// switch, the function returns `text` unchanged.
+pub fn apply_case_switch(instr: &str, text: String) -> String {
+    case_switches(instr).into_iter().fold(text, apply_case)
+}
+
+/// `text` with one capitalization switch applied (see [`apply_case_switch`]).
+fn apply_case(text: String, case: CaseSwitch) -> String {
+    match case {
+        CaseSwitch::Upper => text.to_uppercase(),
+        CaseSwitch::Lower => text.to_lowercase(),
+        CaseSwitch::Caps | CaseSwitch::FirstCap => {
+            let mut out = String::with_capacity(text.len());
+            let mut word_start = true;
+            let mut done = false;
+            for c in text.chars() {
+                if c.is_whitespace() {
+                    word_start = true;
+                    out.push(c);
+                } else if word_start && !done && c.is_alphanumeric() {
+                    out.extend(c.to_uppercase());
+                    word_start = false;
+                    done = case == CaseSwitch::FirstCap;
+                } else {
+                    if c.is_alphanumeric() {
+                        word_start = false;
+                    }
+                    out.push(c);
+                }
+            }
+            out
+        }
+    }
+}
+
+/// Formats `n` in `fmt` as a field shows it. Cardinal, ordinal and dollar text is lowercase
+/// (`\* CardText` shows "twenty-one", `\* DollarText` shows "twenty-one and 00/100") and writes
+/// numbers up to 999,999; a larger number keeps its digits. `\* Hex` writes uppercase hexadecimal
+/// digits (`1CA`). The field's capitalization switches apply after that (`\* CardText \* Caps`
+/// shows "Twenty-one").
+pub fn field_number(instr: &str, fmt: NumFormat, n: u32) -> String {
+    let text = match fmt {
+        NumFormat::CardinalText | NumFormat::OrdinalText | NumFormat::DollarText if n > MAX_TEXT_NUMBER => n.to_string(),
+        NumFormat::CardinalText | NumFormat::OrdinalText => fmt.format(n).to_lowercase(),
+        NumFormat::DollarText => dollar_text(f64::from(n)).unwrap_or_else(|| n.to_string()),
+        NumFormat::Hex => format!("{n:X}"),
+        _ => fmt.format(n),
+    };
+    apply_case_switch(instr, text)
+}
+
+/// The largest number cardinal, ordinal and dollar text write in words.
+const MAX_TEXT_NUMBER: u32 = 999_999;
+
+/// `value` as `\* DollarText` writes it, before any capitalization switch: the whole part in
+/// lowercase cardinal text, "and", and the first two decimals (rounded) over 100
+/// (14.55 gives "fourteen and 55/100"). `None` for NaN, or for a value that rounds below 0 or past
+/// 999,999.99.
+pub fn dollar_text(value: f64) -> Option<String> {
+    let cents = (value * 100.0).round();
+    if !(0.0..=f64::from(MAX_TEXT_NUMBER) * 100.0 + 99.0).contains(&cents) {
+        return None;
+    }
+    let cents = cents as u32;
+    Some(format!("{} and {:02}/100", NumFormat::CardinalText.format(cents / 100).to_lowercase(), cents % 100))
 }
 
 /// The light grey behind a field shown as its code.
@@ -171,16 +289,16 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
     let name = field_name(instr);
     let fmt = format_switch(instr);
     match name.as_str() {
-        "PAGE" => (fmt.unwrap_or(ctx.page_format).format(page), true),
-        "NUMPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.pages), true),
-        "SECTIONPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section_pages), true),
-        "SECTION" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section), true),
+        "PAGE" => (field_number(instr, format_switch(instr).unwrap_or(ctx.page_format), page), true),
+        "NUMPAGES" => (field_number(instr, fmt.unwrap_or(NumFormat::Decimal), ctx.pages), true),
+        "SECTIONPAGES" => (field_number(instr, fmt.unwrap_or(NumFormat::Decimal), ctx.section_pages), true),
+        "SECTION" => (field_number(instr, fmt.unwrap_or(NumFormat::Decimal), ctx.section), true),
         "PAGEREF" => match pageref_page(instr, ctx) {
-            Some((n, page_format)) => (fmt.unwrap_or(page_format).format(n), true),
+            Some((n, page_format)) => (field_number(instr, fmt.unwrap_or(page_format), n), true),
             None => (result.to_string(), false),
         },
-        "TITLE" if result.is_empty() => (ctx.title.to_string(), false),
-        "AUTHOR" if result.is_empty() => (ctx.author.to_string(), false),
+        "TITLE" if result.is_empty() => (apply_case_switch(instr, ctx.title.to_string()), false),
+        "AUTHOR" if result.is_empty() => (apply_case_switch(instr, ctx.author.to_string()), false),
         "FILENAME" if result.is_empty() => {
             let text = if has_switch(instr, 'p') && !ctx.filepath.is_empty() {
                 ctx.filepath.to_string()
@@ -189,12 +307,12 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
             } else {
                 "Document1".into()
             };
-            (text, false)
+            (apply_case_switch(instr, text), false)
         }
         // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
         "ASK" | "SET" => (String::new(), false),
         "STYLEREF" => match &ctx.styleref {
-            Some((ix, at)) => (ix.eval(instr, *at), true),
+            Some((ix, at)) => (apply_case_switch(instr, ix.eval(instr, *at)), true),
             None => (result.to_string(), false),
         },
         _ => (result.to_string(), false),
@@ -273,13 +391,90 @@ mod tests {
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
         assert_eq!(field_text("PAGE \\*roman", "", &ctx).0, "iv");
         assert_eq!(field_text("PAGE \\*roman\\*MERGEFORMAT", "", &ctx).0, "iv");
-        assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "Twelve");
+        assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "twelve");
         assert_eq!(field_text("NUMPAGES \\* CHINESENUM1", "", &ctx).0, "十二");
         assert_eq!(field_text("PAGE \\* ChineseNum2", "", &ctx).0, "肆");
         assert_eq!(field_text("DATE \\@ \"M/d/yyyy\"", "1/2/2026", &ctx), ("1/2/2026".into(), false));
         assert_eq!(field_name("=SUM(ABOVE)"), "SUM(ABOVE)");
         assert_eq!(field_code_text(" PAGE \\* ROMAN "), "{ PAGE \\* ROMAN }");
         assert_eq!(field_code_text(""), "{  }");
+    }
+
+    /// Cardinal and ordinal text is lowercase unless a capitalization switch follows; `\* Upper`,
+    /// `\* Lower`, `\* Caps` and `\* FirstCap` apply to the page fields and the TITLE, AUTHOR and
+    /// FILENAME fallbacks. A switch inside quotes is text.
+    #[test]
+    fn capitalization_switches() {
+        let ctx = FieldCtx {
+            page: 21,
+            pages: 790,
+            title: "weekly report on sales".into(),
+            filename: "Weekly Sales Report.doc".into(),
+            ..Default::default()
+        };
+        let text = |instr: &str| field_text(instr, "", &ctx).0;
+        assert_eq!(text(r"NUMPAGES \* CardText"), "seven hundred ninety");
+        assert_eq!(text(r"NUMPAGES \* CardText \* Caps"), "Seven Hundred Ninety");
+        assert_eq!(text(r"PAGE \* OrdText"), "twenty-first");
+        assert_eq!(text(r"PAGE \* OrdText \* FirstCap"), "Twenty-first");
+        assert_eq!(text(r"PAGE \* CardText \* Upper"), "TWENTY-ONE");
+        assert_eq!(text(r"PAGE \* roman \* upper"), "XXI");
+        assert_eq!(text(r"TITLE \* FirstCap \* MERGEFORMAT"), "Weekly report on sales");
+        assert_eq!(text(r"TITLE \*Caps"), "Weekly Report On Sales");
+        assert_eq!(text(r"FILENAME \* Lower"), "weekly sales report.doc");
+        assert_eq!(text(r"AUTHOR \* Upper"), "");
+        for (title, caps, first_cap) in [
+            ("\"weekly report\"", "\"Weekly Report\"", "\"Weekly report\""),
+            ("(weekly) report", "(Weekly) Report", "(Weekly) report"),
+            ("  q3 - final", "  Q3 - Final", "  Q3 - final"),
+        ] {
+            let ctx = FieldCtx { title: title.into(), ..Default::default() };
+            assert_eq!(field_text(r"TITLE \* Caps", "", &ctx).0, caps);
+            assert_eq!(field_text(r"TITLE \* FirstCap", "", &ctx).0, first_cap);
+        }
+        assert_eq!(field_text(r#"TITLE "x \* Upper""#, "", &ctx).0, "weekly report on sales");
+        assert_eq!(field_text(r"REF mark \* Upper", "stored", &ctx).0, "stored", "a stored result shows as it is");
+    }
+
+    /// `\* DollarText` writes lowercase cardinal text with "and 00/100", `\* Hex` uppercase
+    /// hexadecimal digits, and `\* ArabicDash` the number between hyphens. Words
+    /// stop at 999,999; a larger number keeps its digits.
+    #[test]
+    fn dollar_text_hex_and_arabic_dash_switches() {
+        let ctx = FieldCtx { page: 31, pages: 458, section: 790, ..Default::default() };
+        let text = |instr: &str| field_text(instr, "", &ctx).0;
+        assert_eq!(text(r"PAGE \* ArabicDash"), "- 31 -");
+        assert_eq!(text(r"PAGE \*arabicdash \* MERGEFORMAT"), "- 31 -");
+        assert_eq!(text(r"NUMPAGES \* ArabicDash"), "- 458 -", "any number field reads ArabicDash");
+        assert_eq!(text(r"NUMPAGES \* ArabicDash \* roman"), "- 458 -", "the first format switch counts");
+        assert_eq!(text(r"NUMPAGES \* Hex"), "1CA");
+        assert_eq!(text(r"NUMPAGES \* hex \* Lower"), "1ca");
+        assert_eq!(text(r"PAGE \* Hex"), "1F");
+        assert_eq!(text(r"SECTION \* DollarText"), "seven hundred ninety and 00/100");
+        assert_eq!(text(r"SECTION \* DollarText \* Upper"), "SEVEN HUNDRED NINETY AND 00/100");
+        assert_eq!(text(r"PAGE \* DollarText \* FirstCap"), "Thirty-one and 00/100");
+        assert_eq!(dollar_text(9.20 + 5.35).as_deref(), Some("fourteen and 55/100"));
+        assert_eq!(dollar_text(0.999).as_deref(), Some("one and 00/100"), "the decimals round");
+        assert_eq!(dollar_text(999_999.99).as_deref(), Some("nine hundred ninety-nine thousand nine hundred ninety-nine and 99/100"));
+        assert_eq!(dollar_text(999_999.995), None);
+        assert_eq!(dollar_text(-1.0), None);
+        assert_eq!(dollar_text(-0.004).as_deref(), Some("zero and 00/100"), "a value that rounds to 0 is not below 0");
+        assert_eq!(dollar_text(f64::NAN), None);
+        for fmt in [NumFormat::CardinalText, NumFormat::OrdinalText, NumFormat::DollarText] {
+            assert_eq!(field_number(r"SEQ x \* Upper", fmt, 1_000_140), "1000140", "{fmt:?}");
+        }
+        assert_eq!(field_number("SEQ x", NumFormat::CardinalText, 999_999), "nine hundred ninety-nine thousand nine hundred ninety-nine");
+    }
+
+    /// Several capitalization switches apply in the order they appear.
+    #[test]
+    fn capitalization_switches_apply_in_order() {
+        let ctx = FieldCtx { title: "WEEKLY REPORT".into(), ..Default::default() };
+        let text = |instr: &str| field_text(instr, "", &ctx).0;
+        assert_eq!(text(r"TITLE \* Lower \* Caps"), "Weekly Report");
+        assert_eq!(text(r"TITLE \* Lower \* FirstCap"), "Weekly report");
+        assert_eq!(text(r"TITLE \* Caps \* Lower"), "weekly report");
+        assert_eq!(text(r"TITLE \* Lower \* MERGEFORMAT \* Upper"), "WEEKLY REPORT");
     }
 
     /// #1765: ASK and SET only assign text to a bookmark; they show nothing, whatever result is stored.

@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-metafile = { workspace = true }

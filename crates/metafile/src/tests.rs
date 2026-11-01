@@ -1053,3 +1053,18 @@ fn plain_wmf_target_comes_from_a_window_that_was_read() {
     let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
     assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 200.0) && close(y1, 100.0), "{x0} {y0} {x1} {y1}");
 }
+
+/// A poly-polygon's group counts are file data: a long list of empty groups adds no ops, so it
+/// mustn't reserve room for them either (the canvas charges what a path holds, capacity included).
+#[test]
+fn empty_poly_groups_reserve_nothing() {
+    let pts = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+    let mut counts = vec![0usize; 100_000];
+    counts.push(3);
+    let ops = crate::geom::subpaths(&pts, &counts, true);
+    assert_eq!(ops.len(), 4, "M L L Z");
+    assert!(ops.capacity() <= 8, "capacity {}", ops.capacity());
+    // Counts past the points are cut short, and the size still matches.
+    let ops = crate::geom::subpaths(&pts, &[2, 5, 4], false);
+    assert_eq!((ops.len(), ops.capacity()), (3, 3));
+}

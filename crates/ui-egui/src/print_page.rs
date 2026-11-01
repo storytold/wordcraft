@@ -82,23 +82,40 @@ const NO_SCALING: &str = "none";
 const ORIENTATIONS: [(&str, &str); 3] = [("auto", "Auto orientation"), ("portrait", "Portrait"), ("landscape", "Landscape")];
 
 /// A choice list over `(id, label)` pairs; true when the choice changed.
-fn choice(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &str)]) -> bool {
+fn choice(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &str)], label: &egui::Response) -> bool {
     let shown = items.iter().find(|(id, _)| *id == current.as_str()).map_or("", |(_, l)| *l);
     let mut changed = false;
-    egui::ComboBox::from_id_salt(salt).width(260.0).selected_text(tl!(shown)).show_ui(ui, |ui| {
-        for (id, label) in items {
-            if ui.selectable_label(current == id, tl!(label)).clicked() && current != id {
+    let combo = craft_ui::ComboBox::from_id_salt(salt).width(260.0).selected_text(tl!(shown)).show_ui(ui, |ui| {
+        for (id, item) in items {
+            if ui.selectable_label(current == id, tl!(item)).clicked() && current != id {
                 *current = (*id).to_string();
                 changed = true;
             }
         }
     });
+    combo.response.labelled_by(label.id);
+    changed
+}
+
+/// A choice list named without a visible label beside it (its heading names a group of choices).
+fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &str)], name: &str) -> bool {
+    let shown = items.iter().find(|(id, _)| *id == current.as_str()).map_or("", |(_, l)| *l);
+    let mut changed = false;
+    let combo = craft_ui::ComboBox::from_id_salt(salt).width(260.0).selected_text(tl!(shown)).show_ui(ui, |ui| {
+        for (id, item) in items {
+            if ui.selectable_label(current == id, tl!(item)).clicked() && current != id {
+                *current = (*id).to_string();
+                changed = true;
+            }
+        }
+    });
+    combo.response.accessible_name(name);
     changed
 }
 
 /// The output layout, kept while the document is unchanged (laying out every frame would be slow).
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
-    let id = egui::Id::new("print_page_layout");
+    let id = egui::Id::unique("print_page_layout");
     let rev = app.session.rev();
     if let Some((r, l)) = ctx.data(|d| d.get_temp::<(u64, Arc<DocLayout>)>(id))
         && r == rev
@@ -112,7 +129,7 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
 
 /// The texture of one page, re-rendered only when the document, page or size changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, width: f32) -> Option<TextureHandle> {
-    let id = egui::Id::new("print_page_texture");
+    let id = egui::Id::unique("print_page_texture");
     let key = (app.session.rev(), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
     if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, usize, u32, u32), TextureHandle)>(id))
         && k == key
@@ -184,10 +201,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         ui.add_enabled(!app.printing.busy(), egui::Checkbox::new(&mut app.ui.print.collate, tl!("Collate copies")));
                     }
                 } else {
-                    ui.label(egui::RichText::new(tl!("Copies")).font(medium(13.0)));
+                    let copies_label = ui.label(egui::RichText::new(tl!("Copies")).font(medium(13.0)));
                     ui.horizontal(|ui| {
                         let mut n = app.ui.print.copies;
-                        ui.add(egui::DragValue::new(&mut n).range(1..=wordcraft_engine::print::MAX_COPIES).speed(0.2));
+                        ui.add(egui::DragValue::new(&mut n).range(1..=wordcraft_engine::print::MAX_COPIES).speed(0.2)).labelled_by(copies_label.id);
                         app.ui.print.copies = n.clamp(1, wordcraft_engine::print::MAX_COPIES);
                         if app.ui.print.copies > 1 {
                             ui.checkbox(&mut app.ui.print.collate, tl!("Collate copies"));
@@ -195,8 +212,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     });
                 }
 
-                ui.label(egui::RichText::new(tl!("Pages")).font(medium(13.0)));
-                if choice(ui, "print_range", &mut app.ui.print.range, &RANGES) {
+                let pages_label = ui.label(egui::RichText::new(tl!("Pages")).font(medium(13.0)));
+                if choice(ui, "print_range", &mut app.ui.print.range, &RANGES, &pages_label) {
                     // Show the first page that will print.
                     app.ui.print.preview = if app.ui.print.range == "all" { 0 } else { current.0.min(total.saturating_sub(1)) };
                 }
@@ -206,16 +223,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             .hint_text(tl!("Pages like 1-3, 5"))
                             .desired_width(260.0)
                             .char_limit(wordcraft_engine::print::MAX_SPEC_CHARS),
-                    );
+                    )
+                    .labelled_by(pages_label.id);
                 }
-                choice(ui, "print_parity", &mut app.ui.print.parity, &PARITIES);
-                ui.label(egui::RichText::new(tl!("Orientation")).font(medium(13.0)));
-                choice(ui, "print_orientation", &mut app.ui.print.orientation, &ORIENTATIONS);
+                choice_named(ui, "print_parity", &mut app.ui.print.parity, &PARITIES, tl!("Pages in the range"));
+                let orientation_label = ui.label(egui::RichText::new(tl!("Orientation")).font(medium(13.0)));
+                choice(ui, "print_orientation", &mut app.ui.print.orientation, &ORIENTATIONS, &orientation_label);
                 // Word: Pages per sheet › Scale to paper size. Only the printout changes.
-                ui.label(egui::RichText::new(tl!("Scale to paper size")).font(medium(13.0)));
+                let paper_label = ui.label(egui::RichText::new(tl!("Scale to paper size")).font(medium(13.0)));
                 let papers: Vec<(&str, &str)> =
                     std::iter::once((NO_SCALING, "No Scaling")).chain(wordcraft_geom::PAPER_SIZES.iter().map(|(n, _, _)| (*n, *n))).collect();
-                choice(ui, "print_paper", &mut app.ui.print.paper, &papers);
+                choice(ui, "print_paper", &mut app.ui.print.paper, &papers, &paper_label);
 
                 match wordcraft_engine::print::plan(&app.ui.print.params(), total, current) {
                     Ok(plan) => {
@@ -274,8 +292,8 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
         let room = vec2((size.x + 2.0 * PREVIEW_MARGIN).max(ui.available_width()), (size.y + 2.0 * PREVIEW_MARGIN).max(ui.available_height()));
         let (area, _) = ui.allocate_exact_size(room, Sense::hover());
         let r = Rect::from_center_size(area.center(), size);
-        let resp = ui.interact(r, ui.id().with("print_preview_page"), Sense::hover());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
+        let resp = ui.interact(r, ui.scope_id().with("print_preview_page"), Sense::hover());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
         ui.painter().rect_filled(r.translate(vec2(2.0, 3.0)), 0.0, t.page_shadow);
         ui.painter().rect(r, 0.0, egui::Color32::WHITE, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
         let on_sheet = sheet.map_or(r, |f| Rect::from_min_size(r.min + vec2(f.dx, f.dy) * scale, vec2(page_w, page_h) * f.k * scale));
@@ -287,7 +305,7 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
         ui.set_height(PREVIEW_BAR);
         let nav = |ui: &mut Ui, icon: &str, tip: &str, enabled: bool| {
             let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
             let col = if enabled { t.icon } else { t.text_disabled };
             if enabled && resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -316,7 +334,9 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
             if room >= 40.0 {
                 let mut v = z;
                 ui.spacing_mut().slider_width = room.min(110.0);
-                if ui.add(egui::Slider::new(&mut v, 0.1..=5.0).logarithmic(true).show_value(false)).on_hover_text(tl!("Zoom")).changed() {
+                let response = ui.add(egui::Slider::new(&mut v, 0.1..=5.0).logarithmic(true).show_value(false)).on_hover_text(tl!("Zoom"));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), tl!("Zoom")));
+                if response.changed() {
                     app.ui.print.zoom = Some(v.clamp(0.1, 5.0));
                 }
             }

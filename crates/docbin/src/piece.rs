@@ -113,8 +113,14 @@ impl PieceTable {
             }
             PrmRef::Sprm0 { isprm, val: (p.prm >> 8) as u8 }
         } else {
-            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(|v| v.as_slice()))
+            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(Vec::as_slice))
         }
+    }
+
+    /// The raw Prm of the piece holding `cp` (0, no properties, when there is none): two CPs
+    /// with the same value get the same [`PrmRef`].
+    pub(crate) fn prm_of(&self, cp: u32) -> u16 {
+        self.piece_of(cp).map_or(0, |p| p.prm)
     }
 
     fn piece_of(&self, cp: u32) -> Option<&Pcd> {

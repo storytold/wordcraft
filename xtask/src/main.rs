@@ -12,7 +12,7 @@ mod version;
 mod visual_diff;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -20,8 +20,13 @@ usage: cargo xtask <command>
 commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
-  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call)
+  test            workspace tests (cargo nextest when installed, else cargo test), the interface
+                  audit with its missing-translation report, then doctests
+  i18n-report     the interface audit: fails on text that skips the catalog, and prints the
+                  strings each language has no translation for (never a failure)
+  ci              fmt --check, clippy -D warnings, test, i18n-report, doctest, assets, layers, wasm
+                  (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -40,6 +45,8 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
+        Some("test") => cmd_test().and_then(|()| cmd_i18n_report()).and_then(|()| cmd_doctest()),
+        Some("i18n-report") => cmd_i18n_report(),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
@@ -136,21 +143,64 @@ fn wasm_set() -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// One `cargo check` for the whole set: each crate is checked once, and
+/// `--keep-going` still reports every failing crate. Features unify across the
+/// set, so each crate is checked with the union of the features the set enables.
 fn cmd_wasm() -> Result<(), String> {
     let set = wasm_set()?;
-    let mut results = Vec::new();
+    if set.is_empty() {
+        return Err("no wasm-safe crates found in the workspace metadata".into());
+    }
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown", "--keep-going"]);
     for pkg in &set {
-        let mut c = cargo();
-        c.args(["check", "--target", "wasm32-unknown-unknown", "-p", pkg]);
-        let ok = run(c, &format!("cargo check --target wasm32-unknown-unknown -p {pkg}")).is_ok();
-        results.push((pkg.clone(), ok));
+        c.args(["-p", pkg]);
     }
-    println!("\nwasm32-unknown-unknown check:");
-    for (p, ok) in &results {
-        println!("  {:<6} {p}", if *ok { "ok" } else { "FAIL" });
+    run(c, &format!("cargo check --target wasm32-unknown-unknown --keep-going -p {}", set.join(" -p ")))?;
+    println!("\nwasm32-unknown-unknown check: ok ({} crates: {})", set.len(), set.join(", "));
+    Ok(())
+}
+
+/// Test targets for the test build. Examples are left out so they aren't
+/// linked; clippy `--all-targets` still compiles them.
+const TEST_TARGETS: [&str; 4] = ["--workspace", "--lib", "--bins", "--tests"];
+
+fn nextest_available() -> bool {
+    cargo().args(["nextest", "--version"]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+/// The interface audit, which `cmd_i18n_report` runs on its own so its report is printed.
+const I18N_AUDIT: &str = "i18n::audit::untranslated_interface_text";
+const I18N_AUDIT_FILTER: &str = "package(wordcraft-ui-egui) & test(=i18n::audit::untranslated_interface_text)";
+
+fn cmd_test() -> Result<(), String> {
+    test_run(&["-E", &format!("not ({I18N_AUDIT_FILTER})")], &["--skip", I18N_AUDIT])
+}
+
+/// Missing translations never fail the build: the report lists them in the log.
+fn cmd_i18n_report() -> Result<(), String> {
+    test_run(&["-E", I18N_AUDIT_FILTER, "--no-capture"], &["--exact", I18N_AUDIT, "--nocapture"])
+}
+
+/// A test run over `TEST_TARGETS`, with nextest arguments or, without nextest, libtest arguments.
+/// Every run builds the same targets, so a second run reuses the first one's build.
+fn test_run(nextest: &[&str], libtest: &[&str]) -> Result<(), String> {
+    let mut c = cargo();
+    if nextest_available() {
+        c.args(["nextest", "run"]).args(TEST_TARGETS).args(nextest);
+        run(c, &format!("cargo nextest run {} {}", TEST_TARGETS.join(" "), nextest.join(" ")))
+    } else {
+        eprintln!("note: cargo-nextest is not installed, running cargo test (cargo install cargo-nextest --locked)");
+        c.arg("test").args(TEST_TARGETS).arg("--").args(libtest);
+        run(c, &format!("cargo test {} -- {}", TEST_TARGETS.join(" "), libtest.join(" ")))
     }
-    let failed = results.iter().filter(|r| !r.1).count();
-    if failed == 0 { Ok(()) } else { Err(format!("{failed} crate(s) failed the wasm check")) }
+}
+
+/// nextest does not run doctests.
+fn cmd_doctest() -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["test", "--workspace", "--doc"]);
+    run(c, "cargo test --workspace --doc")
 }
 
 fn cmd_ci() -> Result<(), String> {
@@ -172,14 +222,9 @@ fn cmd_ci() -> Result<(), String> {
                 run(c, "cargo clippy --workspace --all-targets -- -D warnings")
             }),
         ),
-        (
-            "test",
-            Box::new(|| {
-                let mut c = cargo();
-                c.args(["test", "--workspace"]);
-                run(c, "cargo test --workspace")
-            }),
-        ),
+        ("test", Box::new(cmd_test)),
+        ("i18n-report", Box::new(cmd_i18n_report)),
+        ("doctest", Box::new(cmd_doctest)),
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),

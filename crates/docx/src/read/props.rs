@@ -23,8 +23,8 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
     let word = |name: &str, allowed: &[&str], default: &str| k.attr(name).filter(|v| allowed.contains(v)).unwrap_or(default).to_string();
     let align = |name: &str, allowed: &[&str]| k.attr(name).filter(|v| allowed.contains(v)).map(str::to_string);
     wordcraft_doc::props::TextFrame {
-        w: len("w:w").filter(|v| *v > 0.0),
-        h: len("w:h").map(f32::abs).filter(|v| *v > 0.0),
+        w: len("w:w").filter(|v| *v >= 0.0),
+        h: len("w:h").map(f32::abs),
         h_exact: k.attr("w:hRule") == Some("exact"),
         x: len("w:x").unwrap_or(0.0),
         y: len("w:y").unwrap_or(0.0),
@@ -231,22 +231,11 @@ impl PropCtx {
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
                     let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
-                    c.font =
-                        themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi")).or_else(
-                            || {
-                                // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
-                                // Latin font only when the run is hinted as that script. Otherwise the Latin
-                                // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
-                                // `docDefaults` font, as in Word).
-                                match k.attr("w:hint") {
-                                    Some("eastAsia") => k.attr("w:eastAsia"),
-                                    Some("cs") => k.attr("w:cs"),
-                                    _ => None,
-                                }
-                                .filter(|f| !f.is_empty())
-                                .map(str::to_string)
-                            },
-                        );
+                    // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
+                    // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
+                    // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
+                    // `docDefaults` font, and so does a hinted run, as in Word.
+                    c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
@@ -269,6 +258,8 @@ impl PropCtx {
                 "w:imprint" => c.engrave = Some(on_off(k)),
                 "w:noProof" => c.no_proof = Some(on_off(k)),
                 "w:vanish" => c.hidden = Some(on_off(k)),
+                "w:webHidden" => c.web_hidden = Some(on_off(k)),
+                "w:snapToGrid" => c.snap_to_grid = Some(on_off(k)),
                 "w:rtl" => c.rtl = Some(on_off(k)),
                 "w:color" => {
                     c.color = match (self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade"), k.attr("w:val")) {

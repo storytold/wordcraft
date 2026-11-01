@@ -95,14 +95,32 @@ list (author, source, license) is in ATTRIBUTION.md.
     FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
     OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
-- All UI icons are drawn in code (crates/ui-egui/src/icons.rs) and are original work, MIT OR Apache-2.0.
+- Application-drawn UI icons (crates/ui-egui/src/icons.rs) are original work, MIT OR Apache-2.0;
+  the bundled egui font icons have the separate notice below.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)
 are permissively licensed (MIT/Apache-2.0/BSD/ISC/Zlib) and fetched through crates.io or pinned Git sources.
 The craft-pdf writer and Krilla 0.8.2 backend are pinned to storytold/craft-libs revision
-c3487320b2d1de657b860b3c8abb44e1f2b32bd8. The backend retains its MIT OR Apache-2.0 licensing
+b926b5c03e256c86ca10934f58d03f628810b5b7. The backend retains its MIT OR Apache-2.0 licensing
 and upstream bundled material; see that revision's licenses/pdf-writer/ and ATTRIBUTION.md.
 The backend patch prevents finalization during an unwind and rejects a writer after failed
 cleanup. WordCraft enables only writing; PDF import and its image decoders are not enabled.
 
 No Microsoft, Adobe, Avid or Autodesk icons, images, templates or artwork are included.
+
+Bundled egui font icons
+
+The canonical egui0.37 dependency includes egui-icons.ttf (a small subset of emoji-icon-font)
+through default_fonts, and emoji-icon-font.ttf through monochrome_emoji_fonts. Both are embedded
+by the UI font definitions. Their upstream project is https://github.com/jslegers/emoji-icon-font;
+the exact copyright and permission notice from the pinned egui dependency follows.
+
+MIT License
+
+Copyright (c) 2014 John Slegers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

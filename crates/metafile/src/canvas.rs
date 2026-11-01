@@ -284,9 +284,12 @@ impl Canvas {
 
     fn push(&mut self, raw: Raw) {
         let cost = match &raw {
-            Raw::Path { ops, .. } => ops.len() * std::mem::size_of::<Op>(),
-            Raw::Bitmap { img, .. } => img.px.len(),
-            Raw::Text(t) => t.text.len() + t.font.len() + t.dx.len() * std::mem::size_of::<f64>(),
+            // What is held, capacity and all.
+            Raw::Path { ops, .. } => ops.capacity().saturating_mul(std::mem::size_of::<Op>()),
+            Raw::Bitmap { img, .. } => img.px.capacity(),
+            Raw::Text(t) => {
+                t.text.capacity().saturating_add(t.font.capacity()).saturating_add(t.dx.capacity().saturating_mul(std::mem::size_of::<f64>()))
+            }
         };
         if self.items.len() >= MAX_ITEMS || self.used.saturating_add(cost) > MAX_BYTES {
             self.full = true;

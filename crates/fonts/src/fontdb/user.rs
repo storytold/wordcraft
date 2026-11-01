@@ -149,8 +149,24 @@ pub fn decode_font_file(bytes: &[u8]) -> Result<Vec<u8>, UserFontError> {
     }
     let decoded = match sniff(bytes).ok_or(UserFontError::NotAFont)? {
         FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection => return Ok(bytes.to_vec()),
-        FontFormat::Woff => unwrap_web_font(|| wuff::decompress_woff1(bytes))?,
-        FontFormat::Woff2 => unwrap_web_font(|| wuff::decompress_woff2(bytes))?,
+        FontFormat::Woff => {
+            check_woff1_size(bytes)?;
+            unwrap_web_font(|| wuff::decompress_woff1(bytes))?
+        }
+        FontFormat::Woff2 => {
+            let mut too_many_points = false;
+            let unwrapped = unwrap_web_font(|| {
+                wuff::decompress_woff2_with_custom_brotli(bytes, &mut |data, size| {
+                    let stream = unbrotli(data, size)?;
+                    too_many_points = !woff2_points_fit(bytes, &stream);
+                    if too_many_points { Err(TOO_MANY_POINTS.into()) } else { Ok(stream) }
+                })
+            });
+            if too_many_points {
+                return Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into()));
+            }
+            unwrapped?
+        }
     };
     if decoded.len() > MAX_DECODED_BYTES {
         return Err(UserFontError::TooLarge { bytes: decoded.len() });
@@ -159,6 +175,128 @@ pub fn decode_font_file(bytes: &[u8]) -> Result<Vec<u8>, UserFontError> {
         Some(FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection) => Ok(decoded),
         _ => Err(UserFontError::BadWebFont("it doesn't hold a TrueType or OpenType font".into())),
     }
+}
+
+/// WOFF 1.0: the font its table directory describes must fit [`MAX_DECODED_BYTES`]. The decoder
+/// sizes each table's buffer from the directory's `origLength` before inflating it (#3703).
+/// A short header or directory is left to the decoder to report.
+fn check_woff1_size(bytes: &[u8]) -> Result<(), UserFontError> {
+    let u32_at = |at: usize| bytes.get(at..at.saturating_add(4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
+    let tables = bytes.get(12..14).and_then(|n| n.try_into().ok()).map_or(0, |n| usize::from(u16::from_be_bytes(n)));
+    let mut total = 12 + 16 * tables;
+    for i in 0..tables {
+        let entry = 44 + 20 * i;
+        let (Some(compressed), Some(orig)) = (u32_at(entry + 8), u32_at(entry + 12)) else { break };
+        total = total.saturating_add((compressed.max(orig) as usize).saturating_add(3) & !3);
+    }
+    if total > MAX_DECODED_BYTES {
+        return Err(UserFontError::TooLarge { bytes: total });
+    }
+    Ok(())
+}
+
+/// Why a WOFF2 file whose glyph has more points than a glyph may is refused.
+const TOO_MANY_POINTS: &str = "a glyph has more than 65536 points";
+
+/// WOFF2's brotli stream, which must decompress to exactly `size` bytes (the decoder has checked
+/// `size` against its own cap and the compression ratio).
+fn unbrotli(data: &[u8], size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(size);
+    brotli_decompressor::Decompressor::new(data, 4096).take(size as u64 + 1).read_to_end(&mut out)?;
+    if out.len() != size {
+        return Err("the compressed data doesn't have the size the directory gives".into());
+    }
+    Ok(out)
+}
+
+/// Does every glyph in the WOFF2 file's transformed `glyf` tables have at most 65536 points, as
+/// the decoder requires? It allocates a glyph's points from its counts before checking them, so a
+/// small file could claim gigabytes (#3703). `stream` is the decompressed table data; anything
+/// that doesn't parse is refused too (the decoder would refuse it).
+fn woff2_points_fit(file: &[u8], stream: &[u8]) -> bool {
+    woff2_transformed_glyf(file, stream).is_some_and(|tables| tables.iter().all(|t| glyf_points_fit(t).unwrap_or(false)))
+}
+
+/// The transformed `glyf` tables in `stream`, found from the WOFF2 table directory in `file`
+/// (tables follow each other in directory order).
+fn woff2_transformed_glyf<'a>(file: &[u8], stream: &'a [u8]) -> Option<Vec<&'a [u8]>> {
+    let tables = u16::from_be_bytes(file.get(12..14)?.try_into().ok()?);
+    let (mut at, mut offset, mut glyf) = (48usize, 0usize, Vec::new());
+    for _ in 0..tables {
+        let flags = *file.get(at)?;
+        at += 1;
+        let tag: Option<&[u8]> = if flags & 63 == 63 {
+            at += 4;
+            Some(file.get(at - 4..at)?)
+        } else {
+            None
+        };
+        let is = |index: u8, name: &[u8]| flags & 63 == index || tag == Some(name);
+        let (is_glyf, is_loca) = (is(10, b"glyf"), is(11, b"loca"));
+        let orig = base128(file, &mut at)?;
+        // glyf and loca are transformed at version 0, other tables at any other version.
+        let transformed = if is_glyf || is_loca { flags >> 6 == 0 } else { flags >> 6 != 0 };
+        let len = if transformed { base128(file, &mut at)? } else { orig };
+        let end = offset.checked_add(len)?;
+        if is_glyf && transformed {
+            glyf.push(stream.get(offset..end)?);
+        }
+        offset = end;
+    }
+    Some(glyf)
+}
+
+/// WOFF2's UIntBase128.
+fn base128(b: &[u8], at: &mut usize) -> Option<usize> {
+    let mut v: u32 = 0;
+    for i in 0..5 {
+        let byte = *b.get(*at)?;
+        *at += 1;
+        if (i == 0 && byte == 0x80) || v >> 25 != 0 {
+            return None;
+        }
+        v = v << 7 | u32::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return usize::try_from(v).ok();
+        }
+    }
+    None
+}
+
+/// Does every glyph of the transformed `glyf` table `t` have at most 65536 points?
+fn glyf_points_fit(t: &[u8]) -> Option<bool> {
+    let u32_at = |at: usize| t.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes).map(|v| v as usize);
+    let glyphs = usize::from(u16::from_be_bytes(t.get(4..6)?.try_into().ok()?));
+    let contours_end = 36usize.checked_add(u32_at(8)?)?;
+    let contours = t.get(36..contours_end)?;
+    let points = t.get(contours_end..contours_end.checked_add(u32_at(12)?)?)?;
+    let mut at = 0;
+    for g in 0..glyphs {
+        // The decoder reads the count as unsigned and only 0xFFFF is a composite glyph (no points
+        // here): 0x8000..=0xFFFE are that many contours, so they are counted, not read as negative.
+        let n = u16::from_be_bytes(contours.get(2 * g..2 * g + 2)?.try_into().ok()?);
+        let mut total = 0usize;
+        for _ in 0..if n == 0xFFFF { 0 } else { n } {
+            // 255UInt16
+            let code = *points.get(at)?;
+            at += 1;
+            let mut byte = || {
+                at += 1;
+                points.get(at - 1).copied().map(usize::from)
+            };
+            total += match code {
+                253 => byte()? << 8 | byte()?,
+                254 => byte()? + 253 * 2,
+                255 => byte()? + 253,
+                v => usize::from(v),
+            };
+            if total > 1 << 16 {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
 }
 
 /// Run a WOFF/WOFF2 decoder. The decoder checks its input, but it is third-party code reading
@@ -230,7 +368,8 @@ impl FontDb {
                     None
                 }
                 Err(e) => {
-                    log::warn!("couldn't store the font {name} in {}: {e}", dir.display());
+                    // Debug-quoted: a line break in the supplied name must not start a forged log record.
+                    log::warn!("couldn't store the font {name:?} in {}: {e}", dir.display());
                     Some(format!("added for this session only: couldn't store it in {}: {e}", dir.display()))
                 }
             },
@@ -266,7 +405,7 @@ impl FontDb {
         if FileRef::new(&sfnt).is_err() {
             return Err(UserFontError::Unusable("not a valid OpenType file".into()));
         }
-        let found = enumerate_faces(&sfnt);
+        let found = enumerate_faces(&sfnt, MAX_FACES_PER_FILE + 1);
         if found.is_empty() {
             return Err(UserFontError::Unusable("no face with a family name".into()));
         }
@@ -368,7 +507,7 @@ impl FontDb {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.is_file())
-            .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
+            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
             .collect();
         paths.sort();
         for p in paths {
@@ -412,12 +551,29 @@ fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
 /// Write `bytes` to a new file in `dir` named `name` (or a numbered variant when that exists),
 /// through a temporary file so a crash never leaves half a font.
 fn write_unique(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    // One store at a time: two adds racing for the same name would otherwise pick the same file
+    // and unlink each other's temporary. ponytail: in-process only; two app instances adding the
+    // same name at the same instant can still collide (the later rename wins).
+    static STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::create_dir_all(dir)?;
     let name = unique_name(name, |n| dir.join(n).exists());
     let path = dir.join(&name);
     let tmp = dir.join(format!(".{name}.part"));
-    std::fs::write(&tmp, bytes)?;
-    if let Err(e) = std::fs::rename(&tmp, &path) {
+    // Created afresh, never opened through what is there: a link planted at the temporary name
+    // would otherwise carry the write to a file outside the folder. A leftover from a crash (or
+    // such a link) is unlinked, not followed, and the create tried once more.
+    let create = || std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp);
+    let mut file = match create() {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&tmp)?;
+            create()?
+        }
+        r => r?,
+    };
+    let written = std::io::Write::write_all(&mut file, bytes);
+    drop(file);
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, &path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -425,290 +581,4 @@ fn write_unique(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-
-    const FAMILY: &str = "Userfont Sans";
-
-    /// A bundled Source Sans 3 file renamed `family` (as long as the original name).
-    pub(crate) fn renamed(file: &str, family: &str) -> Vec<u8> {
-        assert_eq!(family.len(), "Source Sans 3".len());
-        let mut data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
-        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
-        for (from, to) in [(utf16("Source Sans 3"), utf16(family)), (b"Source Sans 3".to_vec(), family.as_bytes().to_vec())] {
-            let mut i = 0;
-            while let Some(at) = data[i..].windows(from.len()).position(|w| w == from) {
-                data[i + at..i + at + to.len()].copy_from_slice(&to);
-                i += at + to.len();
-            }
-        }
-        data
-    }
-
-    fn db() -> FontDb {
-        FontDb::with_font_dirs(vec![])
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wc-userfonts-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
-    }
-
-    /// The tables of a TrueType/OpenType font: (tag, data), in directory order.
-    fn tables(font: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
-        let n = u16::from_be_bytes([font[4], font[5]]) as usize;
-        (0..n)
-            .map(|i| {
-                let r = &font[12 + i * 16..28 + i * 16];
-                let off = u32::from_be_bytes(r[8..12].try_into().unwrap()) as usize;
-                let len = u32::from_be_bytes(r[12..16].try_into().unwrap()) as usize;
-                (r[..4].try_into().unwrap(), font[off..off + len].to_vec())
-            })
-            .collect()
-    }
-
-    /// `font` as a WOFF 1.0 file with every table stored uncompressed (the format allows it).
-    fn woff1(font: &[u8]) -> Vec<u8> {
-        let mut t = tables(font);
-        t.sort_by_key(|x| x.0);
-        let mut out = Vec::new();
-        let dir_end = 44 + 20 * t.len();
-        let mut body = Vec::new();
-        let mut dir = Vec::new();
-        let mut sfnt_size = 12 + 16 * t.len();
-        for (tag, data) in &t {
-            let off = dir_end + body.len();
-            dir.extend_from_slice(tag);
-            dir.extend_from_slice(&(off as u32).to_be_bytes());
-            dir.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            dir.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            dir.extend_from_slice(&0u32.to_be_bytes());
-            body.extend_from_slice(data);
-            body.resize(body.len().next_multiple_of(4), 0);
-            sfnt_size += data.len().next_multiple_of(4);
-        }
-        out.extend_from_slice(b"wOFF");
-        out.extend_from_slice(&font[..4]);
-        out.extend_from_slice(&((dir_end + body.len()) as u32).to_be_bytes());
-        out.extend_from_slice(&(t.len() as u16).to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
-        out.extend_from_slice(&(sfnt_size as u32).to_be_bytes());
-        out.extend_from_slice(&[0, 1, 0, 0]); // version 1.0
-        out.extend_from_slice(&[0; 20]); // no metadata, no private data
-        out.extend(dir);
-        out.extend(body);
-        out
-    }
-
-    /// `data` as a brotli stream of uncompressed meta-blocks (RFC 7932 §9.2).
-    fn brotli_stored(data: &[u8]) -> Vec<u8> {
-        struct Bits {
-            out: Vec<u8>,
-            acc: u64,
-            n: u32,
-        }
-        impl Bits {
-            fn put(&mut self, v: u64, bits: u32) {
-                self.acc |= v << self.n;
-                self.n += bits;
-                while self.n >= 8 {
-                    self.out.push(self.acc as u8);
-                    self.acc >>= 8;
-                    self.n -= 8;
-                }
-            }
-            fn align(&mut self) {
-                if self.n > 0 {
-                    self.put(0, 8 - self.n);
-                }
-            }
-        }
-        let mut b = Bits { out: Vec::new(), acc: 0, n: 0 };
-        b.put(0, 1); // WBITS = 16
-        for chunk in data.chunks(1 << 16) {
-            b.put(0, 1); // ISLAST = 0
-            b.put(0, 2); // MNIBBLES = 4
-            b.put(chunk.len() as u64 - 1, 16);
-            b.put(1, 1); // ISUNCOMPRESSED
-            b.align();
-            b.out.extend_from_slice(chunk);
-        }
-        b.put(1, 1); // ISLAST
-        b.put(1, 1); // ISLASTEMPTY
-        b.align();
-        b.out
-    }
-
-    /// WOFF2's UIntBase128.
-    fn base128(mut v: u32, out: &mut Vec<u8>) {
-        let mut bytes = vec![(v & 0x7f) as u8];
-        v >>= 7;
-        while v > 0 {
-            bytes.push((v & 0x7f) as u8 | 0x80);
-            v >>= 7;
-        }
-        out.extend(bytes.into_iter().rev());
-    }
-
-    /// `font` (TrueType) as a WOFF2 file with no table transformed (glyf/loca use the null
-    /// transform, version 3) and the table data in stored brotli blocks.
-    fn woff2(font: &[u8]) -> Vec<u8> {
-        let t = tables(font);
-        let mut dir = Vec::new();
-        let mut stream = Vec::new();
-        for (tag, data) in &t {
-            let null = if tag == b"glyf" || tag == b"loca" { 3 << 6 } else { 0 };
-            dir.push(63 | null);
-            dir.extend_from_slice(tag);
-            base128(data.len() as u32, &mut dir);
-            stream.extend_from_slice(data);
-        }
-        let compressed = brotli_stored(&stream);
-        let mut out = Vec::new();
-        out.extend_from_slice(b"wOF2");
-        out.extend_from_slice(&font[..4]);
-        let total = (48 + dir.len() + compressed.len()).next_multiple_of(4);
-        out.extend_from_slice(&(total as u32).to_be_bytes());
-        out.extend_from_slice(&(t.len() as u16).to_be_bytes());
-        out.extend_from_slice(&0u16.to_be_bytes());
-        let sfnt: usize = 12 + 16 * t.len() + t.iter().map(|(_, d)| d.len().next_multiple_of(4)).sum::<usize>();
-        out.extend_from_slice(&(sfnt as u32).to_be_bytes());
-        out.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
-        out.extend_from_slice(&[0, 1, 0, 0]);
-        out.extend_from_slice(&[0; 20]);
-        out.extend(dir);
-        out.extend(compressed);
-        out.resize(total, 0);
-        out
-    }
-
-    #[test]
-    fn an_added_font_is_listed_resolved_and_measured() {
-        let db = db();
-        let gen0 = db.generation();
-        assert!(!db.has_family(FAMILY));
-        let r = db.install_font("Userfont-Regular.ttf", &renamed("SourceSans3-Regular.ttf", FAMILY)).unwrap();
-        assert_eq!(r.font.families(), vec![FAMILY.to_string()]);
-        assert_eq!(r.font.file, "Userfont-Regular.ttf");
-        assert!(r.font.path.is_none() && r.warning.is_none(), "no folder: kept for the session only");
-        assert!(db.generation() > gen0);
-        assert!(db.families().iter().any(|f| f == FAMILY));
-        let face = db.face(FAMILY, "Regular");
-        assert_eq!(face.family, FAMILY);
-        // Measured with its own glyphs: the copy has Source Sans 3's metrics.
-        let src = db.face("Source Sans 3", "Regular");
-        let g = face.glyph_for('W');
-        assert!(g != 0);
-        assert_eq!(face.advance(g), src.advance(src.glyph_for('W')));
-        assert_eq!(db.user_fonts().len(), 1);
-    }
-
-    #[test]
-    fn the_bundled_baseline_is_never_replaced() {
-        let db = db();
-        let before = db.face("Source Sans 3", "Regular").id();
-        let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/SourceSans3-Regular.ttf")).unwrap();
-        assert!(matches!(db.install_font("x.ttf", &bytes), Err(UserFontError::AlreadyAvailable(_))));
-        assert_eq!(db.face("Source Sans 3", "Regular").id(), before);
-        assert!(db.user_fonts().is_empty());
-        assert!(matches!(db.remove_user_font("Source Sans 3"), Err(UserFontError::NotUserFont(_))));
-        assert!(db.has_family("Source Sans 3"));
-    }
-
-    #[test]
-    fn junk_is_rejected_without_adding_anything() {
-        let db = db();
-        let n = db.families().len();
-        let regular = renamed("SourceSans3-Regular.ttf", FAMILY);
-        let mut cases: Vec<Vec<u8>> = vec![
-            vec![],
-            b"not a font at all".to_vec(),
-            b"\0\x01\0\0".to_vec(),
-            b"\0\x01\0\0\xff\xff\0\0\0\0\0\0".to_vec(),
-            b"ttcf\0\x01\0\0\xff\xff\xff\xff".to_vec(),
-            b"OTTO\0\x01".to_vec(),
-            b"wOFF\0\x01\0\0\0\0\0\x08".to_vec(),
-            b"wOF2\0\x01\0\0\xff\xff\xff\xff\0\x05".to_vec(),
-            regular[..regular.len() / 3].to_vec(),
-        ];
-        // Damaged web fonts: every prefix, and flipped bytes through the headers and directory.
-        for packed in [woff1(&regular), woff2(&regular)] {
-            for cut in [8, 20, 44, 47, 48, 60, 100, 300, packed.len() / 2, packed.len() - 1] {
-                cases.push(packed[..cut.min(packed.len())].to_vec());
-            }
-            for at in 4..200 {
-                let mut b = packed.clone();
-                b[at] ^= 0xA5;
-                cases.push(b);
-            }
-        }
-        for (i, c) in cases.iter().enumerate() {
-            let r = db.install_font("junk.ttf", c);
-            // A flipped byte inside a table can leave a usable font; the cut-off files can't.
-            assert!(i >= 9 || r.is_err(), "case {i}");
-        }
-        assert_eq!(db.families().len(), n + db.user_fonts().iter().map(|u| u.families().len()).sum::<usize>());
-        let mut big = regular.clone();
-        big.resize(MAX_FONT_FILE_BYTES + 1, 0);
-        assert!(matches!(db.install_font("big.ttf", &big), Err(UserFontError::TooLarge { .. })));
-    }
-
-    #[test]
-    fn woff_and_woff2_are_unwrapped() {
-        let regular = renamed("SourceSans3-Regular.ttf", FAMILY);
-        for (name, packed) in [("a.woff", woff1(&regular)), ("a.woff2", woff2(&regular))] {
-            assert!(is_font_file_name(name));
-            let db = db();
-            let r = db.install_font(name, &packed).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(r.font.file, "a.ttf", "stored unwrapped");
-            let face = db.face(FAMILY, "Regular");
-            assert_eq!(face.family, FAMILY);
-            assert!(face.glyph_for('g') != 0);
-        }
-    }
-
-    #[test]
-    fn user_fonts_are_stored_loaded_and_removed() {
-        let dir = temp_dir("store");
-        let db = db();
-        let (loaded, skipped) = db.load_user_fonts(&dir);
-        assert!(loaded.is_empty() && skipped.is_empty(), "a missing folder is empty");
-        let r = db.install_font("../../evil/Userfont Bold?.woff2", &woff2(&renamed("SourceSans3-Bold.ttf", FAMILY))).unwrap();
-        assert!(r.warning.is_none());
-        let path = r.font.path.clone().unwrap();
-        assert_eq!(path.parent(), Some(dir.as_path()), "a file name can't leave the folder");
-        assert_eq!(r.font.file, "Userfont Bold_.ttf");
-        assert!(path.exists());
-        db.install_font("Userfont-Regular.ttf", &renamed("SourceSans3-Regular.ttf", FAMILY)).unwrap();
-        // A damaged file in the folder is skipped, never fatal.
-        std::fs::write(dir.join("damaged.ttf"), b"ttcf\0\x01\0\0\xff\xff\xff\xff").unwrap();
-        std::fs::write(dir.join("notes.txt"), b"hello").unwrap();
-
-        // The next start loads both from the folder.
-        let next = super::super::FontDb::with_font_dirs(vec![]);
-        let (loaded, skipped) = next.load_user_fonts(&dir);
-        assert_eq!(loaded.len(), 2, "{skipped:?}");
-        assert_eq!(skipped.len(), 1);
-        assert_eq!(next.styles(FAMILY), vec!["Regular".to_string(), "Bold".to_string()]);
-        assert_eq!(next.face(FAMILY, "Bold").style, "Bold");
-
-        // Removing the family deletes both files; text in it falls back.
-        let gone = next.remove_user_font(FAMILY).unwrap();
-        assert_eq!(gone.len(), 2);
-        assert!(!next.has_family(FAMILY));
-        assert_eq!(next.face(FAMILY, "Regular").family, super::super::FALLBACK_FAMILY);
-        assert!(!path.exists());
-        assert!(next.user_fonts().is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn stored_names_are_safe_and_unique() {
-        let ttf = renamed("SourceSans3-Regular.ttf", FAMILY);
-        assert_eq!(stored_name("C:\\x\\..\\a.b.TTF", &ttf), "a_b.ttf");
-        assert_eq!(stored_name("", &ttf), "font.ttf");
-        assert_eq!(stored_name("-rf.otf", b"OTTO"), "font-rf.otf");
-        assert_eq!(unique_name("a.ttf", |n| n == "a.ttf" || n == "a-2.ttf"), "a-3.ttf");
-    }
-}
+pub(crate) mod tests;

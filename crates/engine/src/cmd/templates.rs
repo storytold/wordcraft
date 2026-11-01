@@ -185,17 +185,22 @@ fn load_other(name: &str, data: Option<&str>, base: Option<&Path>) -> Result<Doc
     if name.len() > MAX_PATH {
         return Err(CmdError::Params("`path` is too long".into()));
     }
-    let local = local_path(name, base).ok_or_else(|| CmdError::Failed(format!("`{name}` is not a local file")))?;
-    let ext = local.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    // With the bytes given nothing is read, so the name only gives the format: no path is
+    // resolved, and a document on a share (or a `\\?\` path) can still use a relative name.
+    let file = match data {
+        Some(_) => PathBuf::from(name),
+        None => local_path(name, base).ok_or_else(|| CmdError::Failed(format!("`{name}` is not a local file")))?,
+    };
+    let ext = file.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if matches!(ext.as_str(), "" | "txt" | "text") {
         return Err(CmdError::Params(format!("`{name}` is not a document or template with styles")));
     }
     match data {
         Some(d) => {
             let bytes = super::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-            crate::io::open_bytes(&local.to_string_lossy(), &bytes).map_err(CmdError::Failed)
+            crate::io::open_bytes(name, &bytes).map_err(CmdError::Failed)
         }
-        None => crate::io::open_path(&local).map_err(CmdError::Failed),
+        None => crate::io::open_path(&file).map_err(CmdError::Failed),
     }
 }
 
@@ -231,18 +236,34 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
         return None;
     }
     let p = PathBuf::from(&path);
-    if p.is_relative()
-        && !is_windows_absolute(&path)
-        && let Some(dir) = base.and_then(Path::parent)
-    {
-        return Some(dir.join(p));
-    }
-    Some(p)
+    let p = match base.and_then(Path::parent) {
+        Some(dir) if p.is_relative() && !is_windows_absolute(&path) => dir.join(p),
+        _ => p,
+    };
+    // Checked again once joined: the document's own folder may be on another machine (#3698).
+    (!is_network_path(&p.to_string_lossy())).then_some(p)
 }
 
+/// Does `p` name another machine or a device, whatever separators it mixes: `\\host\share`,
+/// `//host`, `\\?\UNC\…`, `\\.\UNC\…`, other devices, and the NT namespace `\??\…`. The
+/// verbatim, device and NT prefixes are local when a drive letter follows (`\\?\C:\…`,
+/// `\\.\C:\…`, `\??\C:\…`, #3698). Purely lexical, so it is the same on every platform.
 pub(crate) fn is_network_path(p: &str) -> bool {
+    let sep = |c: Option<&u8>| matches!(c, Some(b'\\' | b'/'));
     let b = p.as_bytes();
-    matches!((b.first(), b.get(1)), (Some(b'\\' | b'/'), Some(b'\\' | b'/')))
+    // `\\?\`, `\\.\` or `\??\`, then `X:` and the end or a separator.
+    let prefix = sep(b.first())
+        && sep(b.get(3))
+        && match (b.get(1), b.get(2)) {
+            (Some(b'?'), Some(b'?')) => true,
+            (c, Some(b'?' | b'.')) => sep(c),
+            _ => false,
+        };
+    let drive = b.get(4).is_some_and(u8::is_ascii_alphabetic) && b.get(5) == Some(&b':') && (b.len() == 6 || sep(b.get(6)));
+    if prefix {
+        return !drive;
+    }
+    sep(b.first()) && sep(b.get(1))
 }
 
 fn is_windows_absolute(p: &str) -> bool {
@@ -489,6 +510,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// Ultrareview of #3698: with the template's bytes given (`data`) nothing is read from a path,
+    /// so a document opened from a share or a `\\?\` path can still attach, update and organise
+    /// styles from a template named relative to it. Without the bytes, the share is never read.
+    #[test]
+    fn template_bytes_need_no_local_path() {
+        let data = crate::cmd::insert::base64_encode(&wordcraft_docx::write(&template()).unwrap());
+        for doc_path in ["//fileserver/share/Letter.docx", "//?/C:/docs/Letter.docx"] {
+            let mut s = Session::new(Document::new());
+            s.path = Some(PathBuf::from(doc_path));
+            s.run("tools.attachTemplate", &json!({"path": "Report.dotx", "data": data, "update": true})).unwrap();
+            assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.size, Some(31.0), "{doc_path}");
+            s.run("tools.updateStyles", &json!({"path": "Report.dotx", "data": data})).unwrap();
+            let listed = s.run("styles.organizer", &json!({"path": "Report.dotx", "data": data})).unwrap();
+            assert!(listed["file"]["styles"].as_array().unwrap().iter().any(|x| x["name"] == "Callout"), "{doc_path}");
+            s.run("styles.copyFrom", &json!({"path": "Report.dotx", "data": data, "styles": ["Callout"]})).unwrap();
+            assert!(s.doc.styles.get("Callout").is_some(), "{doc_path}");
+        }
+        let mut s = Session::new(Document::new());
+        s.path = Some(PathBuf::from("//fileserver/share/Letter.docx"));
+        let err = s.run("tools.updateStyles", &json!({"path": "Report.dotx"})).unwrap_err().to_string();
+        assert!(err.contains("not a local file"), "{err}");
+    }
+
     #[test]
     fn template_references_become_local_paths() {
         assert_eq!(local_path("file:///C:/Users/A%20B/T.dotx", None), Some(PathBuf::from("C:/Users/A B/T.dotx")));
@@ -504,9 +548,33 @@ mod tests {
             "file://evil.example/share/T.dotx",
             "file:////evil.example/share/T.dotx",
             "FILE://Evil.Example/T.dotx",
+            // The NT namespace (#3698), with any separators.
+            "\\??\\UNC\\evil.example\\share\\T.dotx",
+            "/??/UNC/evil.example/share/T.dotx",
+            "\\??/UNC\\evil.example/share/T.dotx",
+            "\\??\\GLOBALROOT\\Device\\Mup\\evil.example\\share\\T.dotx",
+            "\\\\.\\UNC\\evil.example\\share\\T.dotx",
         ] {
             assert_eq!(local_path(remote, Some(Path::new("/docs/Letter.docx"))), None, "{remote}");
+            assert_eq!(local_path(remote, None), None, "{remote} without a folder");
         }
+        // A relative reference from a document whose folder is on another machine (#3698).
+        assert_eq!(local_path("T.dotx", Some(Path::new("//evil.example/share/Letter.docx"))), None);
+        assert_eq!(local_path("file:T.dotx", Some(Path::new("//evil.example/share/Letter.docx"))), None);
+        // A drive in the NT namespace is local.
+        assert!(!is_network_path("\\??\\C:\\Templates\\T.dotx"));
+        assert!(!is_network_path("\\??\\C:"));
+        assert!(is_network_path("\\??\\C:evil"));
+        // Verbatim and device paths with a drive are local; with `UNC` or anything else they aren't.
+        for local in ["\\\\?\\C:\\Templates\\T.dotx", "\\\\.\\C:\\Templates\\T.dotx", "//?/C:/Templates/T.dotx", "\\\\?\\C:"] {
+            assert!(!is_network_path(local), "{local}");
+        }
+        for remote in
+            ["\\\\?\\UNC\\host\\share\\T.dotx", "//./UNC/host/share/T.dotx", "\\\\host\\share\\T.dotx", "\\\\?\\C:evil", "\\\\.\\PhysicalDrive0"]
+        {
+            assert!(is_network_path(remote), "{remote}");
+        }
+        assert_eq!(local_path("T.dotx", Some(Path::new("//?/C:/docs/Letter.docx"))), Some(PathBuf::from("//?/C:/docs/T.dotx")));
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%zz%4"), "%zz%4");
     }

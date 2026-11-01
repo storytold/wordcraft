@@ -338,6 +338,23 @@ impl Counters {
                 *f = LevelFlags { started: false, first: Some(*start) };
             }
         }
+        // A level above that hasn't counted yet counts its first number here, as in Word: after
+        // 1.1 and 1.2 with no level-1 item before them, the next level-1 item is 2, whether or not
+        // the deeper level's text shows it.
+        for (k, (v, f)) in st.iter_mut().zip(fl.iter_mut()).enumerate().take(lv) {
+            if f.started {
+                continue;
+            }
+            let start = match self.seen.entry((num, k as u8)) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(true);
+                    n.start_overrides.iter().find(|(l, _)| *l as usize == k).map(|(_, s)| *s)
+                }
+                std::collections::hash_map::Entry::Occupied(_) => None,
+            };
+            *v = start.or(f.first).unwrap_or_else(|| level_def(k).map_or(1, |l| l.start));
+            *f = LevelFlags { started: true, first: None };
+        }
         if let (Some(v), Some(f)) = (st.get_mut(lv), fl.get_mut(lv)) {
             *v = if f.started { v.saturating_add(1) } else { f.first.unwrap_or(def.start) };
             *f = LevelFlags { started: true, first: None };
@@ -357,7 +374,8 @@ impl Counters {
             return Some((def.text.clone(), def));
         }
         let mut label = String::new();
-        let mut chars = def.text.chars().peekable();
+        // Word's level text is short; .docx and the lists command already cap it at 64.
+        let mut chars = def.text.chars().take(MAX_LEVEL_TEXT).peekable();
         while let Some(c) = chars.next() {
             if c == '%'
                 && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
@@ -375,6 +393,9 @@ impl Counters {
                     f => f,
                 };
                 label.push_str(&fmt.format(val));
+                if label.len() > MAX_LABEL_BYTES {
+                    break;
+                }
             } else {
                 label.push(c);
             }
@@ -383,9 +404,28 @@ impl Counters {
     }
 }
 
+/// Longest level text (in characters) expanded into a list label.
+const MAX_LEVEL_TEXT: usize = 64;
+/// Labels stop growing once they pass this many bytes.
+const MAX_LABEL_BYTES: usize = 256;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_level_text_gives_a_bounded_label() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        let huge = Level { format: NumFormat::UpperRoman, text: "%1".repeat(30_000), start: u32::MAX, ..Level::default() };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, huge)];
+        }
+        let mut c = Counters::default();
+        let label = c.next_label(&n, id, 0).unwrap().0;
+        assert!(label.len() <= 512, "label is {} bytes", label.len());
+        assert!(label.starts_with("MMMM"));
+    }
 
     #[test]
     fn a_list_s_own_level_definitions_win() {
@@ -403,8 +443,9 @@ mod tests {
         assert_eq!(c.next_label(&n, id, 2).unwrap().0, "1.02");
         assert_eq!(c.next_label(&n, id, 1).unwrap().0, "");
         assert_eq!(c.next_label(&n, id, 2).unwrap().0, "2.01");
-        // Levels it doesn't define still come from the abstract list.
-        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "1.");
+        // Levels it doesn't define still come from the abstract list; level 0 took its first number
+        // with the first level-1 item, so this is its second.
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "2.");
         assert_eq!(n.level(id, 2).map(|l| l.format), Some(NumFormat::DecimalZero));
     }
 
@@ -451,6 +492,40 @@ mod tests {
         assert_eq!(l(0), "2.");
         assert_eq!(l(1), "2.3.", "level 2 never restarts");
         assert_eq!(l(2), "(1)", "level 1 restarts level 3");
+    }
+
+    #[test]
+    fn a_deeper_item_first_counts_the_levels_above_it() {
+        // Measured in Word: a level above that hasn't counted yet takes its first number at the
+        // first deeper item, whether or not that item's text shows it.
+        let labels_with = |starts: [u32; 3], texts: [&str; 3], overrides: &[(u8, u32)], seq: &[u8]| {
+            let mut n = Numbering::default();
+            let id = n.add_list(ListKind::Legal);
+            if let Some(a) = n.abstracts.first_mut() {
+                for (l, (s, t)) in a.levels.iter_mut().zip(starts.into_iter().zip(texts)) {
+                    l.start = s;
+                    l.text = t.into();
+                }
+            }
+            if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+                num.start_overrides = overrides.to_vec();
+            }
+            let mut c = Counters::default();
+            seq.iter().map(|lv| c.next_label(&n, id, *lv).unwrap().0).collect::<Vec<_>>()
+        };
+        let labels = |starts: [u32; 3], texts: [&str; 3], seq: &[u8]| labels_with(starts, texts, &[], seq);
+        let std = ["%1.", "%1.%2.", "%1.%2.%3."];
+        assert_eq!(labels([1, 1, 1], std, &[1, 1, 0, 0]), ["1.1.", "1.2.", "2.", "3."]);
+        assert_eq!(labels([10, 1, 1], std, &[1, 1, 1, 1, 0, 0]), ["10.1.", "10.2.", "10.3.", "10.4.", "11.", "12."]);
+        assert_eq!(labels([1, 1, 1], ["%1.", "(%2)", "%1.%2.%3."], &[1, 1, 0, 0]), ["(1)", "(2)", "2.", "3."]);
+        assert_eq!(labels([1, 1, 1], std, &[2, 1, 0, 1]), ["1.1.1.", "1.2.", "2.", "2.1."]);
+        assert_eq!(labels([1, 1, 1], ["%1.", "%1.%2.", "(%3)"], &[2, 1, 0]), ["(1)", "1.2.", "2."]);
+        assert_eq!(labels([1, 1, 1], std, &[0, 2, 1, 0]), ["1.", "1.1.1.", "1.2.", "2."]);
+        // The num's own start for the level above counts in its place, as the level's start does.
+        assert_eq!(labels_with([1, 1, 1], std, &[(0, 10)], &[1, 1, 0]), ["10.1.", "10.2.", "11."]);
+        assert_eq!(labels_with([1, 1, 1], std, &[(0, 5)], &[1, 0, 1]), ["5.1.", "6.", "6.1."]);
+        // A level-1 item after the first deeper ones restarts level 2 below it, as usual.
+        assert_eq!(labels([1, 1, 1], std, &[1, 1, 0, 1, 1, 0, 2]), ["1.1.", "1.2.", "2.", "2.1.", "2.2.", "3.", "3.1.1."]);
     }
 
     #[test]

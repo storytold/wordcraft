@@ -37,6 +37,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.readLineSpacing", "Reading Line Spacing", "Reading › Layout", read_line_spacing)
             .params(r#"{"value": "document" | 1.0 | 1.25 | 1.5 | 2.0}"#)
             .pure(),
+        CommandSpec::new("view.readPageColor", "Reading Page Color", "Reading › Layout", read_page_color)
+            .params(r#"{"value": "none" | "sepia" | "inverse"}"#)
+            .pure(),
         // Print Layout: hide the white space (margins, headers, footers) between pages. Screen only.
         CommandSpec::new("view.hideWhiteSpace", "Hide White Space", "View › Show", |s, v| toggle(s, v, |x| &mut x.hide_white_space))
             .params(r#"{"value"?: bool}"#)
@@ -91,12 +94,12 @@ pub fn specs() -> Vec<CommandSpec> {
         // light and dark, as the manual switch did.
         CommandSpec::new("view.interfaceTheme", "Interface Theme", "View › Dark Mode", |s, v| match v.get("value") {
             None => {
-                s.ui_requests.push(json!({"toggle": "interfaceTheme"}));
+                s.push_ui_request(json!({"toggle": "interfaceTheme"}));
                 Ok(json!({"value": "toggle"}))
             }
             Some(Value::String(name)) => match name.as_str() {
                 "light" | "dark" | "system" => {
-                    s.ui_requests.push(json!({"interfaceTheme": name}));
+                    s.push_ui_request(json!({"interfaceTheme": name}));
                     Ok(json!({"value": name}))
                 }
                 _ => Err(CmdError::Params("interface theme: light|dark|system".into())),
@@ -106,6 +109,10 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value"?: "light" | "dark" | "system"; without it, toggles light and dark}"#)
         .pure(),
         CommandSpec::new("view.stylesPane", "Styles Pane", "Home › Styles", |s, v| toggle(s, v, |x| &mut x.styles_pane)).pure(),
+        // Where the Styles pane sits: docked right or left, or floating (#1756). No `dock` reads it.
+        CommandSpec::new("view.stylesPaneDock", "Styles Pane Position", "Home › Styles", styles_pane_dock)
+            .params(r#"{"dock"?: "left" | "right" | "float"}"#)
+            .pure(),
         CommandSpec::new("view.commentsPane", "Comments Pane", "Review › Comments", |s, v| toggle(s, v, |x| &mut x.comments_pane)).pure(),
         CommandSpec::new("view.accessibilityPane", "Accessibility Pane", "Review › Accessibility", |s, v| {
             toggle(s, v, |x| &mut x.accessibility_pane)
@@ -121,12 +128,15 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value"?: bool}"#)
         .pure(),
         CommandSpec::new("view.newWindow", "New Window", "View › Window", |s, _| {
-            s.ui_requests.push(json!({"open": "newWindow"}));
+            s.push_ui_request(json!({"open": "newWindow"}));
             sel_result(s)
         })
         .pure(),
+        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
+            .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
+            .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
-            s.ui_requests.push(json!({"toggle": "split"}));
+            s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
         .key("Mod+Alt+S")
@@ -141,8 +151,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
             .pure(),
-        // Word › File › Options › Advanced › Numeral: how digits look on screen (display
-        // only; the document text keeps the typed codepoints).
+        // Word › File › Options › Advanced › Numeral: how digits look on screen, in print, PDFs
+        // and page images (display only; the document text keeps the typed codepoints).
         CommandSpec::new("view.numeral", "Numerals", "File › Options › Advanced", |s, v| match v.get("value") {
             None => Ok(json!({"value": s.view.numeral})),
             Some(Value::String(name)) => {
@@ -171,11 +181,22 @@ fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
+        s.view.read_page_color = ReadPageColor::None;
     }
     s.view.mode = m;
     s.view.read_mode = read;
     s.relayout();
     Ok(json!({"mode": m, "readMode": read}))
+}
+
+fn styles_pane_dock(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(d) = v.get("dock") {
+        let Some(dock) = d.as_str().and_then(crate::StylesPaneDock::parse) else {
+            return Err(CmdError::Params("dock must be left, right or float".into()));
+        };
+        s.view.styles_pane_dock = dock;
+    }
+    Ok(json!({"dock": s.view.styles_pane_dock.name()}))
 }
 
 fn read_column_width(s: &mut Session, v: &Value) -> CmdResult {
@@ -211,6 +232,31 @@ fn read_line_spacing(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.view.read_line_spacing = spacing;
     Ok(json!({"spacing": spacing}))
+}
+
+/// Read Mode › View › Page Color, as in Word. Screen only: the document and its own page color
+/// are unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadPageColor {
+    /// White paper; the document's page color and page picture are not shown.
+    #[default]
+    None,
+    /// Sepia paper (Word's RGB 112, 66, 20 at 80% transparency over white); the text keeps its colors.
+    Sepia,
+    /// A dark page with light text, as View › Switch Modes draws it.
+    Inverse,
+}
+
+fn read_page_color(s: &mut Session, v: &Value) -> CmdResult {
+    let color = match v.get("value").and_then(Value::as_str) {
+        Some("none") => ReadPageColor::None,
+        Some("sepia") => ReadPageColor::Sepia,
+        Some("inverse") => ReadPageColor::Inverse,
+        _ => return Err(CmdError::Params("reading page color must be none, sepia, or inverse".into())),
+    };
+    s.view.read_page_color = color;
+    Ok(json!({"pageColor": color}))
 }
 
 /// The zoom a document is saved with (#995): the fit mode, else the percentage; `None` at 100%.
@@ -256,8 +302,17 @@ fn zoom(s: &mut Session, v: &Value) -> CmdResult {
             s.view.multi_page = false;
         }
         None => {
-            s.ui_requests.push(json!({"open": "zoom"}));
+            s.push_ui_request(json!({"open": "zoom"}));
         }
     }
     Ok(json!({"zoom": s.view.zoom, "fit": s.view.fit}))
+}
+
+/// View › Window › Switch Windows: the open documents, or make one of them active.
+fn switch_windows(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
+        let id = x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?;
+        s.activate(id)?;
+    }
+    Ok(json!({"documents": s.documents()}))
 }

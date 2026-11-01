@@ -10,8 +10,168 @@
 use serde::{Deserialize, Serialize};
 
 use crate::graphic::PathSeg;
-use crate::para::{GroupChild, InlineObject, ShapeKind};
+use crate::para::{InlineObject, ShapeKind};
 use crate::wordart::TextWarp;
+
+/// DrawingML outline ends (ST_LineCap); missing and unknown values use flat ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LineCap {
+    #[default]
+    Flat,
+    Square,
+    Round,
+}
+
+impl LineCap {
+    /// Read an ST_LineCap value; absent or unrecognized values use the flat default.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "sq" => Self::Square,
+            "rnd" => Self::Round,
+            _ => Self::Flat,
+        }
+    }
+
+    /// Return the canonical DrawingML spelling used when saving the outline.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Square => "sq",
+            Self::Round => "rnd",
+        }
+    }
+
+    /// Whether the cap can be omitted from older-compatible serialized shape properties.
+    pub fn is_flat(&self) -> bool {
+        *self == Self::Flat
+    }
+}
+
+/// An arrowhead's width across its line or length along it (ST_LineEndWidth and
+/// ST_LineEndLength, ECMA-376 §20.1.10.39–40): 2, 3 or 5 times the line's width, as Word draws it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ArrowSize {
+    /// Read a DrawingML size (`sm`, `med`, `lg`); absent or unknown values are medium.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "sm" => Self::Small,
+            "lg" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Small => "sm",
+            Self::Medium => "med",
+            Self::Large => "lg",
+        }
+    }
+
+    /// Read a VML width (`narrow`, `medium`, `wide`) or length (`short`, `medium`, `long`).
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "narrow" | "short" => Self::Small,
+            "wide" | "long" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// How many [`arrow_unit`]s the arrowhead measures.
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Small => 2.0,
+            Self::Medium => 3.0,
+            Self::Large => 5.0,
+        }
+    }
+}
+
+/// The kind of an arrowhead (ST_LineEndType, ECMA-376 §20.1.10.33), kept for saving; every kind
+/// is drawn as a triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowKind {
+    #[default]
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Arrow,
+}
+
+impl ArrowKind {
+    /// Read a DrawingML end type other than `none`; unknown values are triangles.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "stealth" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "arrow" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Triangle => "triangle",
+            Self::Stealth => "stealth",
+            Self::Diamond => "diamond",
+            Self::Oval => "oval",
+            Self::Arrow => "arrow",
+        }
+    }
+
+    /// Read a VML arrow (`block`, `classic`, `diamond`, `oval`, `open`) other than `none`.
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "classic" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "open" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+}
+
+/// An arrowhead's kind and size (`a:headEnd` / `a:tailEnd`). The default is a medium triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ArrowStyle {
+    pub kind: ArrowKind,
+    pub width: ArrowSize,
+    pub length: ArrowSize,
+}
+
+impl ArrowStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The arrowhead's length along its line and width across it, for a line `line_width` wide.
+    pub fn dims(self, line_width: f32) -> (f32, f32) {
+        let unit = arrow_unit(line_width);
+        (self.length.factor() * unit, self.width.factor() * unit)
+    }
+}
+
+/// What an arrowhead's size is a multiple of: the line's width, but at least 2 points (Word draws
+/// a thinner line's arrowheads as for a 2-point line).
+pub fn arrow_unit(line_width: f32) -> f32 {
+    let w = if line_width.is_finite() { line_width.clamp(0.25, 200.0) } else { 0.75 };
+    w.max(2.0)
+}
 
 /// The rest of a shape's properties. Empty (the default) for most shapes.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
@@ -34,6 +194,11 @@ pub struct ShapeExtra {
     pub arrow_start: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub arrow_end: bool,
+    /// The kind and size of the start and end arrowheads, when there are any.
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub start_style: ArrowStyle,
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub end_style: ArrowStyle,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +206,9 @@ pub struct ShapeExtra {
     /// The outline dash pattern; absent in older saved documents means solid.
     #[serde(skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
     pub dash: crate::line_dash::LineDash,
+    /// The outline ends; older saved documents and absent DrawingML caps are flat.
+    #[serde(skip_serializing_if = "LineCap::is_flat")]
+    pub cap: LineCap,
     /// The outline's gradient (`a:ln/a:gradFill`), kept for saving; the outline is drawn in its
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,9 +359,16 @@ pub fn end_direction(kind: ShapeKind, w: f32, h: f32, at_end: bool) -> (f32, f32
     if at_end { (ux, uy) } else { (-ux, -uy) }
 }
 
-/// Re-route the glued connectors among a group's members (they share the group's coordinate
-/// space). Returns whether any moved.
-pub fn reroute_group(children: &mut [GroupChild]) -> bool {
+/// Re-route a group's glued connectors. Resolved ends use the shapes' connection sites in child
+/// coordinates; free or unresolved ends keep their displayed position after child scaling and spin.
+/// Returns whether any moved. Non-groups and connectors needing a non-invertible or display-capped
+/// fallback are unchanged.
+pub fn reroute_group(group: &mut InlineObject) -> bool {
+    let InlineObject::Group { w, h, ch_w, ch_h, children, .. } = group else { return false };
+    let fin = wordcraft_geom::finite;
+    // Match group_rects: invalid child extents use unit scale; invalid display extents become zero.
+    let sx = if fin(*ch_w) > 0.0 { fin(*w) / *ch_w } else { 1.0 };
+    let sy = if fin(*ch_h) > 0.0 { fin(*h) / *ch_h } else { 1.0 };
     let shapes: Vec<(u32, ShapeKind, [f32; 4], wordcraft_geom::Spin)> = children
         .iter()
         .filter_map(|c| match &c.obj {
@@ -215,9 +390,35 @@ pub fn reroute_group(children: &mut [GroupChild]) -> bool {
         if !kind.is_connector() || (extra.start.is_none() && extra.end.is_none()) {
             continue;
         }
-        let (s0, e0) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
-        let (s, e) = (find(extra.start).unwrap_or(s0), find(extra.end).unwrap_or(e0));
+        let (s, e, fallback) = match (find(extra.start), find(extra.end)) {
+            (Some(s), Some(e)) => (s, e, false),
+            (s, e) => {
+                if !sx.is_finite() || !sy.is_finite() || sx <= 0.0 || sy <= 0.0 {
+                    continue;
+                }
+                // Rendering scales the rectangle before spinning it. Undo only the group scale
+                // so route can rebuild an unrotated child frame without moving fallback ends.
+                let (x, y) = (fin(c.x) * sx, fin(c.y) * sy);
+                let (cw, ch) = ((fin(*w) * sx).clamp(0.0, 4000.0), (fin(*h) * sy).clamp(0.0, 4000.0));
+                let (cx, cy) = (x + cw / 2.0, y + ch / 2.0);
+                let spin = float.spin();
+                let s0 = spin.apply(cx, cy, x, y);
+                let e0 = spin.apply(cx, cy, x + cw, y + ch);
+                (s.unwrap_or((s0.0 / sx, s0.1 / sy)), e.unwrap_or((e0.0 / sx, e0.1 / sy)), true)
+            }
+        };
+        if ![s.0, s.1, e.0, e.1].into_iter().all(f32::is_finite) {
+            continue;
+        }
         let f = route(s, e);
+        if ![f.x, f.y, f.w, f.h].into_iter().all(f32::is_finite) {
+            continue;
+        }
+        // group_rects caps displayed child sizes. A larger fallback span cannot be represented
+        // by an unrotated frame, so keep the original instead of moving its free/unresolved end.
+        if fallback && (f.w * sx > 4000.0 || f.h * sy > 4000.0) {
+            continue;
+        }
         let same = (f.x - c.x).abs() < 0.01 && (f.y - c.y).abs() < 0.01 && (f.w - *w).abs() < 0.01 && (f.h - *h).abs() < 0.01;
         if same && f.flip_h == float.flip_h && f.flip_v == float.flip_v && float.rot == 0.0 {
             continue;
@@ -237,7 +438,19 @@ pub fn reroute_group(children: &mut [GroupChild]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::para::Float;
+    use crate::para::{Float, GroupChild};
+
+    /// Older JSON retains flat ends without adding a property; non-flat values round-trip.
+    #[test]
+    fn older_shape_json_defaults_to_flat_caps() {
+        let extra: ShapeExtra = serde_json::from_str("{}").unwrap();
+        assert_eq!(extra.cap, LineCap::Flat);
+        assert_eq!(serde_json::to_value(&extra).unwrap(), serde_json::json!({}));
+        for cap in [LineCap::Square, LineCap::Round] {
+            let extra = ShapeExtra { cap, ..Default::default() };
+            assert_eq!(serde_json::from_value::<ShapeExtra>(serde_json::to_value(&extra).unwrap()).unwrap(), extra);
+        }
+    }
 
     fn shape(kind: ShapeKind, w: f32, h: f32, extra: ShapeExtra) -> InlineObject {
         InlineObject::Shape {
@@ -253,6 +466,10 @@ mod tests {
             effects: Default::default(),
             extra,
         }
+    }
+
+    fn group(children: Vec<GroupChild>) -> InlineObject {
+        InlineObject::Group { w: 200.0, h: 300.0, ch_w: 200.0, ch_h: 300.0, float: Float::default(), children, canvas: None }
     }
 
     #[test]
@@ -275,6 +492,175 @@ mod tests {
         assert!(near(corner_radius(Some(10_000), -5.0, 100.0), 0.0));
     }
 
+    /// One rerouting case: the free end settles and the attached end keeps its site.
+    fn assert_transformed_reroute(kind: ShapeKind, rot: f32, flip_h: bool, flip_v: bool, free: Option<ConnEnd>, free_start: bool) {
+        let attached = Some(ConnEnd { id: 7, site: 3 });
+        let (start, end) = if free_start { (free, attached) } else { (attached, free) };
+        let mut obj = shape(kind, 40.0, 20.0, ShapeExtra { start, end, ..Default::default() });
+        let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+        float.rot = rot;
+        float.flip_h = flip_h;
+        float.flip_v = flip_v;
+        // Frame (10, 30, 40, 20), centre (30, 40): mirror, then rotate
+        // clockwise in y-down group space. Do not use the routing transform
+        // to compute the expectation.
+        let sign = if free_start { -1.0 } else { 1.0 };
+        let dx = sign * if flip_h { -20.0 } else { 20.0 };
+        let dy = sign * if flip_v { -10.0 } else { 10.0 };
+        let (sin, cos) = rot.to_radians().sin_cos();
+        let expected = (30.0 + dx * cos - dy * sin, 40.0 + dx * sin + dy * cos);
+        let kids = vec![
+            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { x: 10.0, y: 30.0, obj },
+        ];
+        let mut group = group(kids);
+        assert!(reroute_group(&mut group));
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+        let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        let (free, attached) = if free_start { (start, end) } else { (end, start) };
+        assert!(
+            (free.0 - expected.0).abs() < 0.001 && (free.1 - expected.1).abs() < 0.001,
+            "{kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {free:?} != {expected:?}"
+        );
+        assert_eq!(attached, (140.0, 210.0));
+        assert_eq!(float.rot, 0.0);
+        assert!(!reroute_group(&mut group), "rerouting must settle");
+    }
+
+    #[test]
+    fn rerouting_preserves_transformed_free_and_unresolved_ends() {
+        for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector] {
+            for rot in [0.0_f32, 30.0, 90.0, 180.0, 270.0, -90.0, 450.0] {
+                for (flip_h, flip_v) in [(false, false), (true, false), (false, true), (true, true)] {
+                    for free in [None, Some(ConnEnd { id: 404, site: 0 }), Some(ConnEnd { id: 7, site: 99 })] {
+                        for free_start in [false, true] {
+                            assert_transformed_reroute(kind, rot, flip_h, flip_v, free, free_start);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rerouting_preserves_both_unresolved_ends() {
+        let extra = ShapeExtra { start: Some(ConnEnd { id: 404, site: 0 }), end: Some(ConnEnd { id: 7, site: 99 }), ..Default::default() };
+        let mut obj = shape(ShapeKind::StraightConnector, 40.0, 20.0, extra);
+        let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+        float.rot = 90.0;
+        let kids = vec![
+            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { x: 10.0, y: 30.0, obj },
+        ];
+        let mut group = group(kids);
+        assert!(reroute_group(&mut group));
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+        let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        assert!((start.0 - 40.0).abs() < 0.001 && (start.1 - 20.0).abs() < 0.001);
+        assert!((end.0 - 20.0).abs() < 0.001 && (end.1 - 60.0).abs() < 0.001);
+        assert_eq!(float.rot, 0.0);
+        assert!(!reroute_group(&mut group));
+    }
+
+    #[test]
+    fn rerouting_nonuniform_group_preserves_both_unresolved_ends() {
+        let extra = ShapeExtra { start: Some(ConnEnd { id: 404, site: 0 }), end: Some(ConnEnd { id: 7, site: 99 }), ..Default::default() };
+        let mut obj = shape(ShapeKind::StraightConnector, 40.0, 20.0, extra);
+        let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+        float.rot = 90.0;
+        let mut group = group(vec![
+            GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+            GroupChild { x: 10.0, y: 30.0, obj },
+        ]);
+        let InlineObject::Group { w, h, .. } = &mut group else { panic!() };
+        (*w, *h) = (400.0, 150.0);
+        assert!(reroute_group(&mut group));
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[1];
+        let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+        let (start, end) = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+        // Displayed rect (20, 15, 80, 10), spun 90 degrees: (65, -20) to (55, 60).
+        assert!((start.0 - 32.5).abs() < 0.001 && (start.1 + 40.0).abs() < 0.001);
+        assert!((end.0 - 27.5).abs() < 0.001 && (end.1 - 120.0).abs() < 0.001);
+        assert!(!reroute_group(&mut group));
+    }
+
+    #[test]
+    fn rerouting_preserves_fallback_when_group_display_cap_prevents_route() {
+        for free_start in [false, true] {
+            let attached = Some(ConnEnd { id: 7, site: 3 });
+            let (start, end) = if free_start { (None, attached) } else { (attached, None) };
+            let mut obj = shape(ShapeKind::StraightConnector, 40.0, 0.0, ShapeExtra { start, end, ..Default::default() });
+            let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+            float.flip_h = free_start;
+            let mut group = group(vec![
+                GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+                GroupChild { x: 3000.0, y: 10.0, obj },
+            ]);
+            let InlineObject::Group { w, .. } = &mut group else { panic!() };
+            *w = 400.0;
+            let visual_free = |group: &InlineObject| {
+                let rects = group.group_rects(0.0, 0.0, 400.0, 300.0);
+                let ([x, y, w, h], obj) = rects[1];
+                let spin = obj.frame().unwrap().2.spin();
+                let (px, py) = if free_start { (x, y) } else { (x + w, y + h) };
+                spin.apply(x + w / 2.0, y + h / 2.0, px, py)
+            };
+            let before = visual_free(&group);
+            assert_eq!(before, (6080.0, 10.0));
+            let moved = reroute_group(&mut group);
+            assert_eq!(visual_free(&group), before, "the rebuilt display frame cannot span both endpoints");
+            assert!(!moved, "an unrepresentable fallback route must leave the connector unchanged");
+            let InlineObject::Group { children, .. } = &group else { panic!() };
+            let c = &children[1];
+            let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+            assert_eq!((c.x, c.y, *w, *h, float.rot, float.flip_h), (3000.0, 10.0, 40.0, 0.0, 0.0, free_start));
+            assert!(!reroute_group(&mut group), "repeated rerouting must not shrink the connector");
+        }
+    }
+
+    #[test]
+    fn rerouting_group_handles_degenerate_dimensions_without_nonfinite_writes() {
+        for dims in [
+            [0.0, 300.0, 200.0, 300.0],
+            [200.0, 0.0, 200.0, 300.0],
+            [-200.0, 300.0, 200.0, 300.0],
+            [f32::NAN, 300.0, 200.0, 300.0],
+            [200.0, f32::INFINITY, 200.0, 300.0],
+            [f32::MAX, 300.0, f32::MIN_POSITIVE, 300.0],
+            [f32::MIN_POSITIVE, 300.0, f32::MAX, 300.0],
+            [20000.0, f32::MIN_POSITIVE, 200.0, 300.0],
+            [200.0, 300.0, 0.0, 0.0],
+            [200.0, 300.0, f32::NAN, f32::INFINITY],
+            [200.0, 300.0, -200.0, -300.0],
+        ] {
+            let mut obj =
+                shape(ShapeKind::StraightConnector, 40.0, 20.0, ShapeExtra { start: Some(ConnEnd { id: 7, site: 3 }), ..Default::default() });
+            let InlineObject::Shape { float, .. } = &mut obj else { panic!() };
+            float.rot = 90.0;
+            let mut group = group(vec![
+                GroupChild { x: 100.0, y: 200.0, obj: shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra { id: 7, ..Default::default() }) },
+                GroupChild { x: 10.0, y: 30.0, obj },
+            ]);
+            let InlineObject::Group { w, h, ch_w, ch_h, .. } = &mut group else { panic!() };
+            (*w, *h, *ch_w, *ch_h) = (dims[0], dims[1], dims[2], dims[3]);
+            let moved = reroute_group(&mut group);
+            // group_rects treats invalid child extents as unit scale; display scales that
+            // cannot be inverted (or whose inverse overflows) must not change the connector.
+            assert_eq!(moved, dims[2] <= 0.0 || !dims[2].is_finite(), "{dims:?}");
+            let InlineObject::Group { children, .. } = &group else { panic!() };
+            let c = &children[1];
+            let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+            assert!([c.x, c.y, *w, *h, float.rot].into_iter().all(f32::is_finite), "{dims:?}");
+            assert!(!reroute_group(&mut group), "rerouting must settle: {dims:?}");
+        }
+        assert!(!reroute_group(&mut shape(ShapeKind::Rectangle, 40.0, 20.0, ShapeExtra::default())));
+    }
+
     #[test]
     fn group_connectors_follow_their_shapes() {
         let a = ShapeExtra { id: 7, ..Default::default() };
@@ -285,17 +671,40 @@ mod tests {
             GroupChild { x: 100.0, y: 50.0, obj: shape(ShapeKind::Ellipse, 20.0, 10.0, b) },
             GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::ElbowConnector, 1.0, 1.0, link) },
         ];
-        assert!(reroute_group(&mut kids));
+        // Fully resolved endpoints must still come from their sites, regardless of the
+        // connector's old rotation and flips.
+        let InlineObject::Shape { float, .. } = &mut kids[2].obj else { panic!() };
+        float.rot = 90.0;
+        float.flip_h = true;
+        float.flip_v = true;
+        let mut group = group(kids);
+        assert!(reroute_group(&mut group));
         // From the rectangle's right side (20, 5) to the ellipse's left side (100, 55).
-        let c = &kids[2];
+        let InlineObject::Group { children, .. } = &group else { panic!() };
+        let c = &children[2];
         let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
         assert_eq!((c.x, c.y, *w, *h, float.flip_h, float.flip_v), (20.0, 5.0, 80.0, 50.0, false, false));
-        assert!(!reroute_group(&mut kids), "settled");
+        assert!(!reroute_group(&mut group), "settled");
+        // A fully resolved connector does not need an invertible group scale.
+        for (width, height) in [(400.0, 150.0), (0.0, 0.0), (f32::NAN, f32::INFINITY)] {
+            let mut scaled = group.clone();
+            let InlineObject::Group { w, h, children, .. } = &mut scaled else { panic!() };
+            (*w, *h) = (width, height);
+            let InlineObject::Shape { float, .. } = &mut children[2].obj else { panic!() };
+            float.rot = 90.0;
+            assert!(reroute_group(&mut scaled));
+            let InlineObject::Group { children, .. } = &scaled else { panic!() };
+            let c = &children[2];
+            let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!() };
+            assert_eq!(ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v), ((20.0, 5.0), (100.0, 55.0)));
+            assert!(!reroute_group(&mut scaled));
+        }
         // A connection to a missing id or site keeps that end where it was.
-        if let InlineObject::Shape { extra, .. } = &mut kids[2].obj {
+        let InlineObject::Group { children, .. } = &mut group else { panic!() };
+        if let InlineObject::Shape { extra, .. } = &mut children[2].obj {
             extra.end = Some(ConnEnd { id: 404, site: 0 });
             extra.start = Some(ConnEnd { id: 7, site: 99 });
         }
-        assert!(!reroute_group(&mut kids));
+        assert!(!reroute_group(&mut group));
     }
 }

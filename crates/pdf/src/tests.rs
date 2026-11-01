@@ -6,6 +6,49 @@ use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Wate
 
 use crate::*;
 
+/// Verify preset lines and connectors emit the requested PDF line-cap operator.
+#[test]
+fn shape_line_caps_reach_pdf_content() {
+    use wordcraft_doc::{
+        connector::{LineCap as ShapeCap, ShapeExtra},
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (cap, operator) in [(ShapeCap::Flat, None), (ShapeCap::Round, Some("1 J")), (ShapeCap::Square, Some("2 J"))] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 40.0,
+                h: 0.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+                stroke_width: 10.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            // Content operators can share a line: PDF separates them by whitespace.
+            let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+            let has_operator = |op: &str| {
+                let expected: Vec<_> = op.split_ascii_whitespace().collect();
+                tokens.windows(2).any(|pair| pair == expected.as_slice())
+            };
+            if let Some(op) = operator {
+                assert!(has_operator(op), "{kind:?} {cap:?}: missing PDF cap operator {op}");
+            } else {
+                assert!(!has_operator("1 J") && !has_operator("2 J"), "flat cap must remain butt");
+            }
+        }
+    }
+}
+
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
     let mut buf = Vec::new();
@@ -426,6 +469,9 @@ fn shapes_have_paths() {
         ShapeKind::Star,
         ShapeKind::Heart,
         ShapeKind::Arrow,
+        ShapeKind::ArrowLeft,
+        ShapeKind::ArrowUp,
+        ShapeKind::ArrowDown,
         ShapeKind::Line,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
@@ -531,7 +577,7 @@ fn unsubsettable_font(family: &str, gid: u16) -> Vec<u8> {
             i += 1;
         }
     };
-    let wide = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
+    let wide = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
     assert_eq!(family.len(), "Source Sans 3".len());
     rename(&mut f, &wide("Source Sans 3"), &wide(family));
     rename(&mut f, b"Source Sans 3", family.as_bytes());
@@ -725,6 +771,32 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     let (glyphs, paths) = count_glyphs_and_paths(&bytes);
     assert_eq!(glyphs, 0, "no text in the font krilla can't subset");
     assert!(paths > 0, "its glyphs are drawn as outlines");
+}
+
+/// #3674: shaping gives 32-bit glyph ids (a format-12 cmap can map a character to any of them),
+/// but krilla takes 16-bit ones and panics on a larger id. That failed the export, and on wasm
+/// (`panic = "abort"`) lost the tab. A glyph id above 65535 is now written as .notdef.
+#[test]
+fn glyph_id_above_u16_exports() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Wide glyph", CharProps { font: Some("Source Sans 3".into()), ..Default::default() }))];
+    let opts = PdfOptions { tagged: false, ..Default::default() };
+    let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (want, _) = count_glyphs_and_paths(&export_layout(&d, &lay, &opts).unwrap());
+    assert!(want > 0);
+    let mut wide = 0;
+    for item in lay.pages.iter_mut().flat_map(|p| p.items.iter_mut()) {
+        if let Placed::Lines { para, .. } = item
+            && let Some(g) = Arc::make_mut(para).glyphs.first_mut()
+        {
+            g.gid = 70_000;
+            wide += 1;
+        }
+    }
+    assert_eq!(wide, 1, "one glyph id is out of range");
+    let bytes = export_layout(&d, &lay, &opts).expect("a glyph id above 65535 must not fail the export");
+    let (glyphs, _) = count_glyphs_and_paths(&bytes);
+    assert_eq!(glyphs, want, "every glyph is still drawn, the wide one as .notdef");
 }
 
 #[test]
@@ -1019,6 +1091,34 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
     assert!(whole > 0.0 && (cropped / whole - 1.0 / 0.03).abs() < 0.5, "emf: {whole} → {cropped}");
 }
 
+/// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
+/// components unsubsampled, with no pixel data that size.
+fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 1] = 0xC2;
+    jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+    jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+    for c in 0..3 {
+        jpeg[sof + 11 + 3 * c] = 0x11;
+    }
+    let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+    let n = usize::from(jpeg[sos + 4]);
+    jpeg[sos + 6 + 2 * n] = 0;
+    jpeg
+}
+
+/// #3644: a progressive JPEG's coefficients count toward the budget, beside its output.
+#[test]
+fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
+    assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
+    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900))).is_none());
+    let mut baseline = Vec::new();
+    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    assert!(load_image(&Arc::new(baseline)).is_some(), "other JPEGs still embed");
+}
+
 /// #1502: an inline picture's Figure carries its own alt text, not the "picture" fallback.
 #[test]
 fn inline_picture_figure_keeps_its_alt_text() {
@@ -1208,10 +1308,10 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
 fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
     let mut font = [82i32.to_le_bytes(), 104u32.to_le_bytes(), 1i32.to_le_bytes(), (-20i32).to_le_bytes()].concat();
     font.extend([0i32, 0, 0, 400, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
-    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(u16::to_le_bytes).collect();
     name.resize(64, 0);
     font.extend(name);
-    let units: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let units: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let padded = units.len().div_ceil(4) * 4;
     let mut out = [84u32.to_le_bytes(), ((76 + padded) as u32).to_le_bytes()].concat();
     out.extend([0i32, 0, 100, 100, 1, 0, 0, 5, 40, text.encode_utf16().count() as i32, 76, 0, 0, 0, 0, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
@@ -1249,6 +1349,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
     let mut p = Paragraph::with_text("Paragraph start\u{c}Bookmark target", CharProps::default());
     let at = "Paragraph start\u{c}".len();
     p.insert_object(at, InlineObject::BookmarkStart { name: "target".into() }, &CharProps::default()).unwrap();
+    p.insert_object(at, InlineObject::BookmarkStart { name: "First".into() }, &CharProps::default()).unwrap();
     p.insert_object(0, InlineObject::BookmarkStart { name: "first".into() }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1280,6 +1381,13 @@ fn bookmark_destination_is_the_page_of_its_start() {
     let (page_ci, x_ci, y_ci) = ex.bookmark("TARGET").unwrap();
     assert_eq!(page_ci, 1);
     assert_eq!((x_ci, y_ci), (x, y));
+    // An exact name wins; names that differ only in case fall back to the first in the document
+    // (a folded index, not a scan of a hash map in arbitrary order for every link).
+    assert_eq!(ex.bookmark("First").map(|b| b.0), Some(1));
+    assert_eq!(ex.bookmark("FIRST").map(|b| b.0), Some(0));
+    assert!(ex.bookmark("absent").is_none());
+    let (exact, folded) = ex.bookmarks.get().unwrap();
+    assert_eq!((exact.len(), folded.len()), (3, 2));
 
     // Whitespace in ISO date string is parsed successfully
     assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
@@ -1957,7 +2065,7 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let mut drawn = String::new();
     for page in &lay.pages {
-        for draw in page_display(&d, page, &DisplayOptions::default()) {
+        for draw in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
             if let Draw::Glyphs { face, glyphs, text, .. } = draw {
                 assert_eq!(face.data(), bundled.data(), "page glyphs must use the bundled face without system fallback");
                 assert!(glyphs.iter().all(|(id, _, _)| *id != 0), "page glyphs must not use .notdef");
@@ -2066,6 +2174,13 @@ fn image_budget_is_checked_from_the_header() {
     // The decoded image and its RGBA conversion are charged: two buffers at peak.
     assert!(load_image_within(&data, 1024).is_some());
     assert!(load_image_within(&data, 1023).is_none());
+    // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
+    let mut wide = Vec::new();
+    let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
+    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = Arc::new(wide);
+    assert!(load_image_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(load_image_within(&wide, 1536).is_some());
     // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(30_000, 30_000);
     let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
@@ -2311,4 +2426,65 @@ fn borders_are_dashed_with_words_patterns() {
     assert!(raw.contains("[1 1]0 d") || raw.contains("[1 1] 0 d"), "the dotted border");
     assert!(raw.contains("[6 2]0 d") || raw.contains("[6 2] 0 d"), "the dashed border");
     assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
+}
+
+#[test]
+fn only_safe_link_targets_become_annotations() {
+    use hayro_syntax::object::{Array, Dict, String as PdfString};
+
+    let mut d = Document::new();
+    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
+        .into_iter()
+        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+        .collect();
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let uris: Vec<String> = pdf.pages()[0]
+        .raw()
+        .get::<Array>(b"Annots")
+        .into_iter()
+        .flat_map(|a| a.iter::<Dict>().collect::<Vec<_>>())
+        .map(|a| {
+            let uri = a.get::<Dict>(b"A").unwrap().get::<PdfString>(b"URI").unwrap();
+            String::from_utf8_lossy(uri.as_ref()).into_owned()
+        })
+        .collect();
+    assert_eq!(uris, ["https://example.com/", "mailto:ada@example.com"]);
+}
+
+/// A glyph's text runs to the first later glyph with a cluster past its own (the end of the text
+/// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
+/// of the run for every glyph.
+#[test]
+fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
+    let brute = |cl: &[usize], len: usize| -> Vec<usize> {
+        (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
+    };
+    for cl in [vec![], vec![0], vec![0, 0, 3, 3, 5], vec![5, 3, 3, 0], vec![2, 0, 4, 1, 1, 6, 3], vec![0, 7, 2, 2, 9, 1]] {
+        assert_eq!(cluster_ends(&cl, 10), brute(&cl, 10), "{cl:?}");
+    }
+    // One base letter and a million combining marks in its cluster, then one more letter.
+    // Milliseconds; the rescan (`brute`) took 2.9 s at 50,000 and grows with the square, so
+    // about 20 minutes here.
+    let n = 1_000_000;
+    let mut cl = vec![0; n + 1];
+    cl.push(2 * n + 2);
+    let start = std::time::Instant::now();
+    let ends = cluster_ends(&cl, 2 * n + 4);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    assert!(ends[..=n].iter().all(|e| *e == 2 * n + 2));
+    assert_eq!(ends.last(), Some(&(2 * n + 4)));
+}
+
+/// A run's baseline is the y most of its glyphs share, ties to the lower bits; a run on one
+/// baseline (the common case) gives its y without counting.
+#[test]
+fn baseline_is_the_most_shared_y() {
+    assert_eq!(baseline(&[]), None);
+    assert_eq!(baseline(&[(1, 0.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 7.5), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
+    assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
+    assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }

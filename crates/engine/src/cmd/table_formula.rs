@@ -59,7 +59,8 @@ pub fn format_result(v: f64) -> String {
 }
 
 /// The text a formula field shows: its result under its `\#` numeric picture when it has one (see
-/// [`format_picture`]), otherwise as [`format_result`] shows it.
+/// [`format_picture`]), otherwise as [`format_result`] shows it, and then under its `\*` switches:
+/// a number format such as `\* CardText`, then a capitalization switch such as `\* Upper`.
 pub fn evaluate_field(t: &Table, r: usize, c: usize, instr: &str) -> Result<String, CmdError> {
     evaluate_field_with(t, None, None, r, c, instr)
 }
@@ -74,7 +75,7 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
-    Ok(match switch.and_then(picture_of) {
+    let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
             let out_lang = doc
@@ -97,21 +98,63 @@ pub fn evaluate_field_with(
                 .or_else(|| default_lang.map(str::to_string));
             wordcraft_doc::locale_number::format_number(value, out_lang.as_deref())
         }
+    };
+    Ok(match switch {
+        Some(switch) => format_switches(switch, value, text),
+        None => text,
     })
 }
 
-/// Splits a field's `\#` switch off its formula: `=SUM(ABOVE) \# "0.00"` gives the formula and the
-/// switch text (from the `\#` on).
+/// The text of a formula result under the field's `\*` switches, where `text` is `value` formatted
+/// with the `\#` picture, or in the cell's language when there is no picture. A number format such
+/// as `\* CardText`, `\* OrdText` or `\* roman` writes a whole number the format covers (up to
+/// 999,999 for CardText and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic), in lowercase
+/// for CardText and OrdText. `\* Hex` writes a whole number from 0 to 4,294,967,295 in uppercase
+/// hexadecimal digits. `\* DollarText` writes a result from 0 to 999,999.99 in lowercase cardinal
+/// text with its first two decimals (rounded) over 100 (see
+/// [`wordcraft_layout::fields::dollar_text`]). Any other result keeps its digits. The capitalization
+/// switches (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text in order. Other
+/// `\*` switches leave the text as it is. Quoted text, such as a `\#` picture, is not a switch.
+fn format_switches(switches: &str, value: f64, text: String) -> String {
+    use wordcraft_doc::section::NumFormat;
+    let unquoted = switches.split('"').step_by(2).collect::<Vec<_>>().join(" ");
+    let fmt = wordcraft_layout::fields::format_switch(&unquoted).filter(|f| *f != NumFormat::Decimal);
+    match fmt {
+        Some(NumFormat::DollarText) => {
+            let text = wordcraft_layout::fields::dollar_text(value).unwrap_or(text);
+            wordcraft_layout::fields::apply_case_switch(switches, text)
+        }
+        Some(fmt) if number_format_covers(fmt, value) => wordcraft_layout::fields::field_number(switches, fmt, value as u32),
+        _ => wordcraft_layout::fields::apply_case_switch(switches, text),
+    }
+}
+
+/// Whether the `\*` number format `fmt` writes `value`: a whole number up to 999,999 for CardText
+/// and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic, and 0 to `u32::MAX` otherwise.
+pub(crate) fn number_format_covers(fmt: wordcraft_doc::section::NumFormat, value: f64) -> bool {
+    use wordcraft_doc::section::NumFormat;
+    let range = match fmt {
+        NumFormat::CardinalText | NumFormat::OrdinalText => 0.0..=999_999.0,
+        NumFormat::LowerRoman | NumFormat::UpperRoman => 1.0..=50_000.0,
+        NumFormat::LowerLetter | NumFormat::UpperLetter => 1.0..=780.0,
+        _ => 0.0..=f64::from(u32::MAX),
+    };
+    value.fract() == 0.0 && range.contains(&value)
+}
+
+/// Splits a field's switches (`\#` and `\*`) off its formula: `=SUM(ABOVE) \# "0.00"` gives the
+/// formula and the switch text (from the first switch on).
 pub fn split_switch(instr: &str) -> (&str, Option<&str>) {
-    match instr.find("\\#") {
+    match [instr.find("\\#"), instr.find("\\*")].into_iter().flatten().min() {
         Some(at) => (instr[..at].trim_end(), Some(&instr[at..])),
         None => (instr, None),
     }
 }
 
-/// The picture a `\#` switch names: a quoted one (`"#,##0.00"`) or a single word.
+/// The picture of the `\#` switch in a field's switch text: a quoted one (`"#,##0.00"`) or a
+/// single word.
 fn picture_of(switch: &str) -> Option<String> {
-    let rest = switch.strip_prefix("\\#")?.trim_start();
+    let rest = switch[switch.find("\\#")? + 2..].trim_start();
     let picture = match rest.strip_prefix('"') {
         Some(quoted) => quoted.split('"').next().unwrap_or_default(),
         None => rest.split_whitespace().next().unwrap_or_default(),
@@ -228,6 +271,50 @@ enum Tok {
     Cmp(&'static str),
 }
 
+fn parse_num_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<Tok, CmdError> {
+    let mut lit = String::new();
+    while let Some(&d) = chars.peek() {
+        if d.is_ascii_digit() || d == '.' {
+            lit.push(d);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    let x = lit.parse::<f64>().map_err(|_| syntax(format!("`{lit}` isn't a number")))?;
+    Ok(Tok::Num(x))
+}
+
+fn parse_name_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Tok {
+    let mut name = String::new();
+    while let Some(&d) = chars.peek() {
+        if d.is_ascii_alphanumeric() {
+            name.push(d.to_ascii_uppercase());
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    Tok::Name(name)
+}
+
+fn parse_cmp_token(ch: char, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Tok {
+    chars.next();
+    let next = chars.peek().copied();
+    let (op, longer) = match (ch, next) {
+        ('<', Some('=')) => ("<=", true),
+        ('<', Some('>')) => ("<>", true),
+        ('>', Some('=')) => (">=", true),
+        ('<', _) => ("<", false),
+        ('>', _) => (">", false),
+        _ => ("=", false),
+    };
+    if longer {
+        chars.next();
+    }
+    Tok::Cmp(op)
+}
+
 fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
     let mut out = Vec::new();
     let mut chars = s.chars().peekable();
@@ -235,46 +322,14 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
         if ch.is_whitespace() {
             chars.next();
         } else if ch.is_ascii_digit() || ch == '.' {
-            let mut lit = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() || d == '.' {
-                    lit.push(d);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let x = lit.parse::<f64>().map_err(|_| syntax(format!("`{lit}` isn't a number")))?;
-            out.push(Tok::Num(x));
+            out.push(parse_num_token(&mut chars)?);
         } else if ch.is_ascii_alphabetic() {
-            let mut name = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_alphanumeric() {
-                    name.push(d.to_ascii_uppercase());
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            out.push(Tok::Name(name));
+            out.push(parse_name_token(&mut chars));
         } else if matches!(ch, '+' | '-' | '*' | '/' | '^' | '(' | ')' | ',' | ':') {
             out.push(Tok::Op(ch));
             chars.next();
-        } else if matches!(ch, '<' | '>' | '=') {
-            chars.next();
-            let next = chars.peek().copied();
-            let (op, longer) = match (ch, next) {
-                ('<', Some('=')) => ("<=", true),
-                ('<', Some('>')) => ("<>", true),
-                ('>', Some('=')) => (">=", true),
-                ('<', _) => ("<", false),
-                ('>', _) => (">", false),
-                _ => ("=", false),
-            };
-            if longer {
-                chars.next();
-            }
-            out.push(Tok::Cmp(op));
+        } else if matches!(ch, '<'..='>') {
+            out.push(parse_cmp_token(ch, &mut chars));
         } else {
             return Err(syntax(format!("`{ch}` isn't part of a formula")));
         }
@@ -468,7 +523,7 @@ impl Parser {
 
 /// `B4` → (row 3, column 1): the row counts from 1 and the column from A.
 fn cell_ref(name: &str) -> Option<(usize, usize)> {
-    let letters: String = name.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let letters: String = name.chars().take_while(char::is_ascii_alphabetic).collect();
     let digits = name.get(letters.len()..)?;
     if letters.is_empty() || digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;
@@ -940,6 +995,46 @@ mod tests {
         assert_eq!(shown("=A1"), "1234.50");
         assert_eq!(shown("=A1 \\# 0"), "1235", "a bare picture word");
         assert_eq!(shown("=A1 \\# \"\""), "1234.50", "an empty picture is none");
+    }
+
+    #[test]
+    fn a_format_switch_writes_the_result_as_text_and_sets_its_capitals() {
+        let t = table(&[&["790"], &["1.5"], &[""]]);
+        assert_eq!(split_switch("=A1 \\* Caps \\# 0"), ("=A1", Some("\\* Caps \\# 0")));
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("=A1 \\* CardText"), "seven hundred ninety");
+        assert_eq!(shown("=A1 \\* CardText \\* Caps"), "Seven Hundred Ninety");
+        assert_eq!(shown("=A1 \\* OrdText \\* FirstCap"), "Seven hundred ninetieth");
+        assert_eq!(shown("=A1 \\* roman"), "dccxc");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT"), "790", "a switch that formats nothing");
+        assert_eq!(shown("=A1 \\# \"#,##0.00\" \\* MERGEFORMAT"), "790.00");
+        assert_eq!(shown("=A1 \\* MERGEFORMAT \\# 0.0"), "790.0", "a picture after a format switch");
+        assert_eq!(shown("=A1 \\# \"0 \\* CardText items\""), "790 \\* CardText items", "a switch inside the picture is text");
+        assert_eq!(shown("=A2 \\* CardText"), "1.50", "a fraction keeps its digits");
+        assert_eq!(shown("=A1-800 \\* CardText"), "-10", "a negative number keeps its digits");
+        assert_eq!(shown("=A1*1266 \\* CardText"), "1000140", "a number past CardText keeps its digits");
+        assert_eq!(shown("=A1*1266 \\* OrdText \\* Upper"), "1000140");
+        assert_eq!(shown("=A1*64 \\* roman"), "50560", "a number past roman keeps its digits");
+        assert_eq!(shown("=A1-790 \\* roman"), "0", "roman has no zero");
+        assert_eq!(shown("=A1 \\* alphabetic"), "790", "a number past alphabetic keeps its digits");
+    }
+
+    #[test]
+    fn dollar_text_and_hex_switches_write_the_result() {
+        let t = table(&[&["9.20", "5.35"], &["458", "-1"], &["", ""]]);
+        let shown = |f: &str| evaluate_field(&t, 2, 0, f).unwrap_or_else(|e| panic!("{f}: {e}"));
+        assert_eq!(shown("= 9.20 + 5.35 \\* DollarText \\* Upper"), "FOURTEEN AND 55/100");
+        assert_eq!(shown("=A1+B1 \\* DollarText"), "fourteen and 55/100");
+        assert_eq!(shown("=A2 \\* DollarText \\* FirstCap"), "Four hundred fifty-eight and 00/100");
+        assert_eq!(shown("=0.999 \\* DollarText"), "one and 00/100");
+        assert_eq!(shown("=A2 \\* Hex"), "1CA");
+        assert_eq!(shown("=A2 \\* Hex \\* Lower"), "1ca");
+        assert_eq!(shown("=A2*0 \\* Hex"), "0");
+        assert_eq!(shown("=B2 \\* DollarText"), shown("=B2"), "a negative number keeps its digits");
+        assert_eq!(shown("=B2 \\* Hex"), shown("=B2"));
+        assert_eq!(shown("=A2/4 \\* Hex"), shown("=A2/4"), "a fraction keeps its digits");
+        assert_eq!(shown("=A2*2200 \\* DollarText"), shown("=A2*2200"), "a number past DollarText keeps its digits");
+        assert_eq!(shown("=A2 \\* ArabicDash"), "- 458 -");
     }
 
     #[test]
