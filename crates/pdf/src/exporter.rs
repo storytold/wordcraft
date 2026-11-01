@@ -223,6 +223,8 @@ impl Exporter<'_> {
                             // A rotated inline picture, or a rotated group holding pictures: turned as a
                             // whole, each picture tagged on its own (see `rotated_pictures`).
                             Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
+                            // A turned text box's line: still the paragraph's text.
+                            Draw::Rotated { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
                             Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                                 for d in inner {

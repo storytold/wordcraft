@@ -4427,6 +4427,45 @@ fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: w
     id
 }
 
+#[test]
+fn a_turned_text_box_turns_its_text_with_it() {
+    // Word turns a text box's text with the box (and turns it upside down when the box is
+    // flipped across, but never mirrors it): its lines are drawn inside the box's rotation.
+    let rotated_text = |rot: f32, flip_h: bool, flip_v: bool| {
+        let mut d = Document::from_text("Body text.");
+        let float =
+            wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 20.0, rot, flip_h, flip_v, ..Default::default() };
+        text_box(&mut d, 0, "Turned words", 140.0, 50.0, float);
+        let l = lay(&d);
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        items.iter().find_map(|x| match x {
+            display::Draw::Rotated { spin, items, .. }
+                if items.iter().any(|g| matches!(g, display::Draw::Glyphs { text, .. } if text.contains("Turned"))) =>
+            {
+                Some(*spin)
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(rotated_text(0.0, false, false), None, "an upright box's text is drawn as it is");
+    let s = rotated_text(30.0, false, false).expect("turned with the box");
+    assert_eq!((s.deg, s.flip_h, s.flip_v), (30.0, false, false));
+    // Flipped side to side: readable, not mirrored.
+    assert_eq!(rotated_text(0.0, true, false), None);
+    // Flipped across: upside down.
+    let s = rotated_text(0.0, false, true).expect("upside down");
+    assert_eq!((s.deg, s.flip_h, s.flip_v), (180.0, false, false)); // Drawn item by item (as PDF export draws, to tag each paragraph): the same.
+    let mut d = Document::from_text("Body text.");
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 20.0, rot: 30.0, ..Default::default() };
+    text_box(&mut d, 0, "Turned words", 140.0, 50.0, float);
+    let l = lay(&d);
+    let shown = display::ItemDisplay::new(&d, &l.pages[0]);
+    let turned = l.pages[0].items.iter().flat_map(|it| shown.draws(it, &Default::default())).any(|x| {
+        matches!(&x, display::Draw::Rotated { items, .. } if items.iter().any(|g| matches!(g, display::Draw::Glyphs { text, .. } if text.contains("Turned"))))
+    });
+    assert!(turned);
+}
+
 fn box_rect(l: &DocLayout, id: u32) -> wordcraft_geom::Rect {
     l.pages[0]
         .items
