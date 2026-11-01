@@ -380,7 +380,11 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             // The bullet marker can turn a short run of hyphens into a rule.
                             if thematic_break(&format!("{marker} {body}")) { format!("\\{body}") } else { body }
                         };
-                        out.push(format!("{pad}{marker} {body}").trim_end().to_string());
+                        let line = format!("{pad}{marker} {body}").trim_end().to_string();
+                        // A list inside a block quote stays in it: every line of the item, its
+                        // continuation lines included, takes the quote marker.
+                        let line = if p.kind == Kind::Quote { format!("> {}", line.replace('\n', "\n> ")) } else { line };
+                        out.push(line);
                         prev_list = true;
                         let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
                         if !next_is_list {
