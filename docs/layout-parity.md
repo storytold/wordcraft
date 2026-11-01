@@ -164,6 +164,18 @@ Ordinary overlapping before/after space and one-sided contextual spacing remain 
 work in #108 and #568. Nested tables, rotated cells, other fonts and Word for Windows
 were not reference-tested here. This closes one compatibility-option gap, not table parity.
 
+## Legacy table outdent
+
+Below compatibility mode 15 (and in a .docx without `settings.xml`), a start-aligned table moves
+out past its indent so cell text lines up with the surrounding text. The distance is the table's
+default left cell margin (`w:tblCellMar`, else the table style's, else Word's 5.4 pt), not the
+first cell's own `w:tcMar` (#3407). A table with `w:tblCellMar` left/right 0 and every cell given
+144 twips keeps its edge on the page margin and its first-column text 7.2 pt in: the reporter's
+file measures x = 63.9 pt in Word's PDF and in WordCraft's (56.7 pt before). Mode 15 doesn't
+outdent and is unchanged. Test: `legacy_table_outdent_ignores_the_first_cells_own_margin`. Per-cell
+margins themselves (`w:tcMar`, full and partial) were already read, written and laid out; row
+table exceptions for cell margins (`w:tblPrEx`) remain unsupported.
+
 ## Contextual paragraph spacing
 
 **Observed, 2026-10-11:** original synthetic DOCX probes in Word for Mac 16.113.3
@@ -433,6 +445,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-10 | major | First version: layout and pagination checklist with evidence from `crates/layout`, PRs and issues |
 | 2026-10-16 | trivial | OpenType ligatures follow `w14:ligatures` (none, standard, contextual, historical, discretional and their combinations); without it WordCraft's default stays |
 | 2026-10-21 | trivial | Superscript and subscript lines: Word for Mac sizes them at the full font size and leaves out the raise or drop (an 11pt subscript beside 11pt Arial keeps the 12.675pt line; a line of 24pt subscript is as tall as plain 24pt text); a `w:position` raise or lowering still grows the line. WordCraft added the drop to the line and sized the run at its shrunk size. On a private corpus of 181 Word documents, 26 change: 52 more paragraphs start on Word's page (9 documents better, 4 worse by 1–2 paragraphs, all with substituted fonts or already a page off), page counts unchanged. `layout::tests::superscript_and_subscript_lines_are_as_tall_as_full_size_text` |
+| 2026-10-22 | trivial | An older-mode table moves out by its default cell margin (`w:tblCellMar`), not the first cell's own (`w:tcMar`), as Word does (#3407). |
 
 Maintenance on 2026-10-12 retains current tracked-deletion, endnote, footer-total, text-box
 and balloon layout while supplying explicit cell identity at every box call. The native Word
