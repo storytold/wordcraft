@@ -129,3 +129,32 @@ fn a_note_cut_off_by_the_end_of_the_file_keeps_its_paragraph() {
     assert_eq!(d.body[0].as_para().unwrap().text.replace(OBJ, "#"), "before#");
     assert_eq!(notes(&d), [(NoteKind::Footnote, String::new(), "in note".to_string())]);
 }
+
+#[test]
+fn a_footnote_keeps_its_text_beside_a_footer() {
+    // The footer and the note are both stories of their own: neither takes the other's place.
+    let styles = format!(
+        r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:footer><text:p>Footer text</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"#,
+        crate::odt::tests::NS_T
+    );
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p>Body<text:note text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>The note.</text:p></text:note-body></text:note> after.</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    // A story's text, without the note's own mark.
+    let text = |id: u32| {
+        d.parts
+            .get(&id)
+            .map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).collect::<String>())
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let note = d.body[0].as_para().unwrap().objects.iter().find_map(|o| match o {
+        wordcraft_doc::para::InlineObject::NoteRef { id, .. } => Some(*id),
+        _ => None,
+    });
+    assert_eq!(note.map(text).as_deref(), Some("The note."));
+    assert_eq!(d.last_section.footers.default.map(text).as_deref(), Some("Footer text"));
+}

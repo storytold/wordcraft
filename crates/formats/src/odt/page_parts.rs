@@ -2,7 +2,7 @@
 //! reader (#863).
 use std::collections::HashSet;
 
-use wordcraft_doc::{Document, Part, PartKind};
+use wordcraft_doc::{Document, PartKind};
 
 use super::{Body, Ev, FBlock, Pages, SectionProps, Styles, events, get, model};
 
@@ -152,12 +152,28 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     out
 }
 
-/// Put the parts [`read`] found into `doc` under the ids its sections name. `doc` comes from
-/// [`model::to_doc`], which adds no parts of its own.
+/// Put the parts [`read`] found into `doc`. The sections name them 1, 2…, in the order read;
+/// `doc`'s notes, comments and text boxes already hold ids, so each part takes a free one and
+/// the sections are pointed at it.
 pub(super) fn add(doc: &mut Document, parts: Parts) {
-    for (i, (kind, blocks)) in parts.parts.into_iter().enumerate() {
+    let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
+    for (kind, blocks) in parts.parts {
         let blocks = model::part_blocks(doc, &blocks);
-        doc.parts.insert(i as u32 + 1, Part { kind, blocks, body: Default::default() });
+        ids.push(doc.try_add_part(kind, blocks).ok());
+    }
+    let new_id = |old: Option<u32>| old.and_then(|o| o.checked_sub(1)).and_then(|i| ids.get(i as usize).copied().flatten());
+    let remap = |sec: &mut SectionProps| {
+        for set in [&mut sec.headers, &mut sec.footers] {
+            (set.default, set.first, set.even) = (new_id(set.default), new_id(set.first), new_id(set.even));
+        }
+    };
+    remap(&mut doc.last_section);
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && let Some(sec) = p.section.as_deref_mut()
+        {
+            remap(sec);
+        }
     }
     doc.settings.even_odd_headers |= parts.even_odd;
 }
