@@ -159,6 +159,52 @@ mod tests {
         assert_eq!(items(lang("ko")), items(en));
     }
 
+    /// Every named size, both ways, in both scripts: the name shows for its points and parses
+    /// back to them. The table: Word's Chinese size list (a native speaker should confirm it).
+    #[test]
+    fn every_named_size_round_trips_in_both_scripts() {
+        let expected = [
+            ("初号", "初號", 42.0),
+            ("小初", "小初", 36.0),
+            ("一号", "一號", 26.0),
+            ("小一", "小一", 24.0),
+            ("二号", "二號", 22.0),
+            ("小二", "小二", 18.0),
+            ("三号", "三號", 16.0),
+            ("小三", "小三", 15.0),
+            ("四号", "四號", 14.0),
+            ("小四", "小四", 12.0),
+            ("五号", "五號", 10.5),
+            ("小五", "小五", 9.0),
+            ("六号", "六號", 7.5),
+            ("小六", "小六", 6.5),
+            ("七号", "七號", 5.5),
+            ("八号", "八號", 5.0),
+        ];
+        assert_eq!(expected.len(), NAMED.len());
+        let (hans, hant, en) = (lang("zh-hans"), lang("zh-hant"), lang("en"));
+        for (s, t, pt) in expected {
+            assert_eq!(label(pt, hans), s, "{pt} pt, Simplified");
+            assert_eq!(label(pt, hant), t, "{pt} pt, Traditional");
+            for l in [hans, hant] {
+                assert_eq!(parse(s, l), Some(pt), "{s}");
+                assert_eq!(parse(t, l), Some(pt), "{t}");
+            }
+            // English shows the number and takes only the number.
+            assert_eq!(parse(&label(pt, en), en), Some(pt), "{pt} pt, English");
+            assert!(label(pt, en).chars().all(|c| c.is_ascii_digit() || c == '.'), "{pt} pt, English: {}", label(pt, en));
+            assert_eq!(parse(s, en), None, "{s} in English");
+        }
+        // A size with no name shows as its number everywhere, and parses back.
+        for l in [hans, hant, en] {
+            assert_eq!(label(13.5, l), "13.5");
+            assert_eq!(parse("13.5", l), Some(13.5));
+            assert_eq!(label(11.0, l), "11");
+        }
+        // English lists numbers only, the usual sizes.
+        assert!(items(en).iter().all(|i| i.parse::<f64>().is_ok()), "{:?}", items(en));
+    }
+
     #[test]
     fn typed_sizes_parse_to_points() {
         // A Chinese interface takes the names in either script.
