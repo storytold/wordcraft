@@ -274,6 +274,26 @@ fn english_dialects_are_in_the_language_menu() {
     assert_eq!(language_name(Some("en-SG")), "English (Singapore)");
 }
 
+/// #4968: both Serbian scripts are in the menu, each checked by the tags of its script (`sh`
+/// is Serbian Latin); Serbian of another region still shows by region.
+#[test]
+fn serbian_scripts_are_in_the_language_menu() {
+    for (tag, name, others) in [
+        ("sr-Cyrl-RS", "Serbian (Cyrillic)", &["sr", "sr-RS", "sr_RS", "sr-Cyrl", "SR-cyrl-rs"][..]),
+        ("sr-Latn-RS", "Serbian (Latin)", &["sr-Latn", "sr_Latn_RS", "sh", "sh_RS", "sr_RS@latin"][..]),
+    ] {
+        assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
+        assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
+        for t in std::iter::once(&tag).chain(others) {
+            assert_eq!(language_name(Some(t)), name, "{t}");
+            let c = language_checks(t, |l| l.eq_ignore_ascii_case(t));
+            assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(l, _)| l == tag)), "{t}");
+        }
+    }
+    assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
+    assert_eq!(language_name(Some("sr-ME")), "Serbian (Montenegro)");
+}
+
 #[test]
 fn indonesian_has_a_name_in_the_language_menu() {
     assert!(PROOFING_LANGUAGES.contains(&("id-ID", "Indonesian")));
