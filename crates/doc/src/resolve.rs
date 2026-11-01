@@ -14,6 +14,14 @@ pub const AUTO_SPACING: f32 = 14.0;
 /// The largest drop cap distance from the text, in points (22", as Word's dialog allows).
 pub const MAX_DROP_CAP_DISTANCE: f32 = 1584.0;
 
+/// The size a dropped cap's letter is drawn at: its capital height (~0.7 em) spans from line 1's
+/// caps to line `lines`'s baseline of `size`-point text at a 1.2 em line height — the letter
+/// Word's dialog sizes the same way. Capped at 1000 pt, never below the text's own size.
+pub fn drop_cap_size(size: f32, lines: u8) -> f32 {
+    let line_h = (size * 1.2).max(1.0);
+    (((lines as f32 - 1.0) * line_h + size * 0.7) / 0.7).min(1000.0).max(size)
+}
+
 /// Concrete character formatting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

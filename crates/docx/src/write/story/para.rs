@@ -7,7 +7,8 @@ impl Writer<'_> {
         // Which content control markers are written inline (set by `blocks`).
         let inline = std::mem::take(&mut self.inline_controls);
         // A drop cap is a separate framed paragraph holding the first character.
-        if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0)
+        // `w:lines` and the layout stop at 10, so the letter's saved size does too.
+        if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0).map(|l| l.min(10))
             && let Some(first) = p.text.chars().next().filter(|c| !matches!(*c, wordcraft_doc::para::OBJ | '\t' | '\n' | '\u{c}' | '\u{e}'))
             && p.text.len() > first.len_utf8()
         {
@@ -19,6 +20,19 @@ impl Writer<'_> {
                 if let Some(f) = p.props.drop_cap_font.as_ref().filter(|f| !f.trim().is_empty()) {
                     for r in &mut head.runs {
                         r.props.font = Some(f.clone());
+                    }
+                }
+                // The letter is written at the size the layout draws it, `lines` text lines tall:
+                // Word draws a framed drop cap's letter at its run's `w:sz`, so the text's own
+                // size would come out small there (#3000). Each script's size is enlarged from its
+                // resolved one, so an inherited `w:szCs` grows too and differing sizes stay apart.
+                if let Some(letter) = head.runs.first() {
+                    let text = self.doc.styles.resolve_char_in(p.props.style.as_deref(), None, &letter.props);
+                    let big = wordcraft_doc::resolve::drop_cap_size(text.size, lines);
+                    let big_cs = wordcraft_doc::resolve::drop_cap_size(text.size_cs, lines);
+                    for r in &mut head.runs {
+                        r.props.size = Some(big);
+                        r.props.size_cs = Some(big_cs);
                     }
                 }
                 head.section = None;

@@ -2788,6 +2788,10 @@ fn drop_cap_options_round_trip() {
     assert!(xml.contains(r#"w:dropCap="drop" w:lines="2" w:hSpace="120""#), "{xml}");
     assert!(xml.contains(r#"w:dropCap="margin" w:lines="4""#), "{xml}");
     assert!(xml.contains(r#"w:ascii="Liberation Mono""#), "the letter's font on its run: {xml}");
+    // A dialog-made drop cap's runs carry no size, but the letter is saved at the size the
+    // layout draws it: 2 and 4 lines of the document's 12 pt text → 32.57 pt (65) and 73.71 (147).
+    assert!(xml.contains(r#"w:sz w:val="65""#), "a 2-line drop cap's drawn size on its run: {xml}");
+    assert!(xml.contains(r#"w:sz w:val="147""#), "a 4-line margin drop cap's drawn size on its run: {xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
     let got = paras(&r);
     assert_eq!(got.len(), 2, "each letter merges back into its paragraph");
@@ -2802,5 +2806,46 @@ fn drop_cap_options_round_trip() {
     assert_eq!(
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
+    );
+}
+
+/// #3000: a drop cap set past Word's 10 lines is saved as 10 lines, and its letter at the size of
+/// 10 lines of 12 pt (197.14 pt → 394), the size the layout draws, not 11 lines' 435.
+#[test]
+fn a_drop_cap_past_ten_lines_is_saved_at_ten_lines_size() {
+    let mut p = Paragraph::with_text("Once upon a time", CharProps::default());
+    p.props.drop_cap = Some(11);
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"w:lines="10""#), "{xml}");
+    assert!(xml.contains(r#"w:sz w:val="394""#) && !xml.contains(r#"w:val="435""#), "the letter's size is 10 lines': {xml}");
+}
+
+/// #3000: a drop cap whose text inherits its complex-script size from the document defaults is
+/// saved with that size enlarged too — `w:szCs` beside `w:sz` — or an Arabic letter would stay at
+/// the text's size. Differing Latin and complex-script sizes each grow from their own: 3 lines of
+/// 12 pt → 53.14 pt (106), of 16 pt → 70.86 pt (142).
+#[test]
+fn a_drop_caps_inherited_complex_script_size_is_enlarged() {
+    let mut p = Paragraph::with_text("مرحبا بالعالم", CharProps::default());
+    p.props.drop_cap = Some(3);
+    let mut d = doc_with(vec![p]);
+    d.styles.default_chr.size = Some(12.0);
+    d.styles.default_chr.size_cs = Some(16.0);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:sz w:val="106"/><w:szCs w:val="142"/>"#), "both scripts' drawn sizes on the letter's run: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got.len(), 1, "the letter merges back into its paragraph");
+    assert!(
+        got[0].runs.iter().all(|r| (r.props.size, r.props.size_cs) == (None, None)),
+        "the letter inherits the text's sizes again: {:?}",
+        got[0].runs
     );
 }

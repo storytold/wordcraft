@@ -4101,6 +4101,23 @@ fn drop_cap_indents_its_lines() {
     assert!(g < -20.0, "dy {g}");
 }
 
+/// #3000: an Arabic drop cap is shaped at the complex-script size, so that size is enlarged too:
+/// the 3-line letter is several times as wide as a 1-line one (which keeps the text's size).
+#[test]
+fn a_complex_script_drop_cap_is_enlarged() {
+    let width = |lines: u8| {
+        let mut p = wordcraft_doc::Paragraph::with_text(&"مرحبا بالعالم ".repeat(30), Default::default());
+        p.props.drop_cap = Some(lines);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let pl = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None });
+        pl.and_then(|pl| pl.drop_cap).map_or(0.0, |(_, _, w)| w)
+    };
+    let (one, three) = (width(1), width(3));
+    assert!(one > 0.0 && three > 3.0 * one, "1 line {one}, 3 lines {three}");
+}
+
 /// The first laid-out paragraph of a one-paragraph document with a drop cap set by `set`.
 fn drop_cap_layout(set: impl Fn(&mut wordcraft_doc::props::ParaProps)) -> std::sync::Arc<crate::para::ParaLayout> {
     let mut p =
