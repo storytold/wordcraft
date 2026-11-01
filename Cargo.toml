@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = [".work", "vendor/spellbook"]
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 

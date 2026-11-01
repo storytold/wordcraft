@@ -70,3 +70,8 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/brand/artcraft-mark.svg` | ArtCraft Team | ArtCraft brand kit (project owner) | ArtCraft trademark, `docs/brand/LICENSE-brand.txt` | Not open source; usable unmodified only |
 | craft-fonts (optional build input, not files in this repo): BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic | see https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md | embedded only when built with `CRAFT_FONTS_DIR` (all official releases) | OFL-1.1 | Japanese and Chinese UI, Japanese document fallback |
 | craft-i18n (optional build input, not files in this repo): the interface translations | see https://github.com/storytold/craft-i18n/blob/main/ATTRIBUTION.md, which credits every translator of WordCraft's former in-repo catalogs (`crates/ui-egui/src/i18n/*.tsv`, migrated at `wordcraft@806a945`) | embedded only when built with `CRAFT_I18N_DIR`, at the commit in `craft-i18n.rev` (all official releases) | MIT OR Apache-2.0 | Interface languages other than English; clean-room translations from the English interface labels |
+
+Spellbook 0.4.2 source in `vendor/spellbook/` is by Michael Davis and contributors, from [helix-editor/spellbook](https://github.com/helix-editor/spellbook), under MPL-2.0. Local changes and source-availability requirements are recorded in `vendor/spellbook/WORDCRAFT-NOTICE.txt` and `NOTICE`.
+
+`vendor/spellbook/src/test_fixture.rs` contains original WordCraft synthetic test data
+under MPL-2.0, solely for the vendored unit tests. No upstream English dictionary is bundled.
