@@ -58,7 +58,9 @@ project does not acknowledge provider persistence or replace that binding. As wi
 browser fallback, accepting a download does not prove the browser wrote it to physical disk.
 Device copies therefore retain the document's unsaved-work state, including for documents
 without a provider binding. Explicit-path saves and template/export pickers keep their local route.
-Exports remain local copies and never mark a provider project saved.
+For a provider-bound document, explicit-path Save/Save As and template/export copies preserve
+its unsaved provider state, including comment drafts committed by Save. A browser copy is never
+an acknowledgement of provider durability. Unbound native local saves keep their original behavior.
 
 Supported Save packages: **DOCX, DOCM, DOTX and DOTM**.
 

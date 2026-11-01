@@ -206,11 +206,90 @@ mod tests {
             }
             let restored = wordcraft_engine::io::open_path(&path).unwrap();
             assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Documento con ñ"));
+            assert!(!app.session.dirty, "an unbound native local save keeps its original checkpoint behavior");
             assert!(!host.busy(), "explicit local paths must not open a provider chooser");
             assert!(host.take_events().is_empty());
             std::fs::remove_file(&path).unwrap();
             std::fs::remove_dir(&directory).unwrap();
         }
+    }
+
+    #[test]
+    fn bound_explicit_export_and_template_copies_keep_provider_changes_dirty_until_ack() {
+        for (extension, template) in [("docx", false), ("dotx", true)] {
+            let directory = std::env::temp_dir().join(format!("wordcraft-provider-bound-{extension}-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("Local copy.{extension}"));
+            let picked = path.to_string_lossy().into_owned();
+            let (mut app, host) = app();
+            let document = app.session.document_id();
+            let (request, _) = save(&mut app, &host);
+            host.result(request, "saved".into(), "resource-one".into()).unwrap();
+            app.provider_tick();
+            assert!(!app.session.dirty);
+            assert!(host.bound(document));
+            app.session.run("text.insert", &json!({"text":" New content only on this device"})).unwrap();
+            assert!(app.session.dirty);
+            app.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+            app.services.templates_dir = Some(directory.clone());
+            if template {
+                let _ = app.save_as_template_dialog();
+            } else {
+                app.export_dialog(extension);
+            }
+            let restored = wordcraft_engine::io::open_path(&path).unwrap();
+            assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("New content only on this device"));
+            assert!(host.bound(document), "a local export preserves its provider binding");
+            assert_eq!(host.filename(document).as_deref(), Some("Document.docx"));
+            assert!(app.session.dirty, "the provider has not acknowledged the edited content");
+            assert!(!app.saved_here(), "a provider-bound export does not arm local AutoSave");
+            app.autosave_tick(10_000.0);
+            assert!(app.session.dirty);
+            app.provider_tick();
+            assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+            assert!(!host.busy());
+            let (request, bytes) = save(&mut app, &host);
+            let restored = wordcraft_engine::io::open_bytes("Document.docx", &bytes).unwrap();
+            assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("New content only on this device"));
+            assert!(app.session.dirty);
+            host.result(request, "saved".into(), "resource-one".into()).unwrap();
+            app.provider_tick();
+            assert!(!app.session.dirty, "only the correlated provider acknowledgement clears its checkpoint");
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(&directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn bound_explicit_browser_copy_does_not_acknowledge_provider_persistence() {
+        let (mut app, host) = app();
+        let document = app.session.document_id();
+        let (request, _) = save(&mut app, &host);
+        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.dirty);
+        app.session.run("text.insert", &json!({"text":" Browser copy after cloud save"})).unwrap();
+        let copies = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let received = copies.clone();
+        app.services.download = Some(Box::new(move |name, bytes| {
+            received.borrow_mut().push((name.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.run("file.saveAs", json!({"path":"Browser copy.docx"})).unwrap();
+        let copies = copies.borrow();
+        assert_eq!(copies.len(), 1);
+        let restored = wordcraft_engine::io::open_bytes(&copies[0].0, &copies[0].1).unwrap();
+        assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Browser copy after cloud save"));
+        assert!(host.bound(document));
+        assert!(app.session.dirty);
+        app.provider_tick();
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+        assert!(!host.busy());
+        drop(copies);
+        let (request, _) = save(&mut app, &host);
+        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+        app.provider_tick();
+        assert!(!app.session.dirty);
     }
 
     #[test]

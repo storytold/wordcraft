@@ -139,6 +139,11 @@ impl WordApp {
             }
             return r;
         }
+        // A local copy cannot acknowledge the checkpoint owned by an external provider.
+        // run() has already committed comment drafts before entering this save path.
+        let provider_copy = matches!(id, "file.save" | "file.saveAs")
+            && self.services.file_providers.as_ref().is_some_and(|host| host.enabled() && host.bound(self.session.document_id()));
+        let provider_dirty = provider_copy && self.session.dirty;
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
@@ -168,7 +173,7 @@ impl WordApp {
             }
             // An export is a copy, and so is a save in a format that doesn't keep everything (a
             // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            let marked_saved = !provider_copy && matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
             // Save As tells the host page the document is now this file, which it only is when the
             // save marks it saved. A Save under a name the page never sent (an untitled document,
             // an imported .doc saved as .docx) is a new file too, never an overwrite.
@@ -211,6 +216,9 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
+        if provider_dirty && self.session.document_id() == document {
+            self.session.dirty = true;
+        }
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
@@ -249,8 +257,10 @@ impl WordApp {
             self.recovery_seen = true;
             self.sync_document();
         }
-        // An explicit save to the document's own file lets AutoSave keep writing there.
+        // A provider-bound copy must not arm local AutoSave as a provider acknowledgement.
+        // An ordinary save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
+            && !provider_copy
             && matches!(id, "file.save" | "file.saveAs")
             && v.get("saved").and_then(Value::as_bool) == Some(true)
             && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
