@@ -319,6 +319,16 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         for k in 0..6usize {
             let Some(&ab) = stories.get(6 + si * 6 + k) else { break };
             let Some((a, b)) = story(hdd_base, fib.ccp.hdd, ab) else { continue };
+            // Plcfhdd stories carry a final guard paragraph after the content's own
+            // paragraph or cell/row mark; keep single-mark stories unchanged.
+            let b = if b.saturating_sub(a) >= 2
+                && matches!(pieces.char_at(&word, b.saturating_sub(1)), Ok(('\r', _)))
+                && matches!(pieces.char_at(&word, b.saturating_sub(2)), Ok(('\r' | '\u{7}', _)))
+            {
+                b.saturating_sub(1)
+            } else {
+                b
+            };
             if doc.parts.len() >= MAX_PARTS {
                 continue;
             }
