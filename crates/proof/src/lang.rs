@@ -70,6 +70,9 @@ pub enum ProofLang {
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
     De,
+    /// Hebrew (`he`, `he-IL`, `iw`, `heb`): the installed Hunspell `he_IL` dictionary (such as
+    /// Hspell), dictionary-driven suggestions and generic checks with Hebrew messages.
+    He,
     /// A language without proofing tools here (`fr-FR`, `ja-JP`, `x-none`…). Like Word without
     /// the language's proofing tools: no spelling or grammar marks, so its words are never
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
@@ -79,7 +82,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -95,6 +98,7 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::He,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
@@ -128,6 +132,8 @@ impl ProofLang {
             ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
+        } else if ["he", "iw", "heb"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
+            ProofLang::He
         } else {
             ProofLang::Other
         }
@@ -182,6 +188,7 @@ impl ProofLang {
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
+            ProofLang::He => "he",
             ProofLang::Other => "",
         }
     }

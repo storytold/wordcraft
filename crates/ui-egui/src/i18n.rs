@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +126,8 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Hebrew; `he`, `he-IL`, `he_IL.UTF-8` and legacy `iw`/`iw-IL` resolve here.
+    LangInfo { code: "he", prefer_hans: false, editing_lang: Some("he-IL") },
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
@@ -169,6 +171,11 @@ impl Lang {
     /// The language's name in itself (its `@id language.name` row), shown in the Options dropdown.
     pub fn name(self) -> &'static str {
         self.i18n().name(self.lang)
+    }
+
+    /// Is the interface written right-to-left (Hebrew, Arabic)?
+    pub fn rtl(self) -> bool {
+        self.i18n().rtl(self.lang) || matches!(self.code(), "he" | "ar")
     }
 
     pub fn prefers_hans(self) -> bool {
@@ -279,6 +286,15 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     if non_brazilian_portuguese(tag) {
         return None;
     }
+    let trimmed = tag.trim();
+    let normalized;
+    let tag = match trimmed.split(['-', '_', '.', '@']).next() {
+        Some(first) if first.eq_ignore_ascii_case("iw") => {
+            normalized = format!("he{}", &trimmed[first.len()..]);
+            normalized.as_str()
+        }
+        _ => tag,
+    };
     I18N.match_tag(tag).and_then(|lang| Lang::from_code(I18N.code(lang)))
 }
 

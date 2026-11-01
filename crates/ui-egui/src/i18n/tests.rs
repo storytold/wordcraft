@@ -808,10 +808,11 @@ fn an_italian_interface_writes_new_documents_in_italian() {
     super::pseudo::set(false);
 }
 
+/// Verifies that every interface language with a default editing language is a proofed language.
 #[test]
 fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
     let with: Vec<(&str, &str)> = LANGUAGES.iter().filter_map(|l| l.editing_lang.map(|e| (l.code, e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT"), ("he", "he-IL")]);
 }
 
 #[test]
@@ -1109,6 +1110,7 @@ fn bundled_interface_fonts_cover_romanian_without_system_fallbacks() {
     }
 }
 
+/// Verifies that Slovenian locale tags resolve and persist without altering document content.
 #[test]
 fn slovenian_locales_and_saved_preference_work_without_changing_the_document() {
     needs_catalogs!();
@@ -1127,6 +1129,31 @@ fn slovenian_locales_and_saved_preference_work_without_changing_the_document() {
     let saved = serde_json::to_string(&app.ui).unwrap();
     let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
     assert_eq!(Lang::from_pref(&restored.language), sl);
+}
+
+/// Verifies that Hebrew (`he`) and legacy `iw` locale tags resolve and persist without altering document content.
+#[test]
+fn hebrew_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let he = lang("he");
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "he-Hebr-IL", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    assert_eq!(first_supported([UNSUPPORTED, "he-IL", "en-US"]), Some(he));
+    assert_eq!(first_supported([UNSUPPORTED, "iw-IL", "en-US"]), Some(he));
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    assert_eq!(he.name(), "עברית");
+    assert!(!he.uses_cjk());
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "HE"})).unwrap();
+    assert_eq!(result["effective"], "he");
+    assert_eq!(app.ui.language, "he");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "he" && l["name"] == "עברית"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), he);
 }
 
 #[test]
