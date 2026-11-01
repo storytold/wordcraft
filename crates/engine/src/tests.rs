@@ -4381,6 +4381,10 @@ fn output_shows_toc_page_numbers_where_the_headings_are() {
     assert_eq!(toc_numbers(&s.layout()), ["2", "3"]);
     assert_eq!(toc_numbers(&s.export_layout()), ["3", "4"]);
     assert!(text(&s).contains("Alpha\t2"), "the document keeps the stored numbers");
+    // A page image is laid out as the print job is: it shows the same numbers.
+    let png = crate::io_ext::render_png(&s.doc, 0, 1.0, &Default::default()).unwrap();
+    let printed = wordcraft_render::render_page(&s.doc, &s.export_layout().pages[0], 1.0, &Default::default()).to_png();
+    assert!(png == printed, "the page image and the printed page differ");
 }
 
 /// Headings numbered through a list carry their numbers, and the level's separator, into the

@@ -399,6 +399,37 @@ fn page_references_in_the_body_show_their_bookmarks_page_in_output() {
     assert_eq!(footer_shown(&lay(&d)).last().map(String::as_str), Some("2/9"));
 }
 
+/// Printed or exported, a reference to a bookmark the document doesn't have shows Word's error,
+/// whether or not the document has other bookmarks (measured in Word for Windows: "Error!
+/// Bookmark not defined."); the editor keeps the stored result, and so does a reference that
+/// shows "above" or "below" (`\p`).
+#[test]
+fn a_page_reference_to_a_missing_bookmark_shows_words_error_in_output() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let output = LayoutOptions { output_page_refs: true, ..Default::default() };
+    for other_mark in [false, true] {
+        let mut d = Document::from_text("See \nAbove \nTarget");
+        for (i, instr) in [(0, "PAGEREF NoSuchMark \\h"), (1, "PAGEREF NoSuchMark \\p")] {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            let n = p.len();
+            p.insert_object(n, field(instr), &Default::default()).unwrap();
+        }
+        if other_mark {
+            let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+            p.insert_object(0, InlineObject::BookmarkStart { name: "Elsewhere".into() }, &Default::default()).unwrap();
+        }
+        let shown = |l: &DocLayout| -> Vec<String> {
+            l.pages[0]
+                .items
+                .iter()
+                .flat_map(|it| if let Placed::Lines { para, .. } = it { para.shown.iter().map(|s| s.1.clone()).collect() } else { vec![] })
+                .collect()
+        };
+        assert_eq!(shown(&layout(&d, &mut LayoutCache::new(), &output)), [crate::fields::BOOKMARK_NOT_DEFINED, "9"], "other bookmark: {other_mark}");
+        assert_eq!(shown(&lay(&d)), ["9", "9"], "the editor, other bookmark: {other_mark}");
+    }
+}
 /// The fields' text in each page's footer, joined with "/".
 fn footer_shown(l: &DocLayout) -> Vec<String> {
     l.pages

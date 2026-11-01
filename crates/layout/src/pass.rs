@@ -91,6 +91,7 @@ fn new_ctx<'a>(
             filepath: opts.filepath.clone().unwrap_or_else(|| "".into()),
             bookmark_pages: Arc::clone(marks),
             bookmarks_key: marks_key(marks),
+            output: opts.output_page_refs,
             ..Default::default()
         },
         notes_hash,
