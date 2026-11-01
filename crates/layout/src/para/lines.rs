@@ -93,8 +93,16 @@ struct Scan {
     /// The width of the spaces so far on this line.
     space_w: f32,
     has_tab: bool,
+    /// A tab at the first line's hanging-indent stop.
+    hanging_tab: Option<usize>,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
+}
+
+/// The stop of the positional tab at cluster `j`, if it is one.
+fn ptab_at(bk: &Breaker, pl: &ParaLayout, j: usize) -> Option<TabStop> {
+    let rp = &bk.rp;
+    pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)))
 }
 
 /// Whether anything but markers (a bookmark, say) is among the clusters `c0..j`: an empty line
@@ -278,6 +286,7 @@ impl<'e> Breaker<'e> {
             pending_tab: None,
             space_w: 0.0,
             has_tab: false,
+            hanging_tab: None,
             skip: false,
         }
     }
@@ -729,7 +738,7 @@ impl Scan {
         self.has_tab = true;
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
-        let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
+        let ptab = ptab_at(bk, pl, j);
         let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
@@ -760,6 +769,9 @@ impl Scan {
             }
         }
         self.place_tab(pl, stop);
+        if bk.first && bk.hanging_at.is_some_and(|h| (stop.pos - h).abs() < 0.01) {
+            self.hanging_tab = Some(j);
+        }
         self.last_break = Some(j);
         self.j += 1;
         false
@@ -777,7 +789,13 @@ impl Scan {
                 }
                 self.x += w;
             }
-            _ => self.pending_tab = Some((j, stop, self.x)),
+            _ => {
+                // A tab laid out again after a wrap keeps no width from the line before.
+                if let Some(c) = pl.clusters.get_mut(j) {
+                    c.adv = 0.0;
+                }
+                self.pending_tab = Some((j, stop, self.x));
+            }
         }
         if stop.leader != TabLeader::None {
             self.leaders.push((j, stop.leader));
@@ -904,7 +922,7 @@ impl Scan {
         {
             self.last_break = Some(pj);
         }
-        self.tab_with_its_text(pl);
+        self.tab_with_its_text(bk, pl);
         if let Some(b) = self.last_break.filter(|b| *b >= c0) {
             self.xs.truncate(b + 1 - c0);
             self.j = b + 1;
@@ -915,13 +933,28 @@ impl Scan {
         }
     }
 
-    /// The text after a right, centre or decimal tab doesn't fit: like Word, the tab goes to the
-    /// next line with its text (a TOC entry's page number stays at the right margin, after a
-    /// leader) instead of ending this line.
-    fn tab_with_its_text(&mut self, pl: &ParaLayout) {
-        if let Some((tj, ..)) = self.pending_tab
-            && self.last_break == Some(tj)
-            && has_content(pl, self.c0, tj)
+    /// The text after a tab doesn't fit: like Word, the tab goes to the next line with its text
+    /// and takes the first stop there (a TOC entry's page number stays at the right margin, after
+    /// a leader) instead of ending this line. Not at the first line's hanging-indent stop (a label
+    /// such as "[1]" keeps its tab), nor when the word after it wouldn't fit after the tab there
+    /// either: the tab would get a line of its own.
+    // shortcut: measured against the next line unnarrowed; beside a float the tab can still get
+    // a span of its own, upgrade if that shows up in documents.
+    fn tab_with_its_text(&mut self, bk: &Breaker, pl: &ParaLayout) {
+        // The room after the tab once it's moved: past its stop on the next line (a positional
+        // tab's own place, else the first stop).
+        let moved_room = |tj| {
+            let next_stop = ptab_at(bk, pl, tj).unwrap_or_else(|| next_tab(bk.rp.indent_left, &bk.rp.tabs, bk.default_tab, bk.hanging_at));
+            match next_stop.align {
+                TabAlign::Left | TabAlign::Bar | TabAlign::Clear => bk.base_right - next_stop.pos,
+                _ => bk.base_right - bk.rp.indent_left,
+            }
+        };
+        if let Some(tj) = self.last_break
+            && pl.clusters.get(tj).is_some_and(|c| c.kind == ClKind::Tab)
+            && self.hanging_tab != Some(tj)
+            && (self.c0..tj).any(|k| pl.clusters.get(k).is_some_and(takes_room))
+            && bk.widths.get(tj + 1).is_some_and(|w| *w <= moved_room(tj) + 0.01)
         {
             self.last_break = Some(tj - 1);
             self.pending_tab = None;
