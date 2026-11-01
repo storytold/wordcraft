@@ -3,6 +3,7 @@ mod date_fields;
 mod macro_packages;
 #[cfg(not(target_arch = "wasm32"))]
 mod odt_sections;
+mod odt_toc;
 mod recovery_format;
 #[cfg(not(target_arch = "wasm32"))]
 mod rtf_sections;

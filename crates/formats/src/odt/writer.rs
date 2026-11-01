@@ -2,14 +2,17 @@ use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rg
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
 
 mod drawing;
+mod indexes;
 mod notes;
 mod props;
 mod tables;
 mod tracked;
 
 use drawing::Place;
+use indexes::index_at;
+pub(super) use indexes::{IndexKind, index_instr};
 use notes::annotation_name;
-pub(super) use props::{align_attr, border_attrs, odf_name, props_text, script_attrs, spacing_props, tab_stops};
+pub(super) use props::{align_attr, border_attrs, generated_style, generating_style, odf_name, props_text, script_attrs, spacing_props, tab_stops};
 use props::{odf_border, parent_style, text_props};
 use tracked::{Item, join_deleted_marks};
 
@@ -80,6 +83,10 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    /// Indexes written so far (their names).
+    pub(super) indexes: usize,
+    /// An index's entries are being written: their links are in LibreOffice's Index Link style.
+    in_index: bool,
     /// The named dashes, gradients and arrowheads its graphic styles use.
     pub(super) draw_defs: super::strokes::DrawDefs,
     /// The custom paragraph styles paragraphs were written in (document style ids).
@@ -287,7 +294,9 @@ impl Writer {
                     // the HTML and Markdown exporters do (LibreOffice follows `file:`/UNC hrefs).
                     let link = f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l));
                     if let Some(l) = link {
-                        out.push_str(&format!("<text:a xlink:type=\"simple\" xlink:href=\"{}\">", x(l)));
+                        // An index entry's link looks like the entry, not like a web link.
+                        let look = if self.in_index { " text:style-name=\"Index_20_Link\" text:visited-style-name=\"Index_20_Link\"" } else { "" };
+                        out.push_str(&format!("<text:a xlink:type=\"simple\" xlink:href=\"{}\"{look}>", x(l)));
                     }
                     let fs = Fmt { link: None, ..f.clone() };
                     match self.text_style(&fs) {
@@ -319,6 +328,8 @@ impl Writer {
                     self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), (look, path.as_deref()), blocks, out);
                     prev_space = false;
                 }
+                // A field around content: an index's is its element (see `index_at`).
+                Inline::FieldStart(_) | Inline::FieldEnd => {}
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
                 Inline::Field { instr, result, fmt } => match super::fields::element(instr, &x(result)) {
                     Some(el) => {
@@ -400,6 +411,15 @@ impl Writer {
             // Only the first top-level block of a section starts its page.
             if depth == 0 {
                 self.master = self.pending_start.take();
+                // A table of contents or another index, with its entries.
+                if let Some((n, kind, titled)) = index_at(blocks, i) {
+                    let joined = chains.is_some_and(|c| (i..i + n).any(|k| c.contains_key(&k)));
+                    if !joined {
+                        self.index(blocks.get(i..i + n).unwrap_or(&[]), &kind, titled, out);
+                        i += n;
+                        continue;
+                    }
+                }
             }
             match b {
                 FBlock::Table(t) => {

@@ -127,3 +127,24 @@ fn many_paragraphs_in_custom_styles_open_quickly() {
     assert_eq!(d.body.len(), 20_000);
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
 }
+
+#[test]
+fn a_style_based_on_libreoffices_heading_keeps_it() {
+    // LibreOffice's headings and index headings are based on its "Heading" style, which gives
+    // their font and spacing; saving keeps it, and keeps them based on it.
+    let styles = format!(
+        r#"<office:document-styles {}><office:styles><style:style style:name="Heading" style:family="paragraph"><style:paragraph-properties fo:margin-top="0.17in"/><style:text-properties fo:font-size="14pt"/></style:style><style:style style:name="Plaque" style:family="paragraph" style:parent-style-name="Heading"><style:text-properties fo:font-weight="bold"/></style:style></office:styles></office:document-styles>"#,
+        crate::odt::tests::NS_T
+    );
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p text:style-name="Plaque">On the wall</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    let s = crate::odt::tests::styles_of(&export(&d).unwrap());
+    assert!(
+        s.contains(r#"style:name="Heading""#)
+            && s.contains(r#"style:name="Plaque" style:display-name="Plaque" style:family="paragraph" style:parent-style-name="Heading""#),
+        "{s}"
+    );
+}

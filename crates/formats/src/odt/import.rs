@@ -206,7 +206,8 @@ fn custom_styles(blocks: &mut [FBlock], styles: &Styles, odt: Vec<String>) -> (V
             odt.push(n);
             defs.push(def);
         }
-        if odt.contains(&name)
+        // A custom style, or an index style WordCraft has under its own id (TOC 1…).
+        if (odt.contains(&name) || super::writer::generating_style(&name).is_some())
             && let Some(x) = p.extra.as_mut()
         {
             x.style = Some(super::styles::style_id(&name));
@@ -218,7 +219,7 @@ fn custom_styles(blocks: &mut [FBlock], styles: &Styles, odt: Vec<String>) -> (V
 /// Add the custom styles `named` (ODF names `odt`, parents first) to the document: each with its
 /// name, the style it is based on and its own formatting. A style WordCraft has under the same id
 /// takes the file's definition.
-fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], odt: &[String]) {
+fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], odt: &[String], tabs_from_indent: bool) {
     use super::styles::{Parent, style_id};
     for (def, name) in named.iter().zip(odt) {
         let id = style_id(name);
@@ -244,14 +245,25 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             keep_next: look.keep_next.then_some(true),
             borders: look.borders,
             shading: look.shading,
-            tabs: look.tabs.clone(),
+            // LibreOffice measures tabs from the indent (`TabsRelativeToIndent`); Word from the
+            // margin.
+            tabs: look.tabs.clone().map(|mut tabs| {
+                if tabs_from_indent {
+                    let indent = sp.left.unwrap_or(0.0);
+                    for t in &mut tabs {
+                        t.pos = (t.pos + indent).clamp(-1584.0, 1584.0);
+                    }
+                }
+                tabs
+            }),
             contextual_spacing: look.contextual,
             bidi: look.rtl.filter(|r| *r),
             ..Default::default()
         };
+        let name = super::writer::generating_style(name).map_or_else(|| def.name.clone(), |(_, n)| n);
         let style = wordcraft_doc::styles::Style {
             id: id.clone(),
-            name: def.name.clone(),
+            name,
             kind: wordcraft_doc::styles::StyleKind::Paragraph,
             based_on: (based_on != id).then_some(based_on),
             para,
@@ -385,6 +397,8 @@ struct Parsed {
     scripts: wordcraft_doc::props::CharProps,
     /// The default tab interval, points.
     default_tab: Option<f32>,
+    /// Tab stops are measured from the indent (LibreOffice's `TabsRelativeToIndent`).
+    tabs_from_indent: bool,
     parts: page_parts::Parts,
 }
 
@@ -460,6 +474,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         kern: styles.default_kern,
         scripts: styles.default_scripts.clone(),
         default_tab: styles.default_tab,
+        tabs_from_indent: styles.tabs_from_indent,
         parts,
     })
 }
@@ -483,6 +498,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         kern,
         scripts,
         default_tab,
+        tabs_from_indent,
         parts,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
@@ -503,7 +519,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some(s) = settings {
         doc.passthrough.insert(super::package::SETTINGS_PART.into(), std::sync::Arc::new(s));
     }
-    add_custom_styles(&mut doc, &named, &named_odt);
+    add_custom_styles(&mut doc, &named, &named_odt, tabs_from_indent);
     add_char_styles(&mut doc, &char_styles, &char_defs);
     if let Some(levels) = &outline {
         number_headings(&mut doc, levels);

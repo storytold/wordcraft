@@ -149,19 +149,8 @@ pub fn is_custom_char_style(doc: &Document, id: &str) -> bool {
 /// Paragraph, the note texts).
 pub fn is_custom_style(doc: &Document, id: &str) -> bool {
     // The styles the kinds stand for, and the names formats write fixed styles under.
-    let kinds = [
-        "Normal",
-        "Title",
-        "Quote",
-        super::types::CODE_STYLE,
-        "FootnoteText",
-        "EndnoteText",
-        "Standard",
-        "Footnote",
-        "Endnote",
-        "Quotations",
-        "Heading",
-    ];
+    let kinds =
+        ["Normal", "Title", "Quote", super::types::CODE_STYLE, "FootnoteText", "EndnoteText", "Standard", "Footnote", "Endnote", "Quotations"];
     let heading = id.strip_prefix("Heading").is_some_and(|n| n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()));
     !heading && !kinds.contains(&id) && doc.styles.get(id).is_some_and(|s| s.kind == wordcraft_doc::styles::StyleKind::Paragraph)
 }
@@ -281,6 +270,8 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
         // A text box's content, without notes, comments or boxes of its own.
         // A drawing shape, text box or group (pictures have their own place below).
         InlineObject::Shape { .. } | InlineObject::Group { .. } if opts.boxes => vec![drawing_inline(doc, o, opts, 0, (1.0, 1.0))?],
+        InlineObject::FieldStart { instr, .. } if opts.fields => vec![Inline::FieldStart(instr.clone())],
+        InlineObject::FieldEnd if opts.fields => vec![Inline::FieldEnd],
         InlineObject::Field { instr, result, .. } if opts.fields => {
             vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]
         }

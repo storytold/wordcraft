@@ -252,6 +252,9 @@ pub(in crate::odt) fn tab_stops(tabs: &[wordcraft_doc::props::TabStop]) -> Strin
 /// digits and `-`, `.` kept, anything else as `_xHH_` (its code point in hex), and a leading
 /// digit, `-` or `.` escaped too.
 pub(in crate::odt) fn odf_name(id: &str) -> String {
+    if let Some((name, _)) = generated_style(id) {
+        return name;
+    }
     let mut out = String::new();
     for (i, c) in id.chars().enumerate() {
         let ok = c.is_alphanumeric() || (i > 0 && (c == '-' || c == '.' || c.is_ascii_digit()));
@@ -305,4 +308,29 @@ pub(in crate::odt) fn parent_style(k: Kind) -> &'static str {
         Kind::Code => "Preformatted_20_Text",
         Kind::Normal | Kind::Rule => "Standard",
     }
+}
+
+/// The LibreOffice style (name and display name) standing for WordCraft's table of contents,
+/// table of figures and index heading styles, which LibreOffice's indexes are generated in:
+/// TOC 1–9 are Contents 1–9, TOC Heading is Contents Heading, Table of Figures is Figure Index 1.
+pub(in crate::odt) fn generated_style(id: &str) -> Option<(String, String)> {
+    let n = id.strip_prefix("TOC").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=9).contains(n));
+    Some(match (id, n) {
+        (_, Some(n)) => (format!("Contents_20_{n}"), format!("Contents {n}")),
+        ("TOCHeading", _) => ("Contents_20_Heading".into(), "Contents Heading".into()),
+        ("TableofFigures", _) => ("Figure_20_Index_20_1".into(), "Figure Index 1".into()),
+        _ => return None,
+    })
+}
+
+/// The WordCraft style (id and name) a LibreOffice index style `odt` stands for (the reverse
+/// of [`generated_style`]).
+pub(in crate::odt) fn generating_style(odt: &str) -> Option<(String, String)> {
+    let n = odt.strip_prefix("Contents_20_").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=10).contains(n));
+    Some(match (odt, n) {
+        (_, Some(n)) => (format!("TOC{}", n.min(9)), format!("TOC {}", n.min(9))),
+        ("Contents_20_Heading", _) => ("TOCHeading".into(), "TOC Heading".into()),
+        ("Figure_20_Index_20_1", _) => ("TableofFigures".into(), "Table of Figures".into()),
+        _ => return None,
+    })
 }

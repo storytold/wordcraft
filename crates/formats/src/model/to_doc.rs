@@ -426,6 +426,11 @@ impl<'a> Builder<'a> {
                     }
                     append(&mut out, &t, &cp, None);
                 }
+                Inline::FieldStart(instr) => {
+                    let obj = InlineObject::FieldStart { instr: clean_text(instr), locked: false, dirty: false };
+                    append(&mut out, "", &CharProps::default(), Some(obj));
+                }
+                Inline::FieldEnd => append(&mut out, "", &CharProps::default(), Some(InlineObject::FieldEnd)),
                 Inline::Image(_) | Inline::Shape { .. } | Inline::Group { .. } => {
                     if let Some(obj) = self.drawing(i, 0) {
                         append(&mut out, "", &CharProps::default(), Some(obj));

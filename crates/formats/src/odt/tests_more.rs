@@ -9,6 +9,7 @@ mod floats;
 mod fonts;
 mod groups;
 mod headers;
+mod indexes;
 mod lists;
 mod named_styles;
 mod notes;

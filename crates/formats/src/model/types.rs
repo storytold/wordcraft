@@ -214,6 +214,12 @@ pub enum Inline {
         /// A freeform's paths ([`wordcraft_doc::para::ShapeKind::Freeform`]).
         path: Option<std::sync::Arc<wordcraft_doc::freeform::Freeform>>,
     },
+    /// The start of a field whose result is the content after it, up to the matching
+    /// [`Inline::FieldEnd`] (a table of contents around its entries); its field code. Only flows
+    /// asked for fields ([`FlowOpts::fields`]) hold them.
+    FieldStart(String),
+    /// The end of the innermost [`Inline::FieldStart`].
+    FieldEnd,
     /// Drawing shapes, text boxes and pictures grouped into one object: its size in points, its
     /// placement when it floats, and its members, each at its offset in the group. Only flows
     /// asked for shapes ([`FlowOpts::boxes`]) hold them.
@@ -571,7 +577,9 @@ impl Para {
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
                 | Inline::Shape { .. }
-                | Inline::Group { .. } => {}
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd => {}
             }
         }
         s
@@ -594,7 +602,9 @@ impl Para {
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
                 | Inline::Shape { .. }
-                | Inline::Group { .. } => {}
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd => {}
             }
         }
         s

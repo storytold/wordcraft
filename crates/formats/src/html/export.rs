@@ -137,7 +137,13 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
-            Inline::Note { .. } | Inline::Comment { .. } | Inline::CommentEnd(_) | Inline::Shape { .. } | Inline::Group { .. } => {}
+            Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd => {}
             Inline::Field { result, fmt, .. } => {
                 let (open, close) = fmt_tags(fmt);
                 let at_start = o.is_empty();

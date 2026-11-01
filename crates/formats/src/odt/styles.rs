@@ -356,6 +356,9 @@ pub(super) struct ParaLook {
     /// paragraph is in, by its ODF name; the formatting above is then only what the automatic
     /// styles over it add.
     pub(super) named: Option<String>,
+    /// The paragraph's left indent over its whole style chain, points: where tab stops are
+    /// measured from when they are measured from the indent.
+    pub(super) tab_origin: f32,
 }
 
 /// Where a custom style's formatting comes from besides its own ([`NamedStyle::parent`]).
@@ -383,6 +386,10 @@ const MAX_STYLE_ID: usize = 64;
 /// The document style id for an ODF style: its name's letters and digits (LibreOffice's
 /// `Text_20_body` is `Textbody`), at most [`MAX_STYLE_ID`] of them.
 pub(super) fn style_id(odt: &str) -> String {
+    // LibreOffice's index styles are WordCraft's TOC styles.
+    if let Some((id, _)) = super::writer::generating_style(odt) {
+        return id;
+    }
     let id: String = odt.replace("_20_", " ").chars().filter(|c| c.is_alphanumeric()).take(MAX_STYLE_ID).collect();
     if id.is_empty() { "Custom".into() } else { id }
 }
@@ -1120,7 +1127,11 @@ impl Styles {
         // The nearest custom style: its formatting stays in it; the automatic styles over it give
         // the paragraph's own.
         let named_at = chain.iter().take(kind_at).position(|(n, _)| self.is_named(n));
-        let named = named_at.and_then(|i| chain.get(i)).map(|(n, _)| n.to_string());
+        let named = named_at.and_then(|i| chain.get(i)).map(|(n, _)| n.to_string()).or_else(|| {
+            // An index style the file names but doesn't define (WordCraft has its own).
+            let undefined = chain.last().map_or(Some(name), |(_, s)| s.parent.as_deref());
+            undefined.filter(|n| super::writer::generating_style(n).is_some()).map(String::from)
+        });
         let kind_at = named_at.unwrap_or(kind_at);
         let align = if named.is_some() { chain.iter().take(kind_at).find_map(|(_, s)| s.align) } else { chain.iter().find_map(|(_, s)| s.align) };
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
@@ -1141,6 +1152,9 @@ impl Styles {
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual, rtl }
+        // Where LibreOffice measures the tab stops from: the indent the paragraph ends up with,
+        // whichever style in the chain gives it.
+        let tab_origin = chain.iter().find_map(|(_, s)| s.spacing.left).filter(|v| v.is_finite()).unwrap_or(0.0);
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual, rtl, tab_origin }
     }
 }

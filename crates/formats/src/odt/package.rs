@@ -121,7 +121,7 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
         s.push_str(&format!(
             "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
             super::writer::odf_name(&id),
-            x(&st.name),
+            x(&super::writer::generated_style(&id).map_or_else(|| st.name.clone(), |(_, d)| d)),
             props_text(&st.chr)
         ));
     }
@@ -563,7 +563,11 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     // The dashes, gradients and arrowheads graphic styles name (§16.39–16.41).
     let mut draw_defs = std::mem::take(&mut w.draw_defs.defs);
     draw_defs.append(&mut hw.draw_defs.defs);
-    let draw_xml: String = draw_defs.into_values().collect();
+    let mut draw_xml: String = draw_defs.into_values().collect();
+    // The plain character style index entries' links are in (LibreOffice's Index Link).
+    if w.indexes + hw.indexes > 0 {
+        draw_xml.push_str("<style:style style:name=\"Index_20_Link\" style:display-name=\"Index Link\" style:family=\"text\"/>");
+    }
     let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen(
         "</office:styles>",
         &format!("{draw_xml}{named_text_xml}</office:styles>"),

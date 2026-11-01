@@ -114,3 +114,20 @@ fn the_default_tab_interval_round_trips() {
     let back = import(&export(&d).unwrap()).unwrap();
     assert!((back.settings.default_tab - 28.35).abs() < 0.01, "{}", back.settings.default_tab);
 }
+
+#[test]
+fn tabs_are_measured_from_the_indent_a_style_gives() {
+    // A paragraph whose own (automatic) style holds the tab stop and whose named style holds
+    // the indent, as LibreOffice writes table of contents entries: the stop is from the indent.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Indented" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in"><style:tab-stops><style:tab-stop style:position="2in"/></style:tab-stops></style:paragraph-properties></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Indented"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="3in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a<text:tab/>b</text:p><text:p text:style-name="Indented">c<text:tab/>d</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let own = d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default();
+    assert_eq!(own.iter().map(|t| t.pos).collect::<Vec<_>>(), [252.0], "3in from a 0.5in indent");
+    let style = d.styles.get("Indented").unwrap().para.tabs.clone().unwrap_or_default();
+    assert_eq!(style.iter().map(|t| t.pos).collect::<Vec<_>>(), [180.0], "2in from the style's own 0.5in indent");
+}

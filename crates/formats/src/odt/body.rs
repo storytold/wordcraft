@@ -8,11 +8,13 @@ use super::{
 };
 
 mod drawing;
+mod indexes;
 mod notes;
 mod tables;
 mod tracked;
 
 use drawing::{OpenGroup, read_formula};
+use indexes::{OpenIndex, is_index};
 use notes::{OpenField, OpenNote, balance_comments};
 use tables::TableB;
 use tracked::{DelState, Region, change_mark};
@@ -86,6 +88,8 @@ pub(super) struct Body<'a> {
     member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
     group_at: Option<usize>,
+    /// The table of contents or other index being read.
+    index: Option<OpenIndex>,
     /// The group being read (its anchor, style and members so far), and where its member being
     /// read sits (unturned, from where the group is anchored).
     group: Option<OpenGroup>,
@@ -149,6 +153,7 @@ impl<'a> Body<'a> {
             shape_path: None,
             member_rot: None,
             group_at: None,
+            index: None,
             group: None,
             member_at: None,
             note: None,
@@ -328,7 +333,7 @@ impl Body<'_> {
             // LibreOffice measures tabs from the indent (its `TabsRelativeToIndent`); Word from
             // the margin.
             if self.styles.tabs_from_indent {
-                let indent = look.spacing.left.unwrap_or(0.0);
+                let indent = look.tab_origin;
                 for t in &mut tabs {
                     t.pos = (t.pos + indent).clamp(-1584.0, 1584.0);
                 }
@@ -552,7 +557,7 @@ impl Body<'_> {
             self.skip = 1;
             return;
         }
-        if self.start_inline(q, a) || self.start_note_part(q, a) || self.start_list_part(q, a) {
+        if self.start_inline(q, a) || self.start_note_part(q, a) || self.start_list_part(q, a) || self.start_index_part(q, a) {
             return;
         }
         match local(q) {
@@ -574,15 +579,7 @@ impl Body<'_> {
                 }
             }
             "change-start" | "change-end" => change_mark(&self.regions, &mut self.active_ins, local(q) == "change-start", a),
-            "note"
-            | "annotation"
-            | "text-box"
-            | "sequence-decls"
-            | "forms"
-            | "variable-decls"
-            | "user-field-decls"
-            | "index-title-template"
-            | "table-of-content-source" => {
+            "note" | "annotation" | "text-box" | "sequence-decls" | "forms" | "variable-decls" | "user-field-decls" | "index-title-template" => {
                 self.skip = 1;
             }
             // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
@@ -930,6 +927,8 @@ impl Body<'_> {
                 self.break_section(next);
             }
             "frame" => self.end_frame(),
+            name if q.starts_with("text:") && is_index(name) && self.index.as_ref().is_some_and(|ix| ix.depth == self.depth + 1) => self.end_index(),
+            "index-title" if q.starts_with("text:") => self.index_title(true),
             "g" if self.group_at == Some(self.depth + 1) => {
                 self.group_at = None;
                 self.end_group();

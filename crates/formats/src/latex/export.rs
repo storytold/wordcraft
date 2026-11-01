@@ -245,7 +245,9 @@ impl Writer {
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
                 | Inline::Shape { .. }
-                | Inline::Group { .. } => {}
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd => {}
                 Inline::Field { result, fmt, .. } => {
                     let s = self.span(result, fmt);
                     push_apart(&mut o, &s);

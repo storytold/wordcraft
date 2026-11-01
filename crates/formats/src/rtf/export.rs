@@ -406,7 +406,9 @@ impl Writer {
                 | Inline::Comment { .. }
                 | Inline::CommentEnd(_)
                 | Inline::Shape { .. }
-                | Inline::Group { .. } => {}
+                | Inline::Group { .. }
+                | Inline::FieldStart(_)
+                | Inline::FieldEnd => {}
             }
         }
     }
