@@ -181,14 +181,30 @@ impl eframe::App for WebShell {
         if ui.ctx().current_pass_index() == 0 {
             let ctx = ui.ctx().clone();
             let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-            for f in dropped {
+            for f in dropped.into_iter().take(MAX_DROPPED_FILES) {
+                let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
+                // The browser reports the size without reading, so a file over the cap is refused
+                // before its bytes are ever allocated (#3684).
+                if let Some(file) = f.web_file() {
+                    if file.size() > MAX_DROPPED_BYTES {
+                        log::warn!("dropped file {name} is larger than 200 MB; not opened");
+                        continue;
+                    }
+                }
                 let inbox = self.inbox.clone();
                 let ctx = ctx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
                     match f.bytes_async().await {
                         Ok(bytes) => {
-                            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                            // The queue is bounded like the picked-font queue, so a flood of
+                            // drops cannot outpace the app draining it (#3684).
+                            let mut pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
+                            let held: usize = pending.iter().map(|(_, b)| b.len()).fold(0, usize::saturating_add);
+                            if held.saturating_add(bytes.len()) > MAX_PENDING_PICKED_BYTES {
+                                log::warn!("dropped file {name} not opened: too many files are still opening");
+                                return;
+                            }
+                            pending.push((name, bytes));
                             ctx.request_repaint();
                         }
                         Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
@@ -204,6 +220,11 @@ impl eframe::App for WebShell {
 const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
+/// Most files one browser drop queues: a drop needs no dialog, so a stray folder landing on the
+/// window cannot queue thousands of concurrent reads (#3684).
+const MAX_DROPPED_FILES: usize = 200;
+/// Largest dropped file read into memory, refused before the read begins (the paste cap).
+const MAX_DROPPED_BYTES: f64 = (200u32 << 20) as f64;
 
 /// Pasting a picture (#45): eframe's paste handler only reads text, so a clipboard holding just
 /// pictures (a screenshot, a browser's Copy Image) is read here and the pictures arrive through
