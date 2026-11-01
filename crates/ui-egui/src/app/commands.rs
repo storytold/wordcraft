@@ -623,6 +623,9 @@ impl WordApp {
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
             "ui.headerColour" => {
+                if !p.is_object() {
+                    return Some(Err("parameters must be an object".into()));
+                }
                 if let Some(value) = p.get("value") {
                     let Some(colour) = value.as_str().and_then(theme::HeaderColour::from_code) else {
                         return Some(Err("use #RRGGBB or default for the header colour".into()));
@@ -1077,4 +1080,37 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
 /// replace only an untouched blank document, which has nothing to lose).
 pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
     id == "file.close"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_colour_params() {
+        const COMMAND: &str = "ui.headerColour";
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Preserved")), crate::Services::default());
+        let doc = app.session.doc.clone();
+        let revision = app.session.rev();
+        let selection = app.session.sel.clone();
+        let default = json!({"value": theme::HeaderColour::DEFAULT_CODE});
+        assert_eq!(app.execute(COMMAND, json!({})), Ok(default.clone()));
+        let custom = json!({"value": "#A1B2C3"});
+        assert_eq!(app.execute(COMMAND, json!({"value": "#a1b2c3"})), Ok(custom.clone()));
+        assert_eq!(app.execute(COMMAND, json!({"other": true})), Ok(custom.clone()));
+
+        for params in [Value::Null, json!(false), json!(42), json!(1.5), json!("#A1B2C3"), json!([]), json!([{}])] {
+            assert_eq!(app.execute(COMMAND, params), Err("parameters must be an object".into()));
+            assert_eq!(app.execute(COMMAND, json!({})), Ok(custom.clone()), "invalid parameter shape preserves the colour");
+        }
+        for value in [Value::Null, json!(false), json!(42), json!([]), json!({}), json!("red"), json!("#12345G")] {
+            assert_eq!(app.execute(COMMAND, json!({"value": value})), Err("use #RRGGBB or default for the header colour".into()));
+            assert_eq!(app.execute(COMMAND, json!({})), Ok(custom.clone()), "invalid object value preserves the colour");
+        }
+        assert_eq!(app.execute(COMMAND, default.clone()), Ok(default.clone()));
+        assert_eq!(app.execute(COMMAND, json!({})), Ok(default));
+        assert_eq!(app.session.doc, doc);
+        assert_eq!(app.session.rev(), revision);
+        assert_eq!(app.session.sel, selection);
+    }
 }
