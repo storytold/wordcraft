@@ -142,6 +142,9 @@ const C_SYMBOL: u16 = 0x6A09;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
 const P_ILVL: u16 = 0x260A;
 const P_ILFO: u16 = 0x460B;
+/// `sprmPHugePapx`: the whole PAPX of a paragraph that is too large for its FKP page (a table row with
+/// many cells) is this one sprm, whose operand is the offset of the real properties in the Data stream.
+const P_HUGE_PAPX: u16 = 0x6646;
 
 /// Errors from reading a Word 97-2003 binary file.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
@@ -405,6 +408,17 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
+/// The sprms a `sprmPHugePapx` in `papx` points to in the Data stream: a `PrcData`, a two-byte byte
+/// count and then the grpprl. `None` when `papx` has none, or when it points outside the stream.
+fn huge_papx<'d>(data: &'d [u8], papx: &[u8]) -> Option<&'d [u8]> {
+    let prl = sprm::iter(papx).find(|p| p.op == P_HUGE_PAPX)?;
+    let [a, b, c, d, ..] = *prl.operand else { return None };
+    let at = u32::from_le_bytes([a, b, c, d]) as usize;
+    let body = at.checked_add(2)?;
+    let cb = u16::from_le_bytes(data.get(at..body)?.try_into().ok()?) as usize;
+    data.get(body..body.checked_add(cb)?)
+}
+
 /// Everything the walker needs besides its CP range.
 struct WalkCtx<'a> {
     word: &'a [u8],
@@ -526,6 +540,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
+                let papx = huge_papx(ctx.data, papx).unwrap_or(papx);
                 if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }
