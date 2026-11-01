@@ -128,6 +128,14 @@ fn language_dialog_marks_the_selection() {
     a.run("review.language", f.params()).unwrap();
     let c = a.session.typing_props();
     assert_eq!((c.lang.as_deref(), c.no_proof), (Some("sr-Latn-RS"), Some(true)));
+    assert!(LANGUAGES.contains(&("fr-CA", "French (Canada)")), "Canada is offered by the dialog");
+    assert_eq!(language_name("fr-CA"), "French (Canada)");
+    f.lang = "fr-CA".into();
+    a.run("review.language", f.params()).unwrap();
+    assert_eq!(LanguageForm::read(&a).lang, "fr-CA");
+    assert_eq!(a.run("format.state", json!({})).unwrap()["lang"], "fr-CA");
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(a.run("format.state", json!({})).unwrap()["lang"], "sr-Latn-RS");
     a.run("review.language", json!({"lang": "fr-FR", "default": true})).unwrap();
     assert_eq!(a.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
     assert!(a.dialog.is_none());

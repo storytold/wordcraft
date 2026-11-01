@@ -1,8 +1,8 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-26 · **Change:** minor (French integration retains Turkish dictionary encoding support); previously minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
-English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
+English spelling works out of the box. French, Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
 WordCraft reads at runtime. These dictionaries are not bundled: they are large, and several are
 GPL or LGPL licensed. Without one, the language isn't checked. The status bar then shows the
@@ -22,6 +22,7 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 
 | Language | File names | Common source |
 |---|---|---|
+| French (including Canada) | `fr_FR`, `fr`, `fr-FR`, `fr_BE`, `fr_CA`, `fr_CH`, `fr_LU`, `fr_MC` | Dicollecte / Grammalecte, LibreOffice `dict-fr` (MPL 2.0) |
 | Polish | `pl_PL`, `pl-PL`, `pl` | SJP.PL |
 | Russian | `ru_RU`, `ru-RU`, `ru` | LibreOffice `dict-ru` |
 | Portuguese (Brazil and Portugal) | `pt_BR`, `pt-BR`, `pt` | VERO (LibreOffice `dict-pt-BR`) |
@@ -65,6 +66,36 @@ The first folder holding a matching pair wins:
 | Linux and BSD | `~/.local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell`, `/usr/share/myspell/dicts`, `/usr/local/share/hunspell`, `/usr/local/share/myspell`, LibreOffice's `share/extensions/dict-*` under `/usr/lib/libreoffice` or `/opt/libreoffice` |
 
 The web version can't read these folders, so these languages aren't spell-checked there.
+
+## Example: French (`fr` / `fr_FR`)
+
+The [LibreOffice French dictionaries](https://github.com/LibreOffice/dictionaries/tree/master/fr_FR/dictionaries)
+provide `fr.aff` and `fr.dic` (Dicollecte / Grammalecte, MPL 2.0). Keep both files in the same
+folder with their matching names. France, Belgium, Switzerland and Canada share this spelling
+dictionary; `fr-CA` selects Quebec grammar/typography rules through the document's language.
+
+On Windows, in PowerShell:
+
+```powershell
+$dictionaryFolder = "$env:LOCALAPPDATA\WordCraft\dictionaries"
+New-Item -ItemType Directory -Force $dictionaryFolder | Out-Null
+$base = "https://raw.githubusercontent.com/LibreOffice/dictionaries/67032ee957631908098a72edf48dc81cac27e369/fr_FR/dictionaries"
+Invoke-WebRequest "$base/fr.aff" -OutFile "$dictionaryFolder\fr.aff" -UseBasicParsing
+Invoke-WebRequest "$base/fr.dic" -OutFile "$dictionaryFolder\fr.dic" -UseBasicParsing
+```
+
+On macOS, put the pair in `~/Library/Spelling` (create it if needed). On Linux, install
+`hunspell-fr` from your distribution, or put the pair in `~/.local/share/hunspell`. On any
+desktop system, **File › Options › Proofing › Dictionaries folder** can select a folder of
+your choice. Restart WordCraft after installing the files.
+
+For an existing document, select its text and choose **Review › Language › Set Proofing
+Language… › French (France)** (or Canada), with proofing enabled. A French interface chooses
+French for new documents. Check that `maisonn` is underlined and `maison` is suggested.
+Correct text such as `Une maison près de l’école.` should have no spelling marks.
+
+The explicit regression gate uses `WORDCRAFT_DICTIONARIES` and fails on missing or unreadable
+files. Details and the improvement plan: [french-proofing.md](french-proofing.md).
 
 ## Example: Brazilian Portuguese (`pt_BR`)
 
@@ -140,6 +171,9 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | French proofing synchronized with current main; bounded/grouped affix expansion retains 512-flag support and NEEDAFFIX/FULLSTRIP behavior, with a continuation regression beyond flag 128 (#3185) |
+| 2026-10-25 | minor | French proofing reconciled with current main: Spanish and English variants, German hyphenation, shared NFC lookup, dictionary diagnostics and external interface catalogs are preserved (#3185) |
+| 2026-10-20 | minor | French file names, Windows installation, other platforms, proofing language selection and explicit real-dictionary gate |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |

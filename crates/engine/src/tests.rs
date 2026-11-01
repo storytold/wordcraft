@@ -8523,6 +8523,8 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
         // would otherwise force a reload that finds no cs_CZ here and empties it mid-test. Same
         // fixture content either way keeps such a race harmless, as it already does for Polish.
         ("cs_CZ", czech_test_dict::AFF, czech_test_dict::DIC),
+        // French Review installs this same fixture; a concurrent folder reload must retain it.
+        ("fr_FR", FRENCH_TEST_AFF, FRENCH_TEST_DIC),
     ] {
         std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
         std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -8547,6 +8549,13 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
     reported(file("pl").as_ref(), "pl_PL");
     reported(file("pt").as_ref(), "pt_BR");
     reported(file("id").as_ref(), "id_ID");
+    reported(file("fr").as_ref(), "fr_FR");
+    // The reload keeps the same French words, affixes and typo correction as explicit install.
+    for word in ["école", "écoles", "chat", "chats"] {
+        assert!(wordcraft_proof::fr::is_correct(word), "{word}");
+    }
+    assert!(!wordcraft_proof::fr::is_correct("chaat"));
+    assert!(wordcraft_proof::fr::suggest("chaat", 6).iter().any(|word| word == "chat"));
     // Each Spanish variety reports its own file (Spain, Mexico, Latin America, Uruguay, in order).
     let spanish: Vec<serde_json::Value> = dicts.iter().filter(|d| d["language"] == "es").map(|d| d["file"].clone()).collect();
     assert_eq!(spanish.len(), 4);
@@ -8942,6 +8951,55 @@ fn italian_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
+const FRENCH_TEST_AFF: &str =
+    "SET UTF-8\nFLAG long\nTRY esaitnrulodcpmévqfbghjàxèê\nMAP 2\nMAP eéèê\nMAP aàâ\nSFX S. Y 2\nSFX S. 0 0 .\nSFX S. 0 s .\n";
+const FRENCH_TEST_DIC: &str = "7\nécole/S.\nmaison/S.\nle/S.\nchat/S.\ndort\net\nla\n";
+
+fn french_test_dictionary() {
+    let _turn = dictionaries_turn();
+    wordcraft_proof::fr::install_dictionary(FRENCH_TEST_AFF, FRENCH_TEST_DIC).unwrap();
+}
+
+/// Review › Language and the proofing commands work in French end to end: the language makes
+/// the document's words French, F7 and the issue list use the French dictionary and grammar,
+/// suggestions come from it, and a suggestion fixes the text.
+#[test]
+fn french_proofing_through_the_review_commands() {
+    french_test_dictionary();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Le chaat dort et la école dort!"}));
+    // English by default: the French words are English misspellings, and no French rule runs.
+    let english = run(&mut s, "review.issues", json!({}));
+    assert!(english.as_array().unwrap().iter().any(|i| i["text"] == "chaat" && i["lang"] == "en"), "{english}");
+    assert!(english.as_array().unwrap().iter().all(|i| i["lang"] == "en"), "{english}");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "fr_FR", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"), "the tag is normalized");
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "fr-FR");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    let has = |text: &str, kind: &str, sugg: &str| {
+        arr.iter()
+            .any(|i| i["text"] == text && i["kind"] == kind && i["lang"] == "fr" && i["suggestions"].as_array().unwrap().iter().any(|x| x == sugg))
+    };
+    assert!(has("chaat", "spelling", "chat"), "{issues}");
+    assert!(has("la école", "grammar", "l’école"), "{issues}");
+    assert!(has("!", "grammar", "\u{202F}!"), "{issues}");
+    assert_eq!(arr.len(), 3, "{issues}");
+    assert!(arr.iter().any(|i| i["message"] == "Faute d’orthographe possible"), "{issues}");
+    // F7 from the start selects the first issue; Change applies a suggestion.
+    run(&mut s, "caret.docStart", json!({}));
+    let first = run(&mut s, "review.spelling", json!({}));
+    assert_eq!(first["text"], "chaat");
+    run(&mut s, "review.applySuggestion", json!({"text": "chat"}));
+    assert!(text(&s).starts_with("Le chat dort et la école dort"), "{}", text(&s));
+    // Add to Dictionary works for French words too.
+    run(&mut s, "review.addToDictionary", json!({"word": "dortt"}));
+    run(&mut s, "document.setText", json!({"text": "Le chat dortt."}));
+    let left = run(&mut s, "review.issues", json!({}));
+    assert!(left.as_array().unwrap().is_empty(), "{left}");
+}
+
 #[test]
 fn polish_proofing_through_the_review_commands() {
     polish_test_dictionary();
@@ -9030,7 +9088,7 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     run(&mut s, "review.language", json!({}));
     assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-US");
     // A language without proofing tools: no marks.
-    run(&mut s, "review.language", json!({"lang": "fr-FR"}));
+    run(&mut s, "review.language", json!({"lang": "de-DE"}));
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 

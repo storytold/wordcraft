@@ -8343,11 +8343,11 @@ fn unproofed_languages_and_no_proof_runs_are_not_marked() {
         let l = layout(d, &mut LayoutCache::new(), &opts);
         l.pages[0].items.iter().map(|i| if let Placed::Lines { para, .. } = i { para.issues.len() } else { 0 }).sum()
     };
-    let text = "Nous écrivons beaucoup aujourd'hui.";
+    let text = "Wir schreiben heute sehr viel.";
     let mut d = Document::from_text(text);
-    assert!(issues(&d) > 0, "French words are English misspellings in an English document");
-    d.styles.default_chr.lang = Some("fr-FR".into());
-    assert_eq!(issues(&d), 0, "no French dictionary: no marks");
+    assert!(issues(&d) > 0, "German words are English misspellings in an English document");
+    d.styles.default_chr.lang = Some("de-DE".into());
+    assert_eq!(issues(&d), 0, "no German dictionary: no marks");
     d.styles.default_chr.lang = Some("pl-PL".into());
     let mut pl = Document::from_text("Płynie żeka.");
     pl.styles.default_chr.lang = Some("pl-PL".into());

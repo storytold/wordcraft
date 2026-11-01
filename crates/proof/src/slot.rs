@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn an_installed_dictionary_has_no_file_until_reloaded() {
         assert!(!SLOT.has_dictionary(), "nothing installed under this name");
-        assert!(SLOT.install("FLAG long\n", "1\nkot\n").is_err(), "unsupported files are refused");
+        assert!(SLOT.install("COMPOUNDFLAG X\n", "1\nkot\n").is_err(), "unsupported files are refused");
         assert!(!SLOT.has_dictionary(), "a refused install keeps the current one");
         SLOT.install("", "1\nkot\n").unwrap();
         assert!(SLOT.has_dictionary() && SLOT.get().check("kot"));

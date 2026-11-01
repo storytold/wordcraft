@@ -11,7 +11,9 @@ workspace = true
 [dependencies]
 log = { workspace = true }
 miniz_oxide = "0.9"
+unicode-general-category = "1.1.0"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
 proptest = { workspace = true }
+tempfile = "3"

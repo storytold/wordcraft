@@ -1,1 +1,4 @@
+# include_str! comparisons and recorded SHA-256 values require identical newlines on Windows.
+/crates/proof/tests/fixtures/affix_compatibility.expected text eol=lf
+/crates/proof/tests/fixtures/affix_compatibility.compact text eol=lf
 craft-i18n.rev text eol=lf

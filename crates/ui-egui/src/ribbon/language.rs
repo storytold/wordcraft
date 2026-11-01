@@ -1,7 +1,7 @@
 use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 18] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -14,6 +14,8 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("ru-RU", "Russian"),
     ("cs-CZ", "Czech"),
     ("id-ID", "Indonesian"),
+    ("fr-FR", "French (France)"),
+    ("fr-CA", "French (Canada)"),
     ("es-ES", "Spanish (Spain)"),
     ("es-MX", "Spanish (Mexico)"),
     ("es-419", "Spanish (Latin America)"),
@@ -31,11 +33,15 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     if let Some(name) = named(tag) {
         return name.to_string();
     }
-    let mut parts = tag.split(['-', '_']);
+    let mut parts = tag.split(['-', '_', '.']);
     let primary = parts.next().unwrap_or("");
-    // The region: the first two-letter or three-digit subtag after the language (and script).
-    let region =
-        parts.find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
+    // A region follows the language and optional script, before variants or extensions.
+    // An extension's calendar key (the `ca` in `fr-u-ca-gregory`) is not a region.
+    let first = parts.next().unwrap_or("");
+    let region = if first.len() == 4 && first.chars().all(|c| c.is_ascii_alphabetic()) { parts.next().unwrap_or("") } else { first };
+    let region = ((region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic()))
+        || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit())))
+    .then_some(region);
     match region {
         // A region the list doesn't have: the language's name without its own region or variant.
         Some(r) => {
@@ -58,6 +64,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
+            wordcraft_engine::proof::ProofLang::Fr | wordcraft_engine::proof::ProofLang::FrCa => "French (France)".into(),
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
@@ -198,6 +205,7 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
             || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
             || (tag == "id-ID" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Id)
+            || (tag == "fr-FR" && current.eq_ignore_ascii_case("fr"))
             || (tag == "es-ES" && current.eq_ignore_ascii_case("es"))
             || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
     };
