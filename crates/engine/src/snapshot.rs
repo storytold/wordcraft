@@ -54,7 +54,7 @@ impl EditSnapshot {
 /// What `run` keeps to take a failed mutating command back: the document, the selection, the
 /// undo and redo stacks, the open typing group, the undo steps dropped so far and the column
 /// block.
-pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>);
+pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>, Option<crate::cmd::moves::PendingMove>);
 
 /// A layout made and what it was made for: (revision, width, read height, view, read line
 /// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body

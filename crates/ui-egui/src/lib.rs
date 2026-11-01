@@ -57,6 +57,7 @@ pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
 pub mod panes;
+pub mod paste_options;
 pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
@@ -155,6 +156,8 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
+    /// Default paste formatting (source, merge, or text).
+    pub default_paste: String,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
     /// Fonts applied from the font box, the mini toolbar or the Font dialog, most recent first:
@@ -309,6 +312,7 @@ impl Default for UiState {
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
+            default_paste: "source".into(),
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
@@ -469,6 +473,8 @@ pub struct WordApp {
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
+    /// Contextual Word-style paste button after an untouched paste.
+    pub paste_options: Option<paste_options::PostPaste>,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,

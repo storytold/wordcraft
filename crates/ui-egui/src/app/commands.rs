@@ -58,6 +58,8 @@ impl WordApp {
             });
             return Ok(json!({"pending": "saveChanges"}));
         }
+        // Only the most recent untouched paste offers contextual formatting choices.
+        self.paste_options = None;
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
@@ -73,8 +75,22 @@ impl WordApp {
         {
             return r;
         }
+        let is_paste = matches!(id, "edit.paste" | "edit.pasteMerge" | "edit.pasteText");
+        let mode = if id == "edit.paste" {
+            paste_options::PasteMode::from_key(&self.ui.default_paste)
+        } else if id == "edit.pasteMerge" {
+            paste_options::PasteMode::Merge
+        } else {
+            paste_options::PasteMode::Text
+        };
+        let effective_id = if is_paste { mode.command() } else { id };
+        let paste_params = is_paste.then(|| params.clone());
+        let undo_before = self.session.undo_mark();
         let applied = applied_font(id, &params);
-        let r = self.execute_user(id, params);
+        let r = self.execute_user(effective_id, params);
+        if r.is_ok() && let Some(params) = paste_params {
+            self.paste_options = paste_options::PostPaste::capture(self, params, mode, undo_before);
+        }
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
@@ -752,6 +768,14 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            "ui.defaultPaste" => {
+                match p.get("value") {
+                    None => {}
+                    Some(Value::String(v)) if matches!(v.as_str(), "source" | "merge" | "text") => self.ui.default_paste = v.clone(),
+                    Some(_) => return Some(Err("`value` must be source, merge or text".into())),
+                }
+                json!({"defaultPaste": self.ui.default_paste})
+            }
             "ui.caretAnimation" => {
                 // File › Options › Advanced › Animation: `value` true or false turns the caret's
                 // glide and fading blink on or off; no value reads it.
@@ -1038,6 +1062,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.makeDefaultApp"
             | "ui.discord"
             | "ui.caretAnimation"
+            | "ui.defaultPaste"
             | "ui.startScreen"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
