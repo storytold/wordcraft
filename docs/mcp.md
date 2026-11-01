@@ -115,9 +115,10 @@ files it was given rather than guarding against other software on the computer.
 With `--connect`, an agent works in the user's own app, whose preferences are saved and used for
 every later document. Its commands can't change them: the user name and initials, AutoCorrect,
 keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options settings
-(including the default proofing language, Check Spelling as You Type, Print Markup and how
-tracked changes are shown). A command that would is refused with an error naming
-`--allow-preference-changes`, and nothing it did stays, document edits included (#3622). Start
+(including the default proofing language, Check Spelling as You Type, Print Markup, how tracked
+changes are shown, and the window's own settings such as the theme and the Start screen). A command
+that would is refused with an error naming `--allow-preference-changes`, and nothing it did stays,
+document edits included, except words added to the user dictionary (#3622). Start
 the app with `wordcraft --control 7981 --allow-preference-changes` to let an agent you trust
 change them. Reading them still works: `tools.customizeKeyboard` with `command` or `key`, and
 `file.options` without settings, which returns them.

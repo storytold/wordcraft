@@ -1,7 +1,7 @@
 use super::doc_state::{ColumnBlock, Selection};
 use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
-use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
+use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, PREFERENCES_LOCKED, Pos, Session, StoryRef, Value, document_id_mark};
 use crate::CommandSpec;
 
 struct SuccessContext<'a> {
@@ -33,8 +33,6 @@ struct KeptPrefs {
     ribbon: crate::RibbonLayout,
     proofing: bool,
 }
-
-const PREFERENCES_LOCKED: &str = "automation can't change the user's preferences (user name, AutoCorrect, keyboard shortcuts, ribbon, options); start WordCraft with --allow-preference-changes to let it";
 
 struct ElsewhereContext {
     home: u64,

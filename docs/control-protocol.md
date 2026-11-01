@@ -143,12 +143,15 @@ the same rule (unsaved changes need `{"force": true}`), and the active window st
 
 Requests can't change what the app saves for later documents: the user name and initials,
 AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options
-settings. A command that would, by any method (`engine.execute`, the bare id, or with `doc`), is
-refused with an error that names `--allow-preference-changes`, and everything it did is undone
-(#3622). An agent reading a document could otherwise be steered by text in it into leaving an
-AutoCorrect entry or a rebound Save shortcut behind. Start the app with
-`wordcraft --control 7981 --allow-preference-changes` to allow it. The user's own changes, in the
-window, are never affected.
+settings, including the ones the window keeps itself (`ui.theme`, `ui.startScreen`,
+`ui.language`…). A command that would, by any method (`engine.execute`, the bare id, or with
+`doc`), is refused with an error that names `--allow-preference-changes`, and what it did is undone
+(#3622), except words it added to the user dictionary (`file.options` `addWords`,
+`review.addToDictionary`), which the guard doesn't cover yet. An agent reading a document could
+otherwise be steered by text in it into leaving an AutoCorrect entry or a rebound Save shortcut
+behind. Asking for a setting without changing it still answers. Start the app with
+`wordcraft --control 7981 --allow-preference-changes` to allow changes. The user's own changes, in
+the window, are never affected.
 
 ### Native printing
 

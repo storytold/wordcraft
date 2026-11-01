@@ -146,6 +146,15 @@ fn control_requests_cannot_change_saved_preferences() {
     assert!(refused(&r), "{r}");
     let r = send(&mut a, "engine.execute", json!({"command": "file.setAuthor", "params": {"name": "Mallory"}, "doc": first}));
     assert!(refused(&r), "{r}");
+    // The window's own File › Options settings (`ui.*` commands, which don't go through the
+    // session) are refused too; reading one still answers.
+    let r = exec(&mut a, "ui.startScreen", json!({"value": false}));
+    assert!(refused(&r), "{r}");
+    let dark = if a.ui.theme == crate::theme::Appearance::Dark { "light" } else { "dark" };
+    let r = send(&mut a, "ui.theme", json!({"value": dark}));
+    assert!(refused(&r), "{r}");
+    let r = exec(&mut a, "ui.startScreen", json!({}));
+    assert_eq!(r["ok"], true, "{r}");
     assert_eq!(saved(&a), before);
     // Ordinary automation still works, and the user's own changes after a request go through.
     assert_eq!(exec(&mut a, "text.insert", json!({"text": " more"}))["ok"], true);
