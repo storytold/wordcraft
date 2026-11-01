@@ -16,14 +16,19 @@ impl Writer<'_> {
                 let id = self.bookmark_id(name);
                 w.empty("w:bookmarkEnd", &[("w:id", &id)]);
             }
-            InlineObject::PermStart { id, group, editor } => {
+            InlineObject::PermStart { id, group, editor, cols } => {
                 let id = id.to_string();
+                let (first, last) = cols.map(|[f, l]| (f.to_string(), l.to_string())).unwrap_or_default();
                 let mut a = vec![("w:id", id.as_str())];
                 if !group.is_empty() {
                     a.push(("w:edGrp", group.as_str()));
                 }
                 if !editor.is_empty() {
                     a.push(("w:ed", editor.as_str()));
+                }
+                if cols.is_some() {
+                    a.push(("w:colFirst", first.as_str()));
+                    a.push(("w:colLast", last.as_str()));
                 }
                 w.empty("w:permStart", &a);
             }

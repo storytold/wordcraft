@@ -132,7 +132,9 @@ fn author_flag_cannot_claim_a_named_exception_after_protection() {
     let end = s.doc.end_of(StoryRef::Body);
     s.doc.insert_object(&end, InlineObject::PermEnd { id: 1 }, &CharProps::default()).unwrap();
     let start = s.doc.start_of(StoryRef::Body);
-    s.doc.insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: "Alice".into() }, &CharProps::default()).unwrap();
+    s.doc
+        .insert_object(&start, InlineObject::PermStart { id: 1, group: String::new(), editor: "Alice".into(), cols: None }, &CharProps::default())
+        .unwrap();
     assert_eq!(s.doc.perm_ranges().len(), 1);
     s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
     s.run("select.text", &json!({"text": "Named"})).unwrap();

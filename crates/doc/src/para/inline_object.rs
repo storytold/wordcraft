@@ -151,6 +151,11 @@ pub enum InlineObject {
         group: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         editor: String,
+        /// The zero-based first and last table grid columns the range covers (`w:colFirst`,
+        /// `w:colLast`, ECMA-376 §17.13.7.2): in the table its start is in, only the cells
+        /// wholly inside those columns are editable. `None`: an ordinary range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cols: Option<[u32; 2]>,
     },
     /// The end of the editable range [`InlineObject::PermStart`] with the same `id` opened.
     PermEnd {

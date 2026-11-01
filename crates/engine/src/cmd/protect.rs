@@ -8,7 +8,7 @@
 //! command that nothing outside them changed (the command is rolled back otherwise).
 
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::{CellProps, CharProps, RowProps, TableProps};
 use wordcraft_doc::{Block, Blocks, Document, Path, PermRange, Pos, StoryRef};
@@ -23,7 +23,28 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.restrict", "Restrict Editing", "Review › Protect", restrict).params(
             r#"{"mode"?: "none|readOnly|comments|trackedChanges|forms" (start enforcing; "none" stops), "formatting"?: bool (limit formatting to unlocked styles), "lockedStyles"?: [style id or name] (the styles that can't be applied; every other style is unlocked), "password"?: string (set when enforcing; required to stop a password-protected document), "stop"?: bool, "exception"?: "add" (the selection stays editable for everyone) | "remove" (exceptions touching the selection) | "removeAll"} → state"#,
         ),
+        CommandSpec::new("review.nextEditableRegion", "Find Next Region I Can Edit", "Review › Protect", next_region_cmd)
+            .pure()
+            .when(no_region)
+            .params(r#"{} → selects the next region you can edit after the selection (wrapping round): an exception you may edit, or under filling in forms the next fillable control's content"#),
     ]
+}
+
+/// Find Next Region I Can Edit: selects the region [`next_region`] finds.
+fn next_region_cmd(s: &mut Session, _: &Value) -> CmdResult {
+    let from = s.sel.ordered().1;
+    let Some((anchor, focus)) = next_region(s, &from) else { return Err(CmdError::Disabled("there is no region you can edit".into())) };
+    s.sel = crate::Selection { anchor, focus };
+    crate::cmd::sel_result(s)
+}
+
+/// Greys out Find Next Region I Can Edit when there is nothing to find (cached per document
+/// revision: the Restrict Editing pane asks every frame).
+fn no_region(s: &Session) -> Option<&'static str> {
+    let forms = s.doc.settings.protection.as_deref() == Some("forms");
+    let facts = s.protect_facts();
+    let any = if forms { facts.fillable > 0 } else { facts.exceptions };
+    (!any).then_some("there is no region you can edit")
 }
 
 /// The protection state, as `review.restrict` returns it and the Restrict Editing pane shows it.
@@ -54,8 +75,12 @@ pub fn editing_restricted(doc: &Document) -> bool {
     doc.settings.protection.as_deref().is_some_and(|m| m != "none")
 }
 
-/// May `author` edit inside the range?
-fn editable_by(r: &PermRange, author: &str) -> bool {
+/// May `author` edit inside the range? The rule (#5075): a range for the group `everyone`
+/// always; a range naming one editor (`w:ed`) when it is the user name, ignoring case — a
+/// self-declared name, not an authenticated identity, and never an empty one; a range for any
+/// other group (`editors`, `owners`, `current`…) never, since WordCraft knows no group
+/// membership. Only matched ranges count ([`Document::perm_ranges`]).
+pub(crate) fn editable_by(r: &PermRange, author: &str) -> bool {
     r.everyone() || (!r.editor.is_empty() && r.editor.eq_ignore_ascii_case(author.trim()))
 }
 
@@ -166,11 +191,12 @@ fn add_exception(s: &mut Session) -> Result<(), CmdError> {
     if a == b || a.story != b.story {
         return Err(CmdError::Params("select the text that stays editable".into()));
     }
-    let id = s.doc.perm_ranges().iter().map(|r| r.id).max().map_or(0, |m| m.saturating_add(1));
+    // Unique among every marker, unmatched ones too, so the new end can't close an old start.
+    let id = s.doc.next_perm_id();
     let props = CharProps::default();
     // The end first: inserting it can't move the start.
     s.doc.insert_object(&b, InlineObject::PermEnd { id }, &props)?;
-    let after_start = s.doc.insert_object(&a, InlineObject::PermStart { id, group: "everyone".into(), editor: String::new() }, &props)?;
+    let after_start = s.doc.insert_object(&a, InlineObject::PermStart { id, group: "everyone".into(), editor: String::new(), cols: None }, &props)?;
     let mut end = b.clone();
     if end.path == a.path && end.story == a.story {
         end.off += OBJ.len_utf8();
@@ -179,12 +205,12 @@ fn add_exception(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Remove the exceptions that touch the selection (or all of them).
+/// Remove the exceptions that touch the selection (or all of them, with the unmatched markers
+/// a damaged file left).
 fn remove_exceptions(s: &mut Session, all: bool) -> Result<(), CmdError> {
     let (a, b) = s.sel.ordered();
-    let ids: Vec<u32> =
-        s.doc.perm_ranges().iter().filter(|r| all || (r.start.story == a.story && r.start <= b && a <= r.end)).map(|r| r.id).collect();
-    if ids.is_empty() {
+    let ids: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| r.start.story == a.story && r.start <= b && a <= r.end).map(|r| r.id).collect();
+    if ids.is_empty() && !all {
         return Ok(());
     }
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
@@ -195,7 +221,7 @@ fn remove_exceptions(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 .object_offsets()
                 .into_iter()
                 .filter(
-                    |off| matches!(p.object_at(*off), Some(InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id }) if ids.contains(id)),
+                    |off| matches!(p.object_at(*off), Some(InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id }) if all || ids.contains(id)),
                 )
                 .collect();
             if marks.is_empty() {
@@ -497,22 +523,62 @@ fn paired_control_markers(doc: &Document, story: StoryRef) -> HashSet<(Path, usi
     doc.control_ranges(story).into_iter().flat_map(|r| [(r.start.path, r.start.off), (r.end.path, r.end.off)]).collect()
 }
 
+/// The exceptions `author` may edit, and where their markers sit: each start marker and each
+/// end marker, by story, paragraph and offset, to the range it opens or closes. Only matched
+/// pairs are here ([`Document::perm_ranges`]): an unmatched marker opens nothing.
+pub(crate) struct EditableMarks {
+    pub ranges: Vec<PermRange>,
+    starts: HashMap<(StoryRef, Path, usize), usize>,
+    ends: HashMap<(StoryRef, Path, usize), usize>,
+}
+
+impl EditableMarks {
+    pub(crate) fn of(doc: &Document, author: &str) -> EditableMarks {
+        let ranges: Vec<PermRange> = doc.perm_ranges().into_iter().filter(|r| editable_by(r, author)).collect();
+        let w = OBJ.len_utf8();
+        let mut starts = HashMap::new();
+        let mut ends = HashMap::new();
+        for (i, r) in ranges.iter().enumerate() {
+            starts.insert((r.start.story, r.start.path.clone(), r.start.off.saturating_sub(w)), i);
+            ends.insert((r.end.story, r.end.path.clone(), r.end.off), i);
+        }
+        EditableMarks { ranges, starts, ends }
+    }
+
+    /// The range whose start marker is at `off` of the paragraph at `path`.
+    fn start_at(&self, story: StoryRef, path: &Path, off: usize) -> Option<usize> {
+        self.starts.get(&(story, path.clone(), off)).copied()
+    }
+
+    /// The range whose end marker is at `off` of the paragraph at `path`.
+    fn end_at(&self, story: StoryRef, path: &Path, off: usize) -> Option<usize> {
+        self.ends.get(&(story, path.clone(), off)).copied()
+    }
+
+    /// Does any of the `open` ranges make the paragraph at `path` editable (a column range
+    /// covers only its own cells, [`Document::perm_covers`])?
+    fn covers(&self, doc: &Document, open: &[usize], path: &Path) -> bool {
+        open.iter().any(|i| self.ranges.get(*i).is_some_and(|r| doc.perm_covers(r, path)))
+    }
+}
+
 /// Everything outside the editable regions, in order.
 fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
-    let editable: Vec<u32> = match mode {
-        HoleMode::Perms(author) => doc.perm_ranges().iter().filter(|r| editable_by(r, author)).map(|r| r.id).collect(),
-        HoleMode::Controls => Vec::new(),
+    let marks = match mode {
+        HoleMode::Perms(author) => EditableMarks::of(doc, author),
+        HoleMode::Controls => EditableMarks { ranges: Vec::new(), starts: HashMap::new(), ends: HashMap::new() },
     };
     let mut out = Vec::new();
     let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k)));
     for story in stories {
-        let mut open: Vec<u32> = Vec::new();
+        // The perm ranges open at the walk (their indexes in `marks`), or the fillable
+        // controls it is inside, innermost last.
+        let mut open: Vec<usize> = Vec::new();
         let mut fillable: Vec<bool> = Vec::new();
         // In forms mode, only markers that pair open and close holes (orphans stay content).
         let paired = if matches!(mode, HoleMode::Controls) { paired_control_markers(doc, story) } else { HashSet::new() };
-        // The perm range or fillable control the walk is inside, innermost last.
-        let in_hole = |open: &[u32], fillable: &[bool]| match mode {
-            HoleMode::Perms(_) => !open.is_empty(),
+        let in_hole = |open: &[usize], fillable: &[bool], path: &Path| match mode {
+            HoleMode::Perms(_) => marks.covers(doc, open, path),
             HoleMode::Controls => fillable.last() == Some(&true),
         };
         // The paragraphs with protected content, and every table, row and cell above them.
@@ -522,6 +588,8 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
             let Some(p) = doc.para(story, &path) else { continue };
             let pieces = out.len();
             let mut k = 0;
+            // Whether the walk is in an editable region; it changes only at a boundary marker.
+            let mut hole = in_hole(&open, &fillable, &path);
             for (r, props) in p.run_ranges() {
                 let Some(text) = p.text.get(r.clone()) else { continue };
                 let mut piece = String::new();
@@ -531,49 +599,54 @@ fn outside(doc: &Document, mode: &HoleMode) -> Vec<Piece> {
                         k += 1;
                         // A marker that opens or closes a hole moves the walk's stack instead.
                         let mut boundary = false;
+                        let at = r.start + i;
                         match mode {
-                            HoleMode::Perms(_) => match obj {
-                                Some(InlineObject::PermStart { id, .. }) if editable.contains(id) => {
-                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
-                                    open.push(*id);
+                            HoleMode::Perms(_) => {
+                                if matches!(obj, Some(InlineObject::PermStart { .. }))
+                                    && let Some(j) = marks.start_at(story, &path, at)
+                                {
+                                    flush(&mut out, &mut piece, props, hole);
+                                    open.push(j);
                                     boundary = true;
-                                }
-                                Some(InlineObject::PermEnd { id }) if editable.contains(id) => {
-                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
-                                    if let Some(j) = open.iter().rposition(|x| x == id) {
-                                        open.remove(j);
+                                } else if matches!(obj, Some(InlineObject::PermEnd { .. }))
+                                    && let Some(j) = marks.end_at(story, &path, at)
+                                {
+                                    flush(&mut out, &mut piece, props, hole);
+                                    if let Some(x) = open.iter().rposition(|x| *x == j) {
+                                        open.remove(x);
                                     }
                                     boundary = true;
                                 }
-                                _ => {}
-                            },
+                            }
                             HoleMode::Controls => match obj {
-                                Some(InlineObject::ControlStart { control }) if paired.contains(&(path.clone(), r.start + i)) => {
-                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                Some(InlineObject::ControlStart { control }) if paired.contains(&(path.clone(), at)) => {
+                                    flush(&mut out, &mut piece, props, hole);
                                     fillable.push(control.lock.can_edit());
                                     boundary = true;
                                 }
-                                Some(InlineObject::ControlEnd) if paired.contains(&(path.clone(), r.start + i)) => {
-                                    flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                                Some(InlineObject::ControlEnd) if paired.contains(&(path.clone(), at)) => {
+                                    flush(&mut out, &mut piece, props, hole);
                                     fillable.pop();
                                     boundary = true;
                                 }
                                 _ => {}
                             },
                         }
-                        if !boundary && !in_hole(&open, &fillable) {
+                        if boundary {
+                            hole = in_hole(&open, &fillable, &path);
+                        } else if !hole {
                             flush(&mut out, &mut piece, props, false);
                             out.push(Piece::Object(obj.cloned()));
                         }
                         continue;
                     }
-                    if !in_hole(&open, &fillable) {
+                    if !hole {
                         piece.push(c);
                     }
                 }
-                flush(&mut out, &mut piece, props, in_hole(&open, &fillable));
+                flush(&mut out, &mut piece, props, hole);
             }
-            if !in_hole(&open, &fillable) {
+            if !hole {
                 out.push(Piece::Mark(Box::new(p.props.clone()), p.mark.clone()));
             }
             let ancestors = (1..path.0.len()).filter_map(|n| path.0.get(..n));
@@ -651,9 +724,12 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
     if para.objects.is_empty() {
         return p.clone();
     }
-    let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
-    let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
-    let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+    // Only the markers of matched ranges this author may edit that cover this paragraph: an
+    // unmatched start, or a column range's start outside its columns, edits nothing.
+    let marks = EditableMarks::of(&s.doc, &s.author);
+    let covers = |i: usize| marks.ranges.get(i).is_some_and(|r| s.doc.perm_covers(r, &p.path));
+    let is_start = |off: usize| marks.start_at(p.story, &p.path, off).is_some_and(covers);
+    let is_end = |off: usize| marks.end_at(p.story, &p.path, off).is_some_and(covers);
     let w = OBJ.len_utf8();
     let mut off = p.off;
     if is_start(off) {

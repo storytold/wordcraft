@@ -615,7 +615,7 @@ fn object_walks_are_linear_in_the_paragraph() {
     for i in 0..n {
         objs.push(InlineObject::BookmarkStart { name: format!("b{i}") });
         objs.push(fs("ADDIN x"));
-        objs.push(InlineObject::PermStart { id: i, group: "everyone".into(), editor: String::new() });
+        objs.push(InlineObject::PermStart { id: i, group: "everyone".into(), editor: String::new(), cols: None });
     }
     // Ranges close in the order they opened (the worst case for a backwards search).
     for i in 0..n {

@@ -808,11 +808,18 @@ impl Document {
     }
 
     /// Ranges that stay editable while the document is protected (Restrict Editing exceptions),
-    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group and
-    /// editor, its start (just after the marker) and its end (at the matching
-    /// [`InlineObject::PermEnd`], or the end of the story when it has none).
+    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group,
+    /// editor and columns, its start (just after the marker) and its end (at the matching
+    /// [`InlineObject::PermEnd`]: the first end with its id after it, in the same story; with
+    /// several open, the latest closes first).
+    ///
+    /// Only matched pairs are ranges. A start that never ends, an end nothing opened and a pair
+    /// split across stories are orphans: they stay in the document (and in the file it saves)
+    /// but make nothing editable — a damaged file must not open the rest of a protected
+    /// document to editing (#5075).
     pub fn perm_ranges(&self) -> Vec<PermRange> {
         let mut out: Vec<PermRange> = Vec::new();
+        let mut closed: Vec<bool> = Vec::new();
         let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
         for story in stories {
             // Open ranges by id, latest last (an end closes the latest open range of its id).
@@ -821,31 +828,79 @@ impl Document {
                 let Some(p) = self.para(story, &path) else { continue };
                 for (off, o) in p.objects_with_offsets() {
                     match o {
-                        InlineObject::PermStart { id, group, editor } => {
+                        InlineObject::PermStart { id, group, editor, cols } => {
                             let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
                             open.entry(*id).or_default().push(out.len());
-                            out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
+                            out.push(PermRange {
+                                id: *id,
+                                group: group.clone(),
+                                editor: editor.clone(),
+                                cols: *cols,
+                                start: start.clone(),
+                                end: start,
+                            });
+                            closed.push(false);
                         }
                         InlineObject::PermEnd { id } => {
                             if let Some(i) = open.get_mut(id).and_then(Vec::pop)
                                 && let Some(r) = out.get_mut(i)
                             {
                                 r.end = Pos { story, path: path.clone(), off };
+                                if let Some(c) = closed.get_mut(i) {
+                                    *c = true;
+                                }
                             }
                         }
                         _ => {}
                     }
                 }
             }
-            // A range left open runs to the end of its story.
-            let end = self.end_of(story);
-            for i in open.into_values().flatten() {
-                if let Some(r) = out.get_mut(i) {
-                    r.end = end.clone();
+        }
+        out.into_iter().zip(closed).filter_map(|(r, c)| c.then_some(r)).collect()
+    }
+
+    /// Does range `r` cover the paragraph at `path` (in the range's story) — ignoring where the
+    /// range starts and ends, which the caller checks? An ordinary range covers everything
+    /// between its ends. A range limited to table columns covers only paragraphs in the cells of
+    /// the table its start is in (the innermost one) that lie wholly inside those grid columns;
+    /// everything else between its ends stays protected. A column range whose start isn't in a
+    /// table is an ordinary range (the columns name nothing).
+    pub fn perm_covers(&self, r: &PermRange, path: &Path) -> bool {
+        let Some([first, last]) = r.cols else { return true };
+        let sp = &r.start.path.0;
+        let n = sp.len();
+        if n < 4 {
+            return true;
+        }
+        let Some(table_path) = sp.get(..n - 3) else { return false };
+        let q = &path.0;
+        if q.len() < n || !q.starts_with(table_path) {
+            return false;
+        }
+        let (Some(&row), Some(&cell)) = (q.get(n - 3), q.get(n - 2)) else { return false };
+        let Some(table) = self.table(r.start.story, &Path(table_path.to_vec())) else { return false };
+        let (row, cell) = (row as usize, cell as usize);
+        let Some(c) = table.rows.get(row).and_then(|x| x.cells.get(cell)) else { return false };
+        let from = table.grid_col(row, cell);
+        let to = from.saturating_add(c.span().max(1)) - 1;
+        (first as usize) <= from && to <= (last as usize)
+    }
+
+    /// An id no exception marker in the document uses yet (matched or not), for a new range.
+    pub fn next_perm_id(&self) -> u32 {
+        let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
+        let mut next = 0u32;
+        for story in stories {
+            for path in self.para_paths(story) {
+                let Some(p) = self.para(story, &path) else { continue };
+                for o in &p.objects {
+                    if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
+                        next = next.max(id.saturating_add(1));
+                    }
                 }
             }
         }
-        out
+        next
     }
 
     /// Bookmark names in the body, in order.
