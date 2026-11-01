@@ -1,12 +1,15 @@
-//! Paste Special: paste the clipboard in a chosen format (formatted, RTF, HTML, picture,
+//! Paste Special: paste the clipboard in a chosen format (formatted, Markdown, RTF, HTML, picture,
 //! unformatted), and the formatted content Paste and Merge Formatting take from other programs.
 //!
 //! The clipboard can hold several representations of the same content. WordCraft's own copy keeps
 //! a rich fragment; the system clipboard gives text, and callers (agents, the CLI, a front end
-//! with a richer clipboard) may pass `html`, `rtf` or a `picture` too. Text that is itself RTF or
-//! HTML source can also be pasted as that format. Paste keeps the source formatting of another
-//! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
-//! Plain text has no formatting to keep, so Paste inserts it as Keep Text Only does.
+//! with a richer clipboard) may pass `html`, `rtf` or a `picture` too. Text that is itself Markdown,
+//! RTF or HTML source can also be pasted as that format. Paste keeps the source formatting of
+//! another program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
+//! Text with Markdown structure (headings, lists, tables, emphasis, code) reads as a document, as
+//! opening a `.md` file does, so pasting it gives its headings and lists WordCraft's own
+//! formatting instead of the source's punctuation; plain text has no formatting to keep, so Paste
+//! inserts it as Keep Text Only does.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -26,8 +29,9 @@ pub const MAX_PICTURE_BYTES: usize = 96 << 20;
 const MAX_DEPTH: usize = 64;
 
 /// The formats, in the order the dialog lists them: (id, label).
-pub const FORMATS: [(&str, &str); 5] = [
+pub const FORMATS: [(&str, &str); 6] = [
     ("formatted", "Formatted Text"),
+    ("markdown", "Markdown"),
     ("rtf", "Rich Text Format (RTF)"),
     ("html", "HTML Format"),
     ("picture", "Picture"),
@@ -35,11 +39,9 @@ pub const FORMATS: [(&str, &str); 5] = [
 ];
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![
-        CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
-            .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
-    ]
+    vec![CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special).key("Mod+Alt+V").params(
+        r#"{"as"?: "formatted"|"markdown"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#,
+    )]
 }
 
 /// Clipboard text from the params (system clipboard), else WordCraft's own copy.
@@ -59,6 +61,201 @@ fn looks_like_html(t: &str) -> bool {
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
 }
 
+/// How much of a pasted text [`looks_like_markdown`] reads, so a hostile clipboard can't make the
+/// test long.
+const MARKDOWN_SCAN_BYTES: usize = 64 << 10;
+/// Most lines [`looks_like_markdown`] reads.
+const MARKDOWN_SCAN_LINES: usize = 500;
+
+/// The first `max` bytes of `t` (fewer if that would cut a character).
+fn head_bytes(t: &str, max: usize) -> &str {
+    if t.len() <= max {
+        return t;
+    }
+    let mut end = max;
+    while end > 0 && !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    t.get(..end).unwrap_or("")
+}
+
+/// A line without Markdown's indentation: up to three spaces. More than that, or a tab, starts an
+/// indented code block, whose lines are code and not structure.
+fn unindented(l: &str) -> &str {
+    let mut s = l;
+    for _ in 0..3 {
+        match s.strip_prefix(' ') {
+            Some(rest) => s = rest,
+            None => break,
+        }
+    }
+    s
+}
+
+/// The level of an ATX heading line (`## Tema`), if it is one.
+fn atx_heading(l: &str) -> Option<u8> {
+    let s = unindented(l);
+    let n = s.chars().take_while(|&c| c == '#').count();
+    if n == 0 || n > 6 {
+        return None;
+    }
+    let rest = s.get(n..)?;
+    (rest.is_empty() || rest.starts_with([' ', '\t'])).then_some(n as u8)
+}
+
+/// The fence character of a code fence line (```` ``` ```` or `~~~`), if it is one.
+fn fence_marker(l: &str) -> Option<char> {
+    let s = unindented(l);
+    let c = s.chars().next()?;
+    if c != '`' && c != '~' {
+        return None;
+    }
+    (s.chars().take_while(|&x| x == c).count() >= 3).then_some(c)
+}
+
+/// Whether the line is a thematic break (`---`, `***`, `___`).
+fn thematic_break(l: &str) -> bool {
+    let s = unindented(l).trim_end_matches([' ', '\t']);
+    let Some(c) = s.chars().next() else {
+        return false;
+    };
+    if !matches!(c, '-' | '*' | '_') {
+        return false;
+    }
+    s.chars().filter(|&x| x == c).count() >= 3 && s.chars().all(|x| x == c || x == ' ')
+}
+
+/// Whether the line is a block quote line (`> quoted`).
+fn block_quote(l: &str) -> bool {
+    let s = unindented(l);
+    s == ">" || s.starts_with("> ") || s.starts_with(">\t")
+}
+
+/// Whether the line is a GFM table's delimiter row (`| --- | :-: |`).
+fn table_delimiter(l: &str) -> bool {
+    let s = unindented(l).trim();
+    if !s.contains('|') {
+        return false;
+    }
+    let cells: Vec<&str> = s.trim_matches('|').split('|').map(str::trim).collect();
+    cells.len() >= 2
+        && cells.iter().all(|c| {
+            let c = c.strip_prefix(':').unwrap_or(c);
+            let c = c.strip_suffix(':').unwrap_or(c);
+            !c.is_empty() && c.chars().all(|x| x == '-')
+        })
+}
+
+/// Whether the line is an unordered list item (`- a`).
+fn bullet_item(l: &str) -> bool {
+    let s = unindented(l);
+    let Some(c) = s.chars().next() else {
+        return false;
+    };
+    if !matches!(c, '-' | '*' | '+') {
+        return false;
+    }
+    let rest = s.get(1..).unwrap_or("");
+    matches!(rest.chars().next(), Some(' ') | Some('\t')) && !rest.trim().is_empty()
+}
+
+/// Whether the line is an ordered list item (`1. a`).
+fn ordered_item(l: &str) -> bool {
+    let s = unindented(l);
+    let digits = s.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 9 {
+        return false;
+    }
+    let rest = s.get(digits..).unwrap_or("");
+    let mut it = rest.chars();
+    if !matches!(it.next(), Some('.') | Some(')')) {
+        return false;
+    }
+    matches!(it.next(), Some(' ') | Some('\t')) && !it.as_str().trim().is_empty()
+}
+
+/// Whether the line is a setext heading's underline (`===`).
+fn setext_underline(l: &str) -> bool {
+    let s = unindented(l).trim_end_matches([' ', '\t']);
+    s.len() >= 2 && s.chars().all(|c| c == '=')
+}
+
+/// Emphasis, code and link markers in `t`, as pairs: `**bold**` is one, a link one, a code span
+/// one.
+fn inline_markers(t: &str) -> usize {
+    let count = |m: &str| t.matches(m).count();
+    let double = |m: &str| count(m) / 2;
+    double("**") + double("__") + double("~~") + count("`") / 2 + count("](")
+}
+
+/// Whether clipboard text reads as a Markdown document rather than as prose: the punctuation
+/// someone typed as text (`#`, `**`, `- `, `|`), which, pasted, becomes WordCraft's own headings,
+/// lists, tables and emphasis, as opening a `.md` file does.
+///
+/// The test errs towards "no": one heading-looking line (a `#` comment in a shell snippet), one
+/// `>` quote or one pair of `**` is text, and Keep Text Only pastes it raw. What it accepts: a
+/// code fence, a GFM table, two headings, a heading beside emphasis, three list items, and so on.
+/// Paste Special still offers Markdown and formats any text the user picks, whatever this says.
+fn looks_like_markdown(t: &str) -> bool {
+    if t.trim().is_empty() || t.len() > MAX_PASTE_BYTES {
+        return false;
+    }
+    let head = head_bytes(t, MARKDOWN_SCAN_BYTES);
+    let mut headings = 0usize;
+    let mut fences = 0usize;
+    let mut tables = 0usize;
+    let mut quotes = 0usize;
+    let mut rules = 0usize;
+    let mut bullets = 0usize;
+    let mut ordered = 0usize;
+    let mut fence: Option<char> = None;
+    for line in head.split('\n').take(MARKDOWN_SCAN_LINES) {
+        if let Some(c) = fence {
+            // Inside a code fence the lines are code: only the closing fence reads.
+            if fence_marker(line) == Some(c) {
+                fences += 1;
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(c) = fence_marker(line) {
+            fences += 1;
+            fence = Some(c);
+        } else if atx_heading(line).is_some() {
+            headings += 1;
+        } else if table_delimiter(line) {
+            tables += 1;
+        } else if block_quote(line) {
+            quotes += 1;
+        } else if thematic_break(line) {
+            rules += 1;
+        } else if bullet_item(line) {
+            bullets += 1;
+        } else if ordered_item(line) {
+            ordered += 1;
+        } else if setext_underline(line) {
+            headings += 1;
+        }
+    }
+    let structural = headings + fences + tables + quotes + rules;
+    let lists = bullets + ordered;
+    let inline = inline_markers(head);
+    // A code block, a table or a second heading is Markdown whatever else the text holds.
+    if fences >= 2 || tables > 0 || headings >= 2 {
+        return true;
+    }
+    // A heading over emphasized text (`## Tema` and `**nota**`) is a document.
+    if headings > 0 && inline >= 2 {
+        return true;
+    }
+    // Three list items are a list, not three lines that happen to begin with a dash.
+    if bullets >= 3 {
+        return true;
+    }
+    // Anything else that adds up: a quote and two items, a rule and bold and a link, …
+    structural > 0 && structural + lists + inline >= 3
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
@@ -73,6 +270,9 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
         }
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
+        // Picking Markdown formats any text, as picking HTML parses HTML source; only the dialog's
+        // list of formats (see `available`) is what the test keeps off text that isn't Markdown.
+        "markdown" => clip_text(s, v).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
         "text" => clip_text(s, v).and_then(non_empty),
         _ => None,
@@ -81,7 +281,16 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
 
 /// Formats the clipboard can be pasted as, best first.
 pub fn available(s: &Session, v: &Value) -> Vec<&'static str> {
-    FORMATS.iter().map(|(id, _)| *id).filter(|id| source(s, v, id).is_some()).collect()
+    FORMATS
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| match *id {
+            // Offered for text that reads as Markdown, not for every text: plain prose is what Keep
+            // Text Only is for, and the dialog shouldn't suggest turning it into a document.
+            "markdown" => clip_text(s, v).is_some_and(|t| looks_like_markdown(&t)),
+            _ => source(s, v, id).is_some(),
+        })
+        .collect()
 }
 
 fn formats_json(ids: &[&str]) -> Value {
@@ -113,11 +322,14 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
     };
     let fmt = match fmt.to_ascii_lowercase().as_str() {
         "formatted" | "keep" | "wordcraft" => "formatted",
+        "markdown" | "md" => "markdown",
         "rtf" => "rtf",
         "html" => "html",
         "picture" | "png" | "image" => "picture",
         "text" | "unformatted" | "plain" => "text",
-        other => return Err(CmdError::Params(format!("unknown format `{other}` (formatted, rtf, html, picture or text)"))),
+        other => {
+            return Err(CmdError::Params(format!("unknown format `{other}` (formatted, markdown, rtf, html, picture or text)")));
+        }
     };
     let Some(src) = source(s, v, fmt) else {
         return Err(CmdError::Failed(if ids.is_empty() {
@@ -139,6 +351,7 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(r);
         }
         "formatted" => s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?,
+        "markdown" => adopt(s, wordcraft_formats::markdown::import(&src)),
         "html" => adopt(s, import_html(&src)),
         _ => adopt(s, wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?),
     };
@@ -259,14 +472,16 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
 
 /// What a Paste brings in.
 pub enum Pasted {
-    /// WordCraft's own copy, or another program's HTML or RTF: it keeps the formatting it carries.
+    /// WordCraft's own copy, or another program's HTML, RTF or Markdown: it keeps the formatting
+    /// it carries.
     Fragment(Fragment),
     /// The system clipboard's text, lines separated by `\n`.
     Text(String),
 }
 
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
-/// another program's formatted copy (HTML, RTF), else the system clipboard's text.
+/// another program's formatted copy (HTML, RTF), else Markdown that reads as a document, else the
+/// system clipboard's text.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if let Some(f) = &s.clipboard
@@ -277,6 +492,15 @@ pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     }
     if let Some(f) = rich_fragment(s, v) {
         return Ok(Pasted::Fragment(f));
+    }
+    if let Some(t) = text.as_deref().filter(|t| looks_like_markdown(t)) {
+        // Markdown that reads as a document: its headings, lists, tables and emphasis become this
+        // document's formatting, as opening a `.md` file does. Keep Text Only pastes it as text,
+        // and so does Paste Special › Unformatted Text.
+        let doc = wordcraft_formats::markdown::import(t);
+        if !doc.body.is_empty() {
+            return Ok(Pasted::Fragment(adopt(s, doc)));
+        }
     }
     match text {
         Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),

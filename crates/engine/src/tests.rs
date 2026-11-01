@@ -1693,6 +1693,127 @@ fn paste_keeps_source_formatting_from_other_programs() {
     assert_eq!(props_at(&s, 4).italic, Some(true));
 }
 
+/// Markdown copied as text reads as a document when pasted: its headings, lists, tables and
+/// emphasis become WordCraft's own formatting, as opening a `.md` file does — instead of the
+/// source's `##`, `**` and `- ` landing in the text.
+#[test]
+fn paste_reads_markdown_as_a_formatted_document() {
+    let mut s = s();
+    let md =
+        "# Título\n\n## Tema central da questão\n\n**Direito** e *ênfase*\n\n- A\n- B\n\n> citação\n\n---\n\n| A | B |\n| :-: | --- |\n| 1 | 2 |\n";
+    run(&mut s, "edit.paste", json!({"text": md}));
+    let plain = text(&s);
+    assert!(plain.starts_with("Título\nTema central da questão\nDireito e ênfase"), "{plain:?}");
+    for marker in ["#", "**", "*ênfase*", "- A", "| ---"] {
+        assert!(!plain.contains(marker), "{marker:?} left in {plain:?}");
+    }
+    let style = |s: &Session, start: &str| {
+        s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with(start)).and_then(|p| p.props.style.clone())
+    };
+    assert_eq!(style(&s, "Título").as_deref(), Some("Heading1"));
+    assert_eq!(style(&s, "Tema central").as_deref(), Some("Heading2"));
+    assert_eq!(style(&s, "citação").as_deref(), Some("Quote"));
+    // Emphasis: bold on "Direito", italic on "ênfase".
+    let at = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("Direito"))).unwrap();
+    assert!(bold_at(&s, at, 0));
+    assert_eq!(s.doc.para_at(&Pos::body(at, 10)).unwrap().props_of_char(10).italic, Some(true));
+    // A bullet list, with its numbering definition adopted.
+    let lists: Vec<_> = s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.numbering.is_some_and(|n| n.num != 0)).collect();
+    assert_eq!(lists.len(), 2, "{plain:?}");
+    assert!(lists.iter().all(|p| s.doc.numbering.nums.iter().any(|n| n.id == p.props.numbering.unwrap().num)));
+    // The pipe table is a table.
+    assert!(s.doc.body.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(_))), "{plain:?}");
+}
+
+/// Paste Special offers Markdown for text that reads as Markdown, formats that text (and any text
+/// the user picks Markdown for), and doesn't offer it for prose.
+#[test]
+fn paste_special_lists_and_pastes_markdown() {
+    let mut s = s();
+    let md = "## Tema\n\n**negrito** e lista:\n\n- um\n- dois\n- três\n";
+    let r = run(&mut s, "edit.pasteSpecial", json!({"text": md}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["markdown", "text"]);
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "markdown", "text": md}));
+    assert_eq!(r["pastedAs"], "markdown");
+    assert!(text(&s).starts_with("Tema\nnegrito e lista:\num\ndois\ntrês"), "{}", text(&s));
+    assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Heading2"));
+    // Picking Markdown formats text the detection would leave alone: one pair of `**` is enough
+    // once the user says what the text is.
+    let mut t = self::s();
+    run(&mut t, "edit.pasteSpecial", json!({"as": "markdown", "text": "usa **negrito** aqui"}));
+    assert_eq!(text(&t), "usa negrito aqui");
+    assert!(bold_at(&t, 0, 4));
+    // Prose: Markdown is not offered.
+    let r = run(&mut t, "edit.pasteSpecial", json!({"text": "Art. 1º O Município é pessoa jurídica de direito público interno."}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["text"]);
+}
+
+/// Text that only looks a little like Markdown stays text: one `#` comment line, one `>` quote or
+/// one pair of `**` is prose, not a document, and so are numbered lines with no other structure.
+#[test]
+fn markdown_detection_keeps_prose_as_text() {
+    let offered = |sample: &str| {
+        let mut s = s();
+        let r = run(&mut s, "edit.pasteSpecial", json!({"text": sample}));
+        r["formats"].as_array().unwrap().iter().any(|f| f["id"] == "markdown")
+    };
+    for sample in ["# git status\ngit status --short", "Use **cuidado** ao citar o art. 5º.", "> ver nota anterior", "1. Art. 5º\n2. Art. 6º"] {
+        assert!(!offered(sample), "read as Markdown: {sample:?}");
+        let mut s = s();
+        run(&mut s, "edit.paste", json!({"text": sample}));
+        assert_eq!(text(&s), sample, "pasted as text: {sample:?}");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.style.is_none() && p.props.numbering.is_none()), "{sample:?}");
+    }
+    for sample in ["# Um\n\n# Dois", "```\ncode\n```", "| A | B |\n| - | - |\n| 1 | 2 |", "- a\n- b\n- c", "## Tema\n\n**negrito** e `código`"] {
+        assert!(offered(sample), "not read as Markdown: {sample:?}");
+    }
+}
+
+/// Keep Text Only keeps the Markdown source, whatever Paste would make of it.
+#[test]
+fn paste_text_keeps_the_markdown_source() {
+    let mut s = s();
+    let md = "## Tema\n\n**negrito**\n\n- um\n- dois\n- três\n";
+    run(&mut s, "edit.pasteText", json!({"text": md}));
+    assert_eq!(text(&s), md);
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.style.is_none() && p.props.numbering.is_none()), "{}", text(&s));
+    // A statute pasted as text: numbered lines are its text, not a list to renumber.
+    let law = "Art. 1º O Município é pessoa jurídica de direito público interno.\n\n1. A autonomia política;\n2. A autonomia financeira;\n\n* Ver a Lei Orgânica.";
+    let mut t = self::s();
+    run(&mut t, "edit.paste", json!({"text": law}));
+    assert_eq!(text(&t), law);
+    assert!(t.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.numbering.is_none()));
+}
+
+/// Headings pasted from Markdown keep their styles, outline levels and emoji through a save and
+/// a reopen: the Navigator derives its tree from those levels, so the outline survives the file.
+#[test]
+fn pasted_headings_keep_their_outline_and_emoji_after_saving() {
+    let mut s = s();
+    run(&mut s, "edit.paste", json!({"text": "## 1️⃣ Tema central\n\n### 📘 Conceito Básico\n\n## 2️⃣ Resumo teórico\n"}));
+    assert_eq!(text(&s), "1️⃣ Tema central\n📘 Conceito Básico\n2️⃣ Resumo teórico");
+    let dir = std::env::temp_dir().join(format!("wc-outline-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("outline.docx");
+    run(&mut s, "file.saveAs", json!({"path": path.to_str().unwrap()}));
+    let mut t = self::s();
+    run(&mut t, "file.open", json!({"path": path.to_str().unwrap()}));
+    let outline: Vec<Option<u8>> = t
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.text.trim() != "")
+        .map(|p| t.doc.styles.resolve_para(&p.props).outline_level)
+        .collect();
+    assert_eq!(outline, [Some(1), Some(2), Some(1)], "Heading 2, Heading 3, Heading 2");
+    assert!(text(&t).contains("1\u{FE0F}\u{20E3}"), "the keycap code points survive the file: {:?}", text(&t));
+    assert!(text(&t).contains("📘"), "the marker emoji survives the file: {:?}", text(&t));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
 fn cf_html(html: &str) -> String {
     let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();
