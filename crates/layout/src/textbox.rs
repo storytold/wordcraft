@@ -24,7 +24,7 @@ pub(crate) struct Chains {
     member: HashMap<u32, (usize, usize)>,
     chains: Vec<Vec<u32>>,
     /// Each chain's text split over its boxes: per box, items in its unturned frame.
-    flows: HashMap<usize, Vec<Vec<Placed>>>,
+    flows: HashMap<usize, Option<Vec<Vec<Placed>>>>,
 }
 
 impl Chains {
@@ -97,14 +97,15 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
 
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
-pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
+/// `None` means the expansion budget refused it; `Some([])` is a valid empty box.
+pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Option<Vec<Placed>> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body).unwrap_or_default();
     let (len, across) = frame(&body, rect.w, rect.h);
     let items = match chain_share(ctx, id, depth) {
-        Some(items) => items,
+        Some(items) => items?,
         None => {
             if !ctx.boxes.enter(id) {
-                return Vec::new();
+                return None;
             }
             let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
             let inner = lay(ctx, id, &blocks, len, body.vert, depth);
@@ -114,7 +115,7 @@ pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec
             if body.auto_fit { inner } else { fit_box(inner, across) }
         }
     };
-    place(items, &body, rect, across)
+    Some(place(items, &body, rect, across))
 }
 
 /// The height of a `w` wide text box `id` that resizes to fit its text (`a:spAutoFit`): its text's
@@ -191,15 +192,25 @@ fn extent(items: &[Placed]) -> f32 {
 }
 
 /// Box `id`'s share of its chain's text (items in its unturned frame), if it is linked.
-fn chain_share(ctx: &mut Ctx, id: u32, depth: usize) -> Option<Vec<Placed>> {
+/// An inner `None` preserves this occurrence's budget refusal without caching it: a later
+/// occurrence may have room to expand. Successful flows are shared across occurrences, each checked against the current budget.
+fn chain_share(ctx: &mut Ctx, id: u32, depth: usize) -> Option<Option<Vec<Placed>>> {
     ctx.chains.build(ctx.doc);
     let (ci, k) = *ctx.chains.member.get(&id)?;
     if !ctx.chains.flows.contains_key(&ci) {
         let chain = ctx.chains.chains.get(ci).cloned().unwrap_or_default();
-        let flow = flow(ctx, &chain, depth);
-        ctx.chains.flows.insert(ci, flow);
+        let Some(flow) = flow(ctx, &chain, depth) else { return Some(None) };
+        ctx.chains.flows.insert(ci, Some(flow));
+    } else {
+        let head = ctx.chains.chains.get(ci)?.first().copied()?;
+        if !ctx.boxes.enter(head) {
+            return Some(None);
+        }
+        let items = ctx.chains.flows.get(&ci).and_then(Option::as_ref).map(|f| f.get(k).cloned().unwrap_or_default());
+        ctx.boxes.leave();
+        return Some(items);
     }
-    Some(ctx.chains.flows.get(&ci).and_then(|f| f.get(k)).cloned().unwrap_or_default())
+    Some(ctx.chains.flows.get(&ci).and_then(Option::as_ref).map(|f| f.get(k).cloned().unwrap_or_default()))
 }
 
 /// Where a box's text starts: the line holding byte `byte` of paragraph `path`.
@@ -224,10 +235,10 @@ fn flow_key(len: f32, vert: TextVert) -> (i32, TextVert) {
 }
 
 /// Split the text of `chain`'s first box over its boxes.
-fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
-    let Some(&head) = chain.first() else { return Vec::new() };
+fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Option<Vec<Vec<Placed>>> {
+    let &head = chain.first()?;
     if !ctx.boxes.enter(head) {
-        return vec![Vec::new(); chain.len()];
+        return None;
     }
     let ids: BTreeSet<u32> = chain.iter().copied().collect();
     let sizes = ctx.doc.text_box_sizes(&ids);
@@ -282,7 +293,7 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
         (ctx.counters, ctx.eq_count) = a;
     }
     ctx.boxes.leave();
-    out
+    Some(out)
 }
 
 /// Where `cut` is in a layout: the top of the line holding its byte.

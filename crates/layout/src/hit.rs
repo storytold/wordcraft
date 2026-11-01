@@ -69,6 +69,8 @@ pub struct ObjectHit {
     pub path: Path,
     pub off: usize,
     pub text_box: Option<u32>,
+    /// Text of a group member; moving/resizing still targets its containing group.
+    pub group_text_box: bool,
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
@@ -137,9 +139,10 @@ fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '
     objects_in(&page.items, index).chain(objects_in(&page.header, index)).chain(objects_in(&page.footer, index))
 }
 
+/// Objects in reverse paint order, retaining each editable group member frame.
 fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
     items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+        Placed::Object { rect, spin, story, path, off, text_box, group_text_box, wrap, origin } => Some(ObjectHit {
             page: index,
             rect: *rect,
             spin: *spin,
@@ -147,6 +150,7 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
             path: path.clone(),
             off: *off,
             text_box: *text_box,
+            group_text_box: *group_text_box,
             wrap: *wrap,
             origin: *origin,
         }),
@@ -449,11 +453,21 @@ impl DocLayout {
             StoryRef::Body => text_at(p, page, x, y).is_some(),
             StoryRef::Part(id) => hf_text_at(p, id, x, y),
         };
-        cands
+        // A member's text interior stops the search: the containing group must not steal it.
+        let text_inside = |o: &ObjectHit| o.group_text_box && o.rect.expand(-edge).contains(o.unspin(x, y));
+        let hit = cands
             .iter()
-            .find(|o| !o.behind() && grabs(o))
-            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && grabs(o)) })
-            .cloned()
+            .find(|o| !o.behind() && (grabs(o) || text_inside(o)))
+            .or_else(|| if text_here { None } else { cands.iter().find(|o| o.behind() && (grabs(o) || text_inside(o))) })?;
+        if text_inside(hit) {
+            return None;
+        }
+        if hit.group_text_box {
+            // A member's border selects/moves the whole group, using the group's frame.
+            cands.iter().find(|o| !o.group_text_box && o.pos() == hit.pos()).cloned()
+        } else {
+            Some(hit.clone())
+        }
     }
 
     /// The text box in the header or footer at (x, y) on `page`.
@@ -467,7 +481,7 @@ impl DocLayout {
 
     /// Where the object at `pos` (its U+FFFC) is laid out.
     pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<ObjectHit> {
-        self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
+        self.find_object(page_hint, |o| !o.group_text_box && o.story == pos.story && o.path == pos.path && o.off == pos.off)
     }
 
     /// Index objects once for repeated [`Self::object`] lookups, preserving their selection
@@ -987,6 +1001,7 @@ mod object_index_tests {
             path: pos.path.clone(),
             off: pos.off,
             text_box: None,
+            group_text_box: false,
             wrap: Wrap::InFrontOfText,
             origin: Point::new(5.0, 6.0),
         };

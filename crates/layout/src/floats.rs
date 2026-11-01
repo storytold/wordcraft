@@ -506,6 +506,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 path: Path(path.to_vec()),
                 off: c.start,
                 text_box: shown,
+                group_text_box: false,
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
@@ -525,7 +526,20 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
             for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+                let Some(items) = textbox::box_items(ctx, id, rect, depth) else { continue };
+                if matches!(obj, InlineObject::Group { canvas: None, .. }) {
+                    front.push(Placed::Object {
+                        rect,
+                        spin: Spin::default(),
+                        story,
+                        path: Path(path.to_vec()),
+                        off: c.start,
+                        text_box: Some(textbox::shown_story(ctx, id)),
+                        group_text_box: true,
+                        wrap: float.wrap,
+                        origin: Point::new(at.col.0, at.para_y),
+                    });
+                }
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
