@@ -1194,19 +1194,20 @@ fn balloon_glyphs_at_scale(text: &str, width: f32, ppp: f32) -> Option<Vec<(char
         let atlas = ui.fonts(|fonts| fonts.image());
         for r in &shape.galley.rows {
             out.extend(r.row.glyphs.iter().map(|gl| (gl.chr, shape.pos.x + r.pos.x + gl.pos.x)));
+            // A wrapped row's advance stays within the width: that is the wrap contract. Glyph
+            // ink may overhang it — macOS 27's Geeza Pro paints its initial ش a couple of points
+            // past its advance — the way Word lets a final swash overhang the wrap width.
+            // epaint rounds glyph origins individually while row advance stays fractional; the
+            // two edge roundings can differ by one physical pixel.
+            assert!(
+                shape.pos.x + r.pos.x + r.size.x <= width + 1.0 / ppp,
+                "wrapped row: origin {}, width {}, limit {} (text {:?})",
+                shape.pos.x + r.pos.x,
+                r.size.x,
+                width,
+                text
+            );
             for glyph in &r.row.glyphs {
-                // epaint rounds glyph origins individually while row advance stays fractional.
-                // The two edge roundings can differ by one physical pixel.
-                assert!(
-                    shape.pos.x + r.pos.x + glyph.max_x() <= width + 1.0 / ppp,
-                    "wrapped glyph {:?}: origin {}, max {}, row width {}, limit {} (text {:?})",
-                    glyph.chr,
-                    shape.pos.x + r.pos.x,
-                    glyph.max_x(),
-                    r.size.x,
-                    width,
-                    text
-                );
                 if !matches!(glyph.chr, '(' | ')') {
                     continue;
                 }
