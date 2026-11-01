@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The on/off settings by their `file.options` name.
-fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 7] {
+fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 8] {
     [
         ("typingReplacesSelection", |p| &mut p.typing_replaces_selection),
         ("insertKeyOvertype", |p| &mut p.insert_key_overtype),
@@ -44,6 +44,7 @@ fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 7] {
         ("ignoreUppercase", |p| &mut p.ignore_uppercase),
         ("ignoreNumbers", |p| &mut p.ignore_numbers),
         ("ignoreInternet", |p| &mut p.ignore_internet),
+        ("showCropMarks", |p| &mut p.show_crop_marks),
     ]
 }
 

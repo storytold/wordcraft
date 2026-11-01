@@ -1005,6 +1005,9 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
         let page_scale = page_screen_scale(visual_sr, page, geo.scale);
+        if app.session.prefs.show_crop_marks {
+            draw_crop_marks(&painter, visual_sr, page, page_scale, t.text_dim);
+        }
         // Header/footer editing chrome.
         if let StoryRef::Part(id) = app.session.sel.focus.story {
             let sect_body = page.body;
@@ -1604,3 +1607,29 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod tests;
+
+fn draw_crop_marks(painter: &egui::Painter, visual_sr: Rect, page: &wordcraft_layout::Page, page_scale: f32, color: Color32) {
+    let stroke = egui::Stroke::new(0.75, color);
+    let len = 10.0 * page_scale;
+    let b = page.body;
+    let x0 = visual_sr.min.x + b.x * page_scale;
+    let y0 = visual_sr.min.y + b.y * page_scale;
+    let x1 = visual_sr.min.x + b.right() * page_scale;
+    let y1 = visual_sr.min.y + b.bottom() * page_scale;
+
+    // Top-left
+    painter.line_segment([pos2(x0 - len, y0), pos2(x0, y0)], stroke);
+    painter.line_segment([pos2(x0, y0 - len), pos2(x0, y0)], stroke);
+
+    // Top-right
+    painter.line_segment([pos2(x1, y0), pos2(x1 + len, y0)], stroke);
+    painter.line_segment([pos2(x1, y0 - len), pos2(x1, y0)], stroke);
+
+    // Bottom-left
+    painter.line_segment([pos2(x0 - len, y1), pos2(x0, y1)], stroke);
+    painter.line_segment([pos2(x0, y1), pos2(x0, y1 + len)], stroke);
+
+    // Bottom-right
+    painter.line_segment([pos2(x1, y1), pos2(x1 + len, y1)], stroke);
+    painter.line_segment([pos2(x1, y1), pos2(x1, y1 + len)], stroke);
+}

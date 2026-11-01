@@ -59,7 +59,7 @@ pub use fields::FieldRange;
 pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
-pub use section::SectionProps;
+pub use section::{PageBorderDisplay, PageBorderOffset, PageBorderOptions, PageBorderZOrder, SectionProps};
 pub use styles::{Style, StyleKind, StyleSheet};
 pub use table::{Cell, Row, Table};
 

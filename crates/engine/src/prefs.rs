@@ -56,6 +56,8 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Show crop marks at the corners of margins (File › Options › Advanced › Display, #issue1).
+    pub show_crop_marks: bool,
 }
 
 impl Default for Prefs {
@@ -80,6 +82,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            show_crop_marks: false,
         }
     }
 }
