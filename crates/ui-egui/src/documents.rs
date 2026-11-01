@@ -145,6 +145,15 @@ impl WordApp {
         out
     }
 
+    /// Comment drafts stay with their document, including while another document is shown.
+    pub(crate) fn has_comment_drafts_in(&self, id: u64) -> bool {
+        if self.session.document_id() == id {
+            panes::has_comment_drafts(self)
+        } else {
+            self.parked.get(&id).is_some_and(|parked| !parked.comment_drafts.is_empty())
+        }
+    }
+
     /// Whether an open document has work that quitting would lose.
     pub(crate) fn has_unsaved_documents(&self) -> bool {
         !self.unsaved_documents().is_empty()

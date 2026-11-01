@@ -40,7 +40,7 @@ impl WordApp {
     /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
     pub(super) fn report_dirty(&self) {
         if let Some(f) = &self.services.on_dirty {
-            f(self.session.dirty || panes::has_comment_drafts(self));
+            f(self.session.dirty || panes::has_comment_drafts(self) || self.services.file_providers.as_ref().is_some_and(|host| host.busy()));
         }
     }
 

@@ -365,6 +365,9 @@ impl WordApp {
 
     /// Ask where to save, then save there (File › Save As).
     pub fn save_as_dialog(&mut self) {
+        if self.choose_provider_save(true) {
+            return;
+        }
         let _ = self.save_as(AfterSave::Nothing);
     }
 

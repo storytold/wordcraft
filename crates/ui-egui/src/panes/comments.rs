@@ -238,3 +238,80 @@ pub(crate) fn flush_comment_drafts(app: &mut WordApp) -> Result<(), String> {
     }
     first
 }
+
+#[cfg(test)]
+mod provider_draft_tests {
+    use super::*;
+    use crate::file_providers::Host;
+    use crate::{Services, WordApp};
+    fn app() -> (WordApp, Host, u32) {
+        let host = Host::default();
+        host.set_session("word-provider-draft-session".into()).unwrap();
+        host.connect("test".into(), "Storage".into(), "account".into()).unwrap();
+        let mut app = WordApp::new(
+            wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+            Services { file_providers: Some(host.clone()), ..Default::default() },
+        );
+        app.session.run("text.insert", &json!({"text":"Body"})).unwrap();
+        app.session.run("select.all", &json!({})).unwrap();
+        app.session.run("review.newComment", &json!({"text":"Original comment"})).unwrap();
+        let id = *app.session.doc.comments.keys().next().unwrap();
+        (app, host, id)
+    }
+    #[test]
+    fn bound_explicit_copy_keeps_a_comment_draft_flushed_by_save_dirty_until_provider_ack() {
+        let (mut app, host, id) = app();
+        let acknowledge = |app: &mut WordApp, host: &Host| {
+            assert!(app.choose_provider_save(false));
+            let events = host.take_events();
+            let dialog = events.iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
+            let request = dialog.metadata["requestId"].as_str().unwrap().to_string();
+            host.resolve_dialog(&request, "provider", "Document.docx").unwrap();
+            app.provider_tick();
+            let events = host.take_events();
+            assert!(events.iter().any(|event| event.metadata["type"] == "save" && event.metadata["requestId"] == request));
+            host.result(request, "saved".into(), "comment-file".into()).unwrap();
+            app.provider_tick();
+        };
+        acknowledge(&mut app, &host);
+        assert!(!app.session.dirty);
+        let document = app.session.document_id();
+        assert!(host.bound(document));
+        drafts(&mut app).edits.insert(id, "Draft confirmed by the local Save As".into());
+        assert!(!app.session.dirty, "the comment has not been committed to the model yet");
+        let path = std::env::temp_dir().join(format!("wordcraft-bound-comment-copy-{}.docx", std::process::id()));
+        app.run("file.saveAs", json!({"path":path.to_string_lossy()})).unwrap();
+        assert!(comment_draft(&app, id).is_none(), "Save commits the draft before serializing");
+        let restored = wordcraft_engine::io::open_path(&path).unwrap();
+        let comment = restored.comments.get(&id).unwrap();
+        assert_eq!(restored.plain_text(StoryRef::Part(comment.part)), "Draft confirmed by the local Save As");
+        assert!(host.bound(document));
+        assert!(app.session.dirty, "flushed drafts remain unsaved to the provider after a local copy");
+        app.provider_tick();
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+        acknowledge(&mut app, &host);
+        assert!(!app.session.dirty);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn chooser_resolution_captures_comment_text_typed_after_the_initial_save() {
+        let (mut app, host, id) = app();
+        assert!(app.choose_provider_save(false));
+        let events = host.take_events();
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        drafts(&mut app).edits.insert(id, "Comment typed during destination choice".into());
+        host.resolve_dialog(request, "provider", "Document.docx").unwrap();
+        app.provider_tick();
+        let event = host.take_events().into_iter().find(|e| e.metadata["type"] == "save").unwrap();
+        let restored = wordcraft_engine::io::open_bytes("Document.docx", event.bytes.as_ref().unwrap()).unwrap();
+        let comment = restored.comments.get(&id).unwrap();
+        assert_eq!(restored.plain_text(StoryRef::Part(comment.part)), "Comment typed during destination choice");
+        drafts(&mut app).edits.insert(id, "Newer uncommitted draft".into());
+        host.result(request.into(), "saved".into(), "comment-file".into()).unwrap();
+        app.provider_tick();
+        assert!(app.session.dirty);
+        assert_eq!(comment_draft(&app, id).as_deref(), Some("Newer uncommitted draft"));
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+    }
+}

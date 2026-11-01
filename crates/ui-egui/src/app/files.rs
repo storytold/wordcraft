@@ -63,6 +63,13 @@ impl WordApp {
     /// tells the user).
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
+        if let Some(host) = self.services.file_providers.clone().filter(|host| host.enabled()) {
+            if !self.session.dirty && host.bound(self.session.document_id()) && !host.pending_for(self.session.document_id()) {
+                return Ok(PromptSave::Saved);
+            }
+            self.choose_provider_save(false);
+            return Ok(PromptSave::NotSaved);
+        }
         let v = self.execute("file.save", json!({}))?;
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
@@ -79,6 +86,7 @@ impl WordApp {
     pub(crate) fn save_unconfirmed(&self) -> bool {
         let document = self.session.document_id();
         self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == document)
+            || self.services.file_providers.as_ref().is_some_and(|host| host.pending_for(document))
     }
 
     /// The document's name as the Save Changes prompt shows it: its file's name, else its title.

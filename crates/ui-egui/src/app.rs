@@ -18,6 +18,7 @@ mod frame;
 mod input;
 mod pictures;
 mod prefs;
+mod provider_files;
 
 pub(crate) use commands::{discards_document, works_without_document};
 pub(crate) use input::control_click_as_secondary;
@@ -216,6 +217,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.provider_tick();
         updates_ui::tick(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
