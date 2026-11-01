@@ -1,7 +1,8 @@
 use super::*;
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextDirection};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CombineBrackets, EastAsianLayout, ParaProps, TextDirection};
+use wordcraft_doc::section::{DocGrid, DocGridType};
 use wordcraft_doc::{Pos, Table};
 
 mod autospace;
@@ -833,7 +834,7 @@ fn a_megabyte_long_word_lays_out_quickly() {
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
+    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false, warichu: false }
 }
 
 /// A word that a negative advance makes narrower still fits beside a float: the width of a word
@@ -12273,6 +12274,350 @@ fn layout_cache_invalidates_on_changed_filepath() {
     let l_b = layout(&doc, &mut cache, &opts_b);
     let text_b = shown(&l_b);
     assert_eq!(text_b, "/path/two/a.docx", "second layout with same cache shows /path/two/a.docx");
+}
+
+/// 割注 (`w:eastAsianLayout/@w:combine`, two lines in one). Before it was applied, the text ran
+/// on one line at full size; now a combined run is one cluster whose text sits on two half-size
+/// sub-lines inside the line's own height, with the opening bracket above and the closing one
+/// below so they enclose both.
+fn east_asian_doc(text: &str, size: f32, combine: Option<bool>, brackets: Option<CombineBrackets>) -> Document {
+    let chr = wordcraft_doc::CharProps {
+        size: Some(size),
+        east_asian_layout: combine.map(|c| EastAsianLayout { combine: Some(c), combine_brackets: brackets, ..Default::default() }),
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+    d
+}
+
+fn warichu_doc(text: &str, size: f32, brackets: Option<CombineBrackets>) -> Document {
+    east_asian_doc(text, size, Some(true), brackets)
+}
+
+fn only_para(l: &DocLayout) -> &para::ParaLayout {
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Lines { para, .. } => Some(&**para),
+            _ => None,
+        })
+        .expect("a laid out paragraph")
+}
+
+#[test]
+fn combine_sets_a_run_on_two_half_size_lines_inside_one_line() {
+    let plain = lay(&east_asian_doc("abcde", 20.0, None, None));
+    let combined = lay(&warichu_doc("abcde", 20.0, Some(CombineBrackets::Round)));
+    let p = only_para(&plain);
+    let c = only_para(&combined);
+    assert_eq!(p.clusters.len(), 5, "without combine every letter keeps its own cluster");
+    assert_eq!(c.clusters.len(), 1, "the run is one cluster: {:?}", c.clusters.iter().map(|c| (c.start, c.end, c.adv)).collect::<Vec<_>>());
+    let w = &c.clusters[0];
+    assert!(w.warichu && w.obj_h > w.obj_d, "the cluster carries the run's full line metrics: {w:?}");
+    assert_eq!((w.start, w.end), (0, 5));
+    let half = c.styles[w.style as usize].size;
+    assert!((half - 10.0).abs() < 0.01, "half the run's size: {half}");
+    // The line keeps its full height: Word does not grow it for 割注.
+    assert!((c.lines[0].height - p.lines[0].height).abs() < 0.01, "line height {} against {}", c.lines[0].height, p.lines[0].height);
+    // One line, not both sub-lines end to end.
+    let plain_width = p.lines[0].xs.last().copied().unwrap_or(0.0);
+    assert!(w.adv < plain_width * 0.75, "one line wide: {} against {}", w.adv, plain_width);
+    assert!(w.adv > 20.0, "the letters and brackets still take room: {}", w.adv);
+    // （ then the upper line's three letters above the baseline, then the lower line's two below.
+    assert_eq!(c.glyphs.len(), 7, "5 letters + （ + ）: {:?}", c.glyphs.iter().map(|g| (g.dx, g.dy)).collect::<Vec<_>>());
+    assert!(
+        c.glyphs[..4].iter().all(|g| g.dy > 0.0),
+        "opening bracket and upper half stand up: {:?}",
+        c.glyphs.iter().map(|g| g.dy).collect::<Vec<_>>()
+    );
+    assert!(c.glyphs[4..].iter().all(|g| g.dy < 0.0));
+    let up = &c.glyphs[1..4];
+    let low = &c.glyphs[4..6];
+    assert!((up[0].dx - low[0].dx).abs() < 0.01, "both sub-lines start under the opening bracket: {} {}", up[0].dx, low[0].dx);
+    assert!(up.windows(2).all(|g| g[1].dx > g[0].dx) && low.windows(2).all(|g| g[1].dx > g[0].dx), "each sub-line reads along the line");
+    assert!(c.glyphs[6].dx > low[1].dx, "the closing bracket follows the lower line");
+    // Extraction keeps the run's order: brackets are not in the text, the halves are in order.
+    let (_, shown_text, ranges) = c.shown.first().expect("the 割注 text is recorded for display");
+    assert_eq!(shown_text, "abcde");
+    assert_eq!((ranges[0].clone(), ranges[6].clone()), (0..0, 0..0), "brackets are not text: {ranges:?}");
+    let extracted: String = (1..6).map(|i| shown_text[ranges[i].clone()].to_string()).collect();
+    assert_eq!(extracted, "abcde", "{ranges:?}");
+    // Atomic: carets stop before and after the notation; a click on either end lands there.
+    assert_eq!(c.line_offsets(0), vec![0, 5], "no caret stop inside the two lines");
+    let (left, right) = (c.x_of(0, 0).unwrap(), c.x_of(0, 5).unwrap());
+    assert!(right > left + 20.0, "{left}..{right}");
+    assert_eq!(c.off_at_x(0, left + 1.0), 0);
+    assert_eq!(c.off_at_x(0, right - 1.0), 5);
+    // The plain run still lays out one full-size glyph per letter.
+    assert!((p.styles[0].size - 20.0).abs() < 0.01);
+}
+
+#[test]
+fn combine_brackets_are_round_by_default_square_or_none() {
+    let glyphs = |brackets: Option<CombineBrackets>| -> Vec<(u32, f32)> {
+        let l = lay(&warichu_doc("abc", 20.0, brackets));
+        let c = only_para(&l);
+        c.glyphs.iter().map(|g| (g.gid, g.dy)).collect()
+    };
+    let round = glyphs(Some(CombineBrackets::Round));
+    let square = glyphs(Some(CombineBrackets::Square));
+    let none = glyphs(Some(CombineBrackets::None));
+    assert_eq!((round.len(), square.len(), none.len()), (5, 5, 3), "two brackets, or none");
+    assert_ne!(round[0].0, square[0].0, "round and square brackets are different glyphs");
+    assert!(none.iter().all(|(_, dy)| *dy != 0.0), "without brackets the letters still take two lines");
+    // Round is what a combine without a bracket setting gets, as Word's dialog defaults.
+    let default = east_asian_doc("abc", 20.0, Some(true), None);
+    let l = lay(&default);
+    assert_eq!(only_para(&l).glyphs.len(), 5, "a combine with no bracket setting gets round brackets");
+}
+
+#[test]
+fn combine_splits_at_grapheme_boundaries() {
+    // Five graphemes where the first is two characters (e + combining acute): the upper line takes
+    // three, the lower two, and the split never cuts the grapheme.
+    let d = warichu_doc("e\u{301}abcd", 20.0, None);
+    let l = lay(&d);
+    let c = only_para(&l);
+    assert_eq!(c.clusters.len(), 1);
+    let (_, _, ranges) = c.shown.first().expect("shown text");
+    assert!(ranges.iter().all(|r| r.start != 1 && r.start != 2), "the combining mark stays with its base: {ranges:?}");
+    // The upper line holds bytes 0..5 (é a b), the lower c and d.
+    for (k, g) in c.glyphs.iter().enumerate() {
+        let r = ranges.get(k).cloned().unwrap_or(0..0);
+        if r.start == 4 {
+            assert!(g.dy > 0.0, "b is on the upper line");
+        }
+        if r.start == 5 {
+            assert!(g.dy < 0.0, "c is on the lower line");
+        }
+    }
+}
+
+#[test]
+fn combine_off_is_ordinary_text() {
+    let plain = lay(&east_asian_doc("abcde", 20.0, None, None));
+    let off = lay(&east_asian_doc("abcde", 20.0, Some(false), Some(CombineBrackets::Round)));
+    let (p, o) = (only_para(&plain), only_para(&off));
+    assert_eq!(o.clusters.len(), 5, "combine=false keeps one cluster per letter");
+    assert!(!o.clusters.iter().any(|c| c.warichu));
+    assert_eq!(p.lines.len(), o.lines.len());
+    assert_eq!(
+        p.clusters.iter().map(|c| (c.start, c.end, c.adv)).collect::<Vec<_>>(),
+        o.clusters.iter().map(|c| (c.start, c.end, c.adv)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn combine_run_in_vertical_text_is_one_column_of_two_sub_lines() {
+    let text = "日本語の注";
+    let mut d = warichu_doc(text, 20.0, Some(CombineBrackets::Round));
+    d.last_section.text_direction = TextDirection::Down;
+    let l = lay(&d);
+    let Placed::Lines { para, turn: TextDirection::Down, .. } =
+        l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).expect("a turned paragraph")
+    else {
+        panic!("a vertical section turns its lines")
+    };
+    assert!(para.clusters.first().is_some_and(|c| c.warichu), "{:?}", para.clusters.iter().map(|c| (c.start, c.end, c.warichu)).collect::<Vec<_>>());
+    assert_eq!(para.clusters.len(), 1);
+    // The two sub-lines are two small columns across the line, so the notation still fits the
+    // column: one line, its full height, and a caret that lies across it.
+    let start = l.caret(&Pos::body(0, 0)).unwrap();
+    let end = l.caret(&Pos::body(0, text.len())).unwrap();
+    assert!(start.width > 5.0 && start.height <= 0.01, "the caret lies across the vertical line: {start:?}");
+    assert!(end.top > start.top + 20.0, "the notation runs down the page: {start:?} {end:?}");
+    assert_eq!(para.line_offsets(0), vec![0, text.len()]);
+    let (x0, x1) = (para.x_of(0, 0).unwrap(), para.x_of(0, text.len()).unwrap());
+    assert_eq!(para.off_at_x(0, x0 + 0.5), 0);
+    assert_eq!(para.off_at_x(0, x1 - 0.5), text.len());
+}
+
+#[test]
+fn combine_keeps_the_run_text_in_order_in_the_display_list() {
+    use crate::display;
+    let d = warichu_doc("abcde", 20.0, Some(CombineBrackets::Round));
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let (text, glyphs, ranges) = items
+        .iter()
+        .find_map(|i| match i {
+            display::Draw::Glyphs { text, glyphs, ranges, .. } if text == "abcde" => Some((text.clone(), glyphs.len(), ranges.clone())),
+            _ => None,
+        })
+        .expect("the 割注 text is drawn as one run");
+    assert_eq!((glyphs, ranges.len()), (7, 7), "the letters and the two brackets");
+    let extracted: String = ranges.iter().map(|r| text[r.clone()].to_string()).collect();
+    assert_eq!(extracted, "abcde", "copy and PDF extraction keep the run's order: {ranges:?}");
+}
+
+#[test]
+fn combine_with_one_grapheme_keeps_the_character() {
+    // A one-grapheme run has no split point: it is all upper sub-line, the lower one empty. It
+    // must still be laid out (it used to be dropped from the paragraph entirely).
+    let l = lay(&warichu_doc("あ", 20.0, Some(CombineBrackets::Round)));
+    let c = only_para(&l);
+    assert_eq!(c.clusters.len(), 1, "{:?}", c.clusters.iter().map(|c| (c.start, c.end, c.adv)).collect::<Vec<_>>());
+    let w = &c.clusters[0];
+    assert!(w.warichu, "the run is one combined cluster");
+    assert!(w.adv > 0.0, "the character still takes room: {}", w.adv);
+    assert_eq!((w.start, w.end), (0, "あ".len()));
+    // The character and both brackets are drawn, and its text extracts in order.
+    assert_eq!(c.glyphs.len(), 3, "{:?}", c.glyphs.iter().map(|g| (g.gid, g.dx, g.dy)).collect::<Vec<_>>());
+    let (_, shown, ranges) = c.shown.first().expect("the 割注 text is recorded for display");
+    assert_eq!(shown, "あ");
+    let extracted: String = ranges.iter().map(|r| shown[r.clone()].to_string()).collect();
+    assert_eq!(extracted, "あ", "{ranges:?}");
+    assert_eq!(c.line_offsets(0), vec![0, "あ".len()], "no caret stop inside the notation");
+}
+
+#[test]
+fn combine_on_a_character_grid_takes_cells_from_its_combined_advance() {
+    // The 割注 cluster's style is half size, so sizing its cells by style would shorten a long
+    // notation under the text after it; whole cells come from the cluster's combined advance.
+    let text = "日本語の割注文書です";
+    let mut d = warichu_doc(text, 20.0, Some(CombineBrackets::Round));
+    d.last_section.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 18.0, char_space: 0 });
+    let size = para::Grid::of(&d, &d.last_section).font_size;
+    let plain = lay(&d);
+    let natural = only_para(&plain).clusters[0].adv;
+    d.last_section.doc_grid =
+        Some(DocGrid { kind: DocGridType::LinesAndChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(size + 2.5, size) });
+    let pitch = d.last_section.grid_char_pitch(size).expect("a character grid");
+    let l = lay(&d);
+    let c = only_para(&l);
+    let w = &c.clusters[0];
+    assert!(w.warichu, "the run is one combined cluster");
+    assert!(natural > pitch * 1.5, "the notation is wider than one cell: {natural} against {pitch}");
+    assert!(w.adv >= natural - 0.01, "the grid keeps the notation's whole width: {} against {natural}", w.adv);
+    let cells = w.adv / pitch;
+    assert!((cells - cells.round()).abs() < 1e-3, "the notation takes whole cells: {cells}");
+}
+
+#[test]
+fn combine_halves_the_complex_script_size_too() {
+    // Arabic is shaped through `ResolvedChar::complex()`, which reads `size_cs`: the half-size
+    // sub-lines must halve that too, not only `size`, or the complex-script glyphs stay at the
+    // full complex-script size inside them.
+    let text = "مرحبا";
+    let chr = wordcraft_doc::CharProps {
+        size: Some(20.0),
+        size_cs: Some(16.0),
+        east_asian_layout: Some(EastAsianLayout { combine: Some(true), combine_brackets: Some(CombineBrackets::None), ..Default::default() }),
+        ..Default::default()
+    };
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+    let l = lay(&d);
+    let c = only_para(&l);
+    assert_eq!(c.clusters.len(), 1, "{:?}", c.clusters.iter().map(|c| (c.start, c.end, c.warichu)).collect::<Vec<_>>());
+    let w = &c.clusters[0];
+    assert!(w.warichu, "the run is one combined cluster");
+    let size = c.styles[w.style as usize].size;
+    assert!((size - 8.0).abs() < 0.01, "half of the complex-script size: {size}");
+}
+
+#[test]
+fn combine_uses_ordinary_text_when_its_pieces_would_mix_faces() {
+    // A combined cluster draws all its glyphs with one face. Here the run's East Asian font puts
+    // the upper letter in a different face from the Latin lower letter. The same happens when no
+    // fallback face covers a script mix: the pieces fall into different faces. The run must then
+    // stay ordinary text, each character in its own face, instead of drawing the lower line with
+    // the upper line's face and glyph ids.
+    let db = wordcraft_fonts::FontDb::global();
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false);
+    let mut fonts: Vec<(String, wordcraft_fonts::FaceRef)> = db
+        .east_asian_families()
+        .into_iter()
+        .map(|f| (f.clone(), resolve(&f)))
+        .filter(|(_, r)| !r.substituted && r.face.covers('日') && r.face.covers('a'))
+        .map(|(f, r)| (f, r.face))
+        .collect();
+    fonts.sort_by_key(|(_, f)| f.id());
+    fonts.dedup_by_key(|(_, f)| f.id());
+    let (Some((latin_family, latin)), Some((asian_family, asian))) = (fonts.first(), fonts.get(1)) else {
+        eprintln!("skipped: needs two installed East Asian families covering Latin too");
+        return;
+    };
+    let chr = wordcraft_doc::CharProps {
+        font: Some(latin_family.clone()),
+        font_ea: Some(asian_family.clone()),
+        size: Some(20.0),
+        east_asian_layout: Some(EastAsianLayout { combine: Some(true), combine_brackets: Some(CombineBrackets::None), ..Default::default() }),
+        ..Default::default()
+    };
+    let text = "日a";
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+    let l = lay(&d);
+    let c = only_para(&l);
+    assert!(
+        c.clusters.iter().all(|cl| !cl.warichu),
+        "ordinary text, not one cluster drawn in the upper letter's face: {:?}",
+        c.clusters.iter().map(|cl| (cl.start, cl.end, cl.warichu)).collect::<Vec<_>>()
+    );
+    let face = |ch: char| {
+        let cl =
+            c.clusters.iter().find(|cl| text.get(cl.start..cl.end).and_then(|t| t.chars().next()) == Some(ch)).expect("a cluster for the letter");
+        c.styles[cl.style as usize].face
+    };
+    assert_eq!(face('日').id(), asian.id(), "the Japanese letter keeps the East Asian face");
+    assert_eq!(face('a').id(), latin.id(), "the Latin letter keeps the run's own face");
+}
+
+/// A combined cluster keeps the upper piece's style, so its pieces must also draw at one size: a
+/// Latin piece is shaped at `size` and a complex-script one at `size_cs`, and if those differ,
+/// drawing the lower sub-line with the upper piece's style would draw it at the wrong size. Such a
+/// run stays ordinary text, each letter keeping its own size; with `size_cs` equal to `size` it
+/// combines.
+#[test]
+fn combine_uses_ordinary_text_when_its_pieces_draw_at_different_sizes() {
+    let Some(family) = ["DejaVu Sans", "Liberation Sans", "Open Sans", "Noto Sans Hebrew", "Arial", "Tahoma"].into_iter().find(|f| {
+        let r = wordcraft_fonts::word::resolve(f, false, false);
+        !r.substituted && r.face.covers('a') && r.face.covers('א')
+    }) else {
+        eprintln!("skipped: needs an installed font covering Latin and Hebrew");
+        return;
+    };
+    let chr = |size_cs: f32| wordcraft_doc::CharProps {
+        font: Some(family.into()),
+        font_cs: Some(family.into()),
+        size: Some(20.0),
+        size_cs: Some(size_cs),
+        east_asian_layout: Some(EastAsianLayout { combine: Some(true), combine_brackets: Some(CombineBrackets::None), ..Default::default() }),
+        ..Default::default()
+    };
+    let text = "aא";
+    let layout = |size_cs: f32| {
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr(size_cs)))];
+        lay(&d)
+    };
+    // The Latin letter at 20 pt, the Hebrew one at `size_cs` 10: one half size for both would draw
+    // the Latin letter at the Hebrew letter's size, so the run stays ordinary text.
+    let mixed = layout(10.0);
+    let c = only_para(&mixed);
+    assert!(
+        c.clusters.iter().all(|cl| !cl.warichu),
+        "ordinary text, not one cluster drawn at the upper piece's size: {:?}",
+        c.clusters.iter().map(|cl| (cl.start, cl.end, cl.warichu)).collect::<Vec<_>>()
+    );
+    let size_of = |ch: char| {
+        let cl =
+            c.clusters.iter().find(|cl| text.get(cl.start..cl.end).and_then(|t| t.chars().next()) == Some(ch)).expect("a cluster for the letter");
+        c.styles[cl.style as usize].size
+    };
+    assert!((size_of('a') - 20.0).abs() < 0.01, "the Latin letter keeps the run's size");
+    assert!((size_of('א') - 10.0).abs() < 0.01, "the Hebrew letter keeps the complex-script size");
+    // Same face and the same drawing size (half of 20 for both): one combined cluster.
+    let same = layout(20.0);
+    let c = only_para(&same);
+    assert_eq!(c.clusters.len(), 1, "{:?}", c.clusters.iter().map(|cl| (cl.start, cl.end, cl.warichu)).collect::<Vec<_>>());
+    let w = &c.clusters[0];
+    assert!(w.warichu, "the run combines");
+    let half = c.styles[w.style as usize].size;
+    assert!((half - 10.0).abs() < 0.01, "half the run's size: {half}");
 }
 
 /// Keep with next takes the same 0.01 pt of slack as the other fit checks: a kept paragraph and
