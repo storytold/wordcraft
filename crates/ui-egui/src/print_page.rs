@@ -360,6 +360,7 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("OpenDocument Text (*.odt)", "odt"),
         ("Rich Text Format (*.rtf)", "rtf"),
         ("Web page (*.html)", "html"),
+        ("EPUB (*.epub)", "epub"),
         ("Markdown (*.md)", "md"),
         ("LaTeX (*.tex)", "tex"),
         ("Plain text (*.txt)", "txt"),

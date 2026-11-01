@@ -103,6 +103,22 @@ fn txt_open_decodes_windows_1252_and_unmarked_utf16() {
 }
 
 #[test]
+fn epub_exports_as_a_copy_through_file_save() {
+    // #2265: EPUB is a reflowable export, not the document's own lossless format.
+    let dir = std::env::temp_dir().join(format!("wordcraft-epub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("book.epub");
+    let mut s = Session::new(crate::sample::sample_document());
+    let r = run(&mut s, "file.save", json!({"path": path.to_string_lossy()}));
+    assert_eq!(r["saved"], true, "{r}");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"PK\x03\x04"), "an EPUB is a ZIP package");
+    assert_eq!(s.path, None, "an EPUB copy leaves the document associated with its own file");
+    assert!(crate::io::SAVE_EXTS.contains(&"epub"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn txt_save_writes_list_labels() {
     // #434: list paragraphs keep their bullet or number and a tab in plain text.
     let doc = crate::io::open_bytes("l.md", b"- alpha\n- beta\n\n1. first\n2. second\n").unwrap();

@@ -656,6 +656,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("odt") => "application/vnd.oasis.opendocument.text",
         Some("rtf") => "application/rtf",
         Some("html") => "text/html",
+        Some("epub") => "application/epub+zip",
         Some("md" | "txt") => "text/plain",
         Some("tex") => "application/x-tex",
         Some("json") => "application/json",

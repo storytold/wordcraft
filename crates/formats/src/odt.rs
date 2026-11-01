@@ -46,6 +46,7 @@ pub use import::{import, parse};
 use limits::MAX_XML_DEPTH;
 pub use package::export;
 use styles::Styles;
+pub(crate) use writer::now_iso;
 #[cfg(test)]
 use writer::x;
 #[cfg(test)]

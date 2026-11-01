@@ -1012,6 +1012,321 @@ fn html_title_outside_head_is_metadata_not_body() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// EPUB
+
+/// The entries of an EPUB in archive order (name, compression) and by name.
+fn epub_parts(bytes: &[u8]) -> (Vec<(String, zip::CompressionMethod)>, std::collections::BTreeMap<String, Vec<u8>>) {
+    use std::io::Read as _;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut order = Vec::new();
+    let mut parts = std::collections::BTreeMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let name = f.name().to_string();
+        order.push((name.clone(), f.compression()));
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        parts.insert(name, data);
+    }
+    (order, parts)
+}
+
+fn epub_text(parts: &std::collections::BTreeMap<String, Vec<u8>>, name: &str) -> String {
+    String::from_utf8(parts.get(name).unwrap_or_else(|| panic!("missing {name}")).clone()).unwrap()
+}
+
+fn assert_xml(xml: &str) {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().check_end_names = true;
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(e) => panic!("not well-formed XML: {e}\n{xml}"),
+        }
+        buf.clear();
+    }
+}
+
+#[test]
+fn epub_export_is_a_valid_reflowable_package() {
+    let d = sample();
+    let bytes = crate::epub::export(&d).unwrap();
+    let (order, parts) = epub_parts(&bytes);
+    assert_eq!(order.first().map(|(name, _)| name.as_str()), Some("mimetype"), "{order:?}");
+    assert_eq!(order.first().map(|(_, compression)| *compression), Some(zip::CompressionMethod::Stored));
+    assert_eq!(parts.get("mimetype").map(Vec::as_slice), Some(b"application/epub+zip".as_slice()));
+
+    for name in ["META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/style.css", "OEBPS/chapter1.xhtml"] {
+        assert!(parts.contains_key(name), "missing {name}");
+        assert_xml(&epub_text(&parts, name));
+    }
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    for expected in [
+        "<dc:title>Sample Title</dc:title>",
+        "<dc:creator>Ada Writer</dc:creator>",
+        "<dc:language>en",
+        "<meta property=\"dcterms:modified\">",
+        "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
+        "<item id=\"chapter1\" href=\"chapter1.xhtml\" media-type=\"application/xhtml+xml\"/>",
+    ] {
+        assert!(opf.contains(expected), "missing {expected:?}: {opf}");
+    }
+    assert!(opf.contains("<dc:identifier id=\"bookid\">urn:wordcraft:"), "{opf}");
+
+    let nav = epub_text(&parts, "OEBPS/nav.xhtml");
+    for expected in ["<nav epub:type=\"toc\"", "Main Heading", "Second Level", "toc-level-2"] {
+        assert!(nav.contains(expected), "missing {expected:?}: {nav}");
+    }
+
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    for expected in [
+        "<h1 id=\"wc-heading-1\">Main Heading</h1>",
+        "<h2 id=\"wc-heading-2\">Second Level</h2>",
+        "<strong>bold</strong>",
+        "<em>italic</em>",
+        "<a href=\"https://example.com/x\">a link</a>",
+        "<table>",
+        "<ul>",
+        "<ol>",
+        "<blockquote>",
+        "<img src=\"images/img1.png\" alt=\"tiny\"",
+    ] {
+        assert!(content.contains(expected), "missing {expected:?}: {content}");
+    }
+    assert!(!content.contains("data:image"), "{content}");
+
+    let image = parts.keys().find(|name| name.starts_with("OEBPS/images/") && name.ends_with(".png")).unwrap();
+    assert!(parts.get(image).is_some_and(|bytes| bytes.starts_with(b"\x89PNG")), "{image}");
+    assert!(opf.contains("media-type=\"image/png\""), "{opf}");
+}
+
+#[test]
+fn epub_starts_a_chapter_at_each_heading_one() {
+    let mut d = sample();
+    d.body.push(para_block(Paragraph::with_text("Second Chapter", CharProps::default()).styled("Heading1")));
+    d.body.push(para_block(Paragraph::with_text("More text", CharProps::default())));
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let first = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    let second = epub_text(&parts, "OEBPS/chapter2.xhtml");
+    assert!(first.contains("Main Heading") && !first.contains("Second Chapter"), "{first}");
+    assert!(second.contains("Second Chapter") && second.contains("More text"), "{second}");
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    let (a, b) = (opf.find("idref=\"chapter1\"").unwrap(), opf.find("idref=\"chapter2\"").unwrap());
+    assert!(a < b, "{opf}");
+    let nav = epub_text(&parts, "OEBPS/nav.xhtml");
+    assert!(nav.contains("chapter1.xhtml#wc-heading-1") && nav.contains("chapter2.xhtml#wc-heading-3"), "{nav}");
+}
+
+#[test]
+fn epub_keeps_numbered_headings_as_headings() {
+    let mut d = Document::new();
+    let mut blocks = Vec::new();
+    blocks.push(para_block(Paragraph::with_text("Chapter", CharProps::default()).styled("Heading1")));
+    let bullets = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let numbers = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    // A bullet list directly followed by a numbered Heading 2: the list must end before the
+    // heading, and the heading must still be written as a heading (with its navigation entry).
+    let mut item = Paragraph::with_text("Before", CharProps::default()).styled("ListParagraph");
+    item.props.numbering = Some(wordcraft_doc::props::NumRef { num: bullets, level: 0 });
+    blocks.push(para_block(item));
+    let mut heading = Paragraph::with_text("Numbered Section", CharProps::default()).styled("Heading2");
+    heading.props.numbering = Some(wordcraft_doc::props::NumRef { num: numbers, level: 0 });
+    blocks.push(para_block(heading));
+    let mut item = Paragraph::with_text("After", CharProps::default()).styled("ListParagraph");
+    item.props.numbering = Some(wordcraft_doc::props::NumRef { num: bullets, level: 0 });
+    blocks.push(para_block(item));
+    d.body = blocks;
+
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(content.contains("<h2 id=\"wc-heading-2\">Numbered Section</h2>"), "{content}");
+    assert!(!content.contains("<li>Numbered Section"), "{content}");
+    assert!(content.contains("<li>Before</li>") && content.contains("<li>After</li>"), "{content}");
+    assert!(epub_text(&parts, "OEBPS/nav.xhtml").contains("Numbered Section"), "heading missing from navigation");
+    assert_xml(&content);
+}
+
+#[test]
+fn epub_links_to_bookmarks_in_other_chapters() {
+    // A Word-style table of contents links to a `_Toc…` bookmark on a heading in a later chapter.
+    let html = "<h1>Contents</h1>\n\
+<p><a href=\"#_Toc2\">Chapter Two</a></p>\n\
+<p><a id=\"here\"></a>In chapter one. <a href=\"#here\">Same chapter</a> and <a href=\"#missing\">missing target</a>.</p>\n\
+<h1>Chapter Two</h1>\n\
+<p><a id=\"_Toc2\"></a>In chapter two.</p>\n";
+    let d = import("html", html.as_bytes()).unwrap().unwrap();
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let first = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    let second = epub_text(&parts, "OEBPS/chapter2.xhtml");
+    assert!(first.contains("<a href=\"chapter2.xhtml#_Toc2\">Chapter Two</a>"), "{first}");
+    assert!(second.contains("<a id=\"_Toc2\"></a>"), "{second}");
+    assert!(first.contains("<a href=\"#here\">Same chapter</a>"), "{first}");
+    assert!(first.contains("<a id=\"here\"></a>"), "{first}");
+    // A fragment no chapter carries is written as plain text, not as a broken link.
+    assert!(first.contains("missing target") && !first.contains("href=\"#missing\""), "{first}");
+    assert_xml(&first);
+    assert_xml(&second);
+}
+
+#[test]
+fn epub_reports_content_the_flow_cannot_carry() {
+    use wordcraft_doc::{Comment, PartKind};
+    let mut d = sample();
+    d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("A note", CharProps::default()))]);
+    d.add_part(PartKind::Endnote, vec![para_block(Paragraph::with_text("An endnote", CharProps::default()))]);
+    d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Boxed", CharProps::default()))]);
+    let comment_part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("A comment", CharProps::default()))]);
+    d.comments.insert(
+        1,
+        Comment {
+            author: "Ann".into(),
+            initials: "A".into(),
+            date: String::new(),
+            parent: None,
+            resolved: false,
+            part: comment_part,
+            durable_id: None,
+            date_utc: None,
+        },
+    );
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let notes = epub_text(&parts, "OEBPS/notes.xhtml");
+    for expected in ["Footnotes not included: 1.", "Endnotes not included: 1.", "Comments not included: 1.", "Text boxes not included: 1."] {
+        assert!(notes.contains(expected), "missing {expected:?}: {notes}");
+    }
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    assert!(opf.contains("href=\"notes.xhtml\""), "{opf}");
+    assert!(epub_text(&parts, "OEBPS/nav.xhtml").contains("Conversion notes"));
+}
+
+#[test]
+fn epub_metadata_can_be_overridden_and_is_escaped() {
+    let d = sample();
+    let opts = crate::epub::EpubOptions {
+        title: Some("A & B <C>".into()),
+        author: Some("Ann & Bo".into()),
+        language: Some("de-DE".into()),
+        identifier: Some("urn:uuid:1234".into()),
+        modified: Some("2026-01-02T03:04:05Z".into()),
+    };
+    let (_, parts) = epub_parts(&crate::epub::export_with(&d, &opts).unwrap());
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    assert!(opf.contains("<dc:title>A &amp; B &lt;C&gt;</dc:title>"), "{opf}");
+    assert!(opf.contains("<dc:creator>Ann &amp; Bo</dc:creator>"), "{opf}");
+    assert!(opf.contains("<dc:language>de-DE</dc:language>"), "{opf}");
+    assert!(opf.contains("<dc:identifier id=\"bookid\">urn:uuid:1234</dc:identifier>"), "{opf}");
+    assert!(opf.contains("<meta property=\"dcterms:modified\">2026-01-02T03:04:05Z</meta>"), "{opf}");
+    assert!(epub_text(&parts, "OEBPS/nav.xhtml").contains("<h1>Inhalt</h1>"));
+    assert_xml(&epub_text(&parts, "OEBPS/chapter1.xhtml"));
+}
+
+#[test]
+fn epub_rejects_invalid_metadata_dates_and_keeps_hostile_text_well_formed() {
+    let mut d = Document::new();
+    d.core.title = "Hostile".into();
+    d.body = vec![para_block(Paragraph::with_text("bad\u{1}text\u{FFFE}", CharProps::default()))];
+    let opts = crate::epub::EpubOptions { modified: Some("not a date".into()), ..Default::default() };
+    let (_, parts) = epub_parts(&crate::epub::export_with(&d, &opts).unwrap());
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    assert!(opf.contains("<meta property=\"dcterms:modified\">") && !opf.contains("not a date"), "{opf}");
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(!content.contains('\u{1}') && !content.contains('\u{FFFE}'), "{content:?}");
+    assert_xml(&content);
+}
+
+#[test]
+fn epub_empty_document_is_still_a_package() {
+    let (_, parts) = epub_parts(&crate::epub::export(&Document::new()).unwrap());
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(content.contains("&#160;"), "{content}");
+    assert_xml(&content);
+    assert_xml(&epub_text(&parts, "OEBPS/content.opf"));
+}
+
+#[test]
+fn epub_reencodes_bmp_as_png() {
+    let mut d = Document::new();
+    let mut bmp = Vec::new();
+    image::RgbaImage::from_fn(4, 2, |x, _| image::Rgba([(x * 50) as u8, 80, 160, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+        .unwrap();
+    let key = d.add_media(bmp, "bmp");
+    let mut p = Paragraph::with_text("BMP: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image { media: key, w: 30.0, h: 15.0, alt: "bmp".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let image = parts.keys().find(|name| name.starts_with("OEBPS/images/")).unwrap();
+    assert!(image.ends_with(".png"), "{image}");
+    assert!(parts.get(image).is_some_and(|bytes| bytes.starts_with(b"\x89PNG")), "{image}");
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(content.contains("src=\"images/img1.png\""), "{content}");
+}
+
+#[test]
+fn epub_declares_mathml_in_the_manifest() {
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("Formula: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(n, InlineObject::Equation { linear: "x^2".into(), display: false, math: Default::default() }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let opf = epub_text(&parts, "OEBPS/content.opf");
+    assert!(opf.contains("<item id=\"chapter1\" href=\"chapter1.xhtml\" media-type=\"application/xhtml+xml\" properties=\"mathml\"/>"), "{opf}");
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(content.contains("<math "), "{content}");
+    assert_xml(&content);
+}
+
+#[test]
+fn epub_rejects_malformed_language_tags() {
+    let d = sample();
+    for (input, expected) in [
+        ("-en", "en"),
+        ("en--US", "en"),
+        ("en-", "en"),
+        ("en-x", "en"),
+        ("e", "en"),
+        ("toolongprimary", "en"),
+        ("en-123456789", "en"),
+        ("en_US", "en-US"),
+        ("de-DE", "de-DE"),
+        ("zh-Hant-TW", "zh-Hant-TW"),
+        ("en-x-private", "en-x-private"),
+    ] {
+        let opts = crate::epub::EpubOptions { language: Some(input.into()), ..Default::default() };
+        let (_, parts) = epub_parts(&crate::epub::export_with(&d, &opts).unwrap());
+        let opf = epub_text(&parts, "OEBPS/content.opf");
+        assert!(opf.contains(&format!("<dc:language>{expected}</dc:language>")), "input {input:?}: {opf}");
+        assert!(opf.contains(&format!("xml:lang=\"{expected}\"")), "input {input:?}: {opf}");
+        assert_xml(&opf);
+    }
+    let mut d = Document::new();
+    d.styles.default_chr.lang = Some("en--US".into());
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    assert!(epub_text(&parts, "OEBPS/content.opf").contains("<dc:language>en</dc:language>"));
+}
+
+#[test]
+fn epub_writes_embedded_line_breaks_as_br() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("first line\nsecond & <third>\nfourth", CharProps::default()))];
+    let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
+    let content = epub_text(&parts, "OEBPS/chapter1.xhtml");
+    assert!(content.contains("first line<br/>second &amp; &lt;third&gt;<br/>fourth"), "{content}");
+    assert!(!content.contains("first line\nsecond"), "{content}");
+    assert_xml(&content);
+}
+
 #[test]
 fn latex_export_keeps_repeated_spaces() {
     let tex = String::from_utf8(crate::export("tex", &Document::from_text("a  b   c")).unwrap().unwrap()).unwrap();
