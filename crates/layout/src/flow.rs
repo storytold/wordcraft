@@ -1,7 +1,10 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
-use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
+use super::floats::{
+    FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, late_floats, place_late,
+    place_objects,
+};
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
@@ -172,6 +175,15 @@ struct Flow<'a> {
     wrap_relays: usize,
     /// The first line not placed yet.
     l0: usize,
+    /// Its floats anchored on a later page or column than its first piece (#4250).
+    late: LateFloats,
+    /// Whether the floats past the first piece were checked ([`Flow::recheck_late`]), and those
+    /// it held back.
+    rechecked: bool,
+    forced: Vec<usize>,
+    /// The space before it at the top of the piece being placed (a paragraph starting with a page
+    /// break has it on the new page): late floats there are positioned from above it.
+    space_here: f32,
 }
 
 impl<'a> Flow<'a> {
@@ -185,8 +197,8 @@ impl<'a> Flow<'a> {
         let guess = pb.y + space_before;
         let label = ctx.next_label(p);
         let eq_start = ctx.eq_count;
-        let (float_rects, pl, rel) =
-            anchor_floats(ctx, pb, FloatAnchor { p, block, y0: guess, before: space_before, excl_mark, label: &label, place: true });
+        let (float_rects, pl, rel, late) =
+            anchor_floats(ctx, pb, FloatAnchor { p, block, y0: guess, before: space_before, excl_mark, label: &label, place: true }, &[]);
         Flow {
             p,
             block,
@@ -206,6 +218,10 @@ impl<'a> Flow<'a> {
             page_relays: 0,
             wrap_relays: 0,
             l0: 0,
+            late: LateFloats::new(&late),
+            rechecked: false,
+            forced: Vec::new(),
+            space_here: 0.0,
         }
     }
 
@@ -213,16 +229,19 @@ impl<'a> Flow<'a> {
         self.pl.lines.len()
     }
 
-    /// Place the floats and lay the paragraph out again from `y0`, `before` the space before it.
-    fn reanchor(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, (y0, before): (f32, f32)) {
-        let (rects, pl, rel) = again(ctx, self.eq_start, |ctx| {
+    /// Place the floats and lay the paragraph out again from `y0`, `before` the space before it,
+    /// leaving those in `force` for a later piece.
+    fn reanchor(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, (y0, before): (f32, f32), force: &[usize]) {
+        let (rects, pl, rel, late) = again(ctx, self.eq_start, |ctx| {
             anchor_floats(
                 ctx,
                 pb,
                 FloatAnchor { p: self.p, block: self.block, y0, before, excl_mark: self.excl_mark, label: &self.label, place: true },
+                force,
             )
         });
         (self.float_rects, self.pl, self.rel) = (rects, pl, rel);
+        self.late = LateFloats::new(&late);
         (self.laid_page, self.laid_width) = (pb.number, pb.col_w());
     }
 
@@ -467,8 +486,10 @@ impl<'a> Flow<'a> {
         pb.advance(self.block, self.body_top);
         if self.l0 == 0 {
             let y0 = pb.y;
-            self.reanchor(ctx, pb, (y0, 0.0));
+            self.reanchor(ctx, pb, (y0, 0.0), &[]);
             self.anchor_y = y0;
+            // Its floats are checked again on the new page.
+            (self.rechecked, self.forced) = (false, Vec::new());
         }
     }
 
@@ -501,6 +522,13 @@ impl<'a> Flow<'a> {
         }
         let end = push_para(&mut items, (StoryRef::Body, &[self.block as u32]), &self.pl, (l0, l1), (x, y), self.width, edges);
         pb.para_end = Some((pb.pages.len(), pb.col, end));
+        // Late floats whose anchor line came here after all are placed with these lines.
+        self.late.piece = (pb.pages.len(), pb.col);
+        if !pb.web && !self.late.placed.is_empty() {
+            let top = if l0 == 0 { self.anchor_y } else { y - self.space_here };
+            self.place_due(ctx, pb, 0..l1, top);
+        }
+        self.space_here = 0.0;
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
             page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
@@ -508,6 +536,7 @@ impl<'a> Flow<'a> {
             para_y: if pb.web { y } else { self.anchor_y },
             table_chr: None,
             pinned: None,
+            late: Some(&self.late),
         };
         let (behind, front) = place_objects(
             ctx,
@@ -523,6 +552,7 @@ impl<'a> Flow<'a> {
                 depth: 0,
             },
         );
+        self.late.drew();
         items.extend(front);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
         add_items(pb, behind, items);
@@ -549,7 +579,8 @@ impl<'a> Flow<'a> {
             }
             Some(LineEnd::PageBreak) if starts_with_break && !pb.web => {
                 pb.new_page(block, body_top);
-                pb.y += self.pl.rp.space_before.max(0.0);
+                self.space_here = self.pl.rp.space_before.max(0.0);
+                pb.y += self.space_here;
             }
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
             Some(LineEnd::ColumnBreak) => {
@@ -572,8 +603,8 @@ impl<'a> Flow<'a> {
         let y0 = pb.y;
         // The floats were placed and drawn with the first piece: they stay there.
         let (p, block, excl_mark, eq_start, label) = (self.p, self.block, self.excl_mark, self.eq_start, &self.label);
-        let (rects, relaid, relaid_rel) = with_page_map(ctx, &mut self.page_map, |ctx| {
-            again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, FloatAnchor { p, block, y0, before: 0.0, excl_mark, label, place: false }))
+        let (rects, relaid, relaid_rel, _) = with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, FloatAnchor { p, block, y0, before: 0.0, excl_mark, label, place: false }, &[]))
         });
         if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
             (self.float_rects, self.pl, self.rel) = (rects, relaid, relaid_rel);
@@ -581,6 +612,72 @@ impl<'a> Flow<'a> {
             self.anchor_y = y0;
             self.l0 = k;
         }
+    }
+
+    /// Late floats anchored in the lines that fit in this column are placed here, so these lines
+    /// are broken again around them ([`Flow::relay_wrap`]).
+    fn place_due_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+        if self.l0 == 0 || pb.web || self.late.placed.is_empty() {
+            return;
+        }
+        self.late.piece = (pb.pages.len(), pb.col);
+        let lines = self.l0..fitting(&self.pl, self.l0, pb.y, pb.bottom, (0, pb.top));
+        self.place_due(ctx, pb, lines, pb.y - self.space_here);
+    }
+
+    /// Place the late floats due with this piece whose anchor line is in `lines`, positioned from
+    /// `top`.
+    fn place_due(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, lines: std::ops::Range<usize>, top: f32) {
+        for oi in self.late.due(self.p, &self.pl, lines) {
+            place_late(ctx, pb, self.p, oi, top, &mut self.late);
+        }
+    }
+
+    /// Late floats placed for lines that went on after all (past `l1`) wait for the next piece;
+    /// one whose own wrap pushed its line on stays, as before. Whether the lines from `l0` are to
+    /// be broken again without them. Does nothing once the wrap relays are used up
+    /// ([`MAX_WRAP_RELAYS`]).
+    fn settle_late(&mut self, pb: &mut PageBuilder, l1: usize) -> bool {
+        let l0 = self.l0;
+        if l0 == 0 || pb.web || self.late.placed.is_empty() || self.wrap_relays >= MAX_WRAP_RELAYS {
+            return false;
+        }
+        let end = if l1 == l0 && pb.fresh() { l0 + 1 } else { l1 }; // what the overflow keeps
+        let moved = self.late.release(self.p, &self.pl, end, &mut pb.excl) || self.late.keep_back(self.p, &self.pl, l0..end);
+        moved && l1 > l0
+    }
+
+    /// The first piece's lines end at `l1` on this page. Floats anchored past them, on the next
+    /// page, though [`anchor_floats`] thought they would fit here (footnotes, widow control…),
+    /// are held back after all, once; and those held back whose anchor came back once they were
+    /// out of the way are placed here as before, with the text wrapping around them rather than
+    /// over it (before the notes of these lines are kept: the wrap can push their references on).
+    /// Whether the paragraph was laid out again.
+    fn recheck_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, l1: usize) -> bool {
+        if self.l0 != 0 || pb.web {
+            return false;
+        }
+        if l1 < self.n() && !self.rechecked && pb.col + 1 >= pb.cols.len() {
+            self.rechecked = true;
+            self.forced = late_floats(self.p, &self.pl, l1).into_iter().filter(|oi| !self.late.placed.contains_key(oi)).collect();
+            if !self.forced.is_empty() {
+                let mut force = self.forced.clone();
+                force.extend(self.late.placed.keys());
+                force.sort_unstable();
+                let top = (pb.y, pb.y - self.anchor_y);
+                self.reanchor(ctx, pb, top, &force);
+                return true;
+            }
+        }
+        let back = if self.forced.is_empty() { Vec::new() } else { self.late.due(self.p, &self.pl, 0..l1) };
+        if !back.iter().any(|oi| self.forced.contains(oi)) {
+            return false;
+        }
+        // The others are still held back.
+        self.forced.retain(|oi| !back.contains(oi));
+        let (keep, top) = (std::mem::take(&mut self.forced), (pb.y, pb.y - self.anchor_y));
+        self.reanchor(ctx, pb, top, &keep);
+        true
     }
 
     /// Leave the space after the paragraph, for the next one to merge with.
@@ -724,10 +821,11 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;
-        f.reanchor(ctx, pb, (y0, applied_before));
+        f.reanchor(ctx, pb, (y0, applied_before), &[]);
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
+        f.place_due_late(ctx, pb);
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);
         // What is laid out for these lines from here (their footnotes) is on this page.
@@ -738,12 +836,18 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         fit.l1 = f.settled_end(pb, &fit);
+        if f.settle_late(pb, fit.l1) {
+            continue;
+        }
         if fit.l1 == f.l0 {
             if !pb.fresh() {
                 f.move_on(ctx, pb);
                 continue;
             }
             fit.l1 = f.l0 + 1; // can't fit even one line on an empty page: overflow
+        }
+        if f.recheck_late(ctx, pb, fit.l1) {
+            continue;
         }
         let (forced, mark_with_break) = (fit.forced, fit.mark_with_break);
         f.emit(ctx, pb, rooms, (lead, fit, &notes));
@@ -805,6 +909,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
         para_y: y,
         table_chr: None,
         pinned: None,
+        late: None,
     };
     let (behind, front) = place_objects(
         ctx,

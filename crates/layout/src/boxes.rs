@@ -314,7 +314,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame {
+                        page: frame,
+                        col: (0.0, width),
+                        para_y: para_top,
+                        table_chr: table.map(|t| &t.chr),
+                        pinned: Some(&pinned),
+                        late: None,
+                    };
                     let (back, front) = place_objects(
                         ctx,
                         &ObjectPlacement {
