@@ -1,5 +1,5 @@
 use super::language::mi_check;
-use super::{Align2, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
+use super::{Align2, MeasureExt, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
 /// labelled buttons in columns of three. Each shows the command's own icon and label.
@@ -125,11 +125,13 @@ pub(super) fn graphic_size(ui: &mut Ui, app: &mut WordApp) {
         stack(ui, |ui| {
             for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
                 crate::widgets::row(ui, |ui| {
-                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let label = ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     // The range bounds what is typed or dragged; a size outside it is shown as it
                     // is (clamped, egui would report a change and resize the graphic unasked).
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).clamp_existing_to_range(false).suffix(" pt"));
+                    let r = ui
+                        .add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).clamp_existing_to_range(false).points())
+                        .labelled_by(label.id);
                     if r.changed() && v != v0 {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();

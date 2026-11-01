@@ -1,6 +1,6 @@
 use super::common::mi;
 use super::language::mi_check;
-use super::{Ui, WordApp, json, menu_button};
+use super::{MeasureExt, Ui, WordApp, json, menu_button};
 
 /// Word's text wrapping styles in menu order: label, model value, `arrange.wrap` parameter.
 pub(crate) const WRAP_STYLES: [(&str, wordcraft_doc::para::Wrap, &str); 7] = {
@@ -79,9 +79,9 @@ pub(super) fn rotate_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
 /// Size › Rotation: the selected object's exact angle (a drag of the field is one undo step).
 pub(super) fn rotation_field(ui: &mut Ui, app: &mut WordApp) {
     let deg0 = wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| f.spin().deg)).unwrap_or(0.0);
-    ui.label(egui::RichText::new(tl!("Rotation:")).small());
+    let label = ui.label(egui::RichText::new(tl!("Rotation:")).small());
     let mut deg = deg0;
-    let r = ui.add(egui::DragValue::new(&mut deg).speed(1.0).range(-360.0..=360.0).max_decimals(1).suffix("°"));
+    let r = ui.add(egui::DragValue::new(&mut deg).speed(1.0).range(-360.0..=360.0).max_decimals(1).unit_text("°")).labelled_by(label.id);
     if r.changed() {
         if r.dragged() && !r.drag_started() {
             app.session.join_next_undo();

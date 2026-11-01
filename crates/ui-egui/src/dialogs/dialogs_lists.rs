@@ -265,11 +265,11 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
             }
         });
         ui.end_row();
-        ui.label(tl!("Aligned at:"));
-        ui.add(len(&mut l.aligned_at, unit));
+        let label = ui.label(tl!("Aligned at:"));
+        ui.add(len(&mut l.aligned_at, unit)).labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Text indent at:"));
-        ui.add(len(&mut l.indent_at, unit));
+        let label = ui.label(tl!("Text indent at:"));
+        ui.add(len(&mut l.indent_at, unit)).labelled_by(label.id);
         ui.end_row();
         ui.label(tl!("Follow number with:"));
         let follow = |k: &str| match k {
@@ -283,8 +283,8 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
             }
         });
         ui.end_row();
-        ui.add_enabled(l.follow == "tab", egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:")));
-        ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit));
+        let label = ui.add_enabled(l.follow == "tab", egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:")));
+        ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit)).labelled_by(label.id);
         ui.end_row();
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
