@@ -291,6 +291,24 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(png).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
+/// Whether the libraries winit's X11 backend opens at startup are installed (libX11, libXcursor,
+/// libX11-xcb and libXi; libX11-xcb brings in libxcb; and libxkbcommon-x11, for the keyboard).
+/// The deb and rpm only recommend them, and a forced X11 backend without them fails to start
+/// (winit panics when libxkbcommon-x11 is missing).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_libraries_load() -> bool {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    let missing = [Xlib::open().err(), Xcursor::open().err(), Xlib_xcb::open().err(), XInput2::open().err()];
+    let mut missing: Vec<String> = missing.into_iter().flatten().map(|e| e.to_string()).collect();
+    if xkbcommon_dl::x11::xkbcommon_x11_option().is_none() {
+        missing.push("libxkbcommon-x11.so.0 could not be loaded".into());
+    }
+    if !missing.is_empty() {
+        log::warn!("WORDCRAFT_X11: X11 libraries missing, using the native Wayland backend: {}", missing.join("; "));
+    }
+    missing.is_empty()
+}
+
 const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
@@ -460,10 +478,12 @@ fn main() -> eframe::Result {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
+    // winit runs natively on a Wayland desktop: sharp at fractional scales, with working input
+    // methods. It has no file drag-and-drop there (only on X11), so WORDCRAFT_X11=1 runs through
+    // XWayland instead for dropping files from the file manager (#220); any other value, 0 or
+    // empty included, leaves it off. The X11 libraries are only recommended by the packages, so
+    // without them the setting is ignored rather than failing.
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_X11").is_some_and(|v| v == "1") && x11_libraries_load() {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();

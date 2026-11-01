@@ -286,13 +286,17 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
-**Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
-winit (the windowing library) supports dragging files into the window only on X11. To use the
-native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), start it with `WORDCRAFT_WAYLAND=1`:
+**Wayland:** on a Wayland desktop the app uses the native Wayland backend, which is sharp at
+fractional scales and works with input methods. winit (the windowing library) supports dragging
+files into the window only on X11, so to drop files from the file manager, run the app through
+XWayland with `WORDCRAFT_X11=1`. This needs the X11 libraries: libX11, libX11-xcb, libXcursor,
+libXi and libxkbcommon-x11 (on Debian and Ubuntu: libx11-6, libx11-xcb1, libxcursor1, libxi6 and
+libxkbcommon-x11-0). The deb and rpm only recommend them and the tarball doesn't bring them, so
+install them yourself if they're missing; without them the setting is ignored and the app opens on
+native Wayland:
 
 ```sh
-WORDCRAFT_WAYLAND=1 wordcraft
+WORDCRAFT_X11=1 wordcraft
 ```
 
 **Arch Linux (AUR).** Community members maintain three AUR packages; the project doesn't publish
