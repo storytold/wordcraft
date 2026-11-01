@@ -76,19 +76,29 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
 /// the last level-n heading's number, or its count when the heading isn't numbered) and the
 /// text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
+    let updates = seq_results(&s.doc);
+    apply_results(&mut s.doc, updates)
+}
+
+/// A body field's fresh result: its paragraph, its object index there and the text.
+type FieldResult = (Path, usize, String);
+
+/// The fresh results of the body's unlocked SEQ and STYLEREF fields ([`update_seq`]).
+fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut out = Vec::new();
     let mut headings = [0u32; 9];
     let mut seq: std::collections::HashMap<String, (u32, u32)> = Default::default();
     // Built on the first STYLEREF (field results don't change what it finds).
     let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         if let Some(l) = heading_style_level(p)
             && let Some(k) = (l as usize).checked_sub(1)
             && let Some(count) = headings.get_mut(k)
         {
             *count = count.saturating_add(1);
         }
-        let mut updates: Vec<(usize, String)> = Vec::new();
+        let mut push = |k: usize, r: String| out.push((path.clone(), k, r));
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
             let f = FieldCode::parse(instr);
@@ -109,31 +119,85 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
                         n.0 = n.0.saturating_add(1);
                     }
                     let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
-                    updates.push((k, if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) }));
+                    push(k, if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) });
                 }
                 "STYLEREF" => {
-                    let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(&s.doc));
+                    let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(doc));
                     if let Some(i) = ix.index_of(&path) {
-                        updates.push((k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
+                        push(k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i))));
                     }
                 }
                 _ => {}
             }
         }
-        if updates.is_empty() {
-            continue;
-        }
-        let para = s.doc.para_mut(StoryRef::Body, &path)?;
-        for (k, r) in updates {
-            if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
-                // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
-                *result = r;
-                *dirty = false;
+    }
+    out
+}
+
+/// What Word prints for a `REF` to a bookmark the document doesn't have.
+pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
+
+/// The fresh results of the body's unlocked REF fields as output shows them: the bookmark's
+/// text, or Word's error when the document lacks the bookmark (measured in Word for Windows);
+/// `\p`, which gives "above" or "below", keeps the stored result.
+fn ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut out = Vec::new();
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            if wordcraft_layout::fields::field_name(instr) != "REF" || has_switch(instr, 'p') {
+                continue;
             }
+            let f = FieldCode::parse(instr);
+            let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+            let shown = bookmark_text(doc, target).map_or_else(|| REFERENCE_NOT_FOUND.to_string(), |r| text_result(instr, r));
+            out.push((path.clone(), k, shown));
+        }
+    }
+    out
+}
+
+/// Put `results` into their fields, clearing `w:dirty` (a computed result is no longer stale:
+/// Word's F9 clears it too).
+fn apply_results(doc: &mut wordcraft_doc::Document, results: Vec<FieldResult>) -> Result<(), CmdError> {
+    for (path, k, r) in results {
+        let para = doc.para_mut(StoryRef::Body, &path)?;
+        if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
+            *result = r;
+            *dirty = false;
         }
         para.touch();
     }
     Ok(())
+}
+
+/// `results` less those its fields already show.
+fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<FieldResult> {
+    results.retain(|(path, k, r)| {
+        !matches!(doc.para(StoryRef::Body, path).and_then(|p| p.objects.get(*k)), Some(InlineObject::Field { result, .. }) if result == r)
+    });
+    results
+}
+
+/// The document as Word prints and exports it (PDF, print jobs, page images). Laying a document
+/// out for output, Word fills in the body's unlocked SEQ, STYLEREF and REF fields, even with
+/// "Update fields before printing" off, while NUMWORDS, FILENAME, the summary properties and
+/// formulas keep their stored results (measured with Word for Windows, printing and exporting
+/// fields whose stored results were wrong). The document itself keeps its stored results.
+/// `None` when every such field already shows its fresh result, so nothing is copied then.
+pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Document> {
+    // Numbers first: a REF to a bookmarked caption shows the caption's new number.
+    let seq = changed(doc, seq_results(doc));
+    let mut out = (!seq.is_empty()).then(|| doc.clone());
+    if let Some(d) = out.as_mut() {
+        apply_results(d, seq).ok()?;
+    }
+    let refs = changed(out.as_ref().unwrap_or(doc), ref_results(out.as_ref().unwrap_or(doc)));
+    if !refs.is_empty() {
+        apply_results(out.get_or_insert_with(|| doc.clone()), refs).ok()?;
+    }
+    out
 }
 
 /// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).

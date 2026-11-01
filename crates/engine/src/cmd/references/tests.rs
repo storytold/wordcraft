@@ -511,3 +511,91 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// Output (PDF, print, page images) shows the body's unlocked SEQ, STYLEREF and REF fields with
+/// their fresh results, as Word fills them in when it prints or exports even with "Update fields
+/// before printing" off; NUMWORDS and a locked field keep their stored results there, and the
+/// editor and the document keep every stored result.
+#[test]
+fn output_shows_fresh_seq_styleref_and_ref_results() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Refs\nChapter One\nTarget words"));
+    s.run("select.text", &json!({"text": "Chapter One"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("select.text", &json!({"text": "Target words"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for (instr, result) in [
+        (r#"SEQ Figure \* ARABIC"#, "7"),
+        (r#"STYLEREF "Heading 1""#, "stale style"),
+        ("REF Mark \\h", "stale text"),
+        ("NUMWORDS", "999"),
+        (r#"SEQ Table \* ARABIC"#, "9"),
+    ] {
+        s.run("insert.field", &json!({"instr": instr, "result": result})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    // Stale stored results (inserting a field computes its result), the last field locked.
+    let stored = ["7", "stale style", "stale text", "999", "9"];
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    let mut stale = stored.iter();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, locked, .. } = o {
+            *result = stale.next().unwrap().to_string();
+            *locked = stale.len() == 0;
+        }
+    }
+    para.touch();
+    let shown = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages
+            .iter()
+            .flat_map(|pg| &pg.items)
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(shown(&s.export_layout()), ["1", "Chapter One", "Target words", "999", "9"]);
+    assert_eq!(shown(&s.layout()), stored, "the editor shows the stored results");
+    assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), stored, "the document keeps them");
+    let pdf = s.print_pdf(&json!({})).unwrap().0;
+    assert!(pdf.len() > 1000);
+    // Once the fields are current, output copies nothing.
+    update_seq(&mut s).unwrap();
+    update_fields(&mut s).unwrap();
+    assert!(output_fields(&s.doc).is_none());
+}
+
+/// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
+/// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
+/// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
+#[test]
+fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("See "));
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF NoSuchMark \\h", "REF NoSuchMark \\p"] {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "stale".into();
+        }
+    }
+    para.touch();
+    let shown = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(shown(&s.export_layout()), [REFERENCE_NOT_FOUND, "stale"]);
+    assert_eq!(shown(&s.layout()), ["stale", "stale"], "the editor shows the stored result");
+    assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
+}
