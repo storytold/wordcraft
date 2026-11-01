@@ -89,6 +89,27 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const KHMER: &[&str] = &["Khmer Sangam MN", "Khmer MN", "Noto Sans Khmer"];
     #[cfg(not(any(windows, target_os = "macos")))]
     const KHMER: &[&str] = &["Noto Sans Khmer", "Noto Serif Khmer"];
+    // Devanagari document fonts (Hindi, Marathi, Nepali: Mangal, Kokila, Aparajita, Kalimati…): a
+    // missing one is drawn in an installed Devanagari face with OpenType tables, not in a Latin
+    // substitute that leaves every Devanagari letter to the per-character fallback. Windows' own
+    // first, then the Mac's (Kohinoor, Sangam MN and ITF Devanagari carry GSUB/GPOS; Devanagari
+    // MT only `morx`, so it isn't listed), then the open Noto, Lohit and SIL families. Legacy
+    // non-Unicode Nepali fonts (Preeti, Kantipur…) map Devanagari shapes onto Latin code points,
+    // so they are not listed: their text is Latin to every other program, and stays so here.
+    #[cfg(windows)]
+    const DEVANAGARI: &[&str] = &["Mangal", "Nirmala UI", "Kokila", "Aparajita", "Utsaah", "Noto Sans Devanagari", "Noto Serif Devanagari"];
+    #[cfg(target_os = "macos")]
+    const DEVANAGARI: &[&str] = &["Kohinoor Devanagari", "Devanagari Sangam MN", "ITF Devanagari", "Noto Sans Devanagari", "Noto Serif Devanagari"];
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const DEVANAGARI: &[&str] = &["Noto Sans Devanagari", "Lohit Devanagari", "Annapurna SIL", "Noto Serif Devanagari", "Gargi"];
+    // Book-style Devanagari fonts (Kokila, Aparajita, Sanskrit Text…) prefer a serif face.
+    #[cfg(windows)]
+    const DEVANAGARI_SERIF: &[&str] = &["Kokila", "Aparajita", "Utsaah", "Noto Serif Devanagari", "Mangal", "Nirmala UI", "Noto Sans Devanagari"];
+    #[cfg(target_os = "macos")]
+    const DEVANAGARI_SERIF: &[&str] =
+        &["Noto Serif Devanagari", "Devanagari Sangam MN", "ITF Devanagari", "Kohinoor Devanagari", "Noto Sans Devanagari"];
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const DEVANAGARI_SERIF: &[&str] = &["Noto Serif Devanagari", "Annapurna SIL", "Gargi", "Noto Sans Devanagari", "Lohit Devanagari"];
     // Palatino Linotype / Book Antiqua: macOS ships the same design as "Palatino"; open
     // look-alikes with matching metrics (TeX Gyre Pagella, URW P052 / Palladio) on Linux.
     const PALATINO: &[&str] = &[
@@ -119,6 +140,12 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     }
     if is_khmer(&f) {
         return (KHMER, true);
+    }
+    if is_devanagari_serif(&f) {
+        return (DEVANAGARI_SERIF, true);
+    }
+    if is_devanagari(&f) {
+        return (DEVANAGARI, true);
     }
     if is_persian_naskh(&f) {
         return (NASKH, true);
@@ -333,20 +360,62 @@ fn is_khmer(f: &str) -> bool {
         || matches!(f, "daunpenh" | "moolboran" | "limon" | "battambang" | "bokor" | "content" | "dangrek" | "angkor")
 }
 
+/// Unicode Devanagari document fonts (Hindi, Marathi, Nepali, Sanskrit): Windows' (Mangal,
+/// Kokila, Aparajita, Utsaah), Nepal's (Kalimati, Madan), the Mac's, Noto's, Lohit's, SIL's and
+/// the other open ones, and any family named for the script. Matched by name only. The legacy
+/// non-Unicode Nepali fonts (Preeti, Kantipur, Sagarmatha…) are deliberately not matched.
+fn is_devanagari(f: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "mangal",
+        "kokila",
+        "aparajita",
+        "utsaah",
+        "kalimati",
+        "madan",
+        "annapurna sil",
+        "gargi",
+        "sarai",
+        "samanata",
+        "chandas",
+        "nakula",
+        "sahadeva",
+        "sanskrit text",
+        "shree devanagari 714",
+    ];
+    NAMES.contains(&f) || f.contains("devanagari") || f.starts_with("lohit nepali") || f.starts_with("lohit hindi") || f.starts_with("lohit marathi")
+}
+
+/// Book-style (serif) Devanagari document fonts.
+fn is_devanagari_serif(f: &str) -> bool {
+    matches!(f, "kokila" | "aparajita" | "utsaah" | "sanskrit text" | "chandas") || (f.contains("devanagari") && f.contains("serif"))
+}
+
+/// Is `family` a Devanagari document font ([`is_devanagari`])? A missing one is drawn in a
+/// Devanagari face for the whole run, Latin letters included when the face has them.
+pub fn is_devanagari_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
+    is_devanagari(&f) || is_devanagari_serif(&f)
+}
+
 /// Hebrew document fonts.
 fn is_hebrew(f: &str) -> bool {
     const NAMES: &[&str] = &["david", "miriam", "noto sans hebrew", "arial hebrew", "calibri hebrew"];
     NAMES.contains(&f) || f.contains("hebrew")
 }
 
-/// The first installed substitute for a missing `family`. For a Thai font, the first with Latin
-/// letters and digits as well as Thai ones (a Thai face without Latin would leave a mixed run in
-/// two fonts, #1549), else the first with Thai letters, else the first installed.
+/// The first installed substitute for a missing `family`. For a Thai or Devanagari font, the
+/// first with Latin letters and digits as well as the script's letters (a Thai face without Latin
+/// would leave a mixed run in two fonts, #1549), else the first with the script's letters, else
+/// the first installed.
 fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
     let mut installed = substitutes(family).iter().copied().filter(|s| db.has_family(s));
-    if !is_thai_family(family) {
+    let letter = if is_thai_family(family) {
+        '\u{0E19}'
+    } else if is_devanagari_family(family) {
+        '\u{0915}'
+    } else {
         return installed.next();
-    }
+    };
     let installed: Vec<&'static str> = installed.collect();
     let covers = |name: &str, chars: &[char]| {
         let face = db.face(name, "Regular");
@@ -355,8 +424,8 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
     installed
         .iter()
         .copied()
-        .find(|s| covers(s, &['\u{0E19}', 'A', 'z', '0', '9']))
-        .or_else(|| installed.iter().copied().find(|s| covers(s, &['\u{0E19}'])))
+        .find(|s| covers(s, &[letter, 'A', 'z', '0', '9']))
+        .or_else(|| installed.iter().copied().find(|s| covers(s, &[letter])))
         .or_else(|| installed.first().copied())
 }
 
@@ -597,6 +666,46 @@ mod tests {
     fn khmer_fonts_substitute_khmer_faces() {
         for f in ["Khmer OS Bokor", "Khmer OS Battambang", "Khmer Mool1", "Khmer OS Muol Light"] {
             assert!(substitutes(f).iter().any(|s| s.contains("Khmer")), "{f}: {:?}", substitutes(f));
+        }
+    }
+
+    #[test]
+    fn devanagari_fonts_substitute_devanagari_faces() {
+        // Nepali and Hindi document fonts map to Devanagari faces, never to the Latin lists.
+        let deva = |s: &&str| {
+            matches!(*s, "Mangal" | "Nirmala UI" | "Kokila" | "Aparajita" | "Utsaah" | "Gargi" | "Annapurna SIL") || s.contains("Devanagari")
+        };
+        for f in
+            ["Mangal", "Kokila", "Aparajita", "Utsaah", "Kalimati", "Madan", "Annapurna SIL", "Lohit Nepali", "Noto Sans Devanagari", "Devanagari MT"]
+        {
+            assert!(!substitutes(f).is_empty() && substitutes(f).iter().all(deva), "{f}: {:?}", substitutes(f));
+            assert!(has_named_substitutes(f) && is_devanagari_family(f), "{f}");
+        }
+        // Book faces prefer a serif Devanagari face.
+        for f in ["Kokila", "Aparajita", "Noto Serif Devanagari"] {
+            assert!(
+                substitutes(f).iter().position(|s| s.contains("Serif") || *s == "Kokila" || *s == "Devanagari Sangam MN").is_some_and(|i| i < 2),
+                "{f}"
+            );
+        }
+        // Legacy non-Unicode Nepali fonts hold Latin code points: they keep the Latin lists.
+        for f in ["Preeti", "Kantipur", "Sagarmatha"] {
+            assert!(!is_devanagari_family(f) && !has_named_substitutes(f), "{f}");
+        }
+    }
+
+    #[test]
+    fn a_missing_devanagari_font_resolves_to_an_installed_devanagari_face() {
+        let db = FontDb::global();
+        if substitutes("Mangal").iter().all(|s| !db.has_family(s)) || db.has_family("Mangal") {
+            eprintln!("skipped: Mangal is installed, or none of its substitutes is");
+            return;
+        }
+        for f in ["Mangal", "Kalimati"] {
+            let r = resolve(f, false, false);
+            assert!(r.substituted, "{f}");
+            assert!(r.face.covers('\u{0915}') && r.face.covers('\u{094D}'), "{f} → {}", r.face.family);
+            assert!(r.face.has_layout_tables(), "{f} → {} shapes conjuncts", r.face.family);
         }
     }
 

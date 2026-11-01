@@ -69,6 +69,26 @@ fn east_asian_lang_survives_a_save() {
     assert_eq!(back_p.runs[1].props.lang_ea.as_deref(), Some("zh-CN"));
 }
 
+/// Nepali (`ne-NP`) as the run's language and as its complex-script language (`w:bidi`, which
+/// covers Devanagari text): both survive a save, beside the Devanagari text itself.
+#[test]
+fn nepali_lang_survives_a_save() {
+    let body = format!(
+        r#"<w:p>{}{}</w:p>"#,
+        run("नेपाली भाषा", r#"<w:rFonts w:cs="Mangal"/><w:cs/><w:lang w:val="ne-NP" w:bidi="ne-NP"/>"#),
+        run("क्षेत्र", r#"<w:lang w:val="en-US" w:bidi="ne-NP"/>"#)
+    );
+    let d = wordcraft_docx::read(&docx(&body, None)).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    for doc in [&d, &back] {
+        let p = doc.body[0].as_para().unwrap();
+        assert_eq!(p.text, "नेपाली भाषाक्षेत्र");
+        assert_eq!((p.runs[0].props.lang.as_deref(), p.runs[0].props.lang_bidi.as_deref()), (Some("ne-NP"), Some("ne-NP")));
+        assert_eq!(p.runs[0].props.font_cs.as_deref(), Some("Mangal"));
+        assert_eq!((p.runs[1].props.lang.as_deref(), p.runs[1].props.lang_bidi.as_deref()), (Some("en-US"), Some("ne-NP")));
+    }
+}
+
 #[test]
 fn east_asian_lang_style_and_whitespace_trim() {
     let styles =

@@ -291,3 +291,105 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+/// Nepali (ne-NP) text: conjuncts (क्ष, त्र, ज्ञ), pre-base vowel signs (ि), a reph (र्म), a danda.
+const NEPALI: &str = "नेपाली भाषा क्षेत्र त्रिभुवन ज्ञान कर्म।";
+
+/// A face with Devanagari letters and OpenType layout tables (an installed system font), or
+/// `None` to skip.
+fn devanagari_face() -> Option<wordcraft_fonts::FaceRef> {
+    wordcraft_fonts::FontDb::global().fallback_for('\u{0915}', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.has_layout_tables())
+}
+
+#[test]
+fn nepali_conjuncts_and_vowel_signs_are_single_clusters() {
+    // No font needed: layout clusters (and so caret stops) never split a conjunct or a syllable.
+    let l = lay(&Document::from_text(NEPALI));
+    let pl = para_layout(&l, 0);
+    for c in &pl.clusters {
+        let s = NEPALI.get(c.start..c.end).unwrap_or_default();
+        assert!(!s.starts_with(['\u{094D}', '\u{093F}', '\u{0947}', '\u{093E}', '\u{0940}']), "a cluster starts with a sign: {s:?}");
+    }
+    let starts: Vec<usize> = pl.clusters.iter().map(|c| c.start).collect();
+    let offs = pl.line_offsets(0);
+    for word in ["क्षे", "त्रि", "ज्ञा", "र्म"] {
+        let at = NEPALI.find(word).unwrap();
+        for inner in at + 1..at + word.len() {
+            assert!(!starts.contains(&inner) && !offs.contains(&inner), "{word}: no cluster or caret stop inside it at {inner}");
+        }
+    }
+}
+
+#[test]
+fn a_long_nepali_paragraph_wraps_only_between_words() {
+    let text = [NEPALI; 40].join(" ");
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "a long Nepali paragraph wraps");
+    for line in pl.lines.iter().skip(1) {
+        let start = pl.clusters[line.c0].start;
+        assert_eq!(text.get(..start).and_then(|t| t.chars().next_back()), Some(' '), "line starts after a space, at {start}");
+    }
+}
+
+#[test]
+fn nepali_shapes_conjuncts_pre_base_vowels_and_reph() {
+    let Some(face) = devanagari_face() else {
+        eprintln!("skipped: no Devanagari font with OpenType tables installed");
+        return;
+    };
+    let shaped = |t: &str| wordcraft_fonts::shape(&face, t, &[], |c| c);
+    let (ka, ssa, ra, virama) = (face.glyph_for('क'), face.glyph_for('ष'), face.glyph_for('र'), face.glyph_for('\u{094D}'));
+    // क्ष: one conjunct, not ka + a visible virama + ssa.
+    let kssa = shaped("क्ष");
+    assert!(kssa.iter().all(|g| g.gid != virama), "{}: क्ष without a visible virama: {kssa:?}", face.family);
+    assert!(!(kssa.iter().any(|g| g.gid == ka) && kssa.iter().any(|g| g.gid == ssa)), "{}: क्ष is one conjunct: {kssa:?}", face.family);
+    // कि: the vowel sign is drawn before its consonant.
+    let ki = shaped("कि");
+    assert_eq!(ki.last().map(|g| g.gid), Some(ka), "{}: ka after ि: {ki:?}", face.family);
+    assert!(ki.first().is_some_and(|g| g.gid != ka), "{ki:?}");
+    // र्क: the reph is drawn above, after its base consonant.
+    let rka = shaped("र्क");
+    assert_eq!(rka.first().map(|g| g.gid), Some(ka), "{}: the base comes first: {rka:?}", face.family);
+    assert!(rka.iter().all(|g| g.gid != ra && g.gid != virama), "{}: a reph, not ra + virama: {rka:?}", face.family);
+    assert!(rka.iter().chain(&ki).chain(&kssa).all(|g| g.gid != 0 && g.cluster == 0));
+}
+
+#[test]
+fn nepali_in_a_latin_font_falls_back_to_a_devanagari_face() {
+    if devanagari_face().is_none() {
+        eprintln!("skipped: no Devanagari font with OpenType tables installed");
+        return;
+    }
+    let mut d = Document::from_text(NEPALI);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.lang = Some("ne-NP".into());
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.glyphs.iter().all(|g| g.gid != 0), "no missing glyphs");
+    let deva = |s: &str| s.chars().any(|ch| ('\u{0900}'..='\u{097F}').contains(&ch));
+    for c in pl.clusters.iter().filter(|c| NEPALI.get(c.start..c.end).is_some_and(deva)) {
+        let f = pl.styles[c.style as usize].face;
+        assert!(f.has_layout_tables() && f.covers('क'), "{} draws Devanagari", f.family);
+    }
+}
+
+/// Devanagari conjuncts don't depend on the run's `w14:ligatures` setting.
+#[test]
+fn devanagari_ignores_the_ligature_setting() {
+    use wordcraft_doc::props::{CharProps, Ligatures};
+    if devanagari_face().is_none() {
+        eprintln!("skipped: no Devanagari font with OpenType tables installed");
+        return;
+    }
+    let gids = |ligatures: Option<Ligatures>| {
+        let chr = CharProps { lang: Some("ne-NP".into()), size: Some(12.0), ligatures, ..Default::default() };
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(NEPALI, chr))];
+        let l = lay(&d);
+        para_layout(&l, 0).glyphs.iter().map(|g| g.gid).collect::<Vec<_>>()
+    };
+    let all = Ligatures { standard: true, contextual: true, historical: true, discretional: true };
+    assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
+    assert_eq!(gids(Some(all)), gids(None));
+}

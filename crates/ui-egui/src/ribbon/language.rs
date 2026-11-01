@@ -68,7 +68,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
 
 /// The English name of a region subtag the language list has no entry for (else the subtag).
 fn region_name(code: &str) -> String {
-    const REGIONS: [(&str, &str); 62] = [
+    const REGIONS: [(&str, &str); 63] = [
         ("AE", "U.A.E."),
         ("AO", "Angola"),
         ("AR", "Argentina"),
@@ -115,6 +115,7 @@ fn region_name(code: &str) -> String {
         ("MY", "Malaysia"),
         ("MZ", "Mozambique"),
         ("NL", "Netherlands"),
+        ("NP", "Nepal"),
         ("NZ", "New Zealand"),
         ("PE", "Peru"),
         ("PH", "Philippines"),

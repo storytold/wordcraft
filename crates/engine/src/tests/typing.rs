@@ -1414,6 +1414,37 @@ fn indic_and_khmer_backspace_removes_one_character() {
     assert_eq!(paras(&s)[0].0, "a");
 }
 
+/// Nepali (ne-NP): arrows step over whole conjuncts and syllables, Ctrl+arrows and double-click
+/// take whole words (a virama doesn't end a word), and the words count as Word counts them.
+#[test]
+fn nepali_caret_word_moves_and_word_count() {
+    let text = "नेपाल क्षेत्र। कर्म";
+    let mut s = typed(text);
+    // Left from the end: र्म is one syllable (reph + base), then क.
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus.off, text.find("र्म").unwrap());
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus.off, text.find("कर्म").unwrap());
+    // Ctrl+Left from inside क्षेत्र (after क्षे) goes to its start, not to a consonant after a
+    // virama; Ctrl+Right from there goes past the whole word.
+    let kshetra = text.find("क्षेत्र").unwrap();
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्षे".len()));
+    run(&mut s, "caret.wordLeft", json!({}));
+    assert_eq!(s.sel.focus.off, kshetra, "Ctrl+Left lands on the start of क्षेत्र");
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्".len()));
+    run(&mut s, "caret.wordRight", json!({}));
+    assert!(s.sel.focus.off >= kshetra + "क्षेत्र".len(), "Ctrl+Right passes the whole of क्षेत्र: {}", s.sel.focus.off);
+    // Select Word takes the whole word, without the danda.
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्षे".len()));
+    run(&mut s, "select.word", json!({}));
+    assert_eq!(s.selected_text().trim_end(), "क्षेत्र");
+    assert_eq!(s.doc.word_count(), 3);
+    // Backspace at the end of क्षेत्र removes one character at a time (र, then ्).
+    s.sel = crate::Selection::caret(Pos::body(0, kshetra + "क्षेत्र".len()));
+    typ(&mut s, "\u{8}");
+    assert!(paras(&s)[0].0.starts_with("नेपाल क्षेत्। "), "{:?}", paras(&s)[0].0);
+}
+
 /// Arabic vowel and Quranic marks are individually editable without retyping their base (#4757).
 #[test]
 fn arabic_backspace_removes_one_mark_and_keeps_the_base() {

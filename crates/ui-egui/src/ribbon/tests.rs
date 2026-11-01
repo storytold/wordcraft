@@ -229,6 +229,18 @@ fn page_setup_menus_mark_the_current_setting() {
     assert_eq!(first_words, ["Narrow", "Landscape", "A4", "Right"], "{checked:?}");
 }
 
+/// Nepali is offered in the Language dialog (`ne-NP`, as Word tags it), and the Indian variant
+/// Word also offers (`ne-IN`) shows by its region.
+#[test]
+fn nepali_is_a_proofing_language() {
+    assert!(crate::dialogs_layout::LANGUAGES.contains(&("ne-NP", "Nepali (Nepal)")));
+    assert_eq!(language_name(Some("ne-NP")), "Nepali (Nepal)");
+    assert_eq!(language_name(Some("ne_np")), "Nepali (Nepal)");
+    assert_eq!(language_name(Some("ne-IN")), "Nepali (India)");
+    // No proofing tools yet (the Hunspell ne_NP dictionary uses `FLAG num`, #4967): no marks.
+    assert!(!wordcraft_engine::proof::ProofLang::from_tag(Some("ne-NP")).is_proofed());
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]

@@ -81,7 +81,21 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
     match c.script() {
         Script::Myanmar => &["Myanmar Text", "Noto Sans Myanmar", "Padauk", "Pyidaungsu", "Noto Serif Myanmar", "Myanmar Sangam MN", "Myanmar MN"],
         Script::Khmer => &["Leelawadee UI", "Khmer UI", "Noto Sans Khmer", "Noto Serif Khmer", "Khmer OS", "Khmer Sangam MN", "Khmer MN"],
-        Script::Devanagari => &["Nirmala UI", "Mangal", "Kohinoor Devanagari", "Noto Sans Devanagari", "Noto Serif Devanagari", "Lohit Devanagari"],
+        // Hindi, Marathi, Nepali: the Mac's Sangam MN and ITF Devanagari carry OpenType tables too
+        // (Devanagari MT only `morx`); Annapurna SIL is made for Nepali.
+        Script::Devanagari => &[
+            "Nirmala UI",
+            "Mangal",
+            "Kohinoor Devanagari",
+            "Noto Sans Devanagari",
+            "Noto Serif Devanagari",
+            "Devanagari Sangam MN",
+            "ITF Devanagari",
+            "Lohit Devanagari",
+            "Annapurna SIL",
+            "Kokila",
+            "Aparajita",
+        ],
         Script::Bengali => &["Nirmala UI", "Vrinda", "Kohinoor Bangla", "Noto Sans Bengali", "Noto Serif Bengali", "Lohit Bengali"],
         Script::Thai => &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Noto Sans Thai", "Noto Serif Thai"],
         Script::Lao => &["Leelawadee UI", "Lao UI", "Noto Sans Lao", "Noto Serif Lao", "Lao Sangam MN"],
@@ -179,6 +193,14 @@ mod tests {
         assert!(fallback_rank('မ', "Noto Sans Myanmar") < fallback_rank('မ', "Myanmar Sangam MN"));
         assert!(fallback_rank('த', "Noto Sans Tamil") < fallback_rank('த', "Arial"));
         assert_eq!(fallback_rank('a', "Arial"), fallback_rank('a', "Noto Sans"));
+        // Nepali and Hindi (Devanagari): the platforms' faces, then the open ones; any other
+        // family named for the script before unrelated ones.
+        let na = '\u{0928}';
+        for fam in ["Nirmala UI", "Kohinoor Devanagari", "Noto Sans Devanagari", "Devanagari Sangam MN", "ITF Devanagari", "Annapurna SIL"] {
+            assert!(fallback_rank(na, fam) < script_fallbacks(na).len(), "{fam}");
+        }
+        assert!(fallback_rank(na, "Kohinoor Devanagari") < fallback_rank(na, "Devanagari Sangam MN"));
+        assert!(fallback_rank(na, "Shree Devanagari 714") < fallback_rank(na, "Arial Unicode MS"));
     }
 
     #[test]
