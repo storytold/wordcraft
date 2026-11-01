@@ -21,7 +21,7 @@ mod types;
 
 pub use color::parse_color;
 pub use from_doc::{ListCounter, flow_paras, from_doc, from_doc_tracked, is_mono, para_kind};
-pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px, make_img, mime_of, percent_decode, sniff_image};
+pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px, make_img, mime_of, percent_decode, sized_img, sniff_image};
 pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
 pub use types::{
     CODE_STYLE, Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_FONT_NAME, MAX_LINK, MONO_FONT, Meta, Para,
