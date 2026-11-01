@@ -543,3 +543,78 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+/// The fixture bytes: a synthetic `.docx`; `dirty` selects a tracked
+/// change carrying an author name (one finding) versus plain text (clean).
+fn audit_fixture_bytes(dirty: bool) -> Vec<u8> {
+    use std::io::Write as _;
+    let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let rels = "http://schemas.openxmlformats.org/package/2006/relationships";
+    let body = if dirty {
+        r#"<w:p><w:ins w:id="1" w:author="Quill Ramsey"><w:r><w:t>x</w:t></w:r></w:ins></w:p>"#
+    } else {
+        r#"<w:p><w:r><w:t>Just text.</w:t></w:r></w:p>"#
+    };
+    let entries: &[(&str, String)] = &[
+        ("[Content_Types].xml", r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#.to_string()),
+        (
+            "_rels/.rels",
+            format!(
+                r#"<?xml version="1.0"?><Relationships xmlns="{rels}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#
+            ),
+        ),
+        ("word/document.xml", format!(r#"<?xml version="1.0"?><w:document xmlns:w="{w}"><w:body>{body}</w:body></w:document>"#)),
+        ("word/_rels/document.xml.rels", format!(r#"<?xml version="1.0"?><Relationships xmlns="{rels}"/>"#)),
+    ];
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in entries {
+        writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(data.as_bytes()).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+/// A synthetic `.docx` on disk for `audit` tests.
+fn audit_fixture(dirty: bool) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("wordcraft-audit-test-{}-{}.docx", std::process::id(), if dirty { "dirty" } else { "clean" }));
+    std::fs::write(&path, audit_fixture_bytes(dirty)).unwrap();
+    path
+}
+
+#[test]
+fn audit_reports_findings_clean_and_missing_files() {
+    // Missing file: the audit cannot run (exit 2), not "a finding".
+    let err = run(&args(&["audit", "/definitely/not/a/file.docx"])).unwrap_err();
+    assert!(matches!(&err, Failure::AuditError(e) if e.contains("cannot read")), "{err:?}");
+    // Unknown options are usage errors: the audit could not run (exit 2),
+    // never "findings present" (exit 1).
+    let err = run(&args(&["audit", "f.docx", "--bogus"])).unwrap_err();
+    assert!(matches!(&err, Failure::AuditError(e) if e.contains("unknown option")), "{err:?}");
+
+    let dirty = audit_fixture(true);
+    let clean = audit_fixture(false);
+    // Findings present: exit 1.
+    let err = run(&args(&["audit", dirty.to_str().unwrap()])).unwrap_err();
+    assert!(matches!(&err, Failure::Findings(1)), "{err:?}");
+    // Clean file: exit 0.
+    assert!(run(&args(&["audit", clean.to_str().unwrap()])).is_ok());
+    let _ = std::fs::remove_file(dirty);
+    let _ = std::fs::remove_file(clean);
+}
+
+#[cfg(unix)]
+#[test]
+fn audit_opens_non_utf8_paths_by_their_real_name() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    // A dirty fixture at a Latin-1 path: the lossy text argument would
+    // point nowhere, so reaching the findings proves the preserved OS
+    // path is used (#1440).
+    let raw_name = OsString::from_vec(b"caf\xe9-audit.docx".to_vec());
+    let path = std::env::temp_dir().join(&raw_name);
+    std::fs::write(&path, audit_fixture_bytes(true)).unwrap();
+    let raw: Vec<OsString> = vec!["audit".into(), path.as_os_str().to_os_string()];
+    let err = run(&raw).unwrap_err();
+    assert!(matches!(&err, Failure::Findings(1)), "{err:?}");
+    let _ = std::fs::remove_file(&path);
+}

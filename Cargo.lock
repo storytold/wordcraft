@@ -6682,16 +6682,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-audit"
+version = "0.12.0"
+dependencies = [
+ "quick-xml 0.41.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip 3.0.0",
+]
+
+[[package]]
 name = "wordcraft-cli"
 version = "0.14.0"
 dependencies = [
  "serde_json",
  "sys-locale",
+ "wordcraft-audit",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",
+ "zip 3.0.0",
 ]
 
 [[package]]
