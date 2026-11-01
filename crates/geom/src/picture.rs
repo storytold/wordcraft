@@ -13,7 +13,7 @@ use image::{DynamicImage, ImageDecoder, ImageFormat};
 /// Why a picture isn't decoded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// Not a raster picture `WordCraft` decodes (a metafile, SVG or other bytes).
+    /// Not a raster picture WordCraft decodes (a metafile, SVG or other bytes).
     NotAPicture,
     /// A kind of picture that is never decoded, because its decoder can't be held to a budget.
     Unsupported(&'static str),
@@ -114,13 +114,11 @@ fn measure(decoder: &impl ImageDecoder, held: u64) -> Result<(u32, u32, u64), Re
 
 impl Probe<'_> {
     /// Bytes decoding takes at its peak.
-    #[must_use]
     pub fn peak_bytes(&self) -> u64 {
         self.peak
     }
 
     /// Whether decoding fits `budget` bytes.
-    #[must_use]
     pub fn fits(&self, budget: u64) -> bool {
         self.peak <= budget
     }
