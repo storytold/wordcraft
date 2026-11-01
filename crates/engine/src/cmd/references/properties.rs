@@ -108,6 +108,8 @@ pub(super) struct BookmarkTextIndex {
 }
 
 impl BookmarkTextIndex {
+    /// Read current object values between this start and the first later matching end.
+    /// Paragraph marker positions are cached only for this update; malformed storage uses the fragment reader.
     pub(super) fn text_at(&mut self, doc: &wordcraft_doc::Document, name: &str, start: &Pos) -> Option<String> {
         let para = doc.para(start.story, &start.path)?;
         let index = self.paragraphs.entry((start.story, start.path.clone())).or_insert_with(|| BookmarkParagraph::new(para));
@@ -140,6 +142,7 @@ struct BookmarkParagraph {
 }
 
 impl BookmarkParagraph {
+    /// Index marker offsets and ordered closing positions without retaining object text.
     fn new(para: &wordcraft_doc::Paragraph) -> Self {
         let offsets = para.object_offsets();
         let mut ends: std::collections::HashMap<String, Vec<usize>> = Default::default();
@@ -157,6 +160,7 @@ mod tests {
     use super::*;
     use wordcraft_doc::{Document, Paragraph, StoryRef, para::OBJ, para::Run, para_block, props::CharProps};
 
+    /// Build original marker storage, including deliberately mismatched object counts.
     fn paragraph(text: String, objects: Vec<InlineObject>) -> Paragraph {
         let mut p = Paragraph::new();
         p.text = text;
@@ -165,10 +169,12 @@ mod tests {
         p
     }
 
+    /// Construct a named opening marker for an original synthetic paragraph.
     fn start(name: &str) -> InlineObject {
         InlineObject::BookmarkStart { name: name.into() }
     }
 
+    /// Construct a named closing marker for an original synthetic paragraph.
     fn end(name: &str) -> InlineObject {
         InlineObject::BookmarkEnd { name: name.into() }
     }
