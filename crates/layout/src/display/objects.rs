@@ -512,3 +512,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;

@@ -17,13 +17,15 @@ fn freeform_fill_has_own_alpha() {
             let mut out = Vec::new();
             shape_draws(
                 rect,
-                ShapeKind::Freeform,
-                Some(&wordcraft_doc::fill::Fill::Solid { color: Rgb::BLACK, transparency }),
-                Some(Rgb::WHITE),
-                2.0,
-                Default::default(),
-                Some(&freeform),
-                &ShapeExtra::default(),
+                &ShapeLook {
+                    kind: ShapeKind::Freeform,
+                    fill: Some(&wordcraft_doc::fill::Fill::Solid { color: Rgb::BLACK, transparency }),
+                    stroke: Some(Rgb::WHITE),
+                    stroke_width: 2.0,
+                    effects: Default::default(),
+                    freeform: Some(&freeform),
+                    extra: &ShapeExtra::default(),
+                },
                 &DisplayOptions::default(),
                 &mut out,
             );
@@ -43,13 +45,15 @@ fn freeform_fill_has_own_alpha() {
     let mut out = Vec::new();
     shape_draws(
         rect,
-        ShapeKind::Freeform,
-        Some(&wordcraft_doc::fill::Fill::Solid { color: Rgb::BLACK, transparency: 100.0 }),
-        Some(Rgb::WHITE),
-        2.0,
-        Default::default(),
-        Some(&ink),
-        &ShapeExtra::default(),
+        &ShapeLook {
+            kind: ShapeKind::Freeform,
+            fill: Some(&wordcraft_doc::fill::Fill::Solid { color: Rgb::BLACK, transparency: 100.0 }),
+            stroke: Some(Rgb::WHITE),
+            stroke_width: 2.0,
+            effects: Default::default(),
+            freeform: Some(&ink),
+            extra: &ShapeExtra::default(),
+        },
         &DisplayOptions::default(),
         &mut out,
     );

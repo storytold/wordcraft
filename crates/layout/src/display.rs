@@ -141,7 +141,3 @@ impl Draw {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "fill_alpha_tests.rs"]
-mod fill_alpha_tests;
