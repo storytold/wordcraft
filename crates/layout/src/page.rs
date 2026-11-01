@@ -412,10 +412,11 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
-    let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (h, ..) =
-        with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height);
+    let (h, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
+        layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height
+    });
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
@@ -428,7 +429,8 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     // A page total in the footer is filled in after pagination, like the header's: it doesn't
     // make the body lay out again.
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (laid, ..) = with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
+    let (laid, ..) =
+        with_pin(ctx, id, sect, 1, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
     ctx.track_totals = track;
     let top = sect.page_h - sect.footer - laid.height;
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.
@@ -470,6 +472,8 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
 #[derive(Clone, Copy)]
 pub(crate) struct PageFrame<'a> {
     pub(crate) sect: &'a SectionProps,
+    /// Override the Margin anchor area without changing the declared margin bands.
+    pub(crate) margin_top: Option<f32>,
     /// Page position of the box's (0, 0); (0, 0) for body text.
     pub(crate) origin: (f32, f32),
     /// The page's number: inside and outside are left and right on odd pages, the other way
@@ -504,5 +508,5 @@ impl PageFrame<'_> {
 
 /// The page `pb` is filling, for placing floating objects on it (`mirror`: [`Ctx::mirror`]).
 pub(crate) fn page_frame<'a>(pb: &PageBuilder<'a>, mirror: bool) -> PageFrame<'a> {
-    PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror }
+    PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror }
 }
