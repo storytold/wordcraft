@@ -4027,7 +4027,8 @@ fn toc_in_columns_with_localized_styles_keeps_its_layout_through_update_table() 
         assert!(blocks.is_none_or(|n| n == s.doc.body.len()), "round {round}: the document grew: {}", text(&s));
         blocks = Some(s.doc.body.len());
     }
-    // The field's paragraph ends the one-column section: replacing or removing the TOC keeps it.
+    // The field's paragraph ends the one-column section: replacing the TOC keeps it, and
+    // removing it takes the break with the title, as Word does (#4041).
     let columns = |s: &Session| s.doc.sections().iter().map(|(_, x)| x.columns.count).collect::<Vec<_>>();
     assert_eq!(columns(&s), [1, 2, 1]);
     // The heading goes with the table: one "Contents" after Replace, none after Remove.
@@ -4036,8 +4037,128 @@ fn toc_in_columns_with_localized_styles_keeps_its_layout_through_update_table() 
     assert_eq!(columns(&s), [1, 2, 1], "{}", text(&s));
     assert_eq!(titles(&s), 1, "{}", text(&s));
     run(&mut s, "references.removeToc", json!({}));
-    assert_eq!(columns(&s), [1, 2, 1], "{}", text(&s));
+    assert_eq!(columns(&s), [2, 1], "{}", text(&s));
     assert_eq!(titles(&s), 0, "{}", text(&s));
+}
+
+/// #4041: Word's TOC over entries in columns (#3889): its control holds the TOC Heading title in a
+/// one-column section, a blank paragraph ending that section, and the entries in a continuous
+/// two-column section. `title_style` is the title paragraph's style. Update Table has run.
+fn word_toc_above_a_section_break(title_style: &str) -> Session {
+    let t = |s: &str| format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+    let p = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{inner}</w:p>"#);
+    let sect = |cols: &str, kind: &str| format!(r#"<w:sectPr>{kind}<w:pgSz w:w="11906" w:h="16838"/><w:cols {cols} w:space="708"/></w:sectPr>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let toc = [
+        p(title_style, &t("Contents")),
+        format!("<w:p><w:pPr>{}</w:pPr></w:p>", sect("", "")),
+        p("TOC1", &format!("{begin}{}", t("Chapter One\t2"))),
+        p("TOC2", &t("Section\t2")),
+        r#"<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#.to_string(),
+    ]
+    .concat();
+    let body = [
+        format!(
+            r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{toc}</w:sdtContent></w:sdt>"#
+        ),
+        format!(r#"<w:p><w:pPr>{}</w:pPr></w:p>"#, sect(r#"w:num="2""#, r#"<w:type w:val="continuous"/>"#)),
+        p("Heading1", &t("Chapter One")),
+        p("Heading2", &t("Section")),
+        sect("", ""),
+    ]
+    .concat();
+    let styles = [
+        style_xml("Heading1", "heading 1", r#"<w:outlineLvl w:val="0"/>"#, ""),
+        style_xml("Heading2", "heading 2", r#"<w:outlineLvl w:val="1"/>"#, ""),
+        style_xml("TOCHeading", "TOC Heading", "", ""),
+        style_xml("TOC1", "toc 1", "", ""),
+        style_xml("TOC2", "toc 2", r#"<w:ind w:left="220"/>"#, ""),
+    ]
+    .concat();
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(&body, &styles)).unwrap());
+    run(&mut s, "references.updateToc", json!({}));
+    s
+}
+
+/// The body's paragraphs as (style, ends a section, text), and each section's column count.
+fn toc_layout(s: &Session) -> (Vec<(String, bool, String)>, Vec<u32>) {
+    let paras = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .map(|p| (p.props.style.clone().unwrap_or_default(), p.section.is_some(), p.plain_text()))
+        .collect();
+    (paras, s.doc.sections().iter().map(|(_, x)| x.columns.count).collect())
+}
+
+/// #4041: replacing Word's TOC whose title sits above a section break keeps the title above the
+/// break and the entries in their columns, as Word's Insert Table of Contents does (observed in
+/// Word for Mac: the field takes the new settings; the title, the blank paragraph and its break
+/// stay). Replacing again finds the same title; a given title renames it; undo restores the table.
+#[test]
+fn replacing_a_toc_keeps_its_title_above_the_section_break() {
+    let row = |st: &str, sect: bool, t: &str| (st.to_string(), sect, t.to_string());
+    let laid_out = |title: &str| {
+        vec![
+            row("TOCHeading", false, title),
+            row("", true, ""),
+            row("TOC1", false, "Chapter One\t2"),
+            row("TOC2", false, "Section\t2"),
+            row("", true, ""),
+            row("Heading1", false, "Chapter One"),
+            row("Heading2", false, "Section"),
+        ]
+    };
+    let mut s = word_toc_above_a_section_break("TOCHeading");
+    let before = toc_layout(&s);
+    assert_eq!(before, (laid_out("Contents"), vec![1, 2, 1]), "{}", text(&s));
+    run(&mut s, "references.toc", json!({"levels": 1}));
+    let mut one_level = laid_out("Contents");
+    one_level.remove(3);
+    assert_eq!(toc_layout(&s), (one_level, vec![1, 2, 1]), "{}", text(&s));
+    // The field took the new settings.
+    let instr = s.doc.body.get(1).and_then(|b| b.as_para()).and_then(|p| {
+        p.objects.iter().find_map(|o| match o {
+            wordcraft_doc::para::InlineObject::Field { instr, .. } => Some(instr.clone()),
+            _ => None,
+        })
+    });
+    assert!(instr.as_deref().is_some_and(|i| i.contains(r#"\o "1-1""#)), "{instr:?}");
+    run(&mut s, "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
+    assert_eq!(toc_layout(&s), (laid_out("Table of Contents"), vec![1, 2, 1]), "{}", text(&s));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(toc_layout(&s), before, "{}", text(&s));
+}
+
+/// #4041: removing Word's TOC whose title sits above a section break takes the title, the blank
+/// paragraph ending its section and that break with the entries, as Word's Remove Table of
+/// Contents does (observed in Word for Mac): the empty paragraph after the table, ending the
+/// two-column section, stays, so the headings keep their own section. A Normal paragraph above
+/// the break isn't the TOC's title: it and the break stay.
+#[test]
+fn removing_a_toc_takes_its_title_and_the_section_break_under_it() {
+    let row = |st: &str, sect: bool, t: &str| (st.to_string(), sect, t.to_string());
+    let mut s = word_toc_above_a_section_break("TOCHeading");
+    let before = toc_layout(&s);
+    run(&mut s, "references.removeToc", json!({}));
+    let headings = vec![row("", true, ""), row("Heading1", false, "Chapter One"), row("Heading2", false, "Section")];
+    assert_eq!(toc_layout(&s), (headings, vec![2, 1]), "{}", text(&s));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(toc_layout(&s), before, "{}", text(&s));
+    // Replace, then Remove: the same.
+    run(&mut s, "references.toc", json!({"levels": 2}));
+    run(&mut s, "references.removeToc", json!({}));
+    let (paras, columns) = toc_layout(&s);
+    assert_eq!(columns, vec![2, 1], "{}", text(&s));
+    assert!(paras.iter().all(|(st, _, t)| !st.starts_with("TOC") && t != "Contents"), "{paras:?}");
+
+    let mut s = word_toc_above_a_section_break("Normal");
+    run(&mut s, "references.removeToc", json!({}));
+    let (paras, columns) = toc_layout(&s);
+    assert_eq!(columns, vec![1, 2, 1], "{}", text(&s));
+    assert!(paras.first().is_some_and(|(_, _, t)| t == "Contents"), "{paras:?}");
 }
 
 /// #2182: with two TOCs only the one Update Table would refresh is offered Update Field; the other
