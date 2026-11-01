@@ -259,7 +259,7 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.add(egui::Label::new(RichText::new(e.as_str()).color(t.red)).truncate());
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("✕").on_hover_text(tl!("Not now")).clicked() {
+                    if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
                         app.packs_rt.dismissed.insert((document, pack.locale.clone()));
                     }
                 });
@@ -268,7 +268,7 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn licence_hover(pack: &Pack) -> String {
-    crate::i18n::fmt(tl!("Licence: {licence}. Downloaded from {source}"), &[("licence", &pack.licence), ("source", &pack.url)])
+    crate::i18n::fmt(tl!("Licence: {licence}. Downloaded from {source}"), &[("licence", &pack.licence), ("source", pack.source_link())])
 }
 
 /// File › Options › Language › Language packs: every available and installed pack with its
@@ -287,6 +287,10 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
         ui.label(RichText::new(why).small().weak());
         return;
     };
+    if let Some(source) = packs::index_override() {
+        let line = crate::i18n::fmt(tl!("Language packs come from a test source: {source}"), &[("source", &source)]);
+        ui.add(egui::Label::new(RichText::new(line).small().color(t.orange)).wrap());
+    }
     let index = packs::available();
     let installed = packs::installed();
     let network = backend.network_on();
@@ -323,6 +327,7 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
                 name: i.name.clone(),
                 version: String::new(),
                 url: String::new(),
+                source: None,
                 size: 0,
                 licence: i.licence.clone(),
                 class: String::new(),
@@ -346,15 +351,23 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
             ui.end_row();
             for (pack, is_installed) in &rows {
                 ui.vertical(|ui| {
-                    ui.label(language_of(&pack.locale, &pack.name));
-                    ui.label(RichText::new(format!("{} · {}", pack.name, pack.locale)).small().weak());
+                    ui.set_width(180.0);
+                    let language = language_of(&pack.locale, &pack.name);
+                    // The pack's own name when it differs (Nederlands for Dutch), and its locale.
+                    let detail = if language == pack.name { pack.locale.clone() } else { format!("{} · {}", pack.name, pack.locale) };
+                    ui.label(language);
+                    ui.label(RichText::new(detail).small().weak());
                 });
                 ui.label(if pack.size > 0 { size_text(pack.size) } else { String::new() });
-                ui.add(egui::Label::new(RichText::new(pack.licence.as_str()).small()).truncate()).on_hover_text(pack.licence.as_str());
-                if pack.url.is_empty() {
+                ui.vertical(|ui| {
+                    ui.set_width(220.0);
+                    ui.add(egui::Label::new(RichText::new(pack.licence.as_str()).small()).wrap());
+                });
+                let source = pack.source_link();
+                if source.is_empty() {
                     ui.label("");
                 } else {
-                    ui.hyperlink_to(tl!("Source"), pack.url.as_str()).on_hover_text(pack.url.as_str());
+                    ui.hyperlink_to(tl!("Source"), source).on_hover_text(source);
                 }
                 ui.horizontal(|ui| {
                     let job = app.packs_rt.installs.get(&pack.locale).map(|(j, c)| {
@@ -399,9 +412,12 @@ pub(crate) fn about_tab(ui: &mut Ui) {
     ui.add_space(4.0);
     egui::ScrollArea::vertical().id_salt("about_language_data").max_height(420.0).show(ui, |ui| {
         for (title, text) in packs::licence_texts() {
-            egui::CollapsingHeader::new(RichText::new(title.as_str()).font(semibold(13.0))).id_salt(("language_data", title.as_str())).show(ui, |ui| {
-                ui.add(egui::Label::new(RichText::new(text).small().monospace()).wrap());
-            });
+            egui::CollapsingHeader::new(RichText::new(title.as_str()).font(semibold(13.0))).id_salt(("language_data", title.as_str())).show(
+                ui,
+                |ui| {
+                    ui.add(egui::Label::new(RichText::new(text).small().monospace()).wrap());
+                },
+            );
         }
     });
 }

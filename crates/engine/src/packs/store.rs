@@ -45,6 +45,8 @@ fn pack(e: &PackEntry) -> Pack {
         name: e.name.clone(),
         version: e.version.clone(),
         url: e.url.clone(),
+        // TODO(CP4): the index's optional `source` once craft-font-store's PackEntry carries it.
+        source: None,
         size: e.size,
         licence: e.licence.clone(),
         class: e.class.clone(),
@@ -105,6 +107,12 @@ impl super::Backend for FontStoreBackend {
 
     fn remove(&self, locale: &str) -> Result<(), String> {
         self.store.remove_language_pack(locale).map_err(|e| e.to_string())
+    }
+
+    fn index_override(&self) -> Option<String> {
+        // TODO(CP4): craft-font-store's `language_pack_index_overridden()` once it lands; the
+        // store reads the same variable.
+        std::env::var(craft_font_store::LANGUAGE_PACK_INDEX_ENV).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
     }
 
     fn packs_dir(&self) -> Option<PathBuf> {

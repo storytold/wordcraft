@@ -170,10 +170,10 @@ impl<'a> Exempt<'a> {
             names.extend([title, text]);
         }
         for p in wordcraft_engine::packs::available() {
-            names.extend([format!("{} · {}", p.name, p.locale), p.name, p.licence, p.url]);
+            names.extend([format!("{} · {}", p.name, p.locale), p.source_link().to_string(), p.locale, p.name, p.licence, p.url]);
         }
         for p in wordcraft_engine::packs::installed() {
-            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale)]);
+            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale), p.locale]);
         }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));

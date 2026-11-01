@@ -119,7 +119,7 @@ the suite's font store (see [installing languages](spelling-dictionaries.md#lang
 
 | Command | Params | Returns |
 |---|---|---|
-| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source", "spelling", "hyphenation", "installed"}], "installed": [...], "network", "available"}` |
+| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "installed": [...], "network", "available"}` |
 | `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was) |
 | `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
 

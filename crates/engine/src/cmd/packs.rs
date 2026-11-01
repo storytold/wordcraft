@@ -11,7 +11,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("proof.packs", "Language Packs", "File › Options › Language", list)
-            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on)} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (the archive URL), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "network": bool (downloading on), "available": bool (a font store to install into)}"#)
+            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on)} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "network": bool (downloading on), "available": bool (a font store to install into)}"#)
             .pure(),
         CommandSpec::new("proof.installPack", "Install Language Pack", "File › Options › Language", install)
             .params(r#"{"locale": string (a pack's locale from proof.packs, like nl or pt-pt)} — downloads, verifies (sha256) and installs it; spelling and hyphenation in that language use it at once. Needs downloading on (only the person in the app can turn it on). Opens nothing."#)
@@ -42,7 +42,7 @@ fn list(_: &mut Session, v: &Value) -> CmdResult {
         .map(|p| {
             json!({
                 "locale": p.locale, "name": p.name, "size": p.size, "licence": p.licence, "class": p.class,
-                "source": p.url, "spelling": p.spelling, "hyphenation": p.hyphenation,
+                "source": p.source_link(), "archive": p.url, "spelling": p.spelling, "hyphenation": p.hyphenation,
                 "installed": installed.iter().any(|i| i.locale == p.locale),
             })
         })
@@ -126,7 +126,8 @@ mod tests {
     fn unknown_and_hostile_locales_are_errors() {
         with_backend(FixedBackend::sample(), |s, b| {
             b.network.store(true, Ordering::Relaxed);
-            for bad in [json!({}), json!({"locale": 5}), json!({"locale": "../../etc"}), json!({"locale": "x".repeat(10_000)}), json!({"locale": ""})] {
+            for bad in [json!({}), json!({"locale": 5}), json!({"locale": "../../etc"}), json!({"locale": "x".repeat(10_000)}), json!({"locale": ""})]
+            {
                 assert!(s.run("proof.installPack", &bad).is_err(), "{bad}");
                 assert!(s.run("proof.removePack", &bad).is_err(), "{bad}");
             }

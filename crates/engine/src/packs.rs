@@ -44,6 +44,9 @@ pub struct Pack {
     pub version: String,
     /// The archive.
     pub url: String,
+    /// The upstream folder the data comes from, at its pinned commit (the index's optional
+    /// `source`), shown before install; the archive when the index gives none.
+    pub source: Option<String>,
     /// Bytes of the archive.
     pub size: u64,
     /// SPDX expression.
@@ -102,6 +105,10 @@ pub trait Backend: Send + Sync {
     fn installed(&self) -> Vec<Installed> {
         installed_from_proof()
     }
+    /// The test index in use instead of the pinned one (`CRAFT_LANGUAGE_PACK_INDEX`), if any.
+    fn index_override(&self) -> Option<String> {
+        None
+    }
 }
 
 static BACKEND: RwLock<Option<Arc<dyn Backend>>> = RwLock::new(None);
@@ -138,10 +145,13 @@ pub fn backend() -> Option<Arc<dyn Backend>> {
 }
 
 fn installed_from_proof() -> Vec<Installed> {
-    wordcraft_proof::packs::installed()
-        .into_iter()
-        .map(|p| Installed { locale: p.locale, name: p.name, licence: p.licence, path: p.path })
-        .collect()
+    wordcraft_proof::packs::installed().into_iter().map(|p| Installed { locale: p.locale, name: p.name, licence: p.licence, path: p.path }).collect()
+}
+
+/// The test source packs come from instead of the pinned index (`CRAFT_LANGUAGE_PACK_INDEX`):
+/// Options › Language says so.
+pub fn index_override() -> Option<String> {
+    backend().and_then(|b| b.index_override())
 }
 
 /// The packs installed now (none without a backend).
@@ -348,6 +358,13 @@ pub struct FixedBackend {
     pub installed: Mutex<Vec<Installed>>,
 }
 
+impl Pack {
+    /// Where the data comes from: the upstream source when the index names it, else the archive.
+    pub fn source_link(&self) -> &str {
+        self.source.as_deref().filter(|s| !s.is_empty()).unwrap_or(&self.url)
+    }
+}
+
 impl FixedBackend {
     /// A few packs shaped like the published ones, for screenshots and tests.
     pub fn sample() -> Self {
@@ -356,6 +373,7 @@ impl FixedBackend {
             name: name.into(),
             version: "0000000".into(),
             url: format!("https://github.com/storytold/craft-i18n/releases/download/language-packs-1/{locale}.tar.zst"),
+            source: Some("https://github.com/LibreOffice/dictionaries".into()),
             size,
             licence: licence.into(),
             class: class.into(),
@@ -425,7 +443,12 @@ mod tests {
         if std::env::var_os("CRAFT_PROOF_EMBED").is_some_and(|v| !v.is_empty()) {
             return;
         }
+        // `ru-extra` is our own word list (the repository's licence), kept embedded.
+        const OWN_DATA: [&str; 1] = ["ru"];
         let embedded = wordcraft_proof::packs::embedded_locales();
-        assert!(embedded.iter().all(|l| l.starts_with("en-")), "only en-* is embedded by default, got {embedded:?}");
+        assert!(
+            embedded.iter().all(|l| l.starts_with("en-") || OWN_DATA.contains(l)),
+            "only en-* (and our own ru-extra) is embedded by default, got {embedded:?}"
+        );
     }
 }

@@ -24,12 +24,13 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# Pinned like the other craft-libs crates (each has its own rev). This rev is the head of
-# storytold/craft-libs#482, which adds craft-proof; move it to that PR's merge commit once merged.
-# TODO(CP4): path deps to Lane 4's worktrees while developing; switched to their pushed heads before push.
-wordcraft-proof = { package = "craft-proof", path = "../wt-p4-libs/crates/proof" }
-craft-font-store = { path = "../wt-p4-store/crates/font-store" }
-craft-font-catalog = { path = "../wt-p4-store/crates/font-catalog" }
+# TODO(CP4): craft-proof with Language packs is benandez/craft-libs feat/craft-proof-packs (CP4.2,
+# stacked on storytold/craft-libs#482), the font store's `language-pack` kind is
+# feat/font-store-language-packs (CP4.1). Move both to storytold/craft-libs merge commits once
+# merged.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/benandez/craft-libs", rev = "6ae4f03c7f031312f2fd25d633c89ccbe7d414b5", version = "=0.1.0" }
+craft-font-store = { git = "https://github.com/benandez/craft-libs", rev = "630e42f42c49eb8514fd14a780061afe2e8ed7cb", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/benandez/craft-libs", rev = "630e42f42c49eb8514fd14a780061afe2e8ed7cb", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
