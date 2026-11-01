@@ -1608,6 +1608,40 @@ fn right_tab_whose_text_does_not_fit_moves_to_the_next_line_with_it() {
     }
 }
 
+/// Measured in Word: in a Word 2013 document (compatibility mode 15) the text after a right or
+/// centre tab past the right margin ends at the right indent, with the tab's leader; a stop
+/// between the indent and the margin stays. In Word 2010 mode it ends at the stop.
+#[test]
+fn a_right_or_centre_tab_past_the_margin_ends_at_the_indent_from_word_2013() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let end_at = |mode: u32, align: TabAlign, indent_right: f32, pos: f32| {
+        let mut d = Document::from_text("Entry\t12");
+        d.settings.compat_mode = mode;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![TabStop { pos, align, leader: TabLeader::Dot }]);
+            p.indent_right = Some(indent_right);
+        })
+        .unwrap();
+        let l = lay(&d);
+        let para = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).unwrap();
+        assert_eq!(para.lines.len(), 1);
+        assert!(para.lines[0].leaders.iter().any(|(k, _)| *k == 5), "mode {mode} {align:?}: no leader");
+        l.caret(&Pos::body(0, 8)).unwrap().x
+    };
+    let end = |mode, align, indent_right| end_at(mode, align, indent_right, 500.0);
+    let near = |got: f32, want: f32, what: &str| assert!((got - want).abs() < 0.5, "{what}: the number ends at {got}, not {want}");
+    near(end(15, TabAlign::Right, 0.0), 540.0, "right tab, Word 2013");
+    near(end(15, TabAlign::Center, 0.0), 540.0, "centre tab, Word 2013");
+    near(end(15, TabAlign::Right, 36.0), 504.0, "right tab with a right indent, Word 2013");
+    near(end(14, TabAlign::Right, 0.0), 572.0, "right tab, Word 2010");
+    near(end_at(15, TabAlign::Right, 36.0, 450.0), 522.0, "right tab past the indent inside the margin, Word 2013");
+    // A stop inside the margin is the same in both modes.
+    near(end_at(15, TabAlign::Right, 0.0, 300.0), 372.0, "right tab inside the margin, Word 2013");
+    for align in [TabAlign::Right, TabAlign::Center] {
+        near(end_at(15, align, 0.0, 300.0), end_at(14, align, 0.0, 300.0), &format!("{align:?} tab inside the margin, Word 2013 and 2010"));
+    }
+}
+
 /// A left tab whose only stop is past the right indent wraps; on the next line it still can't
 /// reach that stop, so it takes no room there and its text starts at the indent instead of
 /// going to a line of its own.

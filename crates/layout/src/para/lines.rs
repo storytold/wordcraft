@@ -25,6 +25,9 @@ struct Breaker<'e> {
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
+    /// Word 2013+ (compatibility mode 15) ends the text after a right or centre tab past the
+    /// right margin at the right indent; Word 2010 and before put it at the stop.
+    clamp_far_tabs: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
@@ -166,6 +169,8 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
+    /// A breaker for `pl` in `env`: the paragraph's resolved properties, widths and the
+    /// document settings that change how its lines break (space shrinking, far tabs, hyphenation).
     fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
@@ -187,6 +192,7 @@ impl<'e> Breaker<'e> {
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            clamp_far_tabs: settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -730,7 +736,12 @@ impl Scan {
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
-        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
+        let mut stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
+        if ptab.is_none() && bk.clamp_far_tabs && matches!(stop.align, TabAlign::Right | TabAlign::Center) && stop.pos > bk.width + 0.01 {
+            // Past the margin, Word 2013+ ends the text at the right indent, as a right tab, with
+            // the leader; a stop between the indent and the margin stays where it is.
+            stop = TabStop { pos: self.right_edge, align: TabAlign::Right, leader: stop.leader };
+        }
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
         if ptab.is_some() && stop.pos < self.x - 0.01 && has_content(pl, self.c0, j) {
