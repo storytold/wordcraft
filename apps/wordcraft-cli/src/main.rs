@@ -417,6 +417,35 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+fn check_damaged_source_overwrite(session: &Session, output: &Path, confirmed: bool) -> Result<(), Failure> {
+    if !confirmed && !session.doc.skipped_parts.is_empty() && session.path.as_deref().is_some_and(|source| same_file_path(source, output)) {
+        return Err("convert: refusing to replace the damaged source; review the omitted parts and pass --confirm-damaged to continue".into());
+    }
+    Ok(())
+}
+
+fn remote_mcp_backend(addr: &str) -> Result<Box<dyn wordcraft_mcp::Backend>, Failure> {
+    // A malformed address must fail at startup, not on every tool call the lazy remote would retry it with.
+    if !valid_connect_addr(addr) {
+        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
+    }
+    match wordcraft_mcp::Remote::connect(addr) {
+        Ok(remote) => {
+            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
+            if let Some(w) = remote.key_warning() {
+                eprintln!("wordcraft-cli: {w}");
+            }
+            Ok(Box::new(remote))
+        }
+        // The app may start after the client does: serve anyway and connect on the
+        // first call, or the client marks the server failed for its whole session (#4078).
+        Err(e) => {
+            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
+            Ok(Box::new(wordcraft_mcp::Remote::lazy(addr)))
+        }
+    }
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -442,9 +471,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let confirm_damaged = rest.iter().any(|a| a == "--confirm-damaged");
             let password = password_from(&rest)?;
             let mut s = open(&i, password.as_deref())?;
-            if !s.doc.skipped_parts.is_empty() && s.path.as_deref().is_some_and(|source| same_file_path(source, Path::new(&o))) && !confirm_damaged {
-                return Err("convert: refusing to replace the damaged source; review the omitted parts and pass --confirm-damaged to continue".into());
-            }
+            check_damaged_source_overwrite(&s, Path::new(&o), confirm_damaged)?;
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }
@@ -625,29 +652,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 Some(_) if author.is_some() => {
                     return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
                 }
-                Some(addr) => {
-                    // A malformed address must fail at startup, not on every tool call the lazy
-                    // remote would retry it with.
-                    if !valid_connect_addr(&addr) {
-                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
-                    }
-                    match wordcraft_mcp::Remote::connect(&addr) {
-                        Ok(remote) => {
-                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
-                            if let Some(w) = remote.key_warning() {
-                                eprintln!("wordcraft-cli: {w}");
-                            }
-                            Box::new(remote)
-                        }
-                        // The app may start after the client does: serve anyway and connect on the
-                        // first call, or the client marks the server failed for its whole session
-                        // (#4078).
-                        Err(e) => {
-                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
-                        }
-                    }
-                }
+                Some(addr) => remote_mcp_backend(&addr)?,
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
                     if let Some(roots) = roots {
