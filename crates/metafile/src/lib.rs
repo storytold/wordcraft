@@ -11,6 +11,7 @@
 
 mod bytes;
 mod canvas;
+mod codepage;
 mod dib;
 mod emf;
 mod geom;

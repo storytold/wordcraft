@@ -263,7 +263,15 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
 
 /// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
 fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: Affine) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
+    // A symbol font's text was decoded to its Unicode equivalents; draw it from a face that has
+    // them, not from an installed copy of the proprietary font (whose 8-bit cmap has no Unicode
+    // mapping, so every glyph would be a missing-glyph box).
+    let primary = if wordcraft_doc::symbol_fonts::is_symbol_font(&t.font) {
+        wordcraft_fonts::word::resolve_symbol(t.bold, t.italic).face
+    } else {
+        wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face
+    };
+    let face = wordcraft_fonts::word::face_for_text(primary, &t.text, t.bold, t.italic);
     let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
     let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };

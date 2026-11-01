@@ -183,7 +183,14 @@ impl Exporter<'_> {
     /// Draws a metafile text run as PDF text (outlines when the font cannot be embedded). `tf` maps
     /// the run's own space (see [`PlacedItem::Text`]) to the page.
     pub(crate) fn vector_text(&mut self, s: &mut Surface, t: &wordcraft_metafile::Text, tf: kurbo::Affine) {
-        let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
+        // As in the rasteriser: symbol-font text is Unicode now, so an installed 8-bit Symbol font
+        // (no Unicode cmap) must not be used to draw it.
+        let primary = if wordcraft_doc::symbol_fonts::is_symbol_font(&t.font) {
+            wordcraft_fonts::word::resolve_symbol(t.bold, t.italic).face
+        } else {
+            wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face
+        };
+        let face = wordcraft_fonts::word::face_for_text(primary, &t.text, t.bold, t.italic);
         let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
         let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
