@@ -106,7 +106,9 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
                 req[k] = json!(t);
             }
         }
-        s.ui_requests.push(req);
+        // Only the newest dialog request matters; older ones would pin their payloads.
+        s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
+        s.push_ui_request(req);
         return Ok(json!({"formats": formats_json(&ids)}));
     };
     let fmt = match fmt.to_ascii_lowercase().as_str() {

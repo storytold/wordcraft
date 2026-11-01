@@ -74,6 +74,8 @@ impl Counting {
                     out.push(u);
                 }
             }
+            // Trailing zeros of a group are not a gap: the next group starts a new place.
+            zero_pending = false;
             match gi {
                 0 => out.extend(self.myriads.get(1)),
                 1 => out.extend(self.myriads.first()),
@@ -236,7 +238,7 @@ pub(crate) fn ideograph_zodiac_traditional(n: u32) -> String {
 
 /// The `n`th (1-based) item of a sequence, or decimal past its end.
 fn nth(set: &[char], n: u32) -> String {
-    n.checked_sub(1).and_then(|i| set.get(i as usize)).map(|c| c.to_string()).unwrap_or_else(|| n.to_string())
+    n.checked_sub(1).and_then(|i| set.get(i as usize)).map(ToString::to_string).unwrap_or_else(|| n.to_string())
 }
 
 /// Code points `first..` enclosing 1 to `count`, decimal beyond.
@@ -323,6 +325,17 @@ pub(crate) fn chosung(n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chinese_no_zero_after_group_trailing_zeros() {
+        assert_eq!(chinese_counting_thousand(201_000), "二十万一千");
+        assert_eq!(chinese_counting_thousand(120_000), "十二万");
+        assert_eq!(chinese_counting_thousand(100_100), "十万零一百");
+        assert_eq!(taiwanese_counting_thousand(201_000), "二十萬一千");
+        assert_eq!(chinese_counting_thousand(100_000_001), "一亿零一");
+        assert_eq!(chinese_counting_thousand(100_010_000), "一亿零一万");
+        assert_eq!(chinese_counting_thousand(120_000_001), "一亿二千万零一");
+    }
 
     #[test]
     fn chinese_counting_systems() {
