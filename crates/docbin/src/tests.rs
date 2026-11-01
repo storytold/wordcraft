@@ -532,6 +532,8 @@ struct RichExtra {
     prm: u16,
     alt_fonts: Vec<Option<&'static str>>,
     style_next: Vec<u16>,
+    /// Tracked-change authors (`SttbfRMark`, an extended STTB); none = no table.
+    rmark_authors: Vec<&'static str>,
 }
 
 fn rich_doc(spec: &RichSpec) -> Vec<u8> {
@@ -592,10 +594,23 @@ fn rich_doc_with(spec: &RichSpec, extra: &RichExtra) -> Vec<u8> {
     table[stsh_at..stsh_at + stsh.len()].copy_from_slice(&stsh);
     table[ffn_at..ffn_at + ffn.len()].copy_from_slice(&ffn);
     let _ = bins_at;
+    let rmark_at = table.len();
+    if !extra.rmark_authors.is_empty() {
+        table.extend_from_slice(&[0xFF, 0xFF]);
+        table.extend_from_slice(&(extra.rmark_authors.len() as u16).to_le_bytes());
+        table.extend_from_slice(&0u16.to_le_bytes());
+        for a in &extra.rmark_authors {
+            let units: Vec<u16> = a.encode_utf16().collect();
+            table.extend_from_slice(&(units.len() as u16).to_le_bytes());
+            table.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+        }
+    }
+    let rmark_len = table.len() - rmark_at;
 
     let spec_fib = FibSpec {
         ccp_text: ccp,
         pairs: vec![
+            (51, rmark_at as u32, rmark_len as u32),
             (33, clx_at as u32, clx.len() as u32),
             (1, stsh_at as u32, stsh.len() as u32),
             (15, ffn_at as u32, ffn.len() as u32),
@@ -2393,6 +2408,122 @@ fn paragraph_borders_read_from_both_forms() {
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
 }
 
+/// A DTTM ([MS-DOC] §2.9.70) for the tests: minute, hour, day, month, years since 1900.
+fn dttm(year: u32, month: u32, day: u32, hour: u32, minute: u32) -> [u8; 4] {
+    (minute | hour << 6 | day << 11 | month << 16 | (year - 1900) << 20).to_le_bytes()
+}
+
+/// #4187: tracked insertions and deletions (the revision-mark sprms with their author index
+/// into SttbfRMark and their DTTM) become `ins` / `del` revisions, on text and on paragraph
+/// marks, instead of plain text.
+#[test]
+fn tracked_changes_read_from_revision_marks() {
+    let at = dttm(2015, 5, 25, 13, 47);
+    let later = dttm(2016, 4, 20, 14, 23);
+    let del = grpprl(&[(0x0800, &[0x01]), (0x4863, &[0x01, 0x00]), (0x6864, &at)]);
+    let ins = grpprl(&[(0x0801, &[0x01]), (0x4804, &[0x00, 0x00]), (0x6805, &later)]);
+    let spec = RichSpec {
+        text: "keep old new\rnext\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        // "keep " plain, "old " deleted, "new" inserted, its paragraph mark deleted.
+        chpx_runs: vec![(0, Vec::new()), (5, del.clone()), (9, ins), (12, del), (13, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let extra = RichExtra { rmark_authors: vec!["Alice", "Bob"], ..Default::default() };
+    let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+    let p = para0(&doc);
+    assert_eq!(p.text, "keep old new");
+    let at_char = |i: usize| {
+        let c = p.props_of_char(i);
+        (c.ins, c.del)
+    };
+    assert_eq!(at_char(0), (None, None), "plain text");
+    let (_, Some(d)) = at_char(5) else { panic!("'old' is deleted: {:?}", p.runs) };
+    let (Some(n), None) = at_char(9) else { panic!("'new' is inserted: {:?}", p.runs) };
+    assert_eq!(p.mark.del, Some(d), "the deleted paragraph mark shares the deletion");
+    let rev = |i: u32| doc.revisions.get(i as usize).map(|r| (r.kind, r.author.as_str(), r.date.as_str()));
+    assert_eq!(rev(d), Some((wordcraft_doc::RevisionKind::Delete, "Bob", "2015-05-25T13:47:00Z")));
+    assert_eq!(rev(n), Some((wordcraft_doc::RevisionKind::Insert, "Alice", "2016-04-20T14:23:00Z")));
+    assert_eq!(doc.revisions.len(), 2, "one revision per (kind, author, date)");
+    let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("second paragraph");
+    assert_eq!((p1.text.as_str(), p1.mark.ins, p1.mark.del), ("next", None, None));
+}
+
+/// #4187: revision marks in a piece's Prc apply after the CHPX (here they turn a CHPX
+/// insertion into a deletion), and a document without SttbfRMark still reads its changes
+/// with an empty author.
+#[test]
+fn tracked_changes_from_a_piece_prc_without_an_author_table() {
+    let ins = grpprl(&[(0x0801, &[0x01])]);
+    let prcs = vec![grpprl(&[(0x0801, &[0x00]), (0x0800, &[0x01])])];
+    let spec = RichSpec {
+        text: "gone\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, ins)],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc_with(&spec, &RichExtra { prcs, prm: 0x0001, ..Default::default() })).expect("opens");
+    let p = para0(&doc);
+    let c = p.props_of_char(0);
+    assert_eq!((c.ins, c.del), (None, Some(0)));
+    assert_eq!(doc.revisions.first().map(|r| (r.kind, r.author.as_str(), r.date.as_str())), Some((wordcraft_doc::RevisionKind::Delete, "", "")));
+}
+
+#[test]
+fn tracked_changes_from_a_piece_prm0() {
+    // A Prm0 ([MS-DOC] §2.9.215) holds isprm 0x42 (sprmCFRMarkIns) or 0x41 (sprmCFRMarkDel) in
+    // bits 1–7 and the operand in bits 8–15; it has no room for an author or a date.
+    let run = |prm: u16, chpx: Vec<u8>| {
+        let spec = RichSpec {
+            text: "text\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, chpx)],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { prm, ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        let c = p.props_of_char(0);
+        (c.ins.is_some(), c.del.is_some(), doc.revisions.len())
+    };
+    assert_eq!(run(0x42 << 1 | 1 << 8, Vec::new()), (true, false, 1), "Prm0 insertion");
+    assert_eq!(run(0x41 << 1 | 1 << 8, grpprl(&[(0x0801, &[0x01])])), (true, true, 2), "Prm0 deletion of an insertion");
+    assert_eq!(run(0x42 << 1, grpprl(&[(0x0801, &[0x01])])), (false, false, 0), "Prm0 insertion off overrides the CHPX");
+}
+
+/// #4187: a field updated with tracking on keeps its old result deleted and the new one
+/// inserted: the field becomes a range around them, as the DOCX reader keeps it (#1037), so
+/// Accept and Reject reach both. A field with an unmarked result stays one object.
+#[test]
+fn tracked_changes_inside_a_field_result_keep_the_field_a_range() {
+    use wordcraft_doc::para::InlineObject;
+    let del = grpprl(&[(0x0800, &[0x01])]);
+    let ins = grpprl(&[(0x0801, &[0x01])]);
+    let spec = RichSpec {
+        text: "Date \u{13} DATE \u{14}OLDNEW\u{15} \u{13}PAGE\u{14}3\u{15}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        // "OLD" deleted, "NEW" inserted; the field characters and the PAGE field plain.
+        chpx_runs: vec![(0, Vec::new()), (13, del), (16, ins), (19, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc_with(&spec, &RichExtra::default())).expect("opens");
+    let p = para0(&doc);
+    assert_eq!(p.text, "Date \u{FFFC}OLDNEW\u{FFFC} \u{FFFC}");
+    assert!(
+        matches!(p.objects.as_slice(), [InlineObject::FieldStart { instr, .. }, InlineObject::FieldEnd, InlineObject::Field { result, .. }] if instr == "DATE" && result == "3"),
+        "{:?}",
+        p.objects
+    );
+    let at = |t: &str| {
+        let c = p.props_of_char(p.text.find(t).unwrap());
+        (c.ins.is_some(), c.del.is_some())
+    };
+    assert_eq!((at("OLD"), at("NEW"), at("Date")), ((false, true), (true, false), (false, false)));
+}
+
 /// #3642: a small compound file whose DIFAT names one FAT sector thousands of times made `cfb`
 /// build a FAT of hundreds of megabytes before checking it. The precheck refuses it first.
 #[test]
@@ -2481,7 +2612,12 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
     let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"http://{target}\""),
+        sep: Some(result),
+        props: wordcraft_doc::props::CharProps::default(),
+    };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
     assert_eq!(u64::MAX - work.left.get(), ("http://".len() + n) as u64, "one copy of the target");
@@ -2494,7 +2630,7 @@ fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
     let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
+    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result), props: CharProps::default() };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
     super::finish_field(&mut pb, f, &budget);
