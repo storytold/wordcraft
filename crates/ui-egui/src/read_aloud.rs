@@ -29,7 +29,8 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
         app.read_aloud_error = Some(e.clone());
         app.status(e);
     }
-    let current = app.session.read_aloud.current().map(|u| u.start);
+    // The caret follows the reading only in the document being read.
+    let current = if reads_shown_document(app) { app.session.read_aloud.current().map(|u| u.start) } else { None };
     if current != app.read_aloud_at {
         if let Some(start) = &current {
             app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.clamp(start));
@@ -42,16 +43,29 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
 
 /// The page rectangles (in page units) of the sentence being read, to highlight.
 pub fn highlight(app: &mut WordApp) -> Option<(wordcraft_engine::doc::Pos, wordcraft_engine::doc::Pos)> {
-    if !app.session.read_aloud.open {
+    if !app.session.read_aloud.open || !reads_shown_document(app) {
         return None;
     }
     let u = app.session.read_aloud.current()?;
     Some((app.session.doc.clamp(&u.start), app.session.doc.clamp(&u.end)))
 }
 
+/// Whether the reading is of the document the window shows: its sentence positions are in it.
+fn reads_shown_document(app: &WordApp) -> bool {
+    app.session.read_aloud.document == Some(app.session.document_id())
+}
+
 /// The player window.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     if !app.session.read_aloud.open {
+        return;
+    }
+    // With a window per document, the player is in the window of the document being read.
+    if app.windows.native()
+        && let Some(d) = app.session.read_aloud.document
+        && d != app.session.document_id()
+        && app.session.is_open(d)
+    {
         return;
     }
     let t = Tokens::get(ctx);
