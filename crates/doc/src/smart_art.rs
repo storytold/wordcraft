@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::props::Rgb;
+
 /// Most items in a SmartArt graphic.
 pub const MAX_ITEMS: usize = 100;
 /// Longest item text, characters.
@@ -198,11 +200,17 @@ pub struct SmartArtItem {
     pub text: String,
     #[serde(default)]
     pub level: u8,
+    /// Fill of the item's shape in place of the style's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgb>,
+    /// Percent of `color` that shows (100 or none: solid). Needs `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<u8>,
 }
 
 impl SmartArtItem {
     pub fn new(text: impl Into<String>, level: u8) -> SmartArtItem {
-        SmartArtItem { text: text.into(), level }
+        SmartArtItem { text: text.into(), level, color: None, opacity: None }
     }
 }
 
@@ -254,6 +262,54 @@ impl SmartArtSpec {
             let most = prev.map_or(0, |p| p.saturating_add(1)).min(MAX_LEVEL);
             it.level = it.level.min(most);
             prev = Some(it.level);
+        }
+    }
+
+    /// Whether any item has its own colour.
+    pub fn has_custom_colors(&self) -> bool {
+        self.items.iter().any(|it| it.color.is_some())
+    }
+
+    /// Give every item the style's colour again.
+    pub fn clear_custom_colors(&mut self) {
+        for it in &mut self.items {
+            it.color = None;
+            it.opacity = None;
+        }
+    }
+
+    /// Move item `i` with the items under it to follow the first `slot` of the other items,
+    /// with `i` at `level`. False when there is no item `i`.
+    pub fn move_block(&mut self, i: usize, slot: usize, level: u8) -> bool {
+        let end = self.descendants(i).end;
+        let Some(first) = self.items.get(i).map(|it| it.level) else { return false };
+        let block: Vec<SmartArtItem> = self.items.drain(i..end).collect();
+        let depth = block.iter().map(|it| it.level.saturating_sub(first)).max().unwrap_or(0);
+        let level = level.min(MAX_LEVEL.saturating_sub(depth));
+        let at = slot.min(self.items.len());
+        let moved = block.into_iter().map(|mut it| {
+            it.level = it.level.saturating_sub(first).saturating_add(level).min(MAX_LEVEL);
+            it
+        });
+        self.items.splice(at..at, moved);
+        self.sanitize();
+        true
+    }
+
+    /// The theme accent (1–6) the style gives item `i`; `None` when the item has no shape of
+    /// its own (it is text inside another item's shape).
+    pub fn style_accent(&self, i: usize) -> Option<usize> {
+        let it = self.items.get(i)?;
+        let tops = || self.items.iter().take(i).filter(|o| o.level == 0).count();
+        match self.layout {
+            SmartArtLayout::Hierarchy => Some(self.colors.accent(i)),
+            SmartArtLayout::Radial if i == 0 => Some(self.colors.accent(0)),
+            SmartArtLayout::Radial => {
+                let parents = self.parents();
+                let spoke = |j: usize| j > 0 && matches!(parents.get(j), Some(Some(0)) | Some(None));
+                spoke(i).then(|| self.colors.accent((1..i).filter(|j| spoke(*j)).count() + 1))
+            }
+            _ => (it.level == 0).then(|| self.colors.accent(tops())),
         }
     }
 
@@ -330,5 +386,40 @@ mod tests {
         assert_eq!(SmartArtColors::from_id("Accent 2"), Some(SmartArtColors::Accent2));
         assert_eq!(SmartArtColors::from_id("accent-4"), Some(SmartArtColors::Accent4));
         assert_eq!(clean_text(&format!("{}Valid Text", " ".repeat(1500))), "Valid Text");
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+
+    fn texts(g: &SmartArtSpec) -> Vec<(&str, u8)> {
+        g.items.iter().map(|i| (i.text.as_str(), i.level)).collect()
+    }
+
+    #[test]
+    fn moving_a_block_takes_its_children_and_sets_the_level() {
+        let mut g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        assert!(g.move_block(1, 5, 1));
+        assert_eq!(texts(&g), [("Lead", 0), ("Build", 1), ("Code", 2), ("Tests", 2), ("Design", 1), ("Sketches", 2)]);
+        assert!(g.move_block(4, 0, 0));
+        assert_eq!(texts(&g)[0], ("Design", 0));
+        assert!(!g.move_block(99, 0, 0));
+    }
+
+    #[test]
+    fn a_deep_block_keeps_its_shape_when_the_level_is_too_deep() {
+        let mut g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        g.items[0].level = 0;
+        g.items[1].level = 1;
+        g.items[2].level = 2;
+        g.items.truncate(3);
+        let mut other = SmartArtItem::new("Other", 0);
+        other.level = 0;
+        g.items.push(other);
+        assert!(g.move_block(0, 4, MAX_LEVEL));
+        let lv: Vec<u8> = g.items.iter().map(|i| i.level).collect();
+        assert_eq!(lv.len(), 4);
+        assert!(lv[1] < lv[2] && lv[2] < lv[3]);
     }
 }

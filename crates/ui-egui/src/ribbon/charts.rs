@@ -56,8 +56,9 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
             app,
             crate::widgets::MenuButtonOptions::new("smartArtColors", Some("Change\nColors"), "Change Colors", true, ""),
             |ui, app| {
+                let custom = g.has_custom_colors();
                 for colors in SmartArtColors::ALL {
-                    let on = g.colors == colors;
+                    let on = g.colors == colors && !custom;
                     let resp = ui.add(egui::Button::new(crate::dialogs_smart_art::colors_label(colors)).selected(on).min_size(vec2(200.0, 24.0)));
                     let sw = Rect::from_min_size(pos2(resp.rect.right() - 74.0, resp.rect.center().y - 6.0), vec2(66.0, 12.0));
                     crate::dialogs_smart_art::swatches(ui.painter(), sw, colors, &theme);
@@ -65,6 +66,13 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
                         let _ = app.run("smartArt.colors", json!({"variant": colors.id()}));
                         ui.close();
                     }
+                }
+                // Active while items carry their own colours; set in the Text Pane.
+                let resp = ui.add_enabled(custom, egui::Button::new(tl!("Custom")).selected(custom).min_size(vec2(200.0, 24.0)));
+                let sw = Rect::from_min_size(pos2(resp.rect.right() - 74.0, resp.rect.center().y - 6.0), vec2(66.0, 12.0));
+                crate::dialogs_smart_art::custom_swatches(ui.painter(), sw, &g, &theme);
+                if !custom {
+                    resp.on_disabled_hover_text(tl!("Set the colors in the Text Pane to use custom colors."));
                 }
             },
         );
