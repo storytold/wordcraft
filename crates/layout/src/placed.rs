@@ -6,19 +6,12 @@ pub enum Placed {
     /// Lines `l0..l1` of a paragraph; `y` is the top of line `l0`; `x` the column's left edge.
     /// Turned lines (a table cell's text direction) run as `turn` says from the page point
     /// (`x`, `y`): see [`turn_point`].
-    Lines {
-        story: StoryRef,
-        path: Path,
-        para: Arc<ParaLayout>,
-        l0: usize,
-        l1: usize,
-        x: f32,
-        y: f32,
-        turn: TextDirection,
-    },
+    Lines { story: StoryRef, path: Path, para: Arc<ParaLayout>, l0: usize, l1: usize, x: f32, y: f32, turn: TextDirection },
     Fill {
         rect: Rect,
         color: Rgb,
+        /// Paragraph shading owns its source; table and page backgrounds do not.
+        source: Option<(StoryRef, Path)>,
     },
     Rule {
         x0: f32,
@@ -26,17 +19,11 @@ pub enum Placed {
         x1: f32,
         y1: f32,
         border: Border,
+        /// Paragraph borders own their source; table and page borders do not.
+        source: Option<(StoryRef, Path)>,
     },
     /// A picture in `rect`, turned about the rect's centre by `spin` (as are shapes and charts).
-    Image {
-        rect: Rect,
-        media: String,
-        crop: [f32; 4],
-        story: StoryRef,
-        path: Path,
-        off: usize,
-        spin: Spin,
-    },
+    Image { rect: Rect, media: String, crop: [f32; 4], story: StoryRef, path: Path, off: usize, spin: Spin },
     Shape {
         rect: Rect,
         kind: wordcraft_doc::para::ShapeKind,
@@ -58,22 +45,11 @@ pub enum Placed {
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
-    Graphic {
-        rect: Rect,
-        graphic: Arc<wordcraft_doc::graphic::Graphic>,
-        story: StoryRef,
-        path: Path,
-        off: usize,
-        spin: Spin,
-    },
+    Graphic { rect: Rect, graphic: Arc<wordcraft_doc::graphic::Graphic>, story: StoryRef, path: Path, off: usize, spin: Spin },
     /// `items` clipped to `rect`: a floating Drawing Canvas's members, kept inside its frame.
     /// `rect` is the unturned frame and `items` sit in it; `spin` turns the clipped whole about
     /// the frame's centre.
-    Clip {
-        rect: Rect,
-        spin: Spin,
-        items: Vec<Placed>,
-    },
+    Clip { rect: Rect, spin: Spin, items: Vec<Placed> },
     /// A table cell's area (for hit testing and cell selection). A vertically merged cell is
     /// one `Cell` as tall as all its rows; its continuation rows get a `covered` `Cell` (their
     /// own row's height) so the rows keep a box each, but it isn't a cell of its own on screen.

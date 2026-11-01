@@ -27,13 +27,20 @@ fn page_content_key(page: &Page) -> u64 {
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
         list.len().hash(&mut h);
-        for it in list.iter() {
+        for (index, it) in list.iter().enumerate() {
             match it {
-                Placed::Lines { para, l0, l1, x, y, turn, .. } => {
+                Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
                     (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
+                    (story, path).hash(&mut h);
                 }
-                Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
-                Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
+                Placed::Fill { rect, color, source } => {
+                    format!("{rect:?}{color:?}").hash(&mut h);
+                    source.hash(&mut h);
+                }
+                Placed::Rule { x0, y0, x1, y1, border, source } => {
+                    format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h);
+                    source.hash(&mut h);
+                }
                 Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
                     format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
@@ -44,7 +51,11 @@ fn page_content_key(page: &Page) -> u64 {
                     format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
-                Placed::Cell { .. } | Placed::Object { .. } => {}
+                Placed::Cell { rect, clip, story, table, row, cell, .. } => {
+                    // Cell markers select the physical clip; their placement closes each occurrence.
+                    (index, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), clip, story, table, row, cell).hash(&mut h);
+                }
+                Placed::Object { .. } => {}
             }
         }
     }
@@ -249,4 +260,116 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
 /// draws it, so a page looks as it does in other Mac apps (exports never are).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
     wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoration_owner_changes_key() {
+        use wordcraft_doc::props::{Border, Rgb};
+        use wordcraft_doc::{Path, StoryRef};
+        let rect = wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 60.0);
+        for item in [
+            Placed::Fill { rect, color: Rgb::BLACK, source: None },
+            Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 60.0, border: Border::single(1.0), source: None },
+        ] {
+            let original = Page { items: vec![item], ..Default::default() };
+            let key = page_content_key(&original);
+            let mut keys = vec![key];
+            for source in [(StoryRef::Body, Path::top(0)), (StoryRef::Body, Path::top(1)), (StoryRef::Part(0), Path::top(0))] {
+                let mut changed = original.clone();
+                match &mut changed.items[0] {
+                    Placed::Fill { source: owner, .. } | Placed::Rule { source: owner, .. } => *owner = Some(source),
+                    _ => panic!("decoration fixture"),
+                }
+                let next = page_content_key(&changed);
+                assert!(!keys.contains(&next), "owner-only mutation must invalidate cell paint");
+                keys.push(next);
+            }
+            assert_eq!(key, page_content_key(&original), "unchanged source retains the paint cache");
+        }
+    }
+
+    #[test]
+    fn cell_marker_changes_key() {
+        use wordcraft_doc::{Path, Rgb};
+        let rect = wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 20.0);
+        let marker = Placed::Cell { rect, clip: true, story: StoryRef::Body, table: Path::top(0), row: 0, cell: 0, covered: false };
+        let mut second = marker.clone();
+        if let Placed::Cell { rect, .. } = &mut second {
+            rect.h *= 2.0;
+        }
+        let original = Page {
+            // Retained ink crosses both physical cell bottoms; only markers change below.
+            items: vec![
+                Placed::Fill {
+                    rect: wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 60.0),
+                    color: Rgb::BLACK,
+                    source: Some((StoryRef::Body, Path(vec![0, 0, 0, 0]))),
+                },
+                marker,
+                second,
+            ],
+            ..Default::default()
+        };
+        let key = page_content_key(&original);
+        let mutations: [fn(&mut Placed); 9] = [
+            |item| {
+                if let Placed::Cell { rect, .. } = item {
+                    rect.x += 1.0
+                }
+            },
+            |item| {
+                if let Placed::Cell { rect, .. } = item {
+                    rect.y += 1.0
+                }
+            },
+            |item| {
+                if let Placed::Cell { rect, .. } = item {
+                    rect.w += 1.0
+                }
+            },
+            |item| {
+                if let Placed::Cell { rect, .. } = item {
+                    rect.h += 1.0
+                }
+            },
+            |item| {
+                if let Placed::Cell { clip, .. } = item {
+                    *clip = false
+                }
+            },
+            |item| {
+                if let Placed::Cell { story, .. } = item {
+                    *story = StoryRef::Part(0)
+                }
+            },
+            |item| {
+                if let Placed::Cell { table, .. } = item {
+                    *table = Path::top(1)
+                }
+            },
+            |item| {
+                if let Placed::Cell { row, .. } = item {
+                    *row += 1
+                }
+            },
+            |item| {
+                if let Placed::Cell { cell, .. } = item {
+                    *cell += 1
+                }
+            },
+        ];
+        for mutate in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed.items[1]);
+            assert_ne!(key, page_content_key(&changed), "marker-only changes must invalidate clipped paint");
+        }
+        let mut reordered = original.clone();
+        reordered.items.swap(1, 2);
+        assert_ne!(key, page_content_key(&reordered), "physical occurrences retain placement order");
+        assert_eq!(key, page_content_key(&original.clone()), "unchanged paint retains its cache key");
+    }
 }

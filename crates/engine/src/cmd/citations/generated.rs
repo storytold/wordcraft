@@ -236,7 +236,7 @@ fn add_entry_style(s: &mut Session) {
 
 pub(super) fn page_of(s: &mut Session, pos: &Pos) -> u32 {
     let l = s.layout();
-    l.caret(pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1)
+    l.page_of(pos).and_then(|page| l.pages.get(page)).map(|p| p.number).unwrap_or(1)
 }
 
 /// Entry lines (text, hanging indent) for a generated list.

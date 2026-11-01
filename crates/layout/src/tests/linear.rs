@@ -399,7 +399,7 @@ fn balloons_are_in_their_authors_colours() {
         .items
         .iter()
         .filter_map(|it| match it {
-            Placed::Fill { rect, color } if rect.w == 3.0 => Some((rect.y, *color)),
+            Placed::Fill { rect, color, .. } if rect.w == 3.0 => Some((rect.y, *color)),
             _ => None,
         })
         .collect();
@@ -438,7 +438,7 @@ fn mixed_page() -> (Document, DocLayout) {
 /// page's authors and clipped cells were shared: a `page_display` of its own.
 fn drawn_alone(d: &Document, page: &Page, it: &Placed, opts: &display::DisplayOptions) -> Vec<display::Draw> {
     let mut items = vec![it.clone()];
-    if matches!(it, Placed::Lines { .. }) {
+    if matches!(it, Placed::Lines { .. } | Placed::Fill { source: Some(_), .. } | Placed::Rule { source: Some(_), .. }) {
         let cells = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
         items.extend(cells.cloned());
     }
