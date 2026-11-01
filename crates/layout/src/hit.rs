@@ -74,6 +74,20 @@ pub struct ObjectHit {
     pub origin: Point,
 }
 
+/// Object positions in one layout, retaining each page occurrence for page-hinted lookups.
+/// Build once for a batch of lookups; rebuild when the layout changes.
+pub struct ObjectIndex {
+    by_pos: HashMap<Pos, Vec<ObjectHit>>,
+}
+
+impl ObjectIndex {
+    /// Like [`DocLayout::object`]: prefer `page_hint`, otherwise the first matching page.
+    pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<&ObjectHit> {
+        let hits = self.by_pos.get(pos)?;
+        hits.binary_search_by_key(&page_hint, |h| h.page).ok().and_then(|i| hits.get(i)).or_else(|| hits.first())
+    }
+}
+
 /// The inputs for a column selection across laid-out lines.
 pub struct ColumnSelection<'a> {
     /// The selection's first corner.
@@ -454,6 +468,22 @@ impl DocLayout {
     /// Where the object at `pos` (its U+FFFC) is laid out.
     pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<ObjectHit> {
         self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
+    }
+
+    /// Index objects once for repeated [`Self::object`] lookups, preserving their selection
+    /// order, including objects repeated on several pages (headers or repeated table rows).
+    pub fn object_index(&self) -> ObjectIndex {
+        let mut by_pos: HashMap<Pos, Vec<ObjectHit>> = HashMap::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            for hit in all_objects(page, i) {
+                let hits = by_pos.entry(hit.pos()).or_default();
+                // all_objects has the same within-page order as find_object; first wins.
+                if hits.last().is_none_or(|prev| prev.page != i) {
+                    hits.push(hit);
+                }
+            }
+        }
+        ObjectIndex { by_pos }
     }
 
     /// Where the text box showing story `part` is laid out.
@@ -938,4 +968,47 @@ fn score(l: &LineHit, x: f32, y: f32) -> f32 {
         0.0
     };
     dy * 4.0 + dx
+}
+
+#[cfg(test)]
+mod object_index_tests {
+    use super::*;
+
+    /// Compare with the ordinary lookup, including repeated rows/parts and within-page ties.
+    #[test]
+    fn indexed_objects_keep_page_hints_and_first_match_order() {
+        let body = Pos::body(0, 3);
+        let header = Pos::new(StoryRef::Part(7), Path(vec![0, 0, 0, 1]), 6);
+        let footer = Pos::new(StoryRef::Part(8), Path(vec![0]), 0);
+        let object = |pos: &Pos, x| Placed::Object {
+            rect: Rect::new(x, 20.0, 40.0, 30.0),
+            spin: wordcraft_geom::Spin::default(),
+            story: pos.story,
+            path: pos.path.clone(),
+            off: pos.off,
+            text_box: None,
+            wrap: Wrap::InFrontOfText,
+            origin: Point::new(5.0, 6.0),
+        };
+        let layout = DocLayout {
+            pages: vec![
+                Page { items: vec![object(&body, 10.0), object(&body, 11.0)], header: vec![object(&header, 12.0)], ..Default::default() },
+                Page::default(),
+                Page {
+                    items: vec![object(&body, 30.0)],
+                    header: vec![object(&header, 31.0), object(&header, 32.0)],
+                    footer: vec![object(&footer, 33.0)],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let index = layout.object_index();
+        for pos in [body, header, footer, Pos::body(99, 0), Pos::new(StoryRef::Part(7), Path(vec![0]), 6)] {
+            for hint in [0, 1, 2, 3, usize::MAX] {
+                assert_eq!(index.object(&pos, hint).cloned(), layout.object(&pos, hint), "{pos:?}, page hint {hint}");
+            }
+        }
+        assert!(DocLayout::default().object_index().object(&Pos::body(0, 0), 0).is_none());
+    }
 }
