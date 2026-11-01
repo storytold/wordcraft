@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::math::{Arg, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, has_number_mark, merge_runs, to_linear};
+use crate::math::{Arg, LimLoc, MAX_DEPTH, MAX_PARSE_CHARS, MNode, MRun, MScr, MSty, ScriptKind, has_number_mark, merge_runs, to_linear};
 
 /// A caret position inside an equation.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -832,22 +832,51 @@ fn unbalanced(nodes: &[MNode], depth: usize) -> bool {
     })
 }
 
+/// Raw input stays verbatim; a structure must survive LaTeX serialization and parsing unchanged.
+fn lossless_latex(n: &MNode) -> bool {
+    matches!(n, MNode::Run(_))
+        || crate::math_latex::parse_latex(&crate::math_latex::to_latex(std::slice::from_ref(n))).as_slice() == std::slice::from_ref(n)
+}
+
 /// Build up the linear text before the caret in its argument (`latex`: read it as LaTeX).
-/// Returns the new caret when the structure changed.
+/// Returns the new caret when the structure changed; every refusal leaves the tree untouched.
 pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     let pos = clamp(root, pos);
-    let a = arg_at_mut(root, &pos.path)?;
-    let at = split_at(a, pos.off);
-    // Rewrite from after the last formatted run (its formatting would be lost) to the caret.
-    let start = a.get(..at)?.iter().rposition(|n| !plain(n)).map(|k| k + 1).unwrap_or(0);
+    // Plan on this argument alone: splitting runs must not mutate a refused build-up.
+    let mut a = arg_at(root, &pos.path)?.clone();
+    let at = split_at(&mut a, pos.off);
+    // Rewrite after the last formatted run or structure LaTeX cannot preserve.
+    let start = a.get(..at)?.iter().rposition(|n| !plain(n) || (latex && !lossless_latex(n))).map(|k| k + 1).unwrap_or(0);
     let region: Arg = a.get(start..at)?.to_vec();
     if region.is_empty() {
-        tidy(root);
         return None;
     }
-    let text = to_linear(&region);
+    let text = if latex {
+        let mut text = String::new();
+        for node in &region {
+            if let MNode::Run(run) = node {
+                // Runs are input still being typed, including raw LaTeX commands.
+                text.push_str(&run.text);
+            } else {
+                let serialized = crate::math_latex::to_latex(std::slice::from_ref(node));
+                // A raw backslash would escape the serialized node's leading command.
+                if text.ends_with('\\') {
+                    return None;
+                }
+                text.push_str(&serialized);
+                // End any serialized command before the next raw input run.
+                text.push(' ');
+            }
+        }
+        text
+    } else {
+        to_linear(&region)
+    };
+    // Retained delimiters can expand valid input beyond either parser's cap.
+    if text.chars().nth(MAX_PARSE_CHARS).is_some() {
+        return None;
+    }
     if !latex && !builds(&text) {
-        tidy(root);
         return None;
     }
     let mut built = if latex { crate::math_latex::parse_latex(&text) } else { crate::math_linear::parse(&text) };
@@ -861,12 +890,12 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     let built = merge_runs(built);
     let unchanged = merge_runs(region.clone()) == built;
     if unchanged || (!latex && unbalanced(&built, 0)) || (latex && text.matches('{').count() != text.matches('}').count()) {
-        tidy(root);
         return None;
     }
     let new_units = units(&built);
-    let before = node_start(a, start);
+    let before = node_start(&a, start);
     a.splice(start..at, built);
+    *arg_at_mut(root, &pos.path)? = a;
     let out = MathPos { path: pos.path, off: before + new_units };
     tidy(root);
     Some(clamp(root, &out))
@@ -1202,6 +1231,130 @@ mod tests {
         let p = insert_text(&mut eq, &MathPos::default(), "\\frac{a}{b}", TypeStyle::default());
         assert!(build_up(&mut eq, &p, true).is_some());
         assert!(matches!(eq[0], MNode::Frac { .. }));
+    }
+
+    /// LaTeX build-up reads structured nodes as LaTeX while retaining raw commands in runs.
+    #[test]
+    fn latex_build_up_keeps_invisible_function_grouping() {
+        for (linear, latex) in [("sin〖x+1〗", r"\sin{x+1}"), ("log_2〖x+1〗", r"\log_{2}{x+1}")] {
+            let mut eq = crate::math_linear::parse(linear);
+            let before = eq.clone();
+            let pos = MathPos::new(Vec::new(), units(&eq));
+            assert_eq!(build_up(&mut eq, &pos, true), None);
+            assert_eq!(eq, before);
+            let pos = insert_text(&mut eq, &pos, r"+\frac{a}{b}", TypeStyle::default());
+            assert!(build_up(&mut eq, &pos, true).is_some());
+            assert_eq!(eq, crate::math_latex::parse_latex(&format!(r"{latex}+\frac{{a}}{{b}}")));
+        }
+        let mut eq = vec![MNode::Func { name: vec![MNode::Run(MRun::plain("custom"))], e: parse_linear("x+1") }];
+        let pos = MathPos::new(Vec::new(), units(&eq));
+        let before = eq.clone();
+        assert_eq!(build_up(&mut eq, &pos, true), None);
+        assert_eq!(eq, before, "A function without a lossless LaTeX spelling stays untouched");
+    }
+
+    /// A structure without a lossless spelling is a boundary; later LaTeX still builds up.
+    #[test]
+    fn latex_build_up_after_unsupported_structure() {
+        let opaque = MNode::Func { name: vec![MNode::Run(MRun::plain("custom"))], e: parse_linear("x+1") };
+        let mut eq = vec![opaque.clone()];
+        let pos = MathPos::new(Vec::new(), units(&eq));
+        let pos = insert_text(&mut eq, &pos, r"+\frac{a}{b}", TypeStyle::default());
+        assert!(build_up(&mut eq, &pos, true).is_some());
+        assert_eq!(eq.first(), Some(&opaque));
+        assert_eq!(eq.get(1..), Some(crate::math_latex::parse_latex(r"+\frac{a}{b}").as_slice()));
+    }
+
+    /// Raw trailing backslashes cannot escape or consume a following serialized structure.
+    #[test]
+    fn latex_build_up_keeps_structures_after_raw_backslashes() {
+        for prefix in ["\\", "\\\\", "a\\"] {
+            for latex in [r"\frac{a}{b}", r"\sqrt{x}", r"\sin{x+1}"] {
+                let mut eq = vec![MNode::Run(MRun::new(prefix))];
+                eq.extend(crate::math_latex::parse_latex(latex));
+                let before = eq.clone();
+                let pos = MathPos::new(Vec::new(), units(&eq));
+                assert_eq!(build_up(&mut eq, &pos, true), None, "{prefix}{latex}");
+                assert_eq!(eq, before, "{prefix}{latex}");
+            }
+        }
+    }
+
+    /// Rebuilding an expanded function sequence must not discard its last term in either mode.
+    #[test]
+    fn build_up_keeps_overlong_function_sequences() {
+        for latex in [false, true] {
+            let mut eq = crate::math_linear::parse(&vec!["sin(x)"; 2501].join("+"));
+            let before = eq.clone();
+            let pos = MathPos::new(Vec::new(), units(&eq));
+            assert!(to_linear(&eq).chars().count() > MAX_PARSE_CHARS);
+            assert_eq!(build_up(&mut eq, &pos, latex), None);
+            assert_eq!(eq, before, "latex={latex}");
+        }
+    }
+
+    /// Empty, ordinary, unfinished and unchanged arguments all refuse without tidying ancestors.
+    #[test]
+    fn refused_build_up_keeps_short_nested_tree_and_caret() {
+        for latex in [false, true] {
+            for text in ["", "x", "(x", r"\frac{x}{"] {
+                let num = if text.is_empty() { Vec::new() } else { vec![MNode::Run(MRun::new(text))] };
+                let pos = MathPos::new(vec![(2, 0)], units(&num));
+                let mut root = vec![
+                    MNode::Run(MRun::new("a")),
+                    MNode::Run(MRun { text: "b".into(), brk: Some(1), ..Default::default() }),
+                    MNode::Frac { kind: crate::math::FracKind::Bar, num, den: vec![MNode::Run(MRun::new("d"))] },
+                ];
+                let before = root.clone();
+                assert_eq!(build_up(&mut root, &pos, latex), None, "{text}, latex={latex}");
+                assert_eq!(root, before, "{text}, latex={latex}");
+                let moved = insert_text(&mut root, &pos, " ", TypeStyle::default());
+                assert_eq!(moved.path, pos.path);
+                assert_eq!(moved.off, pos.off + 1);
+            }
+        }
+    }
+
+    /// Refusing a nested build-up preserves ancestor indices, manual breaks and unsplit runs.
+    #[test]
+    fn overlong_build_up_refusal_keeps_nested_tree_and_caret() {
+        for latex in [false, true] {
+            let long = crate::math_linear::parse(&vec!["sin(x)"; 2501].join("+"));
+            let pos = MathPos::new(vec![(2, 0)], units(&long));
+            let mut root = vec![
+                MNode::Run(MRun::new("a")),
+                MNode::Run(MRun { text: "b".into(), brk: Some(1), ..Default::default() }),
+                MNode::Frac { kind: crate::math::FracKind::Bar, num: long, den: vec![MNode::Run(MRun::new("d"))] },
+            ];
+            let original = root.clone();
+            assert_eq!(build_up(&mut root, &pos, latex), None);
+            assert_eq!(root, original, "latex={latex}");
+            let moved = insert_text(&mut root, &pos, " ", TypeStyle::default());
+            assert_eq!(moved.path, pos.path);
+            assert_eq!(moved.off, pos.off + 1);
+            // Also refuse a partial run without leaving its speculative split in the tree.
+            let text = "x".repeat(MAX_PARSE_CHARS + 2);
+            let mut run = vec![MNode::Run(MRun { text, brk: Some(2), ..Default::default() })];
+            let original = run.clone();
+            let inside = MathPos::new(Vec::new(), MAX_PARSE_CHARS + 1);
+            assert_eq!(build_up(&mut run, &inside, latex), None);
+            assert_eq!(run, original);
+        }
+    }
+
+    /// The complete character limit remains available, including multibyte operands.
+    #[test]
+    fn build_up_accepts_the_full_character_limit() {
+        for latex in [false, true] {
+            let (prefix, suffix) = if latex { (r"\frac{a}{", "}") } else { ("a/", "") };
+            let count = MAX_PARSE_CHARS - prefix.chars().count() - suffix.chars().count();
+            let text = format!("{prefix}{}{suffix}", "π".repeat(count));
+            let mut eq = vec![MNode::Run(MRun::plain(text))];
+            let pos = MathPos::new(Vec::new(), units(&eq));
+            assert!(build_up(&mut eq, &pos, latex).is_some());
+            let [MNode::Frac { den, .. }] = eq.as_slice() else { panic!("fraction was not built") };
+            assert_eq!(to_linear(den).chars().count(), count);
+        }
     }
 
     #[test]

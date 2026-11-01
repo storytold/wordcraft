@@ -16,6 +16,9 @@ pub type Arg = Vec<MNode>;
 /// Deepest structure nesting kept (parsers stop here; layout draws nothing deeper).
 pub const MAX_DEPTH: usize = 64;
 
+/// Maximum input characters consumed by the UnicodeMath and LaTeX parsers.
+pub const MAX_PARSE_CHARS: usize = 20_000;
+
 /// An equation's structure, plus what's needed to write it back.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Math {
@@ -514,6 +517,11 @@ fn first_lin_char(n: &MNode) -> Option<char> {
 
 /// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
 fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
+    lin_grouped_operand(a, s, depth, ('(', ')'));
+}
+
+/// Write a simple operand bare, otherwise enclose it in the requested grouping characters.
+fn lin_grouped_operand(a: &[MNode], s: &mut String, depth: usize, brackets: (char, char)) {
     let mut inner = String::new();
     lin_arg(a, &mut inner, depth);
     let simple = match a {
@@ -530,9 +538,9 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
     if simple && !inner.is_empty() {
         s.push_str(&inner);
     } else {
-        s.push('(');
+        s.push(brackets.0);
         s.push_str(&inner);
-        s.push(')');
+        s.push(brackets.1);
     }
 }
 
@@ -557,6 +565,7 @@ fn lin_script(a: &[MNode], s: &mut String, depth: usize) {
     lin_operand(a, s, depth);
 }
 
+/// Write one bounded-depth math node as UnicodeMath, preserving explicit delimiter nodes.
 fn lin_node(n: &MNode, s: &mut String, depth: usize) {
     match n {
         MNode::Run(r) => s.push_str(&r.text),
@@ -645,7 +654,8 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         MNode::Func { name, e } => {
             lin_arg(name, s, depth);
             s.push('\u{2061}');
-            lin_operand(e, s, depth);
+            // Group a compound argument without introducing visible parentheses on the next build-up.
+            lin_grouped_operand(e, s, depth, ('〖', '〗'));
         }
         MNode::Lim { upper, e, lim } => {
             lin_operand(e, s, depth);
@@ -893,6 +903,35 @@ mod tests {
         let MNode::Matrix { rows, .. } = &n[0] else { panic!("{n:#?}") };
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].len(), 2);
+    }
+
+    /// Named functions retain explicit delimiters through parsing and linear serialization.
+    #[test]
+    fn a_function_keeps_its_visible_parentheses() {
+        // #4667, UnicodeMath 3.5: a function's parentheses remain visible on build-up.
+        for name in crate::math_linear::FUNCTION_NAMES {
+            let source = format!("{name}(3x-2)");
+            let nodes = parse_linear(&source);
+            let [MNode::Func { e, .. }] = nodes.as_slice() else { panic!("{source}: {nodes:#?}") };
+            assert!(matches!(e.as_slice(), [MNode::Delim { beg: Some('('), end: Some(')'), .. }]), "{source}: {e:#?}");
+            assert_eq!(parse_linear(&to_linear(&nodes)), nodes, "{source}");
+        }
+        for source in ["sin((x))", "cos^2(x+1)", "ln(x)^2", "log_2(x)", "sin(x)y", "cos[x+1]", "ln{2x}"] {
+            let nodes = parse_linear(source);
+            assert_eq!(parse_linear(&to_linear(&nodes)), nodes, "{source}");
+        }
+    }
+
+    /// Compound function arguments use invisible grouping and retain their parsed structure.
+    #[test]
+    fn a_function_groups_unparenthesized_arguments_invisibly() {
+        for source in ["sin xy", "ln 3x", "sin〖x+1〗", "cos〖(x+1)y〗", "sin〖〗"] {
+            let nodes = parse_linear(source);
+            assert_eq!(parse_linear(&to_linear(&nodes)), nodes, "{source}: {}", to_linear(&nodes));
+        }
+        let nodes = vec![MNode::Func { name: vec![MNode::Run(MRun::plain("sin"))], e: vec![run("x+1")] }];
+        assert_eq!(to_linear(&nodes), "sin⁡〖x+1〗");
+        assert_eq!(parse_linear(&to_linear(&nodes)), nodes);
     }
 
     #[test]
