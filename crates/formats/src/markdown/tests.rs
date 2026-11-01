@@ -558,6 +558,30 @@ fn ordered_list_keeps_start_number() {
     assert_eq!(export(&import("5. a\n6. b")).trim_end(), "5. a\n6. b");
 }
 
+/// A numbered list nested under one item and a bulleted one under another each keep their kind:
+/// the nested level shared one list definition, so the first nested kind (a bullet) won for both
+/// and the numbered sub-list came back bulleted.
+#[test]
+fn nested_lists_of_different_kinds_keep_their_kinds() {
+    let src = "1. one\n   - nested bullet\n2. two\n   1. nested one\n   2. nested two\n3. three\n   - bullet again\n";
+    let want = "1. one\n    - nested bullet\n2. two\n    1. nested one\n    2. nested two\n3. three\n    - bullet again";
+    let doc = import(src);
+    assert_eq!(export(&doc).trim_end(), want);
+    // The top level keeps counting across the nested lists (1, 2, 3 above).
+    // The other way round: a bulleted list with a numbered one inside, a numbered one inside the
+    // next item, and a bulleted one under that.
+    let src = "- a\n  1. x\n  2. y\n- b\n  - z\n    1. deep\n";
+    let want = "- a\n    1. x\n    2. y\n- b\n    - z\n        1. deep";
+    assert_eq!(export(&import(src)).trim_end(), want);
+    // Kinds that mix only deeper down: each sub-list keeps its own kind there too.
+    let src = "- parent\n  - one\n    - bullet\n  - two\n    1. numbered\n    2. again\n";
+    let want = "- parent\n    - one\n        - bullet\n    - two\n        1. numbered\n        2. again";
+    assert_eq!(export(&import(src)).trim_end(), want);
+    // Consistent nesting is left as it was: one list, its numbering unbroken.
+    let doc = import("1. a\n   1. b\n   2. c\n2. d\n   1. e\n");
+    assert_eq!(doc.numbering.nums.len(), 1, "one list when no level mixes kinds");
+}
+
 #[test]
 fn lines_after_line_break_stay_in_paragraph() {
     use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};

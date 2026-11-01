@@ -289,6 +289,47 @@ impl<'a> Builder<'a> {
         nid
     }
 
+    /// The list each item of `group` belongs to when a nested level mixes kinds: `top` for the
+    /// top-level items, and a list of its own for each nested sub-list (consecutive siblings of
+    /// one kind under one parent item, their own sub-lists aside). Each list then has one kind at
+    /// the one level it uses, however deep the kinds mix.
+    fn nested_run_lists(&mut self, group: &[ListInfo], top: u32) -> Vec<u32> {
+        let mut ids = Vec::with_capacity(group.len());
+        // The sub-list open at each level: its list and whether it is numbered.
+        let mut open: [Option<(u32, bool)>; 9] = [None; 9];
+        for (at, item) in group.iter().enumerate() {
+            let level = item.level.min(8) as usize;
+            // An item closes the sub-lists below it, and one of the other kind at its own level.
+            for o in open.iter_mut().skip(level + 1) {
+                *o = None;
+            }
+            if level == 0 {
+                ids.push(top);
+                continue;
+            }
+            let id = match open.get(level).copied().flatten() {
+                Some((id, ordered)) if ordered == item.ordered => id,
+                _ => {
+                    let siblings: Vec<ListInfo> = group
+                        .get(at..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take_while(|g| g.level.min(8) as usize > level || (g.level.min(8) as usize == level && g.ordered == item.ordered))
+                        .filter(|g| g.level.min(8) as usize == level)
+                        .copied()
+                        .collect();
+                    let id = self.new_list(&siblings);
+                    if let Some(o) = open.get_mut(level) {
+                        *o = Some((id, item.ordered));
+                    }
+                    id
+                }
+            };
+            ids.push(id);
+        }
+        ids
+    }
+
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
         let mut out = Blocks::new();
         let mut i = 0;
@@ -312,9 +353,18 @@ impl<'a> Builder<'a> {
                         j += 1;
                     }
                     let num = self.new_list(&group);
-                    for q in blocks.get(i..j).unwrap_or(&[]) {
+                    // One list holds one kind per level, so a level with both numbered and
+                    // bulleted items (a numbered list nested under one item, a bulleted one under
+                    // the next) gives each nested run its own list: it keeps its kind, numbering
+                    // restarts for it, and the top-level items go on in `num`.
+                    let mixed = (1..9).any(|l| {
+                        let mut kinds = group.iter().filter(|g| g.level.min(8) as usize == l).map(|g| g.ordered);
+                        kinds.next().is_some_and(|first| kinds.any(|k| k != first))
+                    });
+                    let lists: Vec<u32> = if mixed { self.nested_run_lists(group.as_slice(), num) } else { vec![num; group.len()] };
+                    for (q, id) in blocks.get(i..j).unwrap_or(&[]).iter().zip(lists) {
                         if let FBlock::Para(q) = q {
-                            let para = self.para(q, Some(num));
+                            let para = self.para(q, Some(id));
                             out.push(para_block(para));
                         }
                     }
