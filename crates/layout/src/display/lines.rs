@@ -672,7 +672,7 @@ pub(crate) fn leader_xs(left: f32, right: f32, pitch: f32) -> Vec<f32> {
         return Vec::new();
     }
     let first = (left / pitch - LEADER_GRID_SLACK).ceil() as i64;
-    (first..first + MAX_LEADER_GLYPHS).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + LEADER_FIT_SLACK).collect()
+    (first..first.saturating_add(MAX_LEADER_GLYPHS)).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + LEADER_FIT_SLACK).collect()
 }
 
 /// How far, in grid places, `left` may be past a place and still start the leader there: so text
