@@ -195,7 +195,7 @@ impl Writer<'_> {
         if ink && !direct_ink {
             Self::ink_transform(&mut root, (graphic.w, graphic.h), (*gw, *gh), float, 0);
         }
-        // Native ink, or an Office 2016 chart (`cx:chart`) or 3D model with its fallback picture.
+        // Native ink, or an Office 2016 chart (`cx:chart`) or 3D model with any fallback picture.
         let alternate = (root.name == "mc:AlternateContent").then_some(&root);
         let fallback = alternate.and_then(|e| e.child("mc:Fallback"));
         let choice = alternate.and_then(|e| e.child("mc:Choice"));

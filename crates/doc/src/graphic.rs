@@ -71,7 +71,7 @@ pub enum GraphicKind {
     Diagram,
     /// Word's native InkML, kept opaque; displayed as its fallback picture when available.
     Ink,
-    /// A 3D model (`am3d:model3d` and its glTF part), kept opaque; displayed as its picture.
+    /// A 3D model (`am3d:model3d` and its glTF part), kept opaque; displayed as its fallback picture when available.
     Model3d,
 }
 

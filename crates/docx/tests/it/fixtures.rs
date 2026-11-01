@@ -1936,6 +1936,31 @@ fn office_2016_chart_with_no_fallback_keeps_its_chart() {
 }
 
 #[test]
+fn model_3d_outside_an_alternate_is_kept() {
+    let mut files = unzip(&model3d_docx(true));
+    let doc = text(&files, "word/document.xml");
+    let (head, rest) = doc.split_once("<mc:AlternateContent>").unwrap();
+    let (_, rest) = rest.split_once("<w:drawing>").unwrap();
+    let (drawing, rest) = rest.split_once("</mc:Choice>").unwrap();
+    let (_, tail) = rest.split_once("</mc:AlternateContent>").unwrap();
+    files.insert("word/document.xml".into(), format!(r#"{head}<w:drawing xmlns:am3d="{MODEL3D_NS}">{drawing}{tail}"#).into_bytes());
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    let mut d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    for round in 0..2 {
+        let g = graphics(&d);
+        let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("round {round}: {g:?}") };
+        assert_eq!(graphic.kind, wordcraft_doc::graphic::GraphicKind::Model3d);
+        let out = wordcraft_docx::write(&d).unwrap();
+        let saved = unzip(&out);
+        let body = text(&saved, "word/document.xml");
+        let [model_id] = attr_values(&body, "am3d:model3d", "r:embed").try_into().unwrap_or_else(|_| panic!("model lost: {body}"));
+        let doc_rels = text(&saved, "word/_rels/document.xml.rels");
+        assert_eq!(saved.get(&part_at("word", &rel(&doc_rels, &model_id).1)).map(Vec::as_slice), Some(GLB));
+        d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
+#[test]
 fn model_3d_whose_picture_is_gone_opens_without_it() {
     // The model's own `am3d:raster` names the picture too, so it can't be written back whole:
     // the rest of the document stays and the save points at nothing missing.
