@@ -1,6 +1,7 @@
 use super::ctx::{Ctx, page_anchored};
 use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, line_drops, place_objects, rel_exclusions, wrap_area,
+    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, line_drops, place_objects, rel_exclusions,
+    settle_line_drops, wrap_area,
 };
 use super::page::PageFrame;
 use super::placed::Placed;
@@ -231,13 +232,21 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
             Block::Para(p) => {
                 let label = ctx.next_label(p);
                 let listed = label.is_some();
+                // Laid out again below (in a frame, around floats): each time from the same
+                // equation number, so its numbered equations count once.
+                let eq_start = ctx.eq_count;
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
                 // the flow.
                 if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
-                    let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
+                    let pf = if (fw - width).abs() > 0.01 {
+                        ctx.eq_count = eq_start;
+                        ctx.para_labelled(p, fw, table, &[], label)
+                    } else {
+                        pl
+                    };
                     let h = match fr.h {
                         Some(h) if fr.h_exact => h,
                         Some(h) => h.max(pf.height),
@@ -280,9 +289,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
                 let excl_mark = excl.len();
                 // Objects placed from a line after the first start at that line (#3978): placed
-                // again once the lines are known, and the text laid out around them there.
-                let mut drops = HashMap::new();
-                for pass in 0..2 {
+                // again once the lines are known, and the text laid out around them there, until
+                // the lines stop moving them (`settle_line_drops`).
+                let mut relaid = false;
+                let mut place = |drops: &HashMap<usize, f32>| {
                     excl.truncate(excl_mark);
                     floats.clear();
                     pinned.clear();
@@ -311,18 +321,17 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         floats.insert(oi, r);
                     }
                     let rel = rel_exclusions(&excl, 0.0, y);
-                    if !rel.is_empty() || pass > 0 {
+                    // Laid out again when there is anything to wrap around, or was before.
+                    if !rel.is_empty() || relaid {
+                        ctx.eq_count = eq_start;
                         pl = ctx.para_labelled(p, width, table, &rel, label.clone());
-                    }
-                    if pass > 0 {
-                        break;
+                        relaid = true;
                     }
                     let room = if above { 0.0 } else { Edges::own(&pl, 0, pl.lines.len()).top };
-                    drops = line_drops(p, &pl, y - para_top, room);
-                    if drops.is_empty() {
-                        break;
-                    }
-                }
+                    line_drops(p, &pl, y - para_top, room)
+                };
+                let first = place(&HashMap::new());
+                settle_line_drops(first, place);
                 let mut edges = Edges::own(&pl, 0, pl.lines.len());
                 if above {
                     edges.top = 0.0;

@@ -346,18 +346,55 @@ pub(crate) fn anchor_floats(
     // Objects placed from a line after the first start at that line (#3978): placed again once
     // the lines are known, and the paragraph laid out around them there. A line that starts below
     // the page's text (on a later page) keeps the paragraph's top, as before.
+    // Moving a wrapped object can move its anchor to another line: placed again until the lines
+    // stop moving it ([`settle_line_drops`]).
     if placing && p.objects.iter().filter_map(floating).any(|(_, _, f)| f.v_rel == Anchor::Line) {
-        let room = if joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None) { 0.0 } else { Edges::own(&pl, 0, pl.lines.len()).top };
-        let mut drops = line_drops(p, &pl, before, room);
-        drops.retain(|_, d| y0 - before + *d < pb.bottom);
-        if !drops.is_empty() {
-            rects = place_anchored(ctx, pb, anchor, &drops);
+        let joined_above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
+        let bottom = pb.bottom;
+        let measure = |pl: &ParaLayout| {
+            let room = if joined_above { 0.0 } else { Edges::own(pl, 0, pl.lines.len()).top };
+            let mut drops = line_drops(p, pl, before, room);
+            drops.retain(|_, d| y0 - before + *d < bottom);
+            drops
+        };
+        let first = measure(&pl);
+        settle_line_drops(first, |drops| {
+            rects = place_anchored(ctx, pb, anchor, drops);
             ctx.eq_count = eq_start;
             rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
             pl = ctx.para_labelled(p, width, None, &rel, label.clone());
-        }
+            measure(&pl)
+        });
     }
     (rects, pl, rel)
+}
+
+/// The most times [`settle_line_drops`] lays a paragraph out again.
+pub(crate) const LINE_DROP_PASSES: usize = 4;
+
+/// Settles the objects of a paragraph placed from a later line ([`line_drops`]). `drops` are
+/// those its layout with every such object at the paragraph's top gives; `relayout` places the
+/// objects that far down, lays the paragraph out around them and returns the drops that layout
+/// gives. Wrapped text can move an anchor to another line once its object moves, so this goes
+/// on until a layout gives the drops it was made with (each object at the top of its anchor's
+/// line), at most [`LINE_DROP_PASSES`] times: an anchor that keeps moving between lines (the
+/// object pushing it down a line, and from there no longer in its way) keeps the last layout.
+/// No drops (every anchor on the first line) places the objects at the paragraph's top. A
+/// paragraph with no drops is not laid out again. Returns how many times it was.
+pub(crate) fn settle_line_drops(mut drops: HashMap<usize, f32>, mut relayout: impl FnMut(&HashMap<usize, f32>) -> HashMap<usize, f32>) -> usize {
+    // The drops the current layout was made with: none, the objects at the paragraph's top.
+    let mut placed = HashMap::new();
+    let mut passes = 0;
+    while passes < LINE_DROP_PASSES && !same_drops(&drops, &placed) {
+        let next = relayout(&drops);
+        placed = std::mem::replace(&mut drops, next);
+        passes += 1;
+    }
+    passes
+}
+
+fn same_drops(a: &HashMap<usize, f32>, b: &HashMap<usize, f32>) -> bool {
+    a.len() == b.len() && a.iter().all(|(k, d)| b.get(k).is_some_and(|e| (d - e).abs() < 0.01))
 }
 
 /// Places the floating objects of [`anchor_floats`]'s paragraph on the page and adds their wrap
