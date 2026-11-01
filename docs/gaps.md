@@ -375,3 +375,5 @@ Recipient label generation (#4880) now includes all selected recipients across a
 ## Layout validation fonts
 
 Four geometry-dependent regression controls request Source Sans 3 explicitly. Platform-installed substitutes otherwise change their expected line counts. Assertions remain unchanged; renderer font metrics and substitution gaps remain open.
+
+Text-box quarter turns: anchored 90/270-degree captions follow the shape; arbitrary-angle text rotation remains outside this fix.

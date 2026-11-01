@@ -439,3 +439,5 @@ and balloon layout while supplying explicit cell identity at every box call. The
 probes above are historical; this rebase has no new native or other-platform measurement.
 
 Repeated table-cell control, 12 October 2026: four same-style contextual paragraphs with 6 pt before/after and exactly 24 pt lines retain zero extra gap at every boundary. The body control uses the same fixture. This is an original specification-based regression; no new native Word table comparison was run.
+
+Quarter-turned text boxes rotate their text with the shape. Upright text remains upright; embedded drawing frames compose the quarter turn.

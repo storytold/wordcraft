@@ -4,7 +4,7 @@ use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
 use super::{
     Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect,
-    SectionProps, Spin, StoryRef, Wrap, WrapText, contour, display, para, textbox,
+    SectionProps, Spin, StoryRef, TextDirection, Wrap, WrapText, contour, display, para, textbox,
 };
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
@@ -509,24 +509,38 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
-            // Its text (a group: its text boxes', each where the group's turn carries it; the
-            // text itself stays upright), unless the box budget says no (a box inside itself,
-            // too deep, too many).
+            // A group's turn carries each box; group and member spins also turn its text.
+            // Upright text stays upright, and shape flips don't mirror the lettering.
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            let boxes: Vec<(u32, Rect)> = match obj {
+            let boxes: Vec<(u32, Rect, Spin)> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
-                        c.text_box()
-                            .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
-                            .map(|id| (id, carried(r, float.spin(), centre)))
+                        c.text_box().filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)).map(|id| {
+                            (id, carried(r, float.spin(), centre), c.frame().map_or(Spin::default(), |(_, _, f)| f.spin()).within(float.spin()))
+                        })
                     })
                     .collect(),
-                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+                _ => text_box.map(|id| (id, rect, float.spin())).into_iter().collect(),
             };
-            for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+            for (id, rect, spin) in boxes {
+                let mut items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                let upright = ctx.doc.parts.get(&id).is_some_and(|part| part.body.upright);
+                let turn = if (spin.deg - 90.0).abs() < 0.01 {
+                    TextDirection::Down
+                } else if (spin.deg - 270.0).abs() < 0.01 {
+                    TextDirection::Up
+                } else {
+                    TextDirection::Horizontal
+                };
+                if !upright && turn.is_turned() {
+                    let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                    let (ox, oy) = if turn == TextDirection::Down { (cx + cy, cy - cx) } else { (cx - cy, cy + cx) };
+                    for item in &mut items {
+                        item.turn(turn, ox, oy);
+                    }
+                }
                 layer.extend(items);
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.

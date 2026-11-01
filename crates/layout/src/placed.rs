@@ -170,15 +170,14 @@ impl Placed {
                     *t = turn;
                 }
             }
-            Placed::Fill { rect, .. }
-            | Placed::Image { rect, .. }
-            | Placed::Shape { rect, .. }
-            | Placed::Graphic { rect, .. }
-            | Placed::Cell { rect, .. } => {
+            Placed::Fill { rect, .. } | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
-            Placed::Object { rect, origin, .. } => {
-                *rect = turn_rect(turn, x, y, *rect);
+            Placed::Image { rect, spin, .. } | Placed::Shape { rect, spin, .. } | Placed::Graphic { rect, spin, .. } => {
+                turn_drawing(rect, spin, turn, x, y);
+            }
+            Placed::Object { rect, spin, origin, .. } => {
+                turn_drawing(rect, spin, turn, x, y);
                 (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
             }
             Placed::Clip { rect, items, .. } => {
@@ -193,6 +192,18 @@ impl Placed {
             }
         }
     }
+}
+
+// A drawing keeps its unrotated frame; carry its centre and compose the frame's turn.
+fn turn_drawing(rect: &mut Rect, spin: &mut Spin, turn: TextDirection, x: f32, y: f32) {
+    let (cx, cy) = turn_point(turn, x, y, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let degrees = match turn {
+        TextDirection::Horizontal => 0.0,
+        TextDirection::Down => 90.0,
+        TextDirection::Up => 270.0,
+    };
+    *rect = Rect::new(cx - rect.w / 2.0, cy - rect.h / 2.0, rect.w, rect.h);
+    *spin = spin.within(Spin::new(degrees, false, false));
 }
 
 /// Where point (`u`, `v`) of a frame turned `turn` lands on the page, the frame's origin being
