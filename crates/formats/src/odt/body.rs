@@ -27,8 +27,8 @@ pub(super) struct Body<'a> {
     styles: &'a Styles,
     zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>,
     /// The package's entry names and its manifest's media types, for embedded objects.
-    pub(super) entries: Vec<String>,
-    pub(super) manifest: HashMap<String, String>,
+    pub(super) entries: &'a [String],
+    pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
@@ -121,8 +121,8 @@ impl<'a> Body<'a> {
         Body {
             styles,
             zip,
-            entries: Vec::new(),
-            manifest: HashMap::new(),
+            entries: &[],
+            manifest: None,
             containers: vec![Vec::new()],
             fmt: Vec::new(),
             para: None,
@@ -759,7 +759,7 @@ impl Body<'_> {
                 }
             }
             if fr.4.is_none() && fr.5.is_none() {
-                fr.6 = super::objects::gather(href, ole, &self.entries, &self.manifest, &mut *self.zip);
+                fr.6 = super::objects::gather(href, ole, self.entries, self.manifest, &mut *self.zip);
                 // A replacement picture read before the object.
                 if let Some(o) = &mut fr.6 {
                     o.replacement = fr.2.clone().map(std::sync::Arc::new);

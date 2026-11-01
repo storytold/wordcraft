@@ -238,7 +238,8 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
                 let blocks = model::part_flow(
                     doc,
                     &part.blocks,
-                    model::FlowOpts { fields: true, lists: true, chars: true, paras: true, ..Default::default() },
+                    // Pictures, shapes, text boxes, charts and objects too, as in the body.
+                    model::FlowOpts { fields: true, lists: true, chars: true, paras: true, boxes: true, ..Default::default() },
                 );
                 w.blocks(&blocks, &mut body, 0);
             }

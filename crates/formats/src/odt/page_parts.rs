@@ -66,7 +66,14 @@ impl Parts {
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
 /// [`add`] puts those parts into the document.
-pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Parts {
+/// `objects`: the package's entry names and manifest media types, for embedded objects.
+pub(super) fn read(
+    xml: &[u8],
+    styles: &Styles,
+    pages: &mut Pages,
+    fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+    objects: (&[String], &std::collections::HashMap<String, String>),
+) -> Parts {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
     // The slot being read, its nesting depth and whether it is kept.
@@ -116,6 +123,7 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     for (name, kind, evs) in found {
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
+        (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
         for ev in evs {
             reader.feed(ev);
         }

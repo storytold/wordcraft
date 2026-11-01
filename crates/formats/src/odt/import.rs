@@ -432,10 +432,10 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
+    let objects = (entries.as_slice(), &manifest);
+    let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
-    body.entries = entries;
-    body.manifest = manifest;
+    (body.entries, body.manifest) = (objects.0, Some(objects.1));
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
     let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());

@@ -132,3 +132,24 @@ fn a_flat_document_holds_its_objects_and_their_pictures_inline() {
     let ole = crate::odt::tests::entry(&saved, "content.xml");
     assert!(ole.contains("<draw:object-ole"), "{ole}");
 }
+
+#[test]
+fn an_object_in_a_header_is_kept_too() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T} {NS_D}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1.5cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Logo <draw:frame svg:width="1in" svg:height="0.5in"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame></text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Body.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[
+        ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Object 1/content.xml", SHEET.as_bytes()),
+        ("ObjectReplacements/Object 1", METAFILE),
+    ]);
+    let saved = export(&import(&pkg).unwrap()).unwrap();
+    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    assert!(z.file_names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.file_names().collect::<Vec<_>>());
+    assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));
+}

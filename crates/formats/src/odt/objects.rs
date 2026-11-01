@@ -43,7 +43,7 @@ pub(in crate::odt) fn gather(
     href: &str,
     ole: bool,
     entries: &[String],
-    manifest: &HashMap<String, String>,
+    manifest: Option<&HashMap<String, String>>,
     fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
 ) -> Option<OdfObject> {
     let path = inside(href)?;
@@ -64,7 +64,7 @@ pub(in crate::odt) fn gather(
     if files.is_empty() {
         return None;
     }
-    let mime = manifest.get(&format!("{path}/")).or_else(|| manifest.get(path)).cloned().unwrap_or_else(|| {
+    let mime = manifest.and_then(|m| m.get(&format!("{path}/")).or_else(|| m.get(path))).cloned().unwrap_or_else(|| {
         if ole {
             OLE_MIME.to_string()
         } else {
