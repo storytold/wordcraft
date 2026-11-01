@@ -2258,12 +2258,13 @@ fn style_inherits_its_declared_base() {
                 // A corrupt cycle must neither hang nor crash.
                 (1, 4, "Loop A", Vec::new(), Vec::new()),
                 (1, 3, "Loop B", Vec::new(), Vec::new()),
+                (1, 5, "Self", Vec::new(), Vec::new()),
             ],
             fonts: vec!["Times New Roman"],
             chpx_runs: vec![(0, Vec::new())],
             papx_entries: vec![(0, 1, Vec::new())],
         };
-        let extra = RichExtra { style_next: vec![0x0FFF, next, 0x0FFF, 0x0FFF, 0x0FFF], ..Default::default() };
+        let extra = RichExtra { style_next: vec![0x0FFF, next, 0x0FFF, 0x0FFF, 0x0FFF, 0x0FFF], ..Default::default() };
         let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
         let style = |name: &str| doc.styles.styles.iter().find(|s| s.name == name).cloned().expect("style");
         let derived = style("Derived");
@@ -2273,6 +2274,7 @@ fn style_inherits_its_declared_base() {
         assert_eq!(grand.based_on.as_deref(), Some("Derived"));
         assert_eq!((grand.chr.bold, grand.chr.italic), (Some(true), Some(true)), "two-level chain");
         assert_eq!(style("Normal").based_on, None);
+        assert_eq!(style("Self").based_on, None, "based on itself");
         assert_eq!(para0(&doc).props.style.as_deref(), Some("Derived"));
     }
 }
