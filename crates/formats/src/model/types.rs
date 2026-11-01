@@ -238,6 +238,9 @@ pub struct FlowOpts {
     pub notes: bool,
     /// Comments as [`Inline::Comment`] and [`Inline::CommentEnd`] (otherwise left out).
     pub comments: bool,
+    /// Lists with their identity and labels ([`ListInfo::list`], [`ListInfo::label`]; otherwise
+    /// consecutive items form one list in the default look of its kind).
+    pub lists: bool,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -281,6 +284,103 @@ pub struct ListInfo {
     pub level: u8,
     /// Number of the first item of an ordered list (1 unless the source says otherwise).
     pub start: u32,
+    /// The list the paragraph belongs to, when the source tells its lists apart (ODT): items
+    /// of one list share its number, wherever they are, and a different number starts another
+    /// list. 0: not stated (consecutive items form one list).
+    pub list: u32,
+    /// How the paragraph's level shows its number or bullet, when the source says.
+    pub label: Option<Label>,
+}
+
+impl Default for ListInfo {
+    fn default() -> Self {
+        ListInfo { ordered: false, level: 0, start: 1, list: 0, label: None }
+    }
+}
+
+/// A list label's prefix or suffix (`(`, `.`, `)`, `Chapter `), at most [`Affix::MAX`] bytes
+/// of UTF-8 (kept inline so list paragraphs stay small).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Affix {
+    bytes: [u8; Affix::MAX],
+    len: u8,
+}
+
+impl Affix {
+    pub const MAX: usize = 12;
+
+    /// The characters of `s` that fit in [`Affix::MAX`] bytes, without control characters and
+    /// `%` (which would read as a number placeholder).
+    pub fn new(s: &str) -> Affix {
+        let mut a = Affix::default();
+        for c in s.chars().filter(|c| !c.is_control() && *c != '%') {
+            let mut buf = [0u8; 4];
+            let enc = c.encode_utf8(&mut buf).as_bytes();
+            let at = a.len as usize;
+            let Some(slot) = a.bytes.get_mut(at..at + enc.len()) else { break };
+            slot.copy_from_slice(enc);
+            a.len += enc.len() as u8;
+        }
+        a
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.bytes.get(..self.len as usize).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("")
+    }
+}
+
+/// How a list level shows its label: number format, text around the number and the levels
+/// shown (`1.2.`), or, for a bulleted level, its bullet (as the prefix).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Label {
+    pub format: wordcraft_doc::section::NumFormat,
+    pub prefix: Affix,
+    pub suffix: Affix,
+    /// Levels shown, this one and those above it (1: only its own number).
+    pub shown: u8,
+}
+
+impl Label {
+    /// A bulleted level's label: `bullet`, or the default bullet.
+    pub fn bulleted(bullet: Option<char>) -> Label {
+        let mut b = [0u8; 4];
+        let prefix = bullet.map(|c| Affix::new(c.encode_utf8(&mut b))).unwrap_or_default();
+        Label { format: wordcraft_doc::section::NumFormat::Bullet, prefix, suffix: Affix::default(), shown: 1 }
+    }
+
+    /// The bullet of a bulleted level, when it names one.
+    pub fn bullet(&self) -> Option<char> {
+        (self.format == wordcraft_doc::section::NumFormat::Bullet).then(|| self.prefix.as_str().chars().next()).flatten()
+    }
+
+    /// Word's level text for 0-based `level`: `%1.`, `(%1)`, `%1.%2.`, or the bullet.
+    pub fn text(&self, level: u8) -> String {
+        let level = level.min(8);
+        if self.format == wordcraft_doc::section::NumFormat::Bullet {
+            return self.bullet().unwrap_or('•').to_string();
+        }
+        let shown = self.shown.clamp(1, level + 1);
+        let numbers: Vec<String> = (level + 2 - shown..=level + 1).map(|n| format!("%{n}")).collect();
+        format!("{}{}{}", self.prefix.as_str(), numbers.join("."), self.suffix.as_str())
+    }
+
+    /// The label a Word level text (`%1.`, `(%1)`, `%1.%2.`, a bullet) shows.
+    pub fn of_level(format: wordcraft_doc::section::NumFormat, text: &str) -> Label {
+        if format == wordcraft_doc::section::NumFormat::Bullet {
+            return Label::bulleted(text.chars().next());
+        }
+        let first = text.find('%').unwrap_or(text.len());
+        // The suffix follows the last placeholder's digit.
+        let last =
+            text.rfind('%').map(|i| i + text.get(i + 1..).and_then(|r| r.chars().next()).map_or(1, |c| 1 + c.len_utf8())).unwrap_or(text.len());
+        let shown = text.matches('%').count().clamp(1, 9) as u8;
+        Label {
+            format,
+            prefix: Affix::new(text.get(..first).unwrap_or("")),
+            suffix: Affix::new(text.get(last.min(text.len())..).unwrap_or("")),
+            shown,
+        }
+    }
 }
 
 /// Paragraph spacing and indents (points) that a source states on the paragraph itself (RTF);

@@ -168,8 +168,8 @@ pub(super) struct Body<'a> {
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
     item_used: Vec<bool>,
-    /// Lists outside the table cells being read.
-    lists_saved: Vec<(Vec<(Option<String>, bool)>, Vec<bool>)>,
+    /// Lists outside the table cells being read, and the list number there.
+    lists_saved: Vec<(Vec<(Option<String>, bool)>, Vec<bool>, u32)>,
     tables: Vec<TableB>,
     cells: Vec<Cell>,
     pub(super) in_text: bool,
@@ -209,6 +209,13 @@ pub(super) struct Body<'a> {
     field: Option<OpenField>,
     /// The note or comment being read.
     note: Option<OpenNote>,
+    /// The list being read (its flow number, [`ListInfo::list`]), the last one, the next number,
+    /// lists by `xml:id`, and a start value an item set for the items from it on.
+    list_id: u32,
+    last_list: Option<u32>,
+    next_list: u32,
+    list_xml_ids: HashMap<String, u32>,
+    item_start: Option<u32>,
     /// Comments by `office:name`: their flow ids; and the next flow id.
     comment_names: HashMap<String, u32>,
     next_comment: u32,
@@ -249,6 +256,7 @@ struct OpenNote {
     para_cont: bool,
     lists: Vec<(Option<String>, bool)>,
     item_used: Vec<bool>,
+    list_id: u32,
     /// Stack heights when the note began: what the note opens and leaves open goes with it.
     containers: usize,
     tables: usize,
@@ -309,7 +317,38 @@ impl<'a> Body<'a> {
             note: None,
             comment_names: HashMap::new(),
             next_comment: 0,
+            list_id: 0,
+            last_list: None,
+            next_list: 1,
+            list_xml_ids: HashMap::new(),
+            item_start: None,
         }
+    }
+
+    /// A new list number.
+    fn new_list_id(&mut self) -> u32 {
+        let id = self.next_list;
+        self.next_list = self.next_list.saturating_add(1);
+        id
+    }
+
+    /// A top-level `text:list` starting (ODF 1.3 §5.3.1): a list of its own, unless it continues
+    /// the one before it (`text:continue-numbering`) or the one it names (`text:continue-list`).
+    fn start_list_id(&mut self, a: &Attrs) {
+        let named = get(a, "text:continue-list").and_then(|n| self.list_xml_ids.get(n)).copied();
+        let before = (get(a, "text:continue-numbering").is_some_and(|v| v.trim() == "true")).then_some(self.last_list).flatten();
+        let id = match named.or(before) {
+            Some(id) => id,
+            None => self.new_list_id(),
+        };
+        if let Some(x) = get(a, "xml:id").filter(|x| x.len() <= MAX_INFO_CHARS)
+            && self.list_xml_ids.len() < MAX_SECTIONS
+        {
+            self.list_xml_ids.entry(x.to_string()).or_insert(id);
+        }
+        self.list_id = id;
+        self.last_list = Some(id);
+        self.item_start = None;
     }
 
     pub(super) fn feed(&mut self, ev: Ev) {
@@ -441,8 +480,9 @@ impl Body<'_> {
             && self.lists.last().is_some_and(|l| l.1)
         {
             let style = self.lists.iter().rev().find_map(|l| l.0.clone());
-            let ordered = style.and_then(|s| self.styles.lists.get(&s)).and_then(|v| v.get(lv.min(9)).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv.min(8) as u8, start: 1 });
+            let level = style.and_then(|s| self.styles.lists.get(&s)).and_then(|v| v.get(lv.min(9)).copied()).unwrap_or_default();
+            let start = self.item_start.take().unwrap_or(level.start);
+            p.list = Some(ListInfo { ordered: level.ordered, level: lv.min(8) as u8, start, list: self.list_id, label: level.label });
             self.para_cont = self.item_used.last().copied().unwrap_or(false);
             if let Some(u) = self.item_used.last_mut() {
                 *u = true;
@@ -639,7 +679,7 @@ impl Body<'_> {
         if self.tracked_context(q, a) {
             return;
         }
-        if self.start_inline(q, a) || self.start_note_part(q, a) {
+        if self.start_inline(q, a) || self.start_note_part(q, a) || self.start_list_part(q, a) {
             return;
         }
         match local(q) {
@@ -685,23 +725,6 @@ impl Body<'_> {
                     if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1)) } else { None };
                 self.start_para(get(a, "text:style-name"), h);
             }
-            "list" => {
-                self.end_para();
-                if self.lists.len() < 64 {
-                    self.lists.push((get(a, "text:style-name").map(String::from), false));
-                    self.item_used.push(false);
-                } else {
-                    self.skip = 1;
-                }
-            }
-            "list-item" | "list-header" => {
-                if let Some(l) = self.lists.last_mut() {
-                    l.1 = true;
-                }
-                if let Some(u) = self.item_used.last_mut() {
-                    *u = false;
-                }
-            }
             "table" if q.starts_with("table:") => {
                 self.end_para();
                 // A body table whose style names a master page starts that page (ODF 1.3 §19.509).
@@ -739,7 +762,7 @@ impl Body<'_> {
                 }
                 self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, ..Default::default() });
                 self.containers.push(Vec::new());
-                self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used)));
+                self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
             }
             "covered-table-cell" => {
                 if let Some(t) = self.tables.last_mut() {
@@ -1001,6 +1024,43 @@ impl Body<'_> {
         true
     }
 
+    /// A list, list item or list header starting: true when handled.
+    fn start_list_part(&mut self, q: &str, a: &Attrs) -> bool {
+        if !q.starts_with("text:") {
+            return false;
+        }
+        match local(q) {
+            "list" => {
+                self.end_para();
+                if self.lists.is_empty() {
+                    self.start_list_id(a);
+                }
+                if self.lists.len() < 64 {
+                    self.lists.push((get(a, "text:style-name").map(String::from), false));
+                    self.item_used.push(false);
+                } else {
+                    self.skip = 1;
+                }
+            }
+            "list-item" | "list-header" => {
+                // An item restarting the numbering begins a list of its own from there.
+                if let Some(v) = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()) {
+                    self.list_id = self.new_list_id();
+                    self.last_list = Some(self.list_id);
+                    self.item_start = Some(v.min(32_767));
+                }
+                if let Some(l) = self.lists.last_mut() {
+                    l.1 = true;
+                }
+                if let Some(u) = self.item_used.last_mut() {
+                    *u = false;
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// A note or its citation starting: true when handled. A note inside a note (allowed by the
     /// schema, never written by Word or LibreOffice), or one in deleted text or a frame, is left
     /// out with its content.
@@ -1079,6 +1139,7 @@ impl Body<'_> {
             para_cont: std::mem::take(&mut self.para_cont),
             lists: std::mem::take(&mut self.lists),
             item_used: std::mem::take(&mut self.item_used),
+            list_id: self.list_id,
             containers: self.containers.len(),
             tables: self.tables.len(),
             cells: self.cells.len(),
@@ -1104,6 +1165,7 @@ impl Body<'_> {
         self.para_cont = n.para_cont;
         self.lists = n.lists;
         self.item_used = n.item_used;
+        self.list_id = n.list_id;
         match n.comment {
             Some(c) => {
                 // LibreOffice writes an empty date as all zeroes; a date without a zone is
@@ -1259,7 +1321,7 @@ impl Body<'_> {
             "table-cell" => {
                 self.end_para();
                 let blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
-                (self.lists, self.item_used) = self.lists_saved.pop().unwrap_or_default();
+                (self.lists, self.item_used, self.list_id) = self.lists_saved.pop().unwrap_or_default();
                 let mut cell = self.cells.pop().unwrap_or_default();
                 cell.blocks = blocks;
                 if let Some(t) = self.tables.last_mut()

@@ -24,9 +24,9 @@ pub use from_doc::{ListCounter, flow_paras, from_doc, from_doc_tracked, from_doc
 pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px, make_img, mime_of, percent_decode, sized_img, sniff_image};
 pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
 pub use types::{
-    CODE_STYLE, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_FONT_NAME, MAX_LINK,
-    MONO_FONT, Meta, Para, RUBY_BASE_SIZE, RevMark, Spacing, clean_text, equations_as_text, flatten_tables, kept_font, kept_link, ruby_as_text,
-    ruby_object,
+    Affix, CODE_STYLE, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, Label, ListInfo, MAX_DEPTH, MAX_FONT_NAME,
+    MAX_LINK, MONO_FONT, Meta, Para, RUBY_BASE_SIZE, RevMark, Spacing, clean_text, equations_as_text, flatten_tables, kept_font, kept_link,
+    ruby_as_text, ruby_object,
 };
 pub(crate) use types::{Dropped, begin_import, dropped};
 
@@ -90,12 +90,12 @@ mod tests {
     #[test]
     fn list_labels() {
         let mut c = ListCounter::default();
-        let o = |level| ListInfo { ordered: true, level, start: 1 };
+        let o = |level| ListInfo { ordered: true, level, start: 1, ..Default::default() };
         assert_eq!(c.label(o(0)), "1.");
         assert_eq!(c.label(o(1)), "a.");
         assert_eq!(c.label(o(1)), "b.");
         assert_eq!(c.label(o(0)), "2.");
-        assert_eq!(c.label(ListInfo { ordered: false, level: 0, start: 1 }), "•");
+        assert_eq!(c.label(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }), "•");
     }
 
     #[test]

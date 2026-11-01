@@ -114,6 +114,8 @@ struct Builder<'a> {
     run_strings: usize,
     /// The document's comment for each flow comment id.
     comments: std::collections::HashMap<u32, u32>,
+    /// The document's list instance for each flow list number ([`ListInfo::list`]).
+    lists: std::collections::HashMap<u32, u32>,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -133,7 +135,7 @@ impl<'a> Builder<'a> {
                 revs.entry((rev_key(r.kind), mark)).or_insert(i as u32);
             }
         }
-        Builder { doc, revs, run_strings: 0, comments: Default::default() }
+        Builder { doc, revs, run_strings: 0, comments: Default::default(), lists: Default::default() }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -358,11 +360,17 @@ impl<'a> Builder<'a> {
             }
         }
         let mut starts: [Option<u32>; 9] = [None; 9];
+        let mut labels: [Option<super::types::Label>; 9] = [None; 9];
         for li in group {
             if let Some(s) = starts.get_mut(li.level.min(8) as usize)
                 && s.is_none()
             {
                 *s = Some(li.start);
+            }
+            if let Some(l) = labels.get_mut(li.level.min(8) as usize)
+                && l.is_none()
+            {
+                *l = li.label;
             }
         }
         // Levels nobody used follow the first level's kind.
@@ -374,6 +382,21 @@ impl<'a> Builder<'a> {
                 let mut level = src.get(i).cloned().unwrap_or_default();
                 if ordered && let Some(s) = starts.get(i).copied().flatten() {
                     level.start = s;
+                }
+                // The source's own label: its format and text, or its bullet.
+                match labels.get(i).copied().flatten() {
+                    Some(l) if ordered && l.format != wordcraft_doc::section::NumFormat::Bullet => {
+                        level.format = l.format;
+                        level.text = l.text(i as u8);
+                    }
+                    Some(l) if !ordered => {
+                        if let Some(c) = l.bullet().filter(|c| !c.is_control() && !level.text.starts_with(*c)) {
+                            let custom = levels_for(ListKind::BulletChar(c));
+                            level.text = c.to_string();
+                            level.chr.font = custom.first().and_then(|l| l.chr.font.clone());
+                        }
+                    }
+                    _ => {}
                 }
                 level
             })
@@ -392,14 +415,20 @@ impl<'a> Builder<'a> {
         while let Some(b) = blocks.get(i) {
             match b {
                 FBlock::Para(p) if p.list.is_some() => {
-                    // A run of consecutive list paragraphs is one list, until a top-level item of
-                    // the other kind (bulleted or numbered) starts a new one.
+                    // A run of consecutive list paragraphs is one list, until an item of another
+                    // list or (when the source doesn't tell lists apart) a top-level item of the
+                    // other kind (bulleted or numbered) starts a new one. A list the source
+                    // numbers goes on where it shows up again.
                     let mut j = i;
                     let mut group: Vec<ListInfo> = Vec::new();
                     let mut top: Option<bool> = None;
+                    let id = p.list.map_or(0, |l| l.list);
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
-                        if li.level == 0 {
+                        if li.list != id {
+                            break;
+                        }
+                        if li.level == 0 && id == 0 {
                             if top.is_some_and(|o| o != li.ordered) {
                                 break;
                             }
@@ -408,7 +437,16 @@ impl<'a> Builder<'a> {
                         group.push(li);
                         j += 1;
                     }
-                    let num = self.new_list(&group);
+                    let num = match self.lists.get(&id) {
+                        Some(num) if id != 0 => *num,
+                        _ => {
+                            let num = self.new_list(&group);
+                            if id != 0 {
+                                self.lists.insert(id, num);
+                            }
+                            num
+                        }
+                    };
                     for q in blocks.get(i..j).unwrap_or(&[]) {
                         if let FBlock::Para(q) = q {
                             let para = self.para(q, Some(num));

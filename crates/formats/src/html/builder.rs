@@ -272,7 +272,7 @@ impl<'r> Builder<'r> {
                 }
             }
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
-                p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8, start: 1 });
+                p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8, start: 1, ..Default::default() });
                 self.para_cont = self.stack.get(li).is_some_and(|e| e.used);
                 if let Some(e) = self.stack.get_mut(li) {
                     e.used = true;

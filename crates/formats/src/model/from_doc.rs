@@ -109,7 +109,13 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
     };
     let list = rp.numbering.and_then(|n| {
         let lv = doc.numbering.level(n.num, n.level)?;
-        Some(ListInfo { ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None), level: n.level.min(8), start: lv.start })
+        Some(ListInfo {
+            ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None),
+            level: n.level.min(8),
+            start: lv.start,
+            list: n.num,
+            label: Some(super::types::Label::of_level(lv.format, &lv.text)),
+        })
     });
     (kind, list)
 }
@@ -194,7 +200,12 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
 /// insertion and deletion marks.
 fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let tracked = opts.tracked;
-    let (kind, list) = para_kind(doc, p);
+    let (kind, mut list) = para_kind(doc, p);
+    if !opts.lists
+        && let Some(li) = &mut list
+    {
+        (li.list, li.label) = (0, None);
+    }
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
     let mut out = Para {
@@ -334,7 +345,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         // The formatting change belongs to the paragraph the mark ends.
         out.fmt_change = p.props.fmt_change.as_deref().map(|c| {
             let blank = out.inlines.is_empty();
-            let (kind, list) = props_kind(doc, &c.old, blank);
+            let (kind, mut list) = props_kind(doc, &c.old, blank);
+            if !opts.lists
+                && let Some(li) = &mut list
+            {
+                (li.list, li.label) = (0, None);
+            }
             let old = Para { kind, list, align: c.old.align, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });

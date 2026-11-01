@@ -2,6 +2,7 @@ use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 use crate::model::Spacing;
 use wordcraft_doc::props::LineSpacing;
+use wordcraft_doc::section::NumFormat;
 
 // ---------------------------------------------------------------------------------------------
 // Import
@@ -233,10 +234,51 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     paragraph_spacing(a, &mut s.spacing);
 }
 
+/// A list style's level (ODF 1.3 §16.31–16.33): numbered or not, its label and start value.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ListLevel {
+    pub(super) ordered: bool,
+    pub(super) label: Option<model::Label>,
+    pub(super) start: u32,
+}
+
+/// ODF number format (`style:num-format`, ODF 1.3 §19.500) → WordCraft's; an empty format shows
+/// no number.
+fn num_format(f: &str) -> NumFormat {
+    match f.trim() {
+        "" => NumFormat::None,
+        "i" => NumFormat::LowerRoman,
+        "I" => NumFormat::UpperRoman,
+        "a" => NumFormat::LowerLetter,
+        "A" => NumFormat::UpperLetter,
+        _ => NumFormat::Decimal,
+    }
+}
+
+/// A `text:list-level-style-number`/`-bullet`/`-image` element's level.
+fn list_level(local: &str, a: &Attrs) -> ListLevel {
+    let shown = get(a, "text:display-levels").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
+    let start = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(0, 32_767);
+    let affix = |k: &str| model::Affix::new(get(a, k).unwrap_or(""));
+    match local {
+        "list-level-style-number" => {
+            let format = num_format(get(a, "style:num-format").unwrap_or(""));
+            let ordered = format != NumFormat::None;
+            let label = model::Label { format, prefix: affix("style:num-prefix"), suffix: affix("style:num-suffix"), shown };
+            ListLevel { ordered, label: ordered.then_some(label), start }
+        }
+        _ => {
+            // A picture bullet shows as the default bullet.
+            let bullet = get(a, "text:bullet-char").and_then(|b| b.chars().find(|c| !c.is_control() && !c.is_whitespace()));
+            ListLevel { ordered: false, label: Some(model::Label::bulleted(bullet)), start: 1 }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Styles {
     map: HashMap<String, StyleInfo>,
-    pub(super) lists: HashMap<String, Vec<bool>>,
+    pub(super) lists: HashMap<String, Vec<ListLevel>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
     /// Spacing of `style:default-style` for paragraphs.
@@ -248,7 +290,7 @@ impl Styles {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
-        let mut list: Option<(String, Vec<bool>)> = None;
+        let mut list: Option<(String, Vec<ListLevel>)> = None;
         events(xml, |ev| match ev {
             Ev::Start(q, a) => match local(&q) {
                 "automatic-styles" => in_auto = true,
@@ -321,13 +363,12 @@ impl Styles {
                         c.separator = column_sep(&a);
                     }
                 }
-                "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![false; 10])),
+                "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => {
                     if let Some((_, v)) = &mut list {
                         let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
-                        let ordered = local(&q) == "list-level-style-number" && get(&a, "style:num-format").is_some_and(|f| !f.is_empty());
                         if let Some(slot) = v.get_mut(lv - 1) {
-                            *slot = ordered;
+                            *slot = list_level(local(&q), &a);
                         }
                     }
                 }

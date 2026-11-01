@@ -418,8 +418,8 @@ fn code_span_line_endings_stay_literal_on_export() {
     ];
     let shapes = [
         (Kind::Normal, None),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
     ];
     for (source, expected) in cases {
         for (kind, list) in shapes {
@@ -576,10 +576,10 @@ fn lines_after_line_break_stay_in_paragraph() {
 fn lines_after_line_break_stay_in_list_item_and_quote() {
     let cases = ["a\n- x", "a\n# h", "a\n1. x", "a\n--", "a\n---", "a\n==", "a\n> q"];
     let shapes: [(Kind, Option<ListInfo>); 5] = [
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() })),
         (Kind::Quote, None),
     ];
     for s in cases {
@@ -587,7 +587,7 @@ fn lines_after_line_break_stay_in_list_item_and_quote() {
             let mut blocks = Vec::new();
             if let Some(li) = list.filter(|l| l.level > 0) {
                 let mut parent = Para::new(Kind::Normal);
-                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1 });
+                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1, ..Default::default() });
                 parent.push_text("top", &Fmt::default());
                 blocks.push(FBlock::Para(parent));
             }

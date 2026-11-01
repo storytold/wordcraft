@@ -38,7 +38,7 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             }
             let mut body = String::new();
             if let Some(part) = id.and_then(|i| doc.parts.get(&i)) {
-                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, ..Default::default() });
+                let blocks = model::part_flow(doc, &part.blocks, model::FlowOpts { fields: true, lists: true, ..Default::default() });
                 w.blocks(&blocks, &mut body, 0);
             }
             if body.is_empty() {
@@ -187,7 +187,7 @@ fn flow_sections(blocks: &[FBlock], last: &SectionProps) -> Vec<(SectionProps, s
 
 /// Write an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
-    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true });
+    let flow = model::from_doc_with(doc, model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true });
     let mut w = Writer::default();
     let mut body = String::new();
     let sections = flow_sections(&flow.blocks, &doc.last_section);

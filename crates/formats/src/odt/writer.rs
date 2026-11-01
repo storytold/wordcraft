@@ -4,6 +4,28 @@ use wordcraft_doc::props::LineSpacing;
 // ---------------------------------------------------------------------------------------------
 // Export
 
+/// A list style level as written: numbered or not, its label and its start value.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ListOut {
+    ordered: bool,
+    label: Option<model::Label>,
+    start: u32,
+}
+
+/// WordCraft number format → ODF's `style:num-format` (ODF 1.3 §19.500); formats ODF lacks are
+/// written as decimal.
+fn odf_num_format(f: wordcraft_doc::section::NumFormat) -> &'static str {
+    use wordcraft_doc::section::NumFormat as F;
+    match f {
+        F::LowerRoman => "i",
+        F::UpperRoman => "I",
+        F::LowerLetter => "a",
+        F::UpperLetter => "A",
+        F::None => "",
+        _ => "1",
+    }
+}
+
 pub(super) fn x(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -59,8 +81,11 @@ pub(super) struct Writer {
     text_styles: Vec<(String, String)>,
     /// Automatic paragraph styles: (parent, properties XML, master page) → name.
     para_styles: Vec<((String, String, String), String)>,
-    /// List styles: level kinds.
-    list_styles: Vec<[bool; 9]>,
+    /// List styles: each level's kind, label and start.
+    list_styles: Vec<[ListOut; 9]>,
+    /// The `xml:id` of the first list written for each flow list number, so a list that shows
+    /// up again continues it.
+    list_xml: HashMap<u32, String>,
     /// Table styles: (name, column widths).
     tables: Vec<Vec<f32>>,
     /// The master page (and page-number restart) each table in `tables` starts.
@@ -602,25 +627,29 @@ impl Writer {
                 }
                 FBlock::Para(p) if p.list.is_some() => {
                     let start = i;
-                    let mut kinds = [p.list.map(|l| l.ordered).unwrap_or(false); 9];
+                    let id = p.list.map_or(0, |l| l.list);
+                    let first = ListOut { ordered: p.list.is_some_and(|l| l.ordered), label: None, start: 1 };
+                    let mut kinds = [first; 9];
                     let mut seen = [false; 9];
                     while let Some(FBlock::Para(q)) = blocks.get(i) {
                         let Some(li) = q.list else { break };
                         let l = li.level.min(8) as usize;
-                        // A top-level item of the other kind starts a new list.
-                        if l == 0 && seen[0] && kinds[0] != li.ordered {
+                        // An item of another list, or (lists not told apart) a top-level item of
+                        // the other kind, starts a new list.
+                        if li.list != id || (id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
                             break;
                         }
                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                             && !*s
                         {
                             *s = true;
-                            *k = li.ordered;
+                            *k = ListOut { ordered: li.ordered, label: li.label, start: li.start };
                         }
                         i += 1;
                     }
                     self.list_styles.push(kinds);
                     let lname = format!("{}L{}", self.prefix, self.list_styles.len());
+                    let id_of_list = id;
                     // Open lists: per level, whether a list-item is open.
                     let mut stack: Vec<bool> = Vec::new();
                     for (qi, q) in blocks.get(start..i).unwrap_or(&[]).iter().enumerate() {
@@ -648,8 +677,15 @@ impl Writer {
                                     Some(prev) if depth == 0 && start == 0 && std::mem::take(&mut self.continue_list) => {
                                         format!(" text:continue-list=\"{prev}\"")
                                     }
-                                    _ => String::new(),
+                                    // A list that showed up before goes on with it.
+                                    _ => match self.list_xml.get(&id_of_list) {
+                                        Some(x) if id_of_list != 0 => format!(" text:continue-list=\"{x}\""),
+                                        _ => String::new(),
+                                    },
                                 };
+                                if id_of_list != 0 {
+                                    self.list_xml.entry(id_of_list).or_insert_with(|| id.clone());
+                                }
                                 if depth == 0 {
                                     self.last_list = Some(id.clone());
                                 }
@@ -776,7 +812,8 @@ impl Writer {
         }
         for (i, kinds) in self.list_styles.iter().enumerate() {
             s.push_str(&format!("<text:list-style style:name=\"{}L{}\">", self.prefix, i + 1));
-            for (l, ordered) in kinds.iter().enumerate() {
+            for (l, out) in kinds.iter().enumerate() {
+                let ordered = &out.ordered;
                 let lv = l + 1;
                 let props = format!(
                     "<style:list-level-properties text:list-level-position-and-space-mode=\"label-alignment\"><style:list-level-label-alignment text:label-followed-by=\"listtab\" text:list-tab-stop-position=\"{}\" fo:text-indent=\"-18pt\" fo:margin-left=\"{}\"/></style:list-level-properties>",
@@ -785,9 +822,28 @@ impl Writer {
                 );
                 if *ordered {
                     let fmt = ["1", "a", "i"].get(l % 3).copied().unwrap_or("1");
-                    s.push_str(&format!("<text:list-level-style-number text:level=\"{lv}\" style:num-suffix=\".\" style:num-format=\"{fmt}\">{props}</text:list-level-style-number>"));
+                    // The level's own label, else WordCraft's default for the level.
+                    let attrs = match out.label {
+                        Some(lb) if lb.format != wordcraft_doc::section::NumFormat::Bullet => {
+                            let mut a = format!(" style:num-format=\"{}\"", odf_num_format(lb.format));
+                            for (k, v) in [("style:num-prefix", lb.prefix.as_str()), ("style:num-suffix", lb.suffix.as_str())] {
+                                if !v.is_empty() {
+                                    a.push_str(&format!(" {k}=\"{}\"", x(v)));
+                                }
+                            }
+                            if lb.shown > 1 {
+                                a.push_str(&format!(" text:display-levels=\"{}\"", lb.shown.min(lv as u8)));
+                            }
+                            a
+                        }
+                        _ => format!(" style:num-suffix=\".\" style:num-format=\"{fmt}\""),
+                    };
+                    let start = if out.start != 1 { format!(" text:start-value=\"{}\"", out.start) } else { String::new() };
+                    s.push_str(&format!("<text:list-level-style-number text:level=\"{lv}\"{attrs}{start}>{props}</text:list-level-style-number>"));
                 } else {
-                    let ch = ["•", "◦", "▪"].get(l % 3).copied().unwrap_or("•");
+                    let own = out.label.and_then(|lb| lb.bullet()).map(|c| c.to_string());
+                    let ch = own.as_deref().unwrap_or_else(|| ["•", "◦", "▪"].get(l % 3).copied().unwrap_or("•"));
+                    let ch = x(ch);
                     s.push_str(&format!(
                         "<text:list-level-style-bullet text:level=\"{lv}\" text:bullet-char=\"{ch}\">{props}</text:list-level-style-bullet>"
                     ));

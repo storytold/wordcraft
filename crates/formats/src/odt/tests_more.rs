@@ -3,5 +3,6 @@
 mod comments;
 mod fields;
 mod headers;
+mod lists;
 mod notes;
 mod spacing;

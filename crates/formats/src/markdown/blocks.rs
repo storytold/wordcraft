@@ -620,7 +620,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         while item.len() > 1 && item.last().is_some_and(String::is_empty) {
             item.pop();
         }
-        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start };
+        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start, ..Default::default() };
         let inner = if depth >= MAX_NEST {
             let mut p = Para::default();
             p.push_text(&item.join(" "), &Fmt::default());
