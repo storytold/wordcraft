@@ -11,7 +11,6 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
         match s.doc.para_at(&a) {
             Some(para) if !para.is_empty() => {
                 let (x, y) = para.word_at(a.off);
-                let y = para.text.get(x..y).map(|w| x + w.trim_end().len()).unwrap_or(y);
                 (Pos { off: x, ..a.clone() }, Pos { off: y, ..a })
             }
             _ => (a.clone(), a),

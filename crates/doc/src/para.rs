@@ -550,7 +550,8 @@ impl Paragraph {
         }
         end
     }
-    /// The word around `off` (double-click): (start, end) without trailing space.
+    /// The word around `off` (double-click): (start, end), the word alone — a double-click in
+    /// Word selects just the word, never the space after it (#2927).
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
         let is_w = |c: char| crate::bidi::is_word_char(c);
@@ -571,13 +572,18 @@ impl Paragraph {
             }
             b = off + i + c.len_utf8();
         }
-        // Word also selects the trailing spaces.
+        (a, b)
+    }
+    /// The word around `off` and its trailing spaces: the units a drag after a double-click
+    /// extends by, whole words with the spaces between them (#2927).
+    pub fn word_with_spaces_at(&self, off: usize) -> (usize, usize) {
+        let (a, b) = self.word_at(off);
         let mut e = b;
         for (i, c) in self.text.get(b..).unwrap_or("").char_indices() {
             if c != ' ' {
                 break;
             }
-            e = b + i + 1;
+            e = b + i + c.len_utf8();
         }
         (a, e)
     }
@@ -780,7 +786,12 @@ mod tests {
         assert_eq!(p.word_end(4), 11);
         assert_eq!(p.word_start(10), 4);
         assert_eq!(p.word_start(11), 4);
-        assert_eq!(p.word_at(5), (4, 11));
+        // A double-click takes the word alone, not the spaces after it; a drag after it takes
+        // the word and the spaces between words (#2927).
+        assert_eq!(p.word_at(5), (4, 9));
+        assert_eq!(p.word_with_spaces_at(5), (4, 11));
+        assert_eq!(p.word_at(19), (17, 20), "the full stop is not in the word");
+        assert_eq!(p.word_with_spaces_at(16), (11, 17), "the space joins the word before it");
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
