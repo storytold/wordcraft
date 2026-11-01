@@ -108,6 +108,13 @@ pub struct FindState {
     pub match_suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Match Diacritics is off: `é` finds `e` and `e` finds `é` (#4800). Stored inverted, so a
+    /// saved search without it keeps matching exactly, as WordCraft always did.
+    pub ignore_diacritics: bool,
+    /// Match Kashida is off: the Arabic tatweel (U+0640) is skipped.
+    pub ignore_kashida: bool,
+    /// Match Alef Hamza is off: `أ إ آ ٱ` read as `ا`.
+    pub ignore_alef_hamza: bool,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,

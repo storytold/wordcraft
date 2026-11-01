@@ -663,11 +663,17 @@ impl Dialog {
                     suffix: app.session.find.match_suffix,
                     ignore_punct: app.session.find.ignore_punct,
                     ignore_space: app.session.find.ignore_space,
+                    match_diacritics: !app.session.find.ignore_diacritics,
+                    match_kashida: !app.session.find.ignore_kashida,
+                    match_alef_hamza: !app.session.find.ignore_alef_hamza,
                     more: app.session.find.wildcards
                         || app.session.find.match_prefix
                         || app.session.find.match_suffix
                         || app.session.find.ignore_punct
-                        || app.session.find.ignore_space,
+                        || app.session.find.ignore_space
+                        || app.session.find.ignore_diacritics
+                        || app.session.find.ignore_kashida
+                        || app.session.find.ignore_alef_hamza,
                     to_replace: false,
                 },
                 tab: match name {

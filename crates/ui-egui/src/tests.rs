@@ -6623,6 +6623,39 @@ fn find_replace_and_go_to_keys_like_word() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("find"));
 }
 
+/// The Find dialog's Match diacritics / kashida / alef hamza (#4800): they show the session's
+/// options, go with each Find Next, and grey out with wildcards.
+#[test]
+fn find_dialog_match_diacritics_options() {
+    use egui_kittest::kittest::NodeT;
+    let mut a = app();
+    a.run("document.setText", json!({"text": "café cafe"})).unwrap();
+    a.run("edit.find", json!({"text": "cafe", "matchDiacritics": false})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    a.run("ui.dialog", json!({"name": "find"})).unwrap();
+    let Some(dialogs::Dialog::Find { extra, query, .. }) = &a.dialog else { panic!("no Find dialog") };
+    assert_eq!(query, "cafe");
+    assert!(!extra.match_diacritics && extra.match_kashida && extra.match_alef_hamza);
+    assert!(extra.more, "a changed option shows the search options");
+    let mut h = paste_harness(a);
+    assert!(!h.get_by_label("Match diacritics").accesskit_node().is_disabled());
+    h.get_by_label("Find Next").click();
+    h.step();
+    assert_eq!(h.state().session.find.results.len(), 2, "café and cafe");
+    h.get_by_label("Match diacritics").click();
+    h.step();
+    h.get_by_label("Find Next").click();
+    h.step();
+    assert!(!h.state().session.find.ignore_diacritics);
+    assert_eq!(h.state().session.find.results.len(), 1, "only cafe");
+    h.get_by_label("Use wildcards").click();
+    h.step();
+    h.step();
+    for label in ["Match diacritics", "Match kashida", "Match alef hamza"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} is greyed out with wildcards");
+    }
+}
+
 /// Builds a root-viewport raw input at `size`, optionally marked minimized and occluded.
 fn shot_raw(size: egui::Vec2, hidden: bool) -> egui::RawInput {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);

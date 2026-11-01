@@ -9,6 +9,10 @@ pub struct FindExtra {
     pub suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Match Diacritics, Match Kashida and Match Alef Hamza (#4800): checked is an exact search.
+    pub match_diacritics: bool,
+    pub match_kashida: bool,
+    pub match_alef_hamza: bool,
     /// The search options are shown.
     pub more: bool,
     /// Special ▾ inserts into Replace with (it last had the focus), not Find what.
