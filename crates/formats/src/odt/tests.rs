@@ -999,20 +999,24 @@ fn a_child_style_writing_mode_overrides_its_parent() {
         format!(r#"<style:style style:name="{name}" style:family="paragraph" style:parent-style-name="{parent}">{props}</style:style>"#)
     };
     let styles = format!(
-        "<office:styles>{}{}{}{}{}</office:styles>",
+        "<office:styles>{}{}{}{}{}{}{}</office:styles>",
         style("Rtl", "Standard", "rl-tb"),
         style("LtrChild", "Rtl", "lr-tb"),
         style("Plain", "Rtl", ""),
         style("PageChild", "Rtl", "page"),
-        style("LtrGrand", "LtrChild", "")
+        style("LtrGrand", "LtrChild", ""),
+        style("Rtl11", "Standard", "rl"),
+        style("Ltr11", "Rtl11", "lr")
     );
-    let body: String =
-        ["Rtl", "LtrChild", "Plain", "PageChild", "LtrGrand"].iter().map(|n| format!(r#"<text:p text:style-name="{n}">x</text:p>"#)).collect();
+    let body: String = ["Rtl", "LtrChild", "Plain", "PageChild", "LtrGrand", "Rtl11", "Ltr11"]
+        .iter()
+        .map(|n| format!(r#"<text:p text:style-name="{n}">x</text:p>"#))
+        .collect();
     let content =
         format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
     let flow = parse(&package(content.as_str(), Some(styles.as_str()))).unwrap();
     let got: Vec<bool> = paras(&flow).iter().map(|p| p.rtl).collect();
-    assert_eq!(got, [true, false, true, true, false], "Rtl, LtrChild, Plain, PageChild, LtrGrand");
+    assert_eq!(got, [true, false, true, true, false, true, false], "Rtl, LtrChild, Plain, PageChild, LtrGrand, Rtl11, Ltr11");
 }
 
 #[test]

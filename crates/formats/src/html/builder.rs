@@ -263,7 +263,13 @@ impl<'r> Builder<'r> {
                         }
                         break;
                     }
-                    ElKind::Table => break,
+                    ElKind::Table => {
+                        // Text directly in a table, outside any cell or block, takes the table's.
+                        if !rtl_seen {
+                            p.rtl = e.rtl;
+                        }
+                        break;
+                    }
                     ElKind::Heading(n) if p.kind == Kind::Normal => p.kind = Kind::Heading(n.clamp(1, 6)),
                     ElKind::Pre if p.kind == Kind::Normal => p.kind = Kind::Code,
                     ElKind::Quote if p.kind == Kind::Normal => p.kind = Kind::Quote,

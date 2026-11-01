@@ -255,8 +255,14 @@ fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
     assert_eq!(cells(r#"<table><tr><td>text</td></tr></table>"#), [false]);
     assert_eq!(cells(r#"<table dir="rtl"><tr><td>text</td><td dir="ltr">x</td></tr></table>"#), [true, false]);
     assert_eq!(cells(r#"<table><tr><td dir="rtl"><p dir="ltr">a</p><p>b</p></td></tr></table>"#), [false, true]);
-    // A cell does not take its direction from outside the table.
+    // A cell with no direction of its own inherits the surrounding block's.
     assert_eq!(cells(r#"<div dir="rtl"><table><tr><td><p>a</p></td></tr></table></div>"#), [true]);
+
+    // Text directly in a table, outside any cell, and a caption take the table's direction.
+    for src in [r#"<table dir="rtl">loose<tr><td>x</td></tr></table>"#, r#"<table dir="rtl"><caption>cap</caption><tr><td>x</td></tr></table>"#] {
+        assert_eq!(flags(&parse(src)).first(), Some(&true), "{src}");
+    }
+    assert_eq!(flags(&parse(r#"<table>loose<tr><td>x</td></tr></table>"#)).first(), Some(&false));
 
     // A continuation paragraph in a list item does not change the item's direction.
     let f = parse(r#"<ul><li><p dir="ltr">first</p><p dir="rtl">second</p></li></ul>"#);

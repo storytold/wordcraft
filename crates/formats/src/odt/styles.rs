@@ -89,12 +89,12 @@ pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
 }
 
-/// `style:writing-mode`: "rl-tb" is right-to-left, "lr-tb" left-to-right; anything else (`page`,
-/// vertical modes) says nothing about the inline direction here.
+/// `style:writing-mode`: "rl-tb" is right-to-left, "lr-tb" left-to-right (ODF 1.1 wrote "rl" and
+/// "lr"); anything else (`page`, vertical modes) says nothing about the inline direction here.
 fn writing_mode_rtl(a: &Attrs) -> Option<bool> {
     match get(a, "style:writing-mode")?.trim() {
-        "rl-tb" => Some(true),
-        "lr-tb" => Some(false),
+        "rl-tb" | "rl" => Some(true),
+        "lr-tb" | "lr" => Some(false),
         _ => None,
     }
 }
