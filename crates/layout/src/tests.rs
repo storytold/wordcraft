@@ -5728,6 +5728,54 @@ fn a_percentage_table_from_word_2013_ends_its_outer_borders_at_its_width() {
     }
 }
 
+/// Measured in Word for Windows (compatibility mode 15, 6pt table borders): an end-aligned table
+/// puts its end border's outer edge on the margin, a 100% table landing where a start-aligned one
+/// does and a 400pt one with its right border half inside the margin; and a row exception
+/// (`w:tblPrEx`) turning the outer borders off leaves the 100% table its whole width, as the
+/// cells draw no outer border.
+#[test]
+fn a_table_from_word_2013_ends_at_the_borders_its_cells_draw() {
+    use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableProps};
+    let six = Some(Border { style: BorderStyle::Single, width: 6.0, color: None, space: 0.0 });
+    let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let all = |b: Option<Border>| Borders { top: b, left: b, bottom: b, right: b, between: b, inside_v: b };
+    let cells = |borders: Borders, pct: bool, right: bool, row_off: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let mut t = Table::new(1, 2, 200.0);
+        if pct {
+            t.props.width_pct = Some(100.0);
+        } else {
+            t.props.width = Some(400.0);
+        }
+        t.props.fixed = true;
+        t.props.borders = Some(borders);
+        if right {
+            t.props.align = Some(Align::Right);
+        }
+        if row_off {
+            t.rows[0].props.exceptions =
+                Some(Box::new(TableProps { borders: Some(Borders { left: none, right: none, ..Default::default() }), ..Default::default() }));
+        }
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        let mut out: Vec<(f32, f32)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some((rect.x, rect.x + rect.w)) } else { None }).collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let plain = cells(all(none), true, false, false);
+    let (left, right) = (plain[0].0, plain[1].1);
+    let start = cells(all(six), true, false, false);
+    let end = cells(all(six), true, true, false);
+    assert!(near(end[0].0, start[0].0) && near(end[1].1, start[1].1), "100% end-aligned {end:?}, start-aligned {start:?}");
+    let points = cells(all(six), false, true, false);
+    assert!(near(points[1].1, right - 3.0), "400pt end-aligned {points:?}, margin {right}");
+    let row_off = cells(all(six), true, false, true);
+    assert!(near(row_off[0].0, left) && near(row_off[1].1, right), "outer borders off in the row {row_off:?}, plain {plain:?}");
+}
+
 #[test]
 fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     use wordcraft_doc::para::Anchor;
