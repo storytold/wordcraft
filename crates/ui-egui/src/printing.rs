@@ -19,6 +19,8 @@ pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     ]
 }
 
+/// Builds translated print labels, draws the shared print-settings panel, and shows the current
+/// feedback message.
 pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
     let labels = Labels {
         printer: &translate("Printer"),
@@ -32,7 +34,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate
         short_edge: &translate("Two-sided: short edge"),
         grayscale: &translate("Grayscale"),
     };
-    state.show(ui, egui::Id::new("wordcraft_print_settings"), discover, &labels);
+    state.show(ui, egui::Id::unique("wordcraft_print_settings"), discover, &labels);
     if let Some(message) = &state.message {
         ui.label(feedback(message, translate));
     }
@@ -101,6 +103,13 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
     }))
 }
 
+const SPOOLED: &str = "Print job submitted: spooled {count} sheet(s)";
+
+/// The sheet count of the Windows backend's English receipt `spooled N sheet(s)`.
+fn spooled_sheets(receipt: &str) -> Option<usize> {
+    receipt.trim().strip_prefix("spooled ")?.strip_suffix(" sheet(s)")?.parse().ok()
+}
+
 pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> String {
     match message {
         Feedback::FindingPrinters => translate("Finding printers…"),
@@ -108,6 +117,10 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
         Feedback::DiscoveryFailed => translate("Printer discovery failed."),
         Feedback::Submitting => translate("Submitting print job…"),
         Feedback::Submitted(receipt) if receipt.trim().is_empty() => translate("Print job submitted."),
+        Feedback::Submitted(receipt) if spooled_sheets(receipt).is_some_and(|_| translate(SPOOLED) != SPOOLED) => {
+            let count = spooled_sheets(receipt).unwrap_or_default();
+            translate(SPOOLED).replace("{count}", &count.to_string())
+        }
         Feedback::Submitted(receipt) => translate("Print job submitted: {receipt}").replace("{receipt}", receipt),
         Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", error),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
@@ -162,7 +175,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
     }
     let colour = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_color.take() };
     let picture = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_picture.take() };
-    let pdf = app.session.print_pdf(&pdf_params).map_err(|error| error.to_string());
+    let pdf = app.session.print_job_pdf(&pdf_params).map_err(|error| error.to_string());
     if colour.is_some() {
         app.session.doc.settings.page_color = colour;
     }

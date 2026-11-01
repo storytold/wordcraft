@@ -100,8 +100,20 @@ impl Default for Reflection {
     }
 }
 
-fn clamp(v: f32, lo: f32, hi: f32, dflt: f32) -> f32 {
+pub(crate) fn clamp(v: f32, lo: f32, hi: f32, dflt: f32) -> f32 {
     if v.is_finite() { v.clamp(lo, hi) } else { dflt }
+}
+
+/// At most [`MAX_STOPS`] stops, positions and transparencies 0–100%, in order (text and shape
+/// gradients).
+pub(crate) fn sanitized_stops(stops: &[GradStop]) -> Vec<GradStop> {
+    let mut s: Vec<GradStop> = stops
+        .iter()
+        .take(MAX_STOPS)
+        .map(|g| GradStop { pos: clamp(g.pos, 0.0, 100.0, 0.0), color: g.color, transparency: clamp(g.transparency, 0.0, 100.0, 0.0) })
+        .collect();
+    s.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    s
 }
 
 impl TextFill {
@@ -112,15 +124,10 @@ impl TextFill {
             TextFill::None => TextFill::None,
             TextFill::Solid { color, transparency } => TextFill::Solid { color: *color, transparency: clamp(*transparency, 0.0, 100.0, 0.0) },
             TextFill::Gradient { stops, angle } => {
-                let mut s: Vec<GradStop> = stops
-                    .iter()
-                    .take(MAX_STOPS)
-                    .map(|g| GradStop { pos: clamp(g.pos, 0.0, 100.0, 0.0), color: g.color, transparency: clamp(g.transparency, 0.0, 100.0, 0.0) })
-                    .collect();
+                let s = sanitized_stops(stops);
                 if s.is_empty() {
                     return None;
                 }
-                s.sort_by(|a, b| a.pos.total_cmp(&b.pos));
                 TextFill::Gradient { stops: s, angle: clamp(*angle, -1e6, 1e6, 0.0).rem_euclid(360.0) }
             }
         })

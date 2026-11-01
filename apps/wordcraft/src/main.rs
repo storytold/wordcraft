@@ -27,47 +27,66 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for and, on macOS, the documents opened from Finder.
+/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
+/// the documents opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
     Option<control_server::KeyFile>,
     file_dialogs::Launcher,
+    // The host's answer for this frame. `InputState` still describes the last painted frame on
+    // a hidden logic tick.
+    RawWindowState,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
 
 impl eframe::App for App {
+    /// Advances one desktop frame: polls Finder events on macOS, runs the app and its file dialogs,
+    /// fits or rescues the window and maximizes it after opening, then gates a close or quit request
+    /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.4, &mut self.0, ctx);
+        apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
+        let window = self.4;
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
-        if let Some((pos, size)) = ctx.input(|i| self.1.and_then(|g| g.fit_on_monitor(i.viewport()))) {
+        if let Some((pos, size)) = self.1.and_then(|g| g.fit_on_monitor(&window)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
+        // The geometry saved for the next start is the active window's.
         let prev = self.0.ui.window;
-        self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
+        // Another document window's state is the one it last painted with: the host reports only
+        // the root window's for this frame.
+        let active = self.0.active_viewport();
+        let tracked = if active == egui::ViewportId::ROOT {
+            window
+        } else {
+            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect())))
+        };
+        self.0.ui.window = WindowGeometry::track(prev, &tracked);
         // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
         // window that opened at its normal size so it never flashed on screen half-opened.
-        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| ctx.input(|i| i.viewport().monitor_size.is_some()));
-        if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
+        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| window.monitor_size.is_some());
+        if let Some(pos) = take_rescue(&mut self.1, &window) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
         if let Some(command) = maximize {
             ctx.send_viewport_cmd(command);
         }
-        // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
+        // The window's close button: with other windows open only this window closes (the app
+        // handles that while drawing it); the last one quits, asking first about unsaved changes
+        // (`WordApp::close_requested`).
         let closing = ctx.input(|i| i.viewport().close_requested());
-        if closing && !self.0.close_requested() {
+        if closing && (self.0.closes_a_window() || !self.0.close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         } else if (closing || self.0.quit_requested) && !self.0.printing.busy() {
             // On macOS, letting eframe drop the window inside `-[NSApplication run]` aborts in
@@ -77,7 +96,7 @@ impl eframe::App for App {
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.0.quit_requested = false;
-                schedule_macos_terminate(&self.0, self.2.as_ref());
+                schedule_macos_terminate(&mut self.0, self.2.as_ref());
             }
             #[cfg(not(target_os = "macos"))]
             if self.0.quit_requested {
@@ -85,8 +104,13 @@ impl eframe::App for App {
             }
         }
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(raw);
+    /// Records this frame's native window state before forwarding the hook, so logic never reads a
+    /// stale inner rectangle from a hidden tick.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Keep this frame's native window state. `logic` must not read the last painted
+        // `InputState` when a hidden Wayland tick reports no fresh inner rect.
+        self.4 = RawWindowState::from_raw(raw);
+        self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
@@ -94,6 +118,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
+        self.0.session.finish_recovery();
         save_prefs(&self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();
@@ -109,7 +134,7 @@ impl eframe::App for App {
 /// removed first, as `on_exit` does, because a fallback [`std::process::exit`]
 /// skips `on_exit`. A second close while a quit is already scheduled is ignored.
 #[cfg(target_os = "macos")]
-fn schedule_macos_terminate(app: &WordApp, key_file: Option<&control_server::KeyFile>) {
+fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server::KeyFile>) {
     use std::sync::atomic::{AtomicBool, Ordering};
     if app.printing.busy() {
         return;
@@ -121,6 +146,7 @@ fn schedule_macos_terminate(app: &WordApp, key_file: Option<&control_server::Key
     log::info!("window close: quitting");
     // This path can bypass on_exit. Join the owned workers before termination and cleanup.
     print::finish_pending_jobs();
+    app.session.finish_recovery();
     save_prefs(app);
     if let Some(key_file) = key_file {
         key_file.remove();
@@ -244,6 +270,8 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         print_native: Some(print::submit()),
         clipboard_picture: Some(Box::new(clipboard::picture)),
         make_default_app: default_apps::hook(),
+        // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
+        templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
@@ -301,22 +329,52 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
+/// the `-NS…` / `-Apple…` options (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) with
+/// the value after each. They are not files, and opening them as files fails.
+fn without_launch_args(args: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(a) = args.next() {
+        if a.starts_with("-psn_") {
+            continue;
+        }
+        if a.starts_with("-NS") || a.starts_with("-Apple") {
+            // Its value, unless the next argument is another flag.
+            args.next_if(|v| !v.starts_with('-'));
+            continue;
+        }
+        kept.push(a);
+    }
+    kept
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
+/// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
-    let opened = std::fs::read(path)
-        .map_err(|e| e.to_string())
+    let opened = wordcraft_engine::io::read_document(path)
         .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
     match opened {
         // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => {
+            app.report_open_failure(&name, &e);
+        }
     }
 }
 
+/// Parses the command line, installs logging and the panic hook, restores preferences and window
+/// geometry, opens requested documents or the Start screen, starts the control server when
+/// asked, and runs the eframe event loop.
 fn main() -> eframe::Result {
+    // Windows: the update helper is a copy of this program started with `--finish-update`.
+    #[cfg(windows)]
+    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        std::process::exit(i32::from(result.is_err()));
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
@@ -324,6 +382,8 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
+    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
@@ -393,6 +453,8 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
+    // Windows opened for further documents start like the first one, before its saved place.
+    let window_builder = options.viewport.clone();
     let restored = saved_window();
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
@@ -425,6 +487,7 @@ fn main() -> eframe::Result {
             let mut session = Session::new(doc);
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -443,6 +506,7 @@ fn main() -> eframe::Result {
                 }
             }
             app.ui.window = restored;
+            app.set_window_builder(window_builder);
             app.integrated_titlebar = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
@@ -464,7 +528,7 @@ fn main() -> eframe::Result {
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
+                    app.report_open_failure(&f, &e);
                 }
             }
             for f in other_files {
@@ -476,6 +540,7 @@ fn main() -> eframe::Result {
                 Some(restored.unwrap_or_default()),
                 key_file,
                 dialogs,
+                RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
@@ -512,6 +577,67 @@ mod tests {
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked
+    /// start-up until something wrote to it, and `/dev/zero` read until memory ran out.
+    #[test]
+    fn a_pipe_or_device_whose_name_isnt_unicode_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("wc-app-non-utf8-dev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join(std::ffi::OsString::from_vec(b"fif\xe9.txt".to_vec()));
+        if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("mkfifo unavailable; skipping");
+            return;
+        }
+        let zero = dir.join(std::ffi::OsString::from_vec(b"z\xe9ro.txt".to_vec()));
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        // If the open blocks on the pipe, a writer comes after 10 s, so the test fails rather than hangs.
+        let unblock = fifo.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            let _ = std::fs::OpenOptions::new().write(true).open(unblock);
+        });
+
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("text.insert", serde_json::json!({"text": "kept"})).unwrap();
+        for p in [&fifo, &zero] {
+            let started = std::time::Instant::now();
+            open_non_unicode(&mut app, p);
+            assert!(started.elapsed() < std::time::Duration::from_secs(5), "{p:?} took {:?}", started.elapsed());
+            assert_eq!(app.session.path, None, "{p:?}");
+            assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_arg_tests {
+    use super::without_launch_args;
+
+    fn strip(args: &[&str]) -> Vec<String> {
+        without_launch_args(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn macos_launch_arguments_are_not_files() {
+        assert_eq!(strip(&["-psn_0_12345", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["-AppleLanguages", "(en)", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["a.docx", "-NSDocumentRevisionsDebugMode", "YES", "b.docx"]), ["a.docx", "b.docx"]);
+        // A flag with no value after it, or followed by another flag, takes nothing with it.
+        assert_eq!(strip(&["a.docx", "-AppleLocale"]), ["a.docx"]);
+        assert_eq!(strip(&["-NSFoo", "--sample", "a.docx"]), ["--sample", "a.docx"]);
+    }
+
+    #[test]
+    fn real_arguments_are_kept() {
+        assert_eq!(strip(&["--control", "7981", "--sample", "-h"]), ["--control", "7981", "--sample", "-h"]);
+        // Files whose names merely start like a launch argument keep their place when they are paths.
+        assert_eq!(strip(&["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]), ["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]);
+        assert!(strip(&[]).is_empty());
     }
 }
 

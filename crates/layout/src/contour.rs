@@ -5,6 +5,7 @@
 //! A [`Contour`] is built once per placed object; each line then asks it which stretches of
 //! the line's band it takes ([`Contour::occupied`]), a walk over its edges.
 
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -164,32 +165,110 @@ pub fn contour_area(r: Rect, float: &Float, outline: &[(f32, f32)]) -> Option<(R
 /// Largest picture (each side, pixels) whose transparency is looked at.
 const MAX_PICTURE_SIDE: u32 = 8192;
 
-/// The outline of a picture's opaque pixels within `crop` (left, top, right, bottom fractions),
-/// in unit coordinates of the cropped picture. `None` for pictures without transparency (or
-/// that don't decode): their rectangle is their outline.
-pub fn picture_outline(bytes: &[u8], crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+/// Most picture pixels decoded for their transparency in one layout. Every picture a document
+/// wraps tightly is decoded in full whatever its crop; past this, pictures wrap as their
+/// rectangles. Room for four pictures of the largest size looked at, or hundreds of photos.
+pub(crate) const MAX_DECODED_PIXELS: u64 = 1 << 28;
+
+/// A picture's transparency: one alpha byte per pixel, row by row.
+struct Alpha {
+    w: u32,
+    h: u32,
+    a: Vec<u8>,
+}
+
+impl Alpha {
+    fn opaque(&self, x: u32, y: u32) -> bool {
+        x < self.w
+            && (y as usize)
+                .checked_mul(self.w as usize)
+                .and_then(|r| r.checked_add(x as usize))
+                .and_then(|i| self.a.get(i))
+                .is_some_and(|a| *a >= 128)
+    }
+}
+
+/// A picture whose transparency would take its layout past [`MAX_DECODED_PIXELS`]: it wraps
+/// as its rectangle in this layout only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OverBudget;
+
+/// Pictures' transparency decoded during one layout. A picture shown with many crops (each an
+/// outline of its own) is decoded once, however its crops interleave with other pictures', and
+/// decoding stops at [`MAX_DECODED_PIXELS`] (which also bounds what is kept).
+#[derive(Default)]
+pub(crate) struct Alphas {
+    /// Pictures decoded so far, by their bytes (address and length): their transparency (`None`: none).
+    ///
+    /// The address tells pictures apart only while their bytes can't be freed and the address
+    /// reused for other bytes of the same length: an `Alphas` lives for one layout pass (in its
+    /// `Ctx`), and the document whose media hold the bytes is borrowed for the whole pass, so no
+    /// picture's bytes are freed while it's kept. Kept any longer, it would need to hold on to
+    /// the bytes, as [`crate::LayoutCache`]'s outlines do.
+    seen: HashMap<(usize, usize), Option<Arc<Alpha>>>,
+    /// Pictures refused for the budget (bytes' address and length), not looked at again.
+    refused: HashSet<(usize, usize)>,
+    /// Pixels decoded so far.
+    pub(crate) decoded: u64,
+}
+
+impl Alphas {
+    /// The outline of picture `bytes`'s opaque pixels within `crop` (left, top, right, bottom
+    /// fractions), in unit coordinates of the cropped picture. `None` for pictures without
+    /// transparency (or that don't decode), and [`OverBudget`] past the budget: their rectangle
+    /// is their outline.
+    pub(crate) fn outline(&mut self, bytes: &[u8], crop: [f32; 4]) -> Result<Option<Vec<(f32, f32)>>, OverBudget> {
+        let key = (bytes.as_ptr() as usize, bytes.len());
+        let alpha = match self.seen.get(&key) {
+            Some(alpha) => alpha.clone(),
+            None if self.refused.contains(&key) => return Err(OverBudget),
+            None => {
+                let alpha = decode_alpha(bytes, &mut self.decoded).inspect_err(|_| {
+                    self.refused.insert(key);
+                })?;
+                let alpha = alpha.map(Arc::new);
+                self.seen.insert(key, alpha.clone());
+                alpha
+            }
+        };
+        Ok(alpha.and_then(|a| alpha_in_crop(&a, crop)))
+    }
+}
+
+/// The transparency of picture `bytes`, charging its pixels to `decoded`. `None` for pictures
+/// without transparency or that don't decode; [`OverBudget`] for one that would take `decoded`
+/// past [`MAX_DECODED_PIXELS`]. Pictures whose header says they're opaque cost nothing.
+fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBudget> {
+    use image::ImageDecoder;
+    let Ok(pic) = wordcraft_geom::picture::probe(bytes) else { return Ok(None) };
     // Formats that can't be transparent aren't decoded.
-    if matches!(reader.format(), None | Some(image::ImageFormat::Jpeg)) {
-        return None;
+    if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
+        return Ok(None);
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_PICTURE_SIDE);
-    limits.max_image_height = Some(MAX_PICTURE_SIDE);
-    limits.max_alloc = Some(512 << 20);
-    reader.limits(limits);
-    let img = reader.decode().ok()?;
-    if !img.color().has_alpha() {
-        return None;
+    // Only the header is read here (a PNG's `tRNS` counts as transparency).
+    let has_alpha =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), pic.format).into_decoder().ok().is_some_and(|d| d.color_type().has_alpha());
+    if !has_alpha {
+        return Ok(None);
     }
+    let pixels = u64::from(pic.width) * u64::from(pic.height);
+    *decoded = decoded.checked_add(pixels).filter(|t| *t <= MAX_DECODED_PIXELS).ok_or(OverBudget)?;
+    let Ok(img) = pic.decode(wordcraft_geom::MAX_DECODED_BYTES) else { return Ok(None) };
     let img = img.into_rgba8();
-    let (iw, ih) = img.dimensions();
-    let frac = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
-    let [cl, ct, cr, cb] = crop.map(frac);
-    let x0 = ((iw as f32 * cl) as u32).min(iw);
-    let y0 = ((ih as f32 * ct) as u32).min(ih);
-    let x1 = ((iw as f32 * (1.0 - cr)) as u32).clamp(x0, iw);
-    let y1 = ((ih as f32 * (1.0 - cb)) as u32).clamp(y0, ih);
+    let (w, h) = img.dimensions();
+    Ok(Some(Alpha { w, h, a: img.pixels().map(|p| p.0[3]).collect() }))
+}
+
+/// The outline of `img`'s opaque pixels within `crop`: see [`Alphas::outline`].
+fn alpha_in_crop(img: &Alpha, crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
+    let (iw, ih) = (img.w, img.h);
+    // The part the renderers draw (#1899): a sliver keeps its partly covered pixels.
+    let [cl, ct, vw, vh] = wordcraft_metafile::crop_window(crop);
+    let (fw, fh) = (f64::from(iw), f64::from(ih));
+    let x0 = ((fw * cl) as u32).min(iw);
+    let y0 = ((fh * ct) as u32).min(ih);
+    let x1 = ((fw * (cl + vw)).ceil() as u32).clamp(x0, iw);
+    let y1 = ((fh * (ct + vh)).ceil() as u32).clamp(y0, ih);
     let (cw, ch) = (x1 - x0, y1 - y0);
     if cw == 0 || ch == 0 {
         return None;
@@ -201,19 +280,24 @@ pub fn picture_outline(bytes: &[u8], crop: [f32; 4]) -> Option<Vec<(f32, f32)>> 
     let opaque = |gx: usize, gy: usize| {
         let (px0, py0) = (x0 + gx as u32 * cell, y0 + gy as u32 * cell);
         let (px1, py1) = ((px0 + cell).min(x1), (py0 + cell).min(y1));
-        (py0..py1)
-            .step_by(step as usize)
-            .any(|y| (px0..px1).step_by(step as usize).any(|x| img.get_pixel_checked(x, y).is_some_and(|p| p.0[3] >= 128)))
+        (py0..py1).step_by(step as usize).any(|y| (px0..px1).step_by(step as usize).any(|x| img.opaque(x, y)))
     };
     let pts = alpha_outline(gw as usize, gh as usize, opaque)?;
-    // The grid may reach a little past the picture (its last cells are partial).
-    let (sx, sy) = ((gw * cell) as f32 / cw as f32, (gh * cell) as f32 / ch as f32);
-    Some(pts.into_iter().map(|(x, y)| ((x * sx).min(1.0), (y * sy).min(1.0))).collect())
+    // Grid points onto the picture as the renderers draw the window, whose edges fall within
+    // pixels (crop fractions are f32 too: 0.7 is 0.69999…). The grid may reach a little past the
+    // pixels (its last cells are partial).
+    let place =
+        |g: f32, cells: u32, p0: u32, lo: f64, len: f64| ((f64::from(p0) + f64::from(g) * f64::from(cells * cell) - lo) / len).clamp(0.0, 1.0) as f32;
+    Some(pts.into_iter().map(|(x, y)| (place(x, gw, x0, fw * cl, fw * vw), place(y, gh, y0, fh * ct, fh * vh))).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn picture_outline(bytes: &[u8], crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
+        Alphas::default().outline(bytes, crop).ok().flatten()
+    }
 
     fn diamond(through: bool) -> Contour {
         Contour::new(&[(50.0, 0.0), (100.0, 50.0), (50.0, 100.0), (0.0, 50.0)], 0.0, 0.0, 0.0, through).unwrap().1
@@ -264,6 +348,39 @@ mod tests {
         assert!(half.iter().any(|(x, _)| *x > 0.99), "{half:?}");
         // No transparency: the rectangle.
         assert!(picture_outline(&png(image::RgbImage::new(8, 8).into()), [0.0; 4]).is_none());
+        // #1899: the sliver the renderers draw (0.5% of the axis, when two sides overlap or keep
+        // less) has an outline too. Only the bottom-right quarter is opaque, so a column or a row
+        // through it is opaque in its second half.
+        let quarter = png(image::RgbaImage::from_fn(100, 100, |x, y| image::Rgba([0, 0, 0, if x >= 50 && y >= 50 { 255 } else { 0 }])).into());
+        for (crop, column) in [([0.6, 0.0, 0.6, 0.0], true), ([0.6, 0.0, 0.398, 0.0], true), ([0.0, 0.6, 0.0, 0.6], false)] {
+            let pts = picture_outline(&quarter, crop).unwrap_or_default();
+            let across = |p: &(f32, f32)| if column { p.1 } else { p.0 };
+            // The grid's cells are 3 pixels, so the half starts a little before 0.5.
+            assert!(pts.len() >= 3 && pts.iter().all(|p| across(p) > 0.4), "{crop:?}: {pts:?}");
+        }
+        // Crop fractions are f32 (0.7 is 0.69999…), so an edge on a whole pixel comes out a hair
+        // off it: the outline neither takes in the neighbouring column nor drops the last one. Only
+        // the top half of the 30 columns each crop keeps (of 100) is opaque, so it spans 0–1 across.
+        for (crop, kept) in [([0.7, 0.0, 0.0, 0.0], 70..100), ([0.0, 0.0, 0.7, 0.0], 0..30)] {
+            let img = image::RgbaImage::from_fn(100, 20, |x, y| image::Rgba([0, 0, 0, if kept.contains(&x) && y < 10 { 255 } else { 0 }]));
+            let pts = picture_outline(&png(img.into()), crop).unwrap_or_default();
+            let xs = pts.iter().map(|p| p.0);
+            let (lo, hi) = (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max));
+            assert!(lo < 1e-6 && hi > 1.0 - 1e-6, "{crop:?}: {pts:?}");
+        }
+        // A window whose edges fall within pixels (2.5–5.5 of 10) is placed as the renderers draw
+        // it: pixel 2, the only opaque one (in half the rows), covers the first sixth of the
+        // picture, not a quarter (whole pixels 2–5 stretched over it). Across and down alike.
+        for down in [false, true] {
+            let img = image::RgbaImage::from_fn(10, 10, |x, y| {
+                let (a, b) = if down { (y, x) } else { (x, y) };
+                image::Rgba([0, 0, 0, if a == 2 && b < 5 { 255 } else { 0 }])
+            });
+            let crop = if down { [0.0, 0.25, 0.0, 0.45] } else { [0.25, 0.0, 0.45, 0.0] };
+            let pts = picture_outline(&png(img.into()), crop).unwrap_or_default();
+            let far = pts.iter().map(|p| if down { p.1 } else { p.0 }).fold(f32::MIN, f32::max);
+            assert!(pts.len() >= 3 && (far - 1.0 / 6.0).abs() < 1e-3, "{crop:?}: {pts:?}");
+        }
     }
 
     #[test]
