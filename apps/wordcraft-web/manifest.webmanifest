@@ -1,0 +1,30 @@
+{
+  "name": "WordCraft",
+  "short_name": "WordCraft",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e6e6e6",
+  "theme_color": "#e6e6e6",
+  "icons": [
+    { "src": "icons/256x256/ai.storyteller.wordcraft.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "icons/512x512/ai.storyteller.wordcraft.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+        "application/vnd.ms-word.document.macroEnabled.12": [".docm"],
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.template": [".dotx"],
+        "application/vnd.ms-word.template.macroEnabled.12": [".dotm"],
+        "application/msword": [".doc", ".dot"],
+        "application/vnd.oasis.opendocument.text": [".odt"],
+        "application/rtf": [".rtf"],
+        "text/markdown": [".md", ".markdown"],
+        "text/x-tex": [".tex", ".latex", ".ltx"],
+        "text/html": [".html", ".htm"]
+      }
+    }
+  ]
+}
