@@ -1576,6 +1576,25 @@ fn text_from_file_unlinks_inserted_sections_headers() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #4843: `insert.object` inserts a file's text, as Text from File does, in one undo step. Its
+/// path is required: the app's button asks for the file before the command runs.
+#[test]
+fn insert_object_inserts_a_files_text() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-insert-object-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("object.txt");
+    std::fs::write(&path, "From the object").unwrap();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Start "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    assert!(matches!(s.run("insert.object", &json!({})), Err(crate::CmdError::Params(_))), "no path: a parameter error");
+    assert!(matches!(s.run("insert.object", &json!({"path": 42})), Err(crate::CmdError::Params(_))), "a path that isn't text");
+    run(&mut s, "insert.object", json!({"path": path.to_str().unwrap()}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Start From the object");
+    assert!(s.run("insert.object", &json!({"path": dir.join("missing.txt").to_str().unwrap()})).is_err(), "a missing file is an error");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn paste_special_html_and_rtf_keep_bold() {
     let mut s = s();

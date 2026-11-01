@@ -214,7 +214,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = p::req_str(v, "path")?;
             s.run("insert.textFromFile", &json!({"path": path}))
         })
-        .params(r#"{"path": string}"#),
+        .params(r#"{"path": string (the document whose text is inserted; the app's button asks for it with a file picker)}"#),
         CommandSpec::new("insert.spreadsheet", "Spreadsheet Table", "Insert › Tables", |s, v| {
             let csv = p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6");
             let rows = crate::cmd::mailings::parse_csv(csv);

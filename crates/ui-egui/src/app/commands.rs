@@ -37,6 +37,12 @@ impl WordApp {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
         }
+        // Insert › Object without a file asks for one (#4843), before the command runs, so a
+        // cancelled picker leaves no edit, undo step or macro step behind.
+        if id == "insert.object" && !has_value(&params, "path") && widgets::enabled(self, id) {
+            self.pick_object();
+            return Ok(json!({"pending": "insertObject"}));
+        }
         // A button whose command needs input the user hasn't given yet opens its dialog (#240).
         if let Some(name) = input_dialog(id, &params)
             && widgets::enabled(self, id)

@@ -60,6 +60,8 @@ pub(crate) enum AfterPick {
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// Insert the picked document's text at the caret (Insert › Object, #4843).
+    Object,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -254,6 +256,11 @@ impl WordApp {
                     return Ok(json!({"cancelled": true}));
                 };
                 self.insert_or_change_picture(json!({"path": path}))
+            }
+            AfterPick::Object => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The command `insert.object` runs, directly: one undo step for the insertion.
+                self.run("insert.textFromFile", json!({"path": path}))
             }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -460,6 +467,16 @@ impl WordApp {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+    }
+
+    /// Pick the document whose text Insert › Object inserts (#4843). The web host has no file
+    /// system to read it from.
+    pub(crate) fn pick_object(&mut self) {
+        if self.services.open_async.is_some() {
+            self.status(tl!("Insert Object isn't available in the web app."));
+            return;
+        }
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "object".into() }, AfterPick::Object);
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
