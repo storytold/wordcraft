@@ -705,14 +705,28 @@ fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::bor
 
 fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec<usize> {
     let mut found = Vec::new();
+    // A slash with Thai on either side is a place to break after, before a digit too
+    // ("ปีงบประมาณ/" | "2563", "2563/" | "แผนการ", "planning/" | "แผนการ"), as measured in Word for
+    // Windows; between Latin letters and digits it isn't.
+    let thai = |c: Option<char>| c.is_some_and(|c| matches!(c, '\u{0e00}'..='\u{0e7f}'));
+    let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
+    let break_after_slash = |i: usize| {
+        text.get(..i).and_then(|t| t.strip_suffix('/')).is_some_and(|t| thai(t.chars().next_back()) || thai(next_char(i)))
+            && next_char(i).is_some_and(char::is_alphanumeric)
+    };
     for (i, o) in unicode_linebreak::linebreaks(text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
         // too long for the line still breaks anywhere).
-        let after_slash =
-            text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        let after_slash = text.get(..i).is_some_and(|t| t.ends_with('/')) && next_char(i).is_some_and(char::is_alphanumeric) && !break_after_slash(i);
         if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
             found.push(i);
         }
+    }
+    let thai_slash_breaks: Vec<usize> = text.match_indices('/').map(|(i, _)| i + 1).filter(|&i| break_after_slash(i)).collect();
+    if !thai_slash_breaks.is_empty() {
+        found.extend(thai_slash_breaks);
+        found.sort_unstable();
+        found.dedup();
     }
     // UAX #14 (LB13) also forbids a break between a space and a slash, so with the break after the
     // slash gone as well, "caption /word" had no break at all and the word split mid-letter. Word

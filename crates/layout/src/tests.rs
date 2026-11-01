@@ -5914,6 +5914,31 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+#[test]
+fn a_slash_next_to_thai_is_a_place_to_break_after() {
+    // Measured in Word for Windows: a line can end right after a slash with Thai on either side,
+    // before a digit too, but not after one between Latin letters ("development/planning").
+    // Words before the slashed word make it wrap; every line is wider than the slashed word, so
+    // it never has to split for want of room.
+    let ends_after_slash = |token: &str| {
+        let text = format!("word word word word {token}");
+        (100..=380).step_by(2).any(|m| {
+            let mut d = Document::from_text(&text);
+            d.last_section.margin_right = m as f32;
+            let l = lay(&d);
+            l.pages[0].items.iter().any(|it| {
+                matches!(it, Placed::Lines { para, l0, l1, .. }
+                    if para.lines[*l0..*l1].iter().any(|line| line.stop < text.len() && text[..line.stop].ends_with('/')))
+            })
+        })
+    };
+    for token in ["ดำเนินการ/แผนการพัฒนา", "ปีงบประมาณ/2563", "2563/แผนการพัฒนา", "planning/แผนการพัฒนา", "แผนการพัฒนา/planning"]
+    {
+        assert!(ends_after_slash(token), "no line of {token:?} ends after its slash");
+    }
+    assert!(!ends_after_slash("development/planning"), "a line of development/planning ends after its slash");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
