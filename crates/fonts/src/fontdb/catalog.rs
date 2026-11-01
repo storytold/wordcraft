@@ -30,6 +30,19 @@ impl FontDb {
         v
     }
 
+    /// The monospaced families (English names, as [`FontDb::families`] lists them): a font whose
+    /// `post` table says it is fixed pitch, loaded or cataloged. A family counts when any of its
+    /// faces does (a family's Bold and Italic share their Regular's pitch).
+    pub fn monospaced_families(&self) -> Vec<String> {
+        let mut v: Vec<String> =
+            self.read_faces().iter().filter(|f| f.is_monospaced()).flat_map(|f| [f.family.clone(), f.legacy_family.clone()]).collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        v.extend(self.read_catalog().iter().filter(|c| c.monospaced).flat_map(|c| [c.family.clone(), c.legacy.clone()]));
+        v.sort_by_key(|a| a.to_lowercase());
+        v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        v
+    }
+
     /// Every family's name in the interface language `lang` (`zh-hans`, `zh-hant`, `ja`…), as
     /// (English name, localized name) pairs: SimSun is 宋体 in Simplified Chinese. Families without
     /// a name in that language are left out.
@@ -215,6 +228,7 @@ impl FontDb {
                         postscript: f.postscript,
                         local: f.local,
                         east_asian: f.east_asian,
+                        monospaced: f.monospaced,
                         path: p.clone(),
                     });
                 }

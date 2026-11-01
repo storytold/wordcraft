@@ -62,7 +62,7 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "" })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], monospaced: &[], preview, search: false, tip: "" })
 }
 
 /// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
@@ -75,7 +75,7 @@ pub fn combo_hint(
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     tip: &str,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], monospaced: &[], preview, search: false, tip })
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], monospaced: &[], preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,7 +116,7 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, monospaced: &[], preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
@@ -126,6 +126,9 @@ pub struct FontComboOptions<'a> {
     pub current: &'a str,
     pub items: &'a [String],
     pub recent: &'a [String],
+    /// The monospaced families among `items`: when there are any, the list's header offers a
+    /// "Monospace fonts only" filter that keeps just these (#4398).
+    pub monospaced: &'a [String],
     pub preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     pub tip: &'a str,
 }
@@ -140,6 +143,7 @@ pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -
             current: options.current,
             items: options.items,
             recent: options.recent,
+            monospaced: options.monospaced,
             preview: options.preview,
             tip: options.tip,
         },
@@ -152,6 +156,7 @@ struct ComboOptions<'a> {
     current: &'a str,
     items: &'a [String],
     recent: &'a [String],
+    monospaced: &'a [String],
     preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
     search: bool,
     tip: &'a str,
@@ -208,7 +213,20 @@ struct ComboSearch {
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
 fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
-    let ComboOptions { id, width, current, items, recent, preview, search, tip } = options;
+    let ComboOptions { id, width, current, items, recent, monospaced, preview, search, tip } = options;
+    // The Monospace filter (#4398): on, only the monospaced families are listed, typed matches
+    // and Recently Used Fonts included. It stays until a font is picked.
+    let mono_id = ui.scope_id().with(("combo_mono", id));
+    let mono_only = !monospaced.is_empty() && ui.data_mut(|d| d.get_temp::<bool>(mono_id)).unwrap_or(false);
+    let (items_kept, recent_kept);
+    let (items, recent): (&[String], &[String]) = if mono_only {
+        let keep: std::collections::HashSet<String> = monospaced.iter().map(|f| f.to_lowercase()).collect();
+        let only = |list: &[String]| list.iter().filter(|f| keep.contains(&f.to_lowercase())).cloned().collect::<Vec<String>>();
+        (items_kept, recent_kept) = (only(items), only(recent));
+        (&items_kept, &recent_kept)
+    } else {
+        (items, recent)
+    };
     let mut out = None;
     let edit_id = ui.scope_id().with(("combo_text", id));
     let te_id = ui.scope_id().with(("combo_edit", id));
@@ -347,7 +365,17 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             picked
         };
         let picked = if search {
-            menu.show_rows_with_header_footer(|_| (), row_h, |()| total, list, footer).map(|(v, f)| v.or(f))
+            let header = |ui: &mut Ui| {
+                if !monospaced.is_empty() {
+                    let mut on = mono_only;
+                    if ui.checkbox(&mut on, tl!("Monospace fonts only")).changed() {
+                        ui.data_mut(|d| d.insert_temp(mono_id, on));
+                        ui.ctx().request_repaint();
+                    }
+                    ui.separator();
+                }
+            };
+            menu.show_rows_with_header_footer(header, row_h, |()| total, list, footer).map(|(v, f)| v.or(f))
         } else {
             menu.show_rows_with_header(|_| (), row_h, |()| total, list)
         };
@@ -397,6 +425,11 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
     });
     let keep = (focused || s.open) && out.is_none();
     ui.data_mut(|d| {
+        // A picked font ends the filter; Add Font… and Load System Installed Fonts… keep it, so
+        // a cancelled file picker comes back to the same list.
+        if mono_only && out.as_deref().is_some_and(|o| o != ADD_FONT && o != LOAD_SYSTEM_FONTS) {
+            d.remove::<bool>(mono_id);
+        }
         if keep {
             d.insert_temp(edit_id, text);
         } else {

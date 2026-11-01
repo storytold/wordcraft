@@ -358,6 +358,83 @@ fn the_typed_list_grows_when_the_query_matches_more() {
     assert!(all > 4.0 * one, "one match: {one} tall; two headings, two recent and four fonts: {all}");
 }
 
+/// #4398: with the Monospace filter on, the font list (here the typed matches) keeps only the
+/// monospaced families; off, it lists every match again.
+#[test]
+fn the_monospace_filter_keeps_only_monospaced_families() {
+    fn has_text(shape: &egui::Shape, s: &str) -> bool {
+        match shape {
+            egui::Shape::Text(t) => t.galley.text() == s,
+            egui::Shape::Vec(v) => v.iter().any(|x| has_text(x, s)),
+            _ => false,
+        }
+    }
+    let fonts: Vec<String> = ["Arial", "Arial Black", "Courier New", "Times New Roman"].map(String::from).to_vec();
+    let monospaced: Vec<String> = vec!["Courier New".into()];
+    for (filtered, arial, courier) in [(true, false, true), (false, true, true)] {
+        let ctx = egui::Context::default();
+        let draw = |ctx: &egui::Context, events: Vec<egui::Event>| {
+            let out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                ui.data_mut(|d| d.insert_temp(ui.scope_id().with(("combo_mono", "f")), filtered));
+                ui.memory_mut(|m| m.request_focus(ui.scope_id().with(("combo_edit", "f"))));
+                font_combo_with_recent_hint(
+                    ui,
+                    FontComboOptions {
+                        id: "f",
+                        width: 150.0,
+                        current: "",
+                        items: &fonts,
+                        recent: &[],
+                        monospaced: &monospaced,
+                        preview: None,
+                        tip: "",
+                    },
+                );
+            });
+            let shown = |name: &str| out.shapes.iter().any(|c| has_text(&c.shape, name));
+            let seen = (shown("Arial Black"), shown("Courier New"));
+            out.drop_without_applying_deltas();
+            seen
+        };
+        draw(&ctx, vec![]);
+        // "r" is in every family's name: the filter alone decides which are listed.
+        let (seen_arial, seen_courier) = draw(&ctx, vec![egui::Event::Text("r".into())]);
+        assert_eq!((seen_arial, seen_courier), (arial, courier), "filter on: {filtered}");
+    }
+}
+
+/// #4398: the dropdown's header has a "Monospace fonts only" box; ticking it lists only the
+/// monospaced families, clearing it lists them all again.
+#[test]
+fn the_dropdown_offers_a_monospace_only_box() {
+    use egui_kittest::kittest::Queryable;
+    let fonts: Vec<String> = ["Arial", "Courier New", "Times New Roman"].map(String::from).to_vec();
+    let monospaced: Vec<String> = vec!["Courier New".into()];
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui(|ui| {
+        font_combo_with_recent_hint(
+            ui,
+            FontComboOptions { id: "f", width: 150.0, current: "", items: &fonts, recent: &[], monospaced: &monospaced, preview: None, tip: "Font" },
+        );
+    });
+    h.run_steps(2);
+    h.get_by_label("Font options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Arial").is_some() && h.query_by_label("Courier New").is_some(), "every family is listed");
+    h.get_by_label("Monospace fonts only").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Arial").is_none(), "a proportional family is left out");
+    assert!(h.query_by_label("Courier New").is_some(), "a monospaced one stays");
+    // Add Font… isn't a pick: the filter is still on when the list opens again.
+    h.get_by_label("Add Font…").click();
+    h.run_steps(3);
+    h.get_by_label("Font options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Arial").is_none(), "Add Font… keeps the filter");
+    h.get_by_label("Monospace fonts only").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Arial").is_some(), "unticked, every family is back");
+}
+
 /// The typed list was built invisibly (a sizing pass) on each keystroke that changed its
 /// length, so it blinked out for a frame. It is drawn on the keystroke's own frame.
 #[test]
