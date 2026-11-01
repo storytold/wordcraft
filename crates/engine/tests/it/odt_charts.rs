@@ -49,3 +49,36 @@ fn an_odt_chart_opens_drawn_and_editable() {
     s.run("chart.title", &json!({"text": "Weekly visits"})).unwrap();
     assert_eq!(charts(&s), [(ChartType::Column, Some("Weekly visits".to_string()), true)]);
 }
+
+#[test]
+fn a_chart_in_a_group_opens_drawn() {
+    // The chart is a member of a drawing group (`draw:g`): it is drawn too.
+    let odt = odt();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&odt)).unwrap();
+    let chart = std::io::read_to_string(z.by_name("Object 1/content.xml").unwrap()).unwrap();
+    let content = format!(
+        r#"<office:document-content {NS}><office:body><office:text><text:p>Group <draw:g text:anchor-type="as-char"><draw:frame svg:x="0in" svg:y="0in" svg:width="3in" svg:height="2in"><draw:object xlink:href="./Object 1"/></draw:frame><draw:rect svg:x="3in" svg:y="0in" svg:width="1in" svg:height="1in"/></draw:g></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in
+        [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("Object 1/content.xml", chart.as_str())]
+    {
+        w.start_file(name, o).unwrap();
+        w.write_all(data.as_bytes()).unwrap();
+    }
+    let doc = io::open_bytes("group.odt", &w.finish().unwrap().into_inner()).unwrap();
+    let members: Vec<bool> = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::Group { children, .. } = o { Some(children) } else { None })
+        .flatten()
+        .filter_map(|c| match &c.obj {
+            InlineObject::Graphic { graphic, .. } if graphic.chart.is_some() => Some(!graphic.items.is_empty()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(members, [true]);
+}

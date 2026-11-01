@@ -24,9 +24,25 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
 /// Draw the charts a reader left undrawn (ODT charts come as their chart model alone): in the
 /// document's theme colours, at their size.
 fn draw_charts(doc: &mut Document) {
+    use wordcraft_doc::para::InlineObject;
+    /// Groups nest at most this deep here (the readers flatten deeper ones).
+    const DEPTH: usize = 16;
+    fn undrawn(o: &InlineObject, depth: usize) -> bool {
+        match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() && graphic.items.is_empty(),
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter().any(|c| undrawn(&c.obj, depth + 1)),
+            _ => false,
+        }
+    }
+    fn draw(o: &mut InlineObject, theme: &[wordcraft_doc::Rgb], depth: usize) {
+        match o {
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter_mut().for_each(|c| draw(&mut c.obj, theme, depth + 1)),
+            o if undrawn(o, depth) => crate::cmd::chart::redraw(o, theme),
+            _ => {}
+        }
+    }
     let theme = doc.settings.theme_colors.clone();
-    let undrawn = |o: &wordcraft_doc::para::InlineObject| matches!(o, wordcraft_doc::para::InlineObject::Graphic { graphic, .. } if graphic.chart.is_some() && graphic.items.is_empty());
-    doc.objects_mut(&undrawn, &mut |o| crate::cmd::chart::redraw(o, &theme));
+    doc.objects_mut(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, 0));
 }
 
 /// Save to a format other than plain text / JSON.
