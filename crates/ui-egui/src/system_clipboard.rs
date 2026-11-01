@@ -72,12 +72,7 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// set it, else the text through egui. egui sets its text at the end of the frame, which would
 /// replace the HTML, so only one of them runs.
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
-    if text.is_empty() {
-        // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
-        // else Paste would find the text copied before it and paste that instead of our copy.
-        if !html.is_empty() {
-            ctx.copy_text(String::new());
-        }
+    if text.is_empty() && html.is_empty() {
         return;
     }
     if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
@@ -245,6 +240,33 @@ mod tests {
         };
         let e = app(unreadable).run("edit.paste", json!({})).unwrap_err();
         assert!(e.contains("couldn't be read") && e.contains("isn't supported"), "{e}");
+    }
+
+    #[test]
+    fn copying_a_picture_includes_its_pixels_in_the_html() {
+        let mut a = app(Services::default());
+        let png = crate::paste_picture::png_from_rgba(4, 4, vec![200; 64]).unwrap();
+        a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})).unwrap();
+        let copied = a.run("edit.copy", json!({})).unwrap();
+        let html = copied["html"].as_str().unwrap();
+        assert!(html.contains("data:image/png;base64,"), "{html}");
+    }
+
+    #[test]
+    fn rich_only_copy_keeps_its_html_on_the_system_clipboard() {
+        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String)>::new()));
+        let sink = got.clone();
+        let a = app(Services {
+            set_clipboard_html: Some(Box::new(move |html, text, _| {
+                sink.borrow_mut().push((html.to_string(), text.to_string()));
+                true
+            })),
+            ..Default::default()
+        });
+        let ctx = egui::Context::default();
+        let html = "<p><img src=\"data:image/png;base64,test\"></p>";
+        put(&a, &ctx, "", html, "");
+        assert_eq!(*got.borrow(), vec![(html.to_string(), String::new())]);
     }
 
     #[test]

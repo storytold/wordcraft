@@ -139,6 +139,9 @@ mod tests {
     #[test]
     fn the_player_and_the_file_browser_close_from_the_box() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let dir = std::env::temp_dir().join(format!("wordcraft-close-box-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.session.path = Some(dir.join("document.docx"));
         app.session.read_aloud.open = true;
         let mut h = harness(app);
         for _ in 0..4 {
@@ -153,6 +156,7 @@ mod tests {
         assert!(h.state().file_browser.open.is_some(), "the browser opened");
         click_close_box(&mut h, egui::Id::unique("builtin_file_browser"));
         assert!(h.state().file_browser.open.is_none(), "the browser is cancelled");
+        std::fs::remove_dir(dir).unwrap();
     }
 
     /// The box is pointer-only, like a Windows caption button: Tab never lands on it, so Enter
