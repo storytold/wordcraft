@@ -1,5 +1,7 @@
 # Local document recovery
 
+> **Last updated:** 2026-11-01 · **Change:** minor (opt-in bounded Linux process soak; native-platform and power-loss qualification remain open).
+
 Desktop WordCraft periodically keeps a local copy of unsaved work, including new drafts.
 File › Recover lists available copies. The page opens at startup when copies are found,
 unless a document was explicitly created or opened before the startup scan completed.
@@ -99,6 +101,52 @@ The contribution also uses a native SIGKILL/restart replay in temporary profiles
 drafts and edited existing files. It uses synthetic inputs and hashes the original before and
 after. No Microsoft Word operation is needed for this reliability test.
 
+## Opt-in Linux process soak
+
+The existing isolated recovery test family also has a sustained process replay. It is ignored
+by normal CI. On Linux, choose a **new absolute output directory**
+whose parent already exists (including a symlinked parent), an explicit duration in seconds
+and an iteration limit:
+
+```sh
+WORDCRAFT_RECOVERY_SOAK_SECONDS=180 \
+WORDCRAFT_RECOVERY_SOAK_ITERATIONS=4 \
+WORDCRAFT_RECOVERY_SOAK_DIR=/tmp/wordcraft-recovery-soak-new \
+cargo test -p wordcraft-engine --lib \
+  recovery::desktop::tests::soak::sustained_crash_restart -- --ignored --exact --nocapture
+```
+
+The duration must be 50–3,600 seconds; the iteration limit is 1–100 and defaults to 32.
+The replay stops at the iteration limit or when the remaining duration cannot admit a complete
+50-second cycle. A cycle uses the real ten-second snapshot interval, without forcing timers:
+
+- Open two original synthetic files, edit both repeatedly and wait for two completed snapshots
+  of each. Compare each snapshot with the entire in-memory model.
+- Obstruct each next generation's rename, edit again and observe failed writes while checking
+  that both earlier generations remain byte-identical.
+- Verify the spawned child's PID, executable, parent and start time, terminate that child with
+  SIGKILL and wait for its exit. Corrupt one newest generation in the stopped synthetic profile.
+- Start a fresh process and restore both documents beside existing unsaved work. One must use
+  the latest successful snapshot; the other must fall back to the previous valid generation.
+  Compare the full restored models and save separate native JSON and DOCX copies.
+- Reopen those copies in another fresh process and verify the saved edits. Native comparison
+  excludes only the four core fields that a normal Save updates: last-modified author,
+  created/modified timestamps and revision. Title, subject, creator, keywords, description
+  and category have non-empty synthetic values and remain part of the comparison.
+  Compare both original files'
+  exact bytes and SHA-256 before and after the cycle.
+
+The output retains profiles, originals, expected models, process logs, a copy of the newest
+generation before deliberate corruption and restored documents. `progress.json` records completed
+iterations; `report.json` is written only after a successful run and gives the requested duration,
+completed iterations, snapshot/failure/restore latencies, original hashes and stopping condition.
+An existing output directory is refused. The replay never uses a daily-driver profile or finds
+processes by name or port. The test guard settles only children it started, including on failure.
+
+This qualifies the Linux engine host hook and recovery commands in synthetic child processes.
+It does not drive a native desktop window, simulate power loss or qualify Windows, macOS or Word.
+Longer real-world and native-platform soak work remains open. No CI workflow is added.
+
 ## Maintenance validation
 
 The 2026-10-12 rebase retains main’s editable graphic models, native font setup, current
@@ -110,3 +158,9 @@ all repository CI gates; no daily-driver recovery folder or native app is operat
 The desktop host chooses the private recovery profile. Recovery commands accept known
 snapshot IDs, never file paths or a profile override. This internal store is separate from
 the automation roots that constrain opening and saving user documents.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-01 | minor | Add an opt-in bounded Linux recovery process soak with real timers, multi-document failed-write/crash/fallback checks, retained evidence and fresh native/DOCX reopen; native-platform and power-loss qualification remain open. |
