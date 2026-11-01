@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::control::{self, MAX_CONTROL_NESTING};
 use crate::para::{InlineObject, Run};
 use crate::props::{CharProps, ParaProps};
 use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
@@ -864,9 +865,13 @@ impl Document {
 
     /// Copies of the text box stories shapes in `blocks` show, nested boxes included.
     fn text_box_parts(&self, blocks: &[Block]) -> BTreeMap<u32, Part> {
-        let mut out = BTreeMap::new();
+        self.with_text_box_parts(blocks, BTreeMap::new())
+    }
+
+    /// `out`, plus copies of this document's text box stories `blocks` or `out` show and `out` lacks.
+    fn with_text_box_parts(&self, blocks: &[Block], mut out: BTreeMap<u32, Part>) -> BTreeMap<u32, Part> {
         let mut todo = Vec::new();
-        for b in blocks {
+        for b in blocks.iter().chain(out.values().flat_map(|p| p.blocks.iter().map(|b| &**b))) {
             each_para(b, 0, &mut |p| todo.extend(box_ids(p)));
         }
         while let Some(id) = todo.pop() {
@@ -1026,9 +1031,18 @@ impl Document {
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
+        // Controls that would nest deeper than the limit here lose their markers, keeping their
+        // content (#3618). A story the fragment lacks is copied from this document, so it counts.
+        let room = MAX_CONTROL_NESTING.saturating_sub(self.control_nesting(pos, pos));
+        let mut parts = self.with_text_box_parts(&blocks, frag.parts.clone());
+        let mut bl: Blocks = blocks.into_iter().map(Arc::new).collect();
+        if control::nesting_peak(&bl, &parts) > room {
+            control::trim_nesting(&mut bl, &mut parts, room);
+        }
+        let mut blocks: Vec<Block> = bl.into_iter().map(|b| Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone())).collect();
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
             log::warn!(
