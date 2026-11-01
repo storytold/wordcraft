@@ -410,14 +410,19 @@ impl<'a> Flow<'a> {
         fit
     }
 
-    /// Whether the line may overflow the page: one holding nothing but a page or column break stays
-    /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
-    /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
-    /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
+    /// Whether the line (the paragraph's line `l0`) may overflow the page: one holding nothing but
+    /// a page or column break, with text after it in the paragraph, stays at the bottom of the
+    /// page even when it doesn't fit (it only ends the page, and moving it would leave a blank
+    /// page behind it, as in Word), and so does an empty paragraph closing a section before a new
+    /// page (measured in Word: it stays on a full page instead of starting one of its own).
+    /// Measured in Word: a paragraph of only a page break is an ordinary line, and when its mark's
+    /// text doesn't fit it goes to the next page, blank page and all.
     fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
         let p = self.p;
+        let mark_only_after =
+            l.end == LineEnd::PageBreak && self.pl.lines.get(self.l0 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
         let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+            && !mark_only_after
             && p.text
                 .get(l.start..l.stop)
                 .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));

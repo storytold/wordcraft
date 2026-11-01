@@ -5877,6 +5877,46 @@ fn a_page_break_at_the_bottom_of_a_full_page_leaves_no_blank_page() {
     assert!(last_on_2, "the text after the break is on page 2");
 }
 
+/// Measured in Word for Mac: a paragraph holding only a page break is an ordinary line. When it
+/// doesn't fit at the bottom of a full page it goes to the next one, and its break leaves that
+/// page blank. Only a break with text after it in its paragraph stays on the full page (#534).
+/// WordCraft kept both on the page, so a paper's references started a page early.
+#[test]
+fn a_paragraph_of_only_a_page_break_moves_when_it_does_not_fit() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let doc = |spacing: LineSpacing, room: f32, tail: &[&str]| {
+        let para = |text: &str| {
+            let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+            p.mark = chr.clone();
+            p.props = ParaProps { line_spacing: Some(spacing), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+            wordcraft_doc::para_block(p)
+        };
+        let mut d = Document::new();
+        d.body = (0..20).map(|i| para(&format!("Line {i}"))).chain(tail.iter().map(|t| para(t))).collect();
+        let l = lay(&d);
+        let pitch = l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top;
+        d.last_section.margin_bottom = d.last_section.page_h - d.last_section.margin_top - 20.0 * pitch - room;
+        d
+    };
+    let pages = |d: &Document| lay(d).pages.len();
+    let single = {
+        let l = lay(&doc(LineSpacing::Multiple(1.0), 600.0, &[]));
+        l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top
+    };
+    let only = ["\u{000C}", "After"];
+    let start = ["\u{000C}After"];
+    // Exactly 24 pt lines, 10 pt left: the break's own paragraph moves, a blank page follows.
+    assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &only)), 3, "exact, break only");
+    assert_eq!(pages(&doc(LineSpacing::Exactly(24.0), 10.0, &start)), 2, "exact, break before text");
+    // Double spacing: the break's paragraph moves when not even its text fits, and stays when the
+    // whole line does. (Word also keeps it once only its text fits, the leading hanging into the
+    // bottom margin: that is #1172's last-line rule.)
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &only)), 3, "double, text doesn't fit");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), 2.0 * single + 0.2, &only)), 2, "double, line fits");
+    assert_eq!(pages(&doc(LineSpacing::Multiple(2.0), single - 0.2, &start)), 2, "double, break before text");
+}
+
 /// #534: indents in characters (`w:firstLineChars`) are measured in the paragraph mark's font
 /// size and win over the indent in points.
 #[test]
