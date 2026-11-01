@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
-            s.prefs.overtype = p::bool(v, "value").unwrap_or(!s.prefs.overtype);
+            s.prefs.overtype = p::toggle(v, s.prefs.overtype)?;
             Ok(json!({"value": s.prefs.overtype}))
         })
         .params(r#"{"value"?: bool (default: toggle)}"#)

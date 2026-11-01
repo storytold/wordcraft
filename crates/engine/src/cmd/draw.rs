@@ -255,7 +255,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"value"?: bool}  (starts or stops Ink Replay; returns the strokes in the order they were drawn)"#)
             .pure(),
         CommandSpec::new("review.hideInk", "Hide Ink", "Review › Ink", |s, v| {
-            s.view.hide_ink = p::bool(v, "value").unwrap_or(!s.view.hide_ink);
+            s.view.hide_ink = p::toggle(v, s.view.hide_ink)?;
             Ok(json!({"value": s.view.hide_ink}))
         })
         .params(r#"{"value"?: bool}"#)
@@ -906,7 +906,7 @@ pub fn strokes_in_drawing_order(s: &mut Session) -> Vec<(usize, PlacedInk)> {
 
 /// Start or stop Ink Replay; the strokes in the order they'll be replayed.
 fn replay(s: &mut Session, v: &Value) -> CmdResult {
-    let on = p::bool(v, "value").unwrap_or(!s.view.draw.replay);
+    let on = p::toggle(v, s.view.draw.replay)?;
     let strokes = if on { strokes_in_drawing_order(s) } else { Vec::new() };
     if on && strokes.is_empty() {
         return Err(CmdError::Failed("there is no ink to replay".into()));

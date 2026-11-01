@@ -28,6 +28,33 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let chrome = self.chrome_shape();
+        let r = self.run_command(id, params);
+        self.after_chrome_change(chrome);
+        r
+    }
+
+    /// What hides chrome, as one comparable value: the screen state and whether the ribbon is
+    /// collapsed.
+    pub(crate) fn chrome_shape(&self) -> (crate::chrome::Screen, bool) {
+        (crate::chrome::Screen::of(&self.session.view), self.ui.ribbon_collapsed)
+    }
+
+    /// A command that hides chrome — Focus, Full Screen View, or collapsing the ribbon — takes the
+    /// text field the keyboard was in with it. egui keeps the focus on a widget that is no longer
+    /// drawn, so every key afterwards goes nowhere (#1678). Give the keyboard back to the page, as
+    /// a click on the chrome does (#1093); a dialog, the File page or the page keeps its own.
+    fn after_chrome_change(&mut self, before: (crate::chrome::Screen, bool)) {
+        if self.chrome_shape() == before || self.dialog.is_some() || self.colors.is_some() || self.ui.backstage {
+            return;
+        }
+        let Some(ctx) = self.ctx.clone() else { return };
+        if ctx.text_edit_focused() {
+            self.hand_keyboard_to_the_page(&ctx);
+        }
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -112,6 +139,27 @@ impl WordApp {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
+        }
+        let chrome = self.chrome_shape();
+        let r = self.execute_command(id, params);
+        self.after_chrome_change(chrome);
+        r
+    }
+
+    fn execute_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A pending Change Picture only survives until the next action (#147).
+        if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
+            self.change_picture_target = None;
+        }
+        if !matches!(id, "ui.openRecipientList" | "mailings.recipients") {
+            self.recipient_list_pending = false;
+        }
+        // No document open (#1129): only the commands that open or create one, Help, and the
+        // settings work.
+        if !self.has_document() && !works_without_document(id) {
+            let e = tl!("No document is open. Create a document or open one first.").to_string();
+            self.status(e.clone());
+            return Err(e);
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -571,12 +619,13 @@ impl WordApp {
             }
             "ui.focusRibbon" => {
                 // Focus's "⋯" (#1678): `value` true drops the ribbon down over the page, false
-                // puts it away; no value toggles it. Outside Focus there is no ribbon to drop:
-                // it stays put away.
-                let focus = chrome::Screen::of(&self.session.view) == chrome::Screen::Focus;
+                // puts it away; no value toggles it. Both screen states can drop it — keytips use
+                // it in Full Screen View, which has no "⋯" of its own. In the usual window there
+                // is no ribbon to drop: it stays put away.
+                let droppable = chrome::Screen::of(&self.session.view) != chrome::Screen::Normal;
                 match p.get("value") {
-                    None => self.focus_ribbon = focus && !self.focus_ribbon,
-                    Some(Value::Bool(on)) => self.focus_ribbon = focus && *on,
+                    None => self.focus_ribbon = droppable && !self.focus_ribbon,
+                    Some(Value::Bool(on)) => self.focus_ribbon = droppable && *on,
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"focusRibbon": self.focus_ribbon})
@@ -1017,6 +1066,13 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "view.marks"
             | "view.ruler"
             | "view.numeral"
+            // The screen states must always be leavable: with no document open they are still the
+            // way out of a full-screen empty window (#1678).
+            | "view.focus"
+            | "view.fullScreenView"
+            | "view.fullScreen"
+            // And the bar's own "⋯" must work there too: it is how the ribbon comes back.
+            | "ui.focusRibbon"
             | "ui.tab"
             | "ui.backstage"
             | "ui.dialog"

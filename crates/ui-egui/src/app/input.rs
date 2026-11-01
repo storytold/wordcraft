@@ -119,25 +119,32 @@ impl WordApp {
         }
         let on_chrome = on_focus_ribbon || ctx.layer_id_at(pos).is_none_or(|l| l.order == egui::Order::Background);
         if on_chrome && ctx.memory(|m| m.focused().is_none()) && !egui::Popup::is_any_open(ctx) {
-            self.canvas.want_focus = true;
-            // The page has already been drawn, so it only sees `want_focus` next frame, and its own
-            // `focused` flag (which gates the keys) isn't recomputed until then either. Claim both
-            // now, or the click swallows the first keystroke.
-            self.canvas.focused = true;
-            // Only a page this pass drew. The File page's back arrow closes the File page in the
-            // pass that drew it instead of the page, and focus on a widget missing from the pass
-            // names a node AccessKit doesn't have: with accessibility on, AccessKit ends the program
-            // over that. `want_focus` hands the keyboard over next frame instead.
-            if let Some((id, pass)) = self.canvas.widget_id
-                && pass == ctx.cumulative_pass_nr()
-            {
-                ctx.memory_mut(|m| m.request_focus(id));
-            }
-            // The canvas reads keys before it takes focus back (#1107), so it counts as focused
-            // now: a keystroke in the very next frame reaches the page instead of being dropped.
-            self.canvas.focused = true;
-            ctx.request_repaint();
+            self.hand_keyboard_to_the_page(ctx);
         }
+    }
+
+    /// Give the page the keyboard, as a click on the chrome does (#1093): the caret keeps blinking
+    /// and typing continues where it was. Also used when the chrome that had the keyboard goes
+    /// away (#1678) — Focus hides the ribbon and a collapsed ribbon hides its body — because egui
+    /// keeps the focus on a widget that is no longer drawn, and every key would go nowhere.
+    pub(super) fn hand_keyboard_to_the_page(&mut self, ctx: &egui::Context) {
+        self.canvas.want_focus = true;
+        // Only a page this pass drew can take the keyboard. The File page's back arrow closes the
+        // File page in the pass that drew it instead of the page, and focus on a widget missing
+        // from the pass names a node AccessKit doesn't have: with accessibility on, AccessKit ends
+        // the program over that. `want_focus` hands the keyboard over next frame instead.
+        //
+        // The same guard keeps the empty window working: with no document open there is no page,
+        // so claiming `focused` would leave it true with nothing to receive the keys, and
+        // `global_shortcuts` — which steps aside for a focused page — would swallow every one,
+        // Escape included.
+        let Some((id, _)) = self.canvas.widget_id.filter(|(_, pass)| *pass == ctx.cumulative_pass_nr()) else { return };
+        ctx.memory_mut(|m| m.request_focus(id));
+        // The page has already been drawn, so it only sees `want_focus` next frame, and its own
+        // `focused` flag (which gates the keys) isn't recomputed until then either. Claim it now,
+        // or the click swallows the first keystroke (#1093, #1107).
+        self.canvas.focused = true;
+        ctx.request_repaint();
     }
 }
 

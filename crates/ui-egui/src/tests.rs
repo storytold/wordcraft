@@ -1,6 +1,7 @@
 use super::*;
 use egui_kittest::kittest::Queryable;
 
+mod focus_mode;
 mod perf;
 
 fn mod_key(key: egui::Key) -> egui::Event {
@@ -3694,11 +3695,14 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     }
     type_after_click(&mut h, "empty ribbon space", " blank");
 
-    // The status bar's view buttons.
-    h.get_by_role_and_label(Role::Button, "Web Layout").click();
+    // The status bar's view buttons. The ribbon's View tab is showing, and its big buttons carry
+    // the same names (#1678: drawn ribbon buttons are named for screen readers), so the lower of
+    // the two is the status bar's.
+    let lowest = |a: &egui_kittest::Node<'_>, b: &egui_kittest::Node<'_>| a.rect().top().total_cmp(&b.rect().top());
+    h.query_all_by_role_and_label(Role::Button, "Web Layout").max_by(lowest).expect("a Web Layout button").click();
     type_after_click(&mut h, "Web Layout", " web");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Web);
-    h.get_by_role_and_label(Role::Button, "Print Layout").click();
+    h.query_all_by_role_and_label(Role::Button, "Print Layout").max_by(lowest).expect("a Print Layout button").click();
     type_after_click(&mut h, "Print Layout", " print");
     assert_eq!(h.state().session.view.mode, wordcraft_layout::ViewMode::Print);
 
@@ -7168,7 +7172,13 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     }
     let shown = |h: &egui_kittest::Harness<WordApp>, label| h.query_by_label(label).is_some();
     assert!(shown(&h, "Ruler"), "the View tab is showing");
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Focus").click();
+    // The ribbon's Focus button: the status bar's carries the same name now, so take the upper one.
+    let ribbon_focus = h
+        .query_all_by_role_and_label(egui::accesskit::Role::Button, "Focus")
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a Focus button");
+    assert!(ribbon_focus.rect().top() < 200.0, "the ribbon's is the upper one");
+    ribbon_focus.click();
     h.step();
     h.step();
     assert!(h.state().session.view.focus_mode);

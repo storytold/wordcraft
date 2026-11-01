@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(state(s))
         }),
         CommandSpec::new("tools.linkStyles", "Automatically Update Document Styles", LOC, |s, v| {
-            s.doc.settings.link_styles = p::bool(v, "value").unwrap_or(!s.doc.settings.link_styles);
+            s.doc.settings.link_styles = p::toggle(v, s.doc.settings.link_styles)?;
             Ok(state(s))
         })
         .params(r#"{"value"?: bool (default: toggle)}"#),

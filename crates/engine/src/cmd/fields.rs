@@ -20,7 +20,7 @@ const MAX_CODE: usize = 4096;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("view.fieldCodes", "Field Codes", "View › Show", |s, v| {
-            s.view.field_codes = p::bool(v, "value").unwrap_or(!s.view.field_codes);
+            s.view.field_codes = p::toggle(v, s.view.field_codes)?;
             s.relayout();
             Ok(json!({"value": s.view.field_codes}))
         })

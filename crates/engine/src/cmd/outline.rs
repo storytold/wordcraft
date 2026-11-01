@@ -154,7 +154,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(in_outline)
             .pure(),
         CommandSpec::new("outline.firstLineOnly", "Show First Line Only", "Outlining › Outline Tools", |s, v| {
-            s.view.outline.first_line_only = p::bool(v, "value").unwrap_or(!s.view.outline.first_line_only);
+            s.view.outline.first_line_only = p::toggle(v, s.view.outline.first_line_only)?;
             Ok(json!({"value": s.view.outline.first_line_only}))
         })
         .key(super::non_mac("Alt+Shift+L"))
@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(in_outline)
         .pure(),
         CommandSpec::new("outline.showFormatting", "Show Text Formatting", "Outlining › Outline Tools", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(s.view.outline.hide_formatting);
+            let on = p::switch(v, s.view.outline.hide_formatting)?;
             s.view.outline.hide_formatting = !on;
             Ok(json!({"value": on}))
         })

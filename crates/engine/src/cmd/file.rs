@@ -120,7 +120,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         // A print setting, like Word's: not part of the document, so no undo step.
         CommandSpec::new("file.printMarkup", "Print Markup", "File › Print", |s, v| {
-            s.prefs.print_markup = p::bool(v, "value").unwrap_or(!s.prefs.print_markup);
+            s.prefs.print_markup = p::toggle(v, s.prefs.print_markup)?;
             Ok(json!({"value": s.prefs.print_markup}))
         })
         .params(r#"{"value"?: bool (omit to toggle)} — PDFs, prints and copies show comments (balloons beside each page; a list at the end of HTML, Markdown and text) and tracked changes"#)

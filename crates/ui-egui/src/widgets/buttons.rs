@@ -120,6 +120,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
     }
+    // A drawn button is still a button to a screen reader: without this its label exists only as
+    // paint, so the whole ribbon is unnamed (#1678).
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, label.replace('\n', " ")));
     resp
 }
 

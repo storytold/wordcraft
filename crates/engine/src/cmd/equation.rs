@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure()
         .params(r#"{"format": "unicode|latex"}"#),
         CommandSpec::new("equation.normalText", "Normal Text", "Equation › Tools", |s, v| {
-            s.math_normal_text = p::bool(v, "value").unwrap_or(!s.math_normal_text);
+            s.math_normal_text = p::toggle(v, s.math_normal_text)?;
             Ok(json!({"normalText": s.math_normal_text}))
         })
         .pure()
@@ -669,6 +669,8 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
 /// Toggles or sets the equation's inline or display mode.
 fn set_display(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    // A `value` that is not a boolean refuses the command before the equation changes.
+    p::check_switch(v)?;
     let (_, effect) = with_eq(s, &at, |_, display| *display = p::bool(v, "value").unwrap_or(!*display))?;
     apply_effect(s, effect, false);
     result(s)
@@ -695,6 +697,8 @@ fn justify(s: &mut Session, v: &Value) -> CmdResult {
 /// Add (or remove) an automatic equation number: `#` with nothing after it.
 fn number(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    // A `value` that is not a boolean refuses the command before the equation changes.
+    p::check_switch(v)?;
     let mut pos_reset = false;
     let (_, effect) = with_eq(s, &at, |math, display| {
         let numbered = matches!(math.nodes.as_slice(), [MNode::EqArr { rows }] if rows.iter().any(|r| wordcraft_doc::math::has_number_mark(r)));

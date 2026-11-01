@@ -50,12 +50,14 @@ pub(super) fn set_align(s: &mut Session, a: Align) -> CmdResult {
 /// the direction changes: alignment and indents are logical, so a start-aligned paragraph moves
 /// to the other side, as in Word. `rtl` is what the command turns on; `value: false` turns it off.
 pub(super) fn direction(s: &mut Session, v: &Value, rtl: bool) -> CmdResult {
-    let on = p::bool(v, "value").unwrap_or(true);
+    let on = p::switch(v, true)?;
     let want = if on { rtl } else { !rtl };
     fmt(s, &|p| p.bidi = Some(want))
 }
 
 pub(super) fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool>, set: fn(&mut ParaProps, bool)) -> CmdResult {
+    // A `value` that is not a boolean refuses the command before the paragraph changes.
+    p::check_switch(v)?;
     let on = p::bool(v, "value").unwrap_or_else(|| {
         let r = cur(s);
         let props = s.doc.para_at(&s.sel.focus).map(|p| p.props.clone()).unwrap_or_default();

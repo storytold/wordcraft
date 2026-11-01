@@ -41,7 +41,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"items": [string | {"text": string, "level"?: 0-7}]} (replaces the outline)"#)
         .when(has_smart_art),
         CommandSpec::new("smartArt.textPane", "Text Pane", "SmartArt Design › Create Graphic", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!s.view.smart_art_pane);
+            let on = p::toggle(v, s.view.smart_art_pane)?;
             s.view.smart_art_pane = on;
             Ok(json!({"value": on}))
         })
