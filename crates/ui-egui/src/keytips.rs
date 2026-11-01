@@ -462,7 +462,10 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
             out[i] = Some(c.to_string());
         }
     }
-    // Pass 2: name-derived letters for everything still unassigned.
+    // Pass 2: name-derived letters for everything still unassigned. A control that finds no free
+    // letter is left for the two-letter pass below.
+    let mut named: Vec<usize> = Vec::new();
+    let mut overflow: Vec<usize> = Vec::new();
     for (i, ctl) in ctrls.iter().enumerate() {
         if out[i].is_some() {
             continue;
@@ -476,20 +479,29 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
             Some(c) => {
                 used.push(c);
                 out[i] = Some(c.to_string());
+                named.push(i);
             }
-            None => {
-                // Two-letter badge fallback: a tab has at most ~20 controls, so this succeeds;
-                // the "?n" form keeps assignment total rather than panicking.
-                let two = ('A'..='Z').flat_map(|a| ('A'..='Z').map(move |b| format!("{a}{b}"))).find(|s| {
-                    let mut ch = s.chars();
-                    let (a, b) = (ch.next().unwrap_or('?'), ch.next().unwrap_or('?'));
-                    !out.iter().flatten().any(|o| o == s) && !reserved.contains(&a) && !reserved.contains(&b)
-                });
-                let two = two.unwrap_or_else(|| format!("?{}", out.iter().flatten().count()));
-                used.extend(two.chars());
-                out[i] = Some(two);
-            }
+            None => overflow.push(i),
         }
+    }
+    // Pass 3: two-letter badges. No badge may be the start of another (Word's rule), or the short
+    // one runs the moment its letter is typed and the long one can never be completed (#4498).
+    // So the first letter of every two-letter badge is a letter no single-letter badge uses: the
+    // letters of the last name-derived badges are given up for that until the overflow fits.
+    let seconds: Vec<char> = ('A'..='Z').filter(|c| !reserved.contains(c)).collect();
+    let mut firsts: Vec<char> = Vec::new();
+    let mut two: Vec<usize> = overflow;
+    while !two.is_empty() && firsts.len() * seconds.len() < two.len() {
+        let Some(i) = named.pop() else { break };
+        let letter = out[i].take().and_then(|l| l.chars().next());
+        firsts.extend(letter);
+        two.push(i);
+    }
+    two.sort_unstable();
+    let mut labels = firsts.iter().flat_map(|a| seconds.iter().map(move |b| format!("{a}{b}")));
+    for i in two {
+        // "?n" keeps the assignment total, with nothing to run it, rather than panicking.
+        out[i] = Some(labels.next().unwrap_or_else(|| format!("?{i}")));
     }
     out.into_iter().map(Option::unwrap_or_default).collect()
 }
@@ -634,6 +646,14 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                         let tab = app.ui.tab.clone();
                         let ls = letters_for(app, &tab);
                         let ctrls = controls(&tab);
+                        // Badges are never the start of one another, so a complete one is the one.
+                        let name = format!("{}{name}", app.ui.keytip_prefix);
+                        // The start of a two-letter badge: wait for its next letter, with
+                        // KeyTips still on and only the badges it can complete showing (#4498).
+                        if !ls.contains(&name) && ls.iter().any(|l| l.starts_with(&name)) {
+                            app.ui.keytip_prefix = name;
+                            return true;
+                        }
                         let mut hit: Option<Target> = None;
                         for (ctl, l) in ctrls.into_iter().zip(ls) {
                             if l == name {
@@ -859,6 +879,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
         return;
     }
     let cmds: Vec<(Rect, String)> = ui.data(|d| d.get_temp::<Vec<(Rect, String)>>(rects_id())).unwrap_or_default();
+    // After the start of a two-letter badge only the badges it can still complete show.
+    let prefix = app.ui.keytip_prefix.clone();
+    let cmds = cmds.into_iter().filter(|(_, l)| app.ui.keytips != Phase::Commands || l.starts_with(&prefix));
     for (r, l) in tabs.into_iter().chain(cmds) {
         badge(ui, r, &l);
     }
