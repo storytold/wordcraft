@@ -12091,3 +12091,128 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+/// A caption kept with the next paragraph (`keepNext`) before a table goes over with the table
+/// when the table's repeated header row and the start of its first row don't fit under it, as in
+/// Word, instead of staying alone at the foot of the page: keep with next asked a table for a
+/// flat 24 pt. The first row need not fit whole: Word keeps the caption where the row splits
+/// under it with two lines (widow/orphan control in the cell). Swept over the filler lines above,
+/// so the caption lands at every offset from the foot of the page.
+#[test]
+fn a_caption_kept_with_a_table_goes_over_with_the_start_of_its_first_row() {
+    let mut split_under_it = false;
+    for fill in 20..40 {
+        let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+        // No space after: what a kept paragraph's space after adds is not this test's.
+        d.format_paragraphs(&Pos::body(fill, 0), &Pos::body(fill, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        let mut t = Table::new(2, 1, 468.0);
+        t.rows[0].props.header = true;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header", Default::default()))];
+        t.rows[1].cells[0].blocks =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"first row words go on and on ".repeat(60), Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = l
+            .pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+            .unwrap();
+        // Lines of the first row's text on a page.
+        let first_row_lines = |pi: usize| -> usize {
+            l.pages.get(pi).map_or(0, |p| {
+                p.items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Lines { path, l0, l1, .. } if path.0.len() > 1 && path.0.get(1) == Some(&1) => Some(l1 - l0),
+                        _ => None,
+                    })
+                    .sum()
+            })
+        };
+        let here = first_row_lines(page);
+        assert!(here >= 2, "{fill} filler lines: the caption's page {} holds {here} lines of the first row", page + 1);
+        split_under_it |= first_row_lines(page + 1) > 0;
+    }
+    assert!(split_under_it, "the caption never stays above a first row that splits");
+}
+
+/// Looking ahead at a table for keep with next lays it out once more: the list items in its cells
+/// are still counted once, where the table is placed.
+#[test]
+fn list_items_in_a_table_after_a_kept_caption_are_counted_once() {
+    let mut d = Document::from_text("Caption");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.keep_next = Some(true)).unwrap();
+    let items = numbered(&mut d, &["first item", "second item"], ParaProps::default());
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].cells[0].blocks = items.into_iter().map(wordcraft_doc::para_block).collect();
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    assert_eq!(labels(&lay(&d)), ["1.", "2."]);
+}
+
+/// A first row that can't split starts under a kept caption only where it fits with the border
+/// below it, as placing it needs: otherwise the caption goes over with it instead of staying
+/// alone at the foot of the page. Swept over the caption's space before in 1 pt steps, so the
+/// room left lands between the row's height and its height with the border.
+#[test]
+fn a_caption_kept_with_an_unsplittable_row_counts_the_border_below_it() {
+    for fill in 20..34 {
+        for push in 0..24 {
+            let mut d = ruled_table(fill, 3, 6.0);
+            let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(fill).map(std::sync::Arc::make_mut) else { panic!("no table") };
+            t.rows[0].props.cant_split = true;
+            let mut caption = wordcraft_doc::Paragraph::with_text("Caption", Default::default());
+            caption.props.keep_next = Some(true);
+            caption.props.space_before = Some(push as f32);
+            // No space after: what a kept paragraph's space after adds is not this test's.
+            caption.props.space_after = Some(0.0);
+            d.insert_block(StoryRef::Body, &Path::top(fill), wordcraft_doc::Block::Para(caption)).unwrap();
+            let l = lay(&d);
+            let page_of = |hit: &dyn Fn(&Placed) -> bool| l.pages.iter().position(|p| p.items.iter().any(hit)).unwrap();
+            let caption = page_of(&|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill)));
+            let row = page_of(&|it| matches!(it, Placed::Cell { row: 0, .. }));
+            assert_eq!(caption, row, "{fill} filler lines, {push} pt before the caption: the caption stays on page {} alone", caption + 1);
+        }
+    }
+}
+
+/// A double-spaced caption kept with a table fits by itself where its text does, its last line's
+/// leading running into the bottom margin, and so it goes over with the table that doesn't fit
+/// under it. Measured in Word for Mac (Times New Roman 12 pt, double spacing, the caption's top
+/// 0, 4 and 8 pt below the foot of 52 exactly 12 pt lines): not kept, the caption stays at the
+/// foot of page 1; kept, it starts page 2 with the table.
+#[test]
+fn a_kept_caption_whose_leading_runs_into_the_bottom_margin_goes_with_the_table() {
+    use wordcraft_doc::props::LineSpacing;
+    let fill = 52;
+    for push in [0.0f32, 4.0, 8.0] {
+        for keep in [false, true] {
+            let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+            d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+            d.styles.default_chr.size = Some(12.0);
+            for i in 0..=fill {
+                let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+                p.props.line_spacing = Some(if i < fill { LineSpacing::Exactly(12.0) } else { LineSpacing::Multiple(2.0) });
+                p.props.space_before = Some(if i < fill { 0.0 } else { push });
+                p.props.space_after = Some(0.0);
+                p.props.keep_next = Some(i == fill && keep);
+            }
+            let mut t = Table::new(3, 1, 468.0);
+            t.rows[0].props.cant_split = true;
+            for row in &mut t.rows {
+                row.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("row", Default::default()))];
+            }
+            d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+            let l = lay(&d);
+            let caption = l
+                .pages
+                .iter()
+                .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+                .unwrap();
+            assert_eq!(caption, usize::from(keep), "{push} pt before the caption, kept with the table: {keep}");
+        }
+    }
+}
