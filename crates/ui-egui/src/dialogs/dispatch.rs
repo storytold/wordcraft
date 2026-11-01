@@ -206,7 +206,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ];
         let ligatures_label = ui.label(tl!("Ligatures:"));
         let shown = LIGATURES.iter().find(|(v, _)| v == ligatures).map_or(ligatures.as_str(), |(_, l)| tl!(l));
-        let combo = egui::ComboBox::from_id_salt("fontdlg_ligatures").width(220.0).selected_text(shown).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("fontdlg_ligatures").width(220.0).selected_text(shown).show_ui(ui, |ui| {
             for (v, l) in LIGATURES {
                 ui.selectable_value(ligatures, v.to_string(), tl!(l));
             }
