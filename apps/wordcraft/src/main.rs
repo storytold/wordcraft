@@ -329,6 +329,26 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
+/// the `-NS…` / `-Apple…` options (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) with
+/// the value after each. They are not files, and opening them as files fails.
+fn without_launch_args(args: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(a) = args.next() {
+        if a.starts_with("-psn_") {
+            continue;
+        }
+        if a.starts_with("-NS") || a.starts_with("-Apple") {
+            // Its value, unless the next argument is another flag.
+            args.next_if(|v| !v.starts_with('-'));
+            continue;
+        }
+        kept.push(a);
+    }
+    kept
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
 /// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
@@ -340,7 +360,9 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => {
+            app.report_open_failure(&name, &e);
+        }
     }
 }
 
@@ -350,7 +372,7 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::WORDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
@@ -360,6 +382,8 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
+    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
@@ -504,7 +528,7 @@ fn main() -> eframe::Result {
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
+                    app.report_open_failure(&f, &e);
                 }
             }
             for f in other_files {
@@ -587,6 +611,33 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_arg_tests {
+    use super::without_launch_args;
+
+    fn strip(args: &[&str]) -> Vec<String> {
+        without_launch_args(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn macos_launch_arguments_are_not_files() {
+        assert_eq!(strip(&["-psn_0_12345", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["-AppleLanguages", "(en)", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["a.docx", "-NSDocumentRevisionsDebugMode", "YES", "b.docx"]), ["a.docx", "b.docx"]);
+        // A flag with no value after it, or followed by another flag, takes nothing with it.
+        assert_eq!(strip(&["a.docx", "-AppleLocale"]), ["a.docx"]);
+        assert_eq!(strip(&["-NSFoo", "--sample", "a.docx"]), ["--sample", "a.docx"]);
+    }
+
+    #[test]
+    fn real_arguments_are_kept() {
+        assert_eq!(strip(&["--control", "7981", "--sample", "-h"]), ["--control", "7981", "--sample", "-h"]);
+        // Files whose names merely start like a launch argument keep their place when they are paths.
+        assert_eq!(strip(&["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]), ["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]);
+        assert!(strip(&[]).is_empty());
     }
 }
 

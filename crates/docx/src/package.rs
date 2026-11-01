@@ -96,6 +96,15 @@ pub const MAX_VBA_RELATED: usize = 64;
 pub const EMBEDDED_PARTS: &str = "wordcraft:embedded.parts";
 /// The font table kept from a file (read by `Reader::keep_part_tree`), with the fonts it embeds.
 pub const FONT_TABLE_PART: &str = "word/fontTable.xml";
+
+/// The spelling the font table is stored under in `parts` (part names are case-insensitive, so a
+/// package may spell it `WORD/FONTTABLE.XML`), preferring the exact [`FONT_TABLE_PART`].
+pub fn font_table_key<V>(parts: &BTreeMap<String, V>) -> Option<&str> {
+    if let Some((k, _)) = parts.get_key_value(FONT_TABLE_PART) {
+        return Some(k.as_str());
+    }
+    parts.keys().find(|k| k.eq_ignore_ascii_case(FONT_TABLE_PART)).map(String::as_str)
+}
 /// Custom XML roots kept by the package (P) or main document (D): `owner\ttype\tpart`.
 /// Their opaque bytes and related parts use the same bounded manifest as embedded objects.
 pub const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
@@ -412,7 +421,8 @@ fn rel_targets(files: &BTreeMap<String, Arc<Vec<u8>>>) -> HashSet<String> {
     let mut named = HashSet::new();
     for (name, bytes) in files {
         // `dir/_rels/file.rels` relates `dir/file`, so its targets resolve against `dir`.
-        let Some(at) = name.rfind("_rels/").filter(|_| name.to_ascii_lowercase().ends_with(".rels")) else { continue };
+        let lower = name.to_ascii_lowercase();
+        let Some(at) = lower.rfind("_rels/").filter(|_| lower.ends_with(".rels")) else { continue };
         let dir = name.get(..at).unwrap_or("").trim_end_matches('/');
         let Ok(root) = xml::parse(bytes) else { continue };
         for r in root.els().filter(|e| e.local() == "Relationship") {
