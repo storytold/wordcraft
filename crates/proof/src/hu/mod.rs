@@ -30,68 +30,35 @@ mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::affix::AffixDict;
+use crate::slot::DictSlot;
 
 pub use suggest::suggest;
 
-/// The Hungarian dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<AffixDict>>> = RwLock::new(None);
-
 /// File names of a Hungarian Hunspell dictionary; the first is the key of its load error.
 pub(crate) const NAMES: &[&str] = &["hu_HU", "hu-HU", "hu"];
+
+/// The Hungarian dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Hungarian");
 
 /// The Hungarian dictionary: the installed Hunspell `hu_HU` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available (Hungarian spelling is off then;
 /// see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
-    // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.get_or_insert(loaded).clone()
-}
-
-fn load_installed() -> AffixDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Hungarian spelling: no Hunspell hu_HU dictionary installed");
-        return AffixDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("Hungarian spelling: {e}");
-        AffixDict::default()
-    })
+    DICT.get()
 }
 
 /// Use this Hungarian dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
-    Ok(())
-}
-
-/// Forget the loaded dictionary and hyphenation patterns, so the next check looks for installed
-/// ones again (after [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
-pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
-    hyphen::reload_patterns();
-}
-
-/// The `.dic` file of the installed Hungarian dictionary, searching the dictionaries folder and
-/// the system locations now (File › Options › Proofing shows it); `None` when there is none. A
-/// dictionary given with [`install_dictionary`] has no file and isn't reported.
-pub fn installed_path() -> Option<std::path::PathBuf> {
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.install(aff, dic)
 }
 
 /// Is a Hungarian dictionary available (spelling is checked)?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
+    DICT.has_dictionary()
 }
 
 /// Is `c` a letter of the Latin script (the only one the Hungarian dictionary covers)?
@@ -310,7 +277,7 @@ mod tests {
 
     #[test]
     fn a_failed_load_is_reported_under_the_hungarian_name() {
-        assert_eq!(crate::load_error_key(crate::ProofLang::Hu), Some("hu_HU"));
+        assert_eq!(DICT.name(), "hu_HU");
         assert_eq!(NAMES.first(), Some(&"hu_HU"));
     }
 
