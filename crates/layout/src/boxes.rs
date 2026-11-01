@@ -221,9 +221,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
     // runs with the box's text (#2357).
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
+    // The last paragraph of the text frame placed last: the ones up to it are in that frame.
+    let mut frame_end = 0;
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
     for (i, b) in blocks.iter().enumerate() {
+        if i < frame_end {
+            continue;
+        }
         last_top = y;
         let mut path = prefix.to_vec();
         path.push(i as u32);
@@ -234,18 +239,37 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
-                // the flow.
+                // the flow. The paragraphs right after it with the same frame share it, one under
+                // the other (ECMA-376 §17.3.1.11).
                 if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
-                    let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
-                    let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
+                    let mut run = vec![(p, pl, label)];
+                    for b in blocks.iter().skip(i + 1) {
+                        let Block::Para(q) = &**b else { break };
+                        if ctx.doc.styles.resolve_para(&q.props).frame.as_ref() != Some(&fr) {
+                            break;
+                        }
+                        let label = ctx.next_label(q);
+                        run.push((q, ctx.para_labelled(q, width, table, &[], label.clone()), label));
+                    }
+                    frame_end = i + run.len();
+                    let fw = fr.w.unwrap_or_else(|| run.iter().map(|(_, pl, _)| natural_width(pl)).fold(1.0, f32::max)).clamp(1.0, 1584.0);
+                    let pfs: Vec<_> = run
+                        .into_iter()
+                        .map(|(q, pl, label)| if (fw - width).abs() > 0.01 { ctx.para_labelled(q, fw, table, &[], label) } else { pl })
+                        .collect();
+                    let (tops, text_h) = frame_stack(ctx.doc.settings.sum_paragraph_spacing, &pfs);
                     let h = match fr.h {
                         Some(h) if fr.h_exact => h,
-                        Some(h) => h.max(pf.height),
-                        None => pf.height,
+                        Some(h) => h.max(text_h),
+                        None => text_h,
                     };
                     let float = frame_float(&fr);
                     let r = float_rect(frame, (0.0, width), y, fw, h, &float);
-                    push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
+                    for (k, (pf, top)) in pfs.iter().zip(tops).enumerate() {
+                        path.pop();
+                        path.push((i + k) as u32);
+                        push_para(&mut items, (story, &path), pf, (0, pf.lines.len()), (r.x, r.y + top), fw, Edges::own(pf, 0, pf.lines.len()));
+                    }
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
                     continue;
@@ -378,8 +402,27 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
+/// The paragraphs of one text frame stacked one under the other: the top of each in the frame and
+/// the height of their text (the space between two collapses to the larger one unless the
+/// document adds them up).
+pub(crate) fn frame_stack(sum_spacing: bool, pls: &[Arc<ParaLayout>]) -> (Vec<f32>, f32) {
+    let (mut y, mut prev_after) = (0.0f32, 0.0f32);
+    let tops = pls
+        .iter()
+        .enumerate()
+        .map(|(k, pl)| {
+            y += if k == 0 || sum_spacing { pl.rp.space_before } else { (pl.rp.space_before - prev_after).max(0.0) };
+            let top = y;
+            y += pl.height + pl.rp.space_after;
+            prev_after = pl.rp.space_after;
+            top
+        })
+        .collect();
+    (tops, y)
+}
+
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
-fn natural_width(pl: &ParaLayout) -> f32 {
+pub(crate) fn natural_width(pl: &ParaLayout) -> f32 {
     let widest = (0..pl.lines.len())
         .filter_map(|li| {
             let l = pl.lines.get(li)?;
@@ -390,7 +433,7 @@ fn natural_width(pl: &ParaLayout) -> f32 {
 }
 
 /// A text frame's placement as a floating object's (`w:framePr` → anchors, alignment, wrap).
-fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
+pub(crate) fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
     let anchor = |a: &str, text: Anchor| match a {
         "page" => Anchor::Page,
         "margin" => Anchor::Margin,

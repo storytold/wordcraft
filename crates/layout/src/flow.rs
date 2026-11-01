@@ -1,12 +1,13 @@
-use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
+use super::boxes::{BoxInput, BoxLayout, Edges, frame_float, frame_stack, joined, layout_box, natural_width, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
-use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
-use super::notes::{DECOR_STORY, NoteBox, para_notes};
+use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, float_rect, place_objects, wrap_area};
+use super::notes::{DECOR_STORY, NoteBox, para_notes, table_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
+use super::table_flow::placed_intersects;
 use super::{
-    Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
+    Anchor, Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
     ViewMode, outline, para,
 };
 #[cfg(test)]
@@ -15,6 +16,11 @@ use crate::WRAP_RELAYS;
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    // Views that reflow the text (Web, Draft, Outline and Read Mode) keep framed paragraphs in
+    // it: the frame's page offsets are for the paper, not the reflowed page.
+    if !pb.web && ctx.opts.view != ViewMode::Read && place_framed_para(ctx, pb, p, block, body_top) {
+        return;
+    }
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;
@@ -81,6 +87,137 @@ fn strip_mark(page: &mut Page, drawn: usize, keep_others: bool) {
         line @ Placed::Lines { .. } => Some(line),
         other => keep_others.then_some(other),
     }));
+}
+
+/// The most paragraphs one text frame in the body stacks: a longer run of paragraphs with the same
+/// frame is cut into frames of this many, counted from the run's start.
+const MAX_FRAME_PARAS: usize = 64;
+/// How far back a run of paragraphs with the same frame is looked for when its start isn't known
+/// yet (a longer run's start is taken from there).
+const MAX_FRAME_RUN: usize = 4096;
+
+/// A body paragraph in a text frame (`w:framePr`, a form or letterhead laid out in frames, #2406):
+/// placed apart, where its frame goes on the page, like a floating object; the text around wraps
+/// around the frame, and it takes no room in the flow. Consecutive paragraphs with the same frame
+/// share it, stacked one under the other (Word). A page break before starts a new page and a
+/// frame of its own there; a paragraph with a hard page break in it stays in the flow, which
+/// breaks the page. Returns false for a paragraph that isn't placed in a frame.
+fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) -> bool {
+    let doc = ctx.doc;
+    let hard_break = |q: &Paragraph| q.text.contains(wordcraft_doc::para::PAGE_BREAK) || q.text.contains(wordcraft_doc::para::COLUMN_BREAK);
+    let frame_of = |q: &Paragraph| doc.styles.resolve_para(&q.props).frame.filter(|_| !hard_break(q));
+    let breaks_before = |q: &Paragraph| doc.styles.resolve_para(&q.props).page_break_before;
+    let Some(fr) = frame_of(p) else { return false };
+    // A page holding only frames is still not empty: their lines don't move `pb.y`.
+    if breaks_before(p) && (!pb.at_top() || pb.has_body_content()) {
+        pb.new_page(block, body_top);
+    }
+    let same = |b: usize| match doc.body.get(b).map(|b| &**b) {
+        Some(Block::Para(q)) if frame_of(q).as_ref() == Some(&fr) => Some(q),
+        _ => None,
+    };
+    // Where the run of paragraphs with this frame starts (a page break before, or a section break
+    // after the paragraph before, starts a new one): the frames are cut from there, so every
+    // paragraph of one finds the same first paragraph.
+    let ends_section = |q: &Paragraph| q.section.is_some();
+    let starts_run = |b: usize| b == 0 || same(b).is_some_and(breaks_before) || same(b - 1).is_none_or(ends_section);
+    let start = match ctx.frame_run {
+        Some((prev, start)) if prev.checked_add(1) == Some(block) && !starts_run(block) => start,
+        _ => {
+            let mut start = block;
+            while block - start < MAX_FRAME_RUN && !starts_run(start) {
+                start -= 1;
+            }
+            start
+        }
+    };
+    ctx.frame_run = Some((block, start));
+    let first = start + (block - start) / MAX_FRAME_PARAS * MAX_FRAME_PARAS;
+    let mut last = block;
+    while last - first + 1 < MAX_FRAME_PARAS && same(last).is_some_and(|q| !ends_section(q)) && same(last + 1).is_some_and(|q| !breaks_before(q)) {
+        last += 1;
+    }
+    ctx.fields.page = pb.number;
+    let (col_x, col_w) = (pb.col_x(), pb.col_w());
+    // The frame's paragraphs, laid out to measure them (without list labels: the counters only
+    // count each paragraph once, when it is placed).
+    let eq_start = ctx.eq_count;
+    let measure = |ctx: &mut Ctx, w: f32| -> Vec<Arc<ParaLayout>> {
+        (first..=last).filter_map(same).map(|q| again(ctx, eq_start, |ctx| ctx.para_labelled(q, w, None, &[], None))).collect()
+    };
+    let fw = match fr.w {
+        Some(w) => w,
+        None => measure(ctx, col_w).iter().map(|pl| natural_width(pl)).fold(0.0, f32::max),
+    }
+    .clamp(1.0, 1584.0);
+    // Where this paragraph starts in the frame, and the height of the frame's text.
+    let (tops, y) = frame_stack(doc.settings.sum_paragraph_spacing, &measure(ctx, fw));
+    let offset = tops.get(block - first).copied().unwrap_or(0.0);
+    let h = match fr.h {
+        Some(h) if fr.h_exact => h,
+        Some(h) => h.max(y),
+        None => y,
+    };
+    let float = frame_float(&fr);
+    let mut page = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    let mut r = float_rect(Some(page), (col_x, col_w), pb.y, fw, h, &float);
+    // Like a floating table (#534), a frame that doesn't fit below the text before it moves to the
+    // next page with its paragraphs: one placed relative to the paragraph when it would run off
+    // the page, one placed on the page or margin (at the foot of the text area, say) when it would
+    // also cover the text already on the page.
+    if block == first && !pb.at_top() {
+        let moves = if float.v_rel == Anchor::Paragraph {
+            r.bottom() > pb.bottom + 0.01
+        } else {
+            let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
+            covers_text && pb.y + h > pb.bottom + 0.01
+        };
+        if moves {
+            pb.advance(block, body_top);
+            page = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+            r = float_rect(Some(page), (pb.col_x(), pb.col_w()), pb.y, fw, h, &float);
+        }
+    }
+    // The frame's first paragraph makes the text around keep clear of the whole frame.
+    if block == first
+        && let Some(area) = wrap_area(r, &float, None)
+    {
+        pb.excl.push(area);
+    }
+    let label = ctx.next_label(p);
+    let pl = ctx.para_labelled(p, fw, None, &[], label);
+    let (x, y) = (r.x, r.y + offset);
+    let mut items = Vec::new();
+    push_para(&mut items, (StoryRef::Body, &[block as u32]), &pl, (0, pl.lines.len()), (x, y), fw, Edges::own(&pl, 0, pl.lines.len()));
+    let at = ObjFrame { page: Some(page), col: (x, fw), para_y: y, table_chr: None, pinned: None };
+    let (behind, front) = place_objects(
+        ctx,
+        &ObjectPlacement {
+            story: StoryRef::Body,
+            path: &[block as u32],
+            p,
+            pl: &pl,
+            lines: (0, pl.lines.len()),
+            origin: (x, y),
+            at: &at,
+            floats: &HashMap::new(),
+            depth: 0,
+        },
+    );
+    items.extend(front);
+    // Footnotes referenced in the frame go to the bottom of this page, as in the flow.
+    table_notes(ctx, pb, &items);
+    let n_behind = behind.len();
+    if let Some(pg) = pb.pages.last_mut() {
+        for (i, it) in behind.into_iter().enumerate() {
+            pg.items.insert(i.min(pg.items.len()), it);
+        }
+        pg.items.extend(items);
+    }
+    if let Some(b) = pb.behind.last_mut() {
+        *b += n_behind;
+    }
+    true
 }
 
 /// How many times one body paragraph is laid out again for the page numbers of the later pages

@@ -115,6 +115,16 @@ impl PageBuilder<'_> {
             Some(first) => self.seps.sep_h(first.cont) + notes.iter().map(|n| n.h).sum::<f32>(),
         }
     }
+    /// Whether body text or a table is on the current page already (a text frame's lines are,
+    /// though they leave `y` at the top).
+    pub(crate) fn has_body_content(&self) -> bool {
+        self.pages.last().is_some_and(|pg| {
+            pg.items
+                .iter()
+                .skip(self.page_items_start)
+                .any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. } | Placed::Cell { story: StoryRef::Body, .. }))
+        })
+    }
     /// The lowest bottom of the body text and tables on the current page.
     pub(crate) fn body_floor(&self) -> f32 {
         let Some(pg) = self.pages.last() else { return self.top };

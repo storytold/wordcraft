@@ -54,6 +54,10 @@ pub(crate) struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     pub(crate) table_keys: Vec<(para::CellText, u64)>,
+    /// The last body paragraph placed in a text frame and where its run of paragraphs with the
+    /// same frame starts (see `flow::place_framed_para`), so the next one finds the run's start
+    /// without scanning back.
+    pub(crate) frame_run: Option<(usize, usize)>,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pub(crate) pin: Option<Pin>,
