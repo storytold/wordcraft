@@ -1,4 +1,4 @@
-use super::*;
+use super::{CharProps, Document, Paragraph, ResolvedChar};
 
 /// One run's proofing: its bytes in the paragraph, its language (`w:lang`, resolved through the
 /// styles: the document default, paragraph and character styles, direct formatting) and whether

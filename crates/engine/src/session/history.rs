@@ -1,5 +1,5 @@
 use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
-use super::*;
+use super::{Arc, Document, Session};
 
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is

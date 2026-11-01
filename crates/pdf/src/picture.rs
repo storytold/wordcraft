@@ -1,6 +1,8 @@
 use super::exporter::Exporter;
 use super::paint::{append_path, norm};
-use super::*;
+use super::{
+    Arc, Fill, FillRule, Image, LineCap, LineJoin, NormalizedF32, Path, PathBuilder, Picture, PlacedItem, Rect, Size, Stroke, Surface, Transform, rgb,
+};
 
 /// Largest picture side we embed (pixels).
 const MAX_IMAGE_SIDE: u32 = 30_000;

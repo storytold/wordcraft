@@ -1,4 +1,4 @@
-use super::*;
+use super::{Counters, Document, LevelSuffix, NumFormat, Path, Pos, StoryRef, Stroke, Tokens, Ui, WordApp, json, regular, semibold, vec2};
 
 /// Draws the Navigation pane: search box and tabs, page list, find results and heading outline.
 pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {

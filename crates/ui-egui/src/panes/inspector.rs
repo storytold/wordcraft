@@ -1,4 +1,4 @@
-use super::*;
+use super::{Stroke, Tokens, Ui, Value, WordApp, json, regular, semibold, vec2};
 
 /// Style Inspector: the paragraph and character levels at the caret, each with its style and the
 /// direct formatting on top, and a button to clear each level.

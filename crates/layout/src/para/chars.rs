@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, FaceRef, ResolvedChar, SOFT_HYPHEN};
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
 #[derive(Clone, Copy)]
@@ -58,7 +58,8 @@ pub(super) fn caps_expands(c: char) -> bool {
 /// character before them: same font, same shaping run, so Arabic joining isn't broken.
 pub(super) fn is_mark(c: char) -> bool {
     use unicode_bidi::BidiClass::{BN, NSM};
-    matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
+    // No ASCII character is a mark (its BN characters are controls).
+    !c.is_ascii() && matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
 }
 
 /// A digit Word's Numeral modes substitute: ASCII or Arabic-Indic (U+0660–U+0669).
