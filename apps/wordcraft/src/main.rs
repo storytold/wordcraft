@@ -117,10 +117,12 @@ impl eframe::App for App {
         // Keep this frame's native window state. `logic` must not read the last painted
         // `InputState` when a hidden Wayland tick reports no fresh inner rect.
         self.4 = RawWindowState::from_raw(raw);
-        // Cut / Copy / Paste / Select All chosen in the menu bar arrive as the keyboard's would.
+        // Cut / Copy / Paste / Select All chosen in the menu bar arrive as the keyboard's would,
+        // routed to the focused viewport when the active window has its own.
         #[cfg(target_os = "macos")]
         if let Some(menu) = self.6.as_mut() {
-            raw.events.append(&mut menu.input);
+            let events = std::mem::take(&mut menu.input);
+            self.0.route_input(ctx, raw, events);
         }
         self.0.raw_input_hook(ctx, raw);
     }
