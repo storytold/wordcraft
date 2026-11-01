@@ -50,6 +50,63 @@ pub(super) struct Graphic {
     dash: Option<String>,
     gradient: Option<String>,
     markers: [Option<String>; 2],
+    /// A picture's crop (`fo:clip`, §20.179): how much is cut off its top, right, bottom and
+    /// left, in lengths of its original size.
+    pub(super) clip: Option<[f32; 4]>,
+    /// Text follows the object's outline (`style:wrap-contour`, §20.401), into its hollows or
+    /// only along its outside (`style:wrap-contour-mode`, §20.402: `full` or `outside`).
+    wrap_contour: Option<bool>,
+    contour_mode: Option<String>,
+}
+
+/// A `fo:clip` value, `rect(top, right, bottom, left)` (commas or spaces between; `auto` is 0):
+/// each side's length, points. `None` when it isn't one.
+fn clip_rect(v: &str) -> Option<[f32; 4]> {
+    let inner = v.trim().strip_prefix("rect(")?.strip_suffix(')')?;
+    let parts: Vec<f32> = inner
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .map(|p| if p.trim() == "auto" { Some(0.0) } else { length(p).filter(|v| v.is_finite()) })
+        .collect::<Option<Vec<f32>>>()?;
+    let [t, r, b, l]: [f32; 4] = parts.try_into().ok()?;
+    Some([t, r, b, l].map(|v| v.clamp(0.0, MAX_LEN)))
+}
+
+/// A frame's contour (§10.4.11 `draw:contour-polygon`: its `draw:points` in its `svg:viewBox`)
+/// as a wrap polygon in WordCraft's wrap space (21600 across the object each way). `None` without
+/// three usable points.
+pub(super) fn contour_polygon(a: &Attrs) -> Option<std::sync::Arc<wordcraft_doc::wrap::WrapPolygon>> {
+    let vb: Vec<f64> = get(a, "svg:viewBox")?.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
+    let [x0, y0, vw, vh]: [f64; 4] = vb.try_into().ok()?;
+    if !(vw.is_finite() && vh.is_finite() && vw > 0.0 && vh > 0.0 && x0.is_finite() && y0.is_finite()) {
+        return None;
+    }
+    let space = f64::from(wordcraft_doc::wrap::WRAP_SPACE);
+    let nums: Vec<f64> = get(a, "draw:points")?.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
+    // Points well outside the view box mean another coordinate system than the frame's (as
+    // LibreOffice writes for some pictures): the outline is then worked out from the object.
+    let outside = nums.chunks_exact(2).any(|p| p[0] < x0 - vw * 0.1 || p[0] > x0 + vw * 1.1 || p[1] < y0 - vh * 0.1 || p[1] > y0 + vh * 1.1);
+    if outside {
+        return None;
+    }
+    let points = nums
+        .chunks_exact(2)
+        .take(wordcraft_doc::wrap::MAX_WRAP_POINTS)
+        .filter(|p| p.iter().all(|v| v.is_finite()))
+        .map(|p| (((p[0] - x0) / vw * space).round() as i64, ((p[1] - y0) / vh * space).round() as i64));
+    wordcraft_doc::wrap::WrapPolygon::new(true, points).map(std::sync::Arc::new)
+}
+
+/// A wrap polygon as a frame's `draw:contour-polygon`, the frame `w` × `h` points.
+pub(super) fn contour_xml(p: &wordcraft_doc::wrap::WrapPolygon, w: f32, h: f32) -> String {
+    let points: Vec<String> = p.points.iter().map(|[x, y]| format!("{x},{y}")).collect();
+    let s = wordcraft_doc::wrap::WRAP_SPACE;
+    format!(
+        "<draw:contour-polygon svg:width=\"{}\" svg:height=\"{}\" svg:viewBox=\"0 0 {s} {s}\" draw:points=\"{}\" draw:recreate-on-edit=\"false\"/>",
+        pt(w),
+        pt(h),
+        points.join(" ")
+    )
 }
 
 /// The colour LibreOffice draws a shape's line in when its styles give none (#3465a4), and fills
@@ -89,6 +146,9 @@ impl Graphic {
             gradient: s("draw:fill-gradient-name"),
             markers: [s("draw:marker-start"), s("draw:marker-end")],
             stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
+            clip: get(a, "fo:clip").and_then(clip_rect),
+            wrap_contour: get(a, "style:wrap-contour").map(|v| v.trim() == "true"),
+            contour_mode: s("style:wrap-contour-mode"),
         }
     }
 
@@ -118,6 +178,9 @@ impl Graphic {
         fill(&mut self.stroke, &parent.stroke);
         self.stroke_color = self.stroke_color.or(parent.stroke_color);
         self.stroke_width = self.stroke_width.or(parent.stroke_width);
+        self.clip = self.clip.or(parent.clip);
+        self.wrap_contour = self.wrap_contour.or(parent.wrap_contour);
+        fill(&mut self.contour_mode, &parent.contour_mode);
         self.grow = self.grow.or(parent.grow);
         fill(&mut self.dash, &parent.dash);
         fill(&mut self.gradient, &parent.gradient);
@@ -205,6 +268,13 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("none") => (Wrap::TopAndBottom, WrapText::BothSides),
         // None stated (§20.400 gives no default): both sides, as LibreOffice wraps.
         _ => (Wrap::Square, WrapText::BothSides),
+    };
+    // Following its outline: only along its outside (Word's Tight), or into it as well (Through,
+    // `full` being the default).
+    let wrap = match (wrap, g.wrap_contour) {
+        (Wrap::Square, Some(true)) if g.contour_mode.as_deref() == Some("outside") => Wrap::Tight,
+        (Wrap::Square, Some(true)) => Wrap::Through,
+        (w, _) => w,
     };
     let h_rel = match g.hrel.as_deref() {
         Some("page") => Anchor::Page,
@@ -397,6 +467,13 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
         (_, WrapText::Largest) => "dynamic",
         _ => "parallel",
     };
+    // Tight and Through: square wrapping along the outline (§20.401–20.402).
+    let contour = match f.wrap {
+        Wrap::Tight => "\" style:wrap-contour=\"true\" style:wrap-contour-mode=\"outside",
+        Wrap::Through => "\" style:wrap-contour=\"true\" style:wrap-contour-mode=\"full",
+        _ => "",
+    };
+    let wrap = format!("{wrap}{contour}");
     let hrel = match f.h_rel {
         Anchor::Page => "page",
         Anchor::Margin | Anchor::InsideMargin | Anchor::OutsideMargin => "page-content",

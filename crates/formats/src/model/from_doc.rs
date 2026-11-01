@@ -324,7 +324,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
         }
-        InlineObject::Image { media, w, h, alt, float, ole, .. } => {
+        InlineObject::Image { media, w, h, alt, float, ole, crop, .. } => {
             let data = doc.media.get(media)?;
             let alt = if o.is_decorative() { "" } else { alt.as_str() };
             Some(Inline::Image(Img {
@@ -335,6 +335,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 alt: alt.to_string(),
                 float: kept_float(float),
                 object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
+                crop: if opts.paras { *crop } else { [0.0; 4] },
             }))
         }
         InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
@@ -482,7 +483,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                 continue;
             }
             match obj {
-                Some(o @ InlineObject::Image { media, w, h, alt, float, ole, .. }) => {
+                Some(o @ InlineObject::Image { media, w, h, alt, float, ole, crop, .. }) => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
@@ -498,6 +499,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                             alt: alt.to_string(),
                             float: kept_float(float).filter(|_| opts.paras),
                             object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
+                            crop: if opts.paras { *crop } else { [0.0; 4] },
                         })),
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}

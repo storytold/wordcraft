@@ -82,6 +82,18 @@ impl<'a> Place<'a> {
     }
 }
 
+/// A cropped picture's `fo:clip` (§20.179: top, right, bottom, left, in lengths of its original
+/// size, its pixels at 96 per inch); empty for one not cropped or whose size can't be read.
+fn clip_attr(img: &model::Img) -> String {
+    let [l, t, r, b] = img.crop.map(|c| if c.is_finite() { c.clamp(0.0, 0.99) } else { 0.0 });
+    if l + t + r + b <= 0.0 {
+        return String::new();
+    }
+    let Some((pw, ph)) = model::image_px(&img.data).filter(|(w, h)| *w > 0 && *h > 0) else { return String::new() };
+    let (w, h) = (pw as f32 * 0.75, ph as f32 * 0.75);
+    format!(" fo:clip=\"rect({}, {}, {}, {})\"", pt(t * h), pt(r * w), pt(b * h), pt(l * w))
+}
+
 /// How a frame or shape `w` × `h` at `place` is anchored and placed: its `text:anchor-type`
 /// attribute, its graphic style's placement and its `svg:x`/`svg:y` (or `draw:transform` when
 /// it is turned). A group's member has no anchor of its own: it is placed by its position alone.
@@ -246,11 +258,12 @@ impl Writer {
     /// A picture's frame at `place`, holding `inner`.
     fn image_frame(&mut self, img: &model::Img, place: Place<'_>, inner: &str, out: &mut String) {
         let n = self.pictures.len();
+        let clip = clip_attr(img);
         let (anchor, style) = match place {
-            Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
+            Place::Text(None) if clip.is_empty() => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
             _ => {
                 let (anchor, props, xy) = placement(place, img.w, img.h);
-                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
+                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{props}{clip}"))))
             }
         };
         out.push_str(&format!(
@@ -261,6 +274,15 @@ impl Writer {
         ));
         if !img.alt.is_empty() {
             out.push_str(&format!("<svg:desc>{}</svg:desc>", x(&img.alt)));
+        }
+        // The outline tight or through wrapping follows, last (§10.4.2).
+        if let Some(p) = img
+            .float
+            .as_deref()
+            .filter(|f| matches!(f.wrap, wordcraft_doc::para::Wrap::Tight | wordcraft_doc::para::Wrap::Through))
+            .and_then(|f| f.wrap_polygon.as_deref())
+        {
+            out.push_str(&crate::odt::frames::contour_xml(p, img.w, img.h));
         }
         out.push_str("</draw:frame>");
     }

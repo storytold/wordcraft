@@ -152,6 +152,9 @@ pub struct Img {
     pub float: Option<Box<wordcraft_doc::para::Float>>,
     /// The embedded object this picture shows, kept whole (ODT only; see [`OdfObject`]).
     pub object: Option<Arc<OdfObject>>,
+    /// How much is cut off its left, top, right and bottom, fractions of its size (0..1), for
+    /// formats that keep it (ODT).
+    pub crop: [f32; 4],
 }
 
 /// An embedded object WordCraft shows but doesn't edit, kept whole for saving back (ODF 1.3

@@ -7,7 +7,7 @@ use super::{
     model,
 };
 
-mod drawing;
+pub(in crate::odt) mod drawing;
 mod indexes;
 mod notes;
 mod tables;
@@ -105,6 +105,9 @@ pub(super) struct Body<'a> {
     frame_box: Option<Vec<FBlock>>,
     /// The look of the frame being read, should it hold a text box.
     frame_look: model::BoxLook,
+    /// The open frame's picture crop (`fo:clip`: top, right, bottom, left, points of its original
+    /// size).
+    frame_clip: Option<[f32; 4]>,
     /// The kind of the drawing shape being read (its text is read as a text box's).
     shape_kind: Option<wordcraft_doc::para::ShapeKind>,
     /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
@@ -185,6 +188,7 @@ impl<'a> Body<'a> {
             frame_float: None,
             frame_box: None,
             frame_look: model::BoxLook::default(),
+            frame_clip: None,
             shape_kind: None,
             shape_flip: (false, false),
             shape_path: None,
@@ -781,32 +785,9 @@ impl Body<'_> {
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
+                self.frame_clip = g.clip;
             }
-            "image" => {
-                if let Some(href) = get(a, "xlink:href")
-                    && let Some(fr) = &mut self.frame
-                    && fr.2.is_none()
-                    && fr.4.is_none()
-                    && fr.5.is_none()
-                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
-                {
-                    let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
-                    if let Some(o) = &mut fr.6 {
-                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
-                    }
-                }
-            }
-            // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
-            // a `math:math` tree (#3099), a chart's an `office:chart`. Other object kinds (and
-            // charts WordCraft can't edit) fall back to the frame's `draw:image` replacement
-            // preview, read at `end` below.
-            "object" | "object-ole" => {
-                if let Some(href) = get(a, "xlink:href") {
-                    self.read_object(href, local(q) == "object-ole");
-                }
-            }
-            "desc" | "title" if self.frame.is_some() => self.in_desc = true,
+            "image" | "object" | "object-ole" | "desc" | "title" | "contour-polygon" => self.frame_part(q, a),
             // A columned section (ODF 1.3 §5.4) is a continuous section with its columns.
             "section" if q.starts_with("text:") => {
                 self.end_para();
@@ -858,6 +839,44 @@ impl Body<'_> {
         if let Some((control, text)) = get(a, "draw:control").and_then(|id| self.forms.controls.get(id)).cloned() {
             let fmt = self.cur_fmt();
             self.push_inline(Inline::Control { control: Box::new(control), text, fmt });
+        }
+    }
+
+    /// Part of a frame: its picture, embedded object, description or contour.
+    fn frame_part(&mut self, q: &str, a: &Attrs) {
+        match local(q) {
+            "image" => {
+                if let Some(href) = get(a, "xlink:href")
+                    && let Some(fr) = &mut self.frame
+                    && fr.2.is_none()
+                    && fr.4.is_none()
+                    && fr.5.is_none()
+                    && fr.6.as_ref().is_none_or(|o| o.replacement.is_none())
+                {
+                    let path = href.trim_start_matches("./");
+                    fr.2 = (self.zip)(path);
+                    if let Some(o) = &mut fr.6 {
+                        o.replacement = fr.2.clone().map(std::sync::Arc::new);
+                    }
+                }
+            }
+            // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
+            // a `math:math` tree (#3099), a chart's an `office:chart`. Other object kinds (and
+            // charts WordCraft can't edit) fall back to the frame's `draw:image` replacement
+            // preview, read at `end` below.
+            "object" | "object-ole" => {
+                if let Some(href) = get(a, "xlink:href") {
+                    self.read_object(href, local(q) == "object-ole");
+                }
+            }
+            "desc" | "title" if self.frame.is_some() => self.in_desc = true,
+            // The outline a frame's tight or through wrapping follows.
+            "contour-polygon" if self.frame.is_some() => {
+                if let Some(f) = &mut self.frame_float {
+                    f.wrap_polygon = super::frames::contour_polygon(a);
+                }
+            }
+            _ => {}
         }
     }
 

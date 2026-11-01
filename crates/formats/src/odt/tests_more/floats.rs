@@ -145,3 +145,73 @@ fn an_inline_frame_keeps_its_place_on_the_baseline() {
         );
     }
 }
+
+#[test]
+fn a_cropped_picture_keeps_its_crop() {
+    // LibreOffice's crop (`fo:clip`: top, right, bottom, left, in lengths of the picture's own
+    // size — 200 × 100 px is 150 × 75 pt): a quarter off its left and its bottom.
+    let png = {
+        let img = image::RgbaImage::from_fn(200, 100, |x, _| image::Rgba([if x < 100 { 200 } else { 20 }, 80, 160, 255]));
+        let mut b = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    let content = format!(
+        r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties fo:clip="rect(0in, 0in, 0.2602in, 0.5209in)"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" text:anchor-type="as-char" svg:width="1.5in" svg:height="0.75in"><draw:image xlink:href="Pictures/q.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#,
+        NS = crate::odt::tests::NS_T
+    );
+    let doc = crate::odt::import(&crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/q.png", &png)])).unwrap();
+    let crop = doc
+        .body
+        .iter()
+        .find_map(|b| b.as_para())
+        .and_then(|p| p.objects.iter().find_map(|o| if let wordcraft_doc::para::InlineObject::Image { crop, .. } = o { Some(*crop) } else { None }))
+        .unwrap();
+    assert_eq!(crop.map(|c| (c * 100.0).round() / 100.0), [0.25, 0.0, 0.0, 0.25]);
+    let c = crate::odt::tests::content_of(&crate::odt::export(&doc).unwrap());
+    // 0.2602 in is 18.73 pt, 0.5209 in 37.5 pt.
+    assert!(c.contains(r#"fo:clip="rect(0pt, 0pt, 18.73pt, 37.5pt)""#), "{c}");
+    // An absurd crop (nothing left) is none.
+    assert_eq!(crate::odt::body::drawing::crop_fractions([0.0, 100.0, 0.0, 100.0], &png), [0.0; 4]);
+}
+
+#[test]
+fn contour_wrapping_and_its_outline_are_kept() {
+    // `style:wrap-contour` with `outside` (Word's Tight) or `full` (Through), and the outline
+    // (`draw:contour-polygon`) in the frame's view box, as WordCraft's wrap polygon.
+    let png = {
+        let img = image::RgbaImage::from_fn(10, 10, |_, _| image::Rgba([0, 0, 0, 255]));
+        let mut b = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    for (mode, want) in [("outside", wordcraft_doc::para::Wrap::Tight), ("full", wordcraft_doc::para::Wrap::Through)] {
+        let content = format!(
+            r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:wrap-contour="true" style:wrap-contour-mode="{mode}" style:horizontal-pos="left" style:horizontal-rel="paragraph"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/p.png"/><draw:contour-polygon svg:width="1in" svg:height="1in" svg:viewBox="0 0 1000 1000" draw:points="500,0 1000,1000 0,1000" draw:recreate-on-edit="false"/></draw:frame>Text around it.</text:p></office:text></office:body></office:document-content>"#,
+            NS = crate::odt::tests::NS_T
+        );
+        let doc = crate::odt::import(&crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &png)])).unwrap();
+        let float = |d: &Document| {
+            d.body.iter().find_map(|b| b.as_para()).and_then(|p| p.objects.iter().find_map(|o| o.frame().map(|(_, _, f)| f.clone()))).unwrap()
+        };
+        let f = float(&doc);
+        assert_eq!(f.wrap, want, "{mode}");
+        assert_eq!(f.wrap_polygon.as_deref().map(|p| p.points.clone()), Some(vec![[10800, 0], [21600, 21600], [0, 21600]]), "{mode}");
+        let saved = crate::odt::export(&doc).unwrap();
+        let c = crate::odt::tests::content_of(&saved);
+        assert!(c.contains(&format!(r#"style:wrap-contour="true" style:wrap-contour-mode="{mode}""#)), "{c}");
+        assert!(c.contains(r#"draw:points="10800,0 21600,21600 0,21600""#), "{c}");
+        let back = float(&crate::odt::import(&saved).unwrap());
+        assert_eq!((back.wrap, back.wrap_polygon), (f.wrap, f.wrap_polygon));
+    }
+}
+
+#[test]
+fn a_contour_outside_its_view_box_is_worked_out_instead() {
+    // Points far past the view box: not the frame's coordinates, so no polygon (the outline is
+    // derived from the object), though the wrap stays a contour one.
+    let a: crate::odt::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,150 0,100".into())];
+    assert!(crate::odt::frames::contour_polygon(&a).is_none());
+    let a: crate::odt::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,100 0,100".into())];
+    assert!(crate::odt::frames::contour_polygon(&a).is_some());
+}

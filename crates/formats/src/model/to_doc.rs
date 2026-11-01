@@ -345,7 +345,10 @@ impl<'a> Builder<'a> {
                 let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
                 let float = fit_float(&img.float);
                 let ole = img.object.as_deref().and_then(|o| super::odf_object::store(self.doc, o));
-                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole })
+                // A crop of finite fractions that leaves something of the picture.
+                let crop = img.crop.map(|c| if c.is_finite() { c.clamp(0.0, 0.99) } else { 0.0 });
+                let crop = if crop[0] + crop[2] < 0.99 && crop[1] + crop[3] < 0.99 { crop } else { [0.0; 4] };
+                Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop, ole })
             }
             // Its drawing is made from the chart by the program that opens the document
             // (`wordcraft_engine`'s chart drawing), which has the theme's colours.

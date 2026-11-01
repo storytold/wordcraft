@@ -68,6 +68,16 @@ pub(in crate::odt) struct OpenGroup {
     pub(in crate::odt) members: Vec<model::Member>,
 }
 
+/// A picture's crop as fractions of its size (left, top, right, bottom) from its `fo:clip`
+/// (top, right, bottom, left, in lengths of its original size: its pixels at 96 per inch). No crop
+/// when the picture's size can't be read or the crop would leave nothing.
+pub(in crate::odt) fn crop_fractions([t, r, b, l]: [f32; 4], data: &[u8]) -> [f32; 4] {
+    let Some((pw, ph)) = model::image_px(data).filter(|(w, h)| *w > 0 && *h > 0) else { return [0.0; 4] };
+    let (w, h) = (pw as f32 * 0.75, ph as f32 * 0.75);
+    let c = [l / w, t / h, r / w, b / h].map(|v| if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 });
+    if c[0] + c[2] < 0.99 && c[1] + c[3] < 0.99 { c } else { [0.0; 4] }
+}
+
 /// Largest size or offset read in a group, points (22 inches).
 pub(in crate::odt) const MAX_LEN: f32 = 1584.0;
 
@@ -131,6 +141,9 @@ impl Body<'_> {
                 }
                 (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
                     img.float = float.map(Box::new);
+                    if let Some(clip) = self.frame_clip.take() {
+                        img.crop = crop_fractions(clip, &img.data);
+                    }
                     Inline::Image(img)
                 }),
             };
