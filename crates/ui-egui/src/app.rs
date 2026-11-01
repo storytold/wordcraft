@@ -216,6 +216,9 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // #2726: egui's AccessKit update must carry the focused node in its node list; a frame
+        // that drops it panics in `accesskit_consumer` and closes the window (see `a11y::FocusGuard`).
+        ctx.add_plugin(super::a11y::FocusGuard);
         updates_ui::tick(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
