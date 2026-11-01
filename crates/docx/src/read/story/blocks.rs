@@ -135,6 +135,20 @@ impl Reader<'_> {
         sc.pending.clear();
     }
 
+    /// The model id for an editing exception's file id `w:id`: the one it already has, or the
+    /// next free one. Bounded: a hostile file can't grow the map without end.
+    fn perm_id(&mut self, id: String) -> Option<u32> {
+        if let Some(n) = self.perms.get(&id) {
+            return Some(*n);
+        }
+        if self.perms.len() >= 100_000 {
+            return None;
+        }
+        let n = self.perms.len() as u32;
+        self.perms.insert(id, n);
+        Some(n)
+    }
+
     pub(super) fn marker(&mut self, e: &El) -> Option<InlineObject> {
         let id = e.attr("w:id").map(str::trim).unwrap_or("").to_string();
         match e.name.as_str() {
@@ -157,12 +171,7 @@ impl Reader<'_> {
                 .map(|name| InlineObject::BookmarkEnd { name }),
             "w:commentRangeStart" => self.comment_id(&id).map(|id| InlineObject::CommentStart { id }),
             "w:permStart" => {
-                // Bounded: a hostile file can't grow the map without end.
-                if self.perms.len() >= 100_000 {
-                    return None;
-                }
-                let n = self.perms.len() as u32;
-                let id = *self.perms.entry(id).or_insert(n);
+                let id = self.perm_id(id)?;
                 let text = |a: &str| e.attr(a).filter(|v| v.len() <= 256).unwrap_or("").to_string();
                 let (group, editor) = (text("w:edGrp"), text("w:ed"));
                 if group.is_empty() && editor.is_empty() {
@@ -170,7 +179,10 @@ impl Reader<'_> {
                 }
                 Some(InlineObject::PermStart { id, group, editor, cols: perm_cols(e) })
             }
-            "w:permEnd" => self.perms.get(&id).map(|id| InlineObject::PermEnd { id: *id }),
+            // An end nothing started yet (an orphan, or one before its start) still gets an id,
+            // so it is kept and saved again; the model pairs only a start with a later end, so
+            // it opens nothing.
+            "w:permEnd" => self.perm_id(id).map(|id| InlineObject::PermEnd { id }),
             "w:commentRangeEnd" => {
                 let cid = self.comment_id(&id)?;
                 self.comments_ended.insert(cid);

@@ -1158,10 +1158,28 @@ fn damaged_ranges_in_a_file_open_nothing_to_editing() {
     }
     // The damaged markers are kept (the file says what it says) and still open nothing.
     let bytes = crate::io::save_bytes("damaged.docx", &s.doc).unwrap();
-    let mut t = Session::new(crate::io::open_bytes("damaged.docx", &bytes).unwrap());
-    for text in ["Orphan start", "Locked end", "To header"] {
+    // The paragraph of `xml` holding `text`.
+    fn para_with<'a>(xml: &'a str, text: &str) -> &'a str {
+        let at = xml.find(text).unwrap_or_else(|| panic!("{text} in {xml}"));
+        let start = xml[..at].rfind("<w:p>").into_iter().chain(xml[..at].rfind("<w:p ")).max().unwrap();
+        &xml[start..at + xml[at..].find("</w:p>").unwrap()]
+    }
+    let xml = part_text(&bytes, "word/document.xml");
+    assert!(para_with(&xml, "Orphan end.").contains("<w:permEnd "), "an end nothing started is saved again: {xml}");
+    let first = para_with(&xml, "End first.");
+    let (end, start) = (first.find("<w:permEnd ").unwrap(), first.find("<w:permStart ").unwrap());
+    assert!(end < start, "an end before its start stays before it: {first}");
+    let names: Vec<String> = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap().file_names().map(str::to_string).collect();
+    let header = names.iter().find(|n| n.starts_with("word/header")).map(|n| part_text(&bytes, n)).unwrap();
+    assert!(para_with(&header, "Header.").contains("<w:permEnd "), "the header's end is saved again: {header}");
+    let again = crate::io::open_bytes("damaged.docx", &bytes).unwrap();
+    assert_eq!(describe(&again), describe(&s.doc), "the same matched pairs, no more");
+    let mut t = Session::new(again);
+    for text in ["Orphan start", "Orphan end", "End first", "Locked end", "To header"] {
         select(&mut t, text);
+        let before = t.doc.clone();
         assert!(t.run("text.insert", &json!({"text": "Z"})).is_err(), "{text}");
+        assert_eq!(t.doc, before, "{text}");
     }
 }
 
