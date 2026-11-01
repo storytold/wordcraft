@@ -18,11 +18,12 @@ pub const MAX_WORD_CHARS: usize = 64;
 /// Most words one call may add or remove.
 const MAX_WORDS_PER_CALL: usize = 1000;
 
+/// Register the options command and its parameter contract for UI and automation.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "defaultZoom"?: integer (10–500 percent)|"onePage"|"pageWidth"|"textWidth"|"document"|null (new/opened documents; does not change this view), "overrideDocumentZoom"?: bool (prefer the default over a saved document zoom), "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -78,6 +79,7 @@ fn words_param(v: &Value, k: &str) -> Result<Vec<String>, CmdError> {
     Ok(out)
 }
 
+/// Validate all supplied preferences before applying them, or open the requested options pane.
 fn options(s: &mut Session, v: &Value) -> CmdResult {
     let pane = match p::str(v, "pane") {
         Some(name) if PANES.contains(&name) => name,
@@ -95,6 +97,8 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(Value::String(i)) => Some(i.trim().chars().filter(|c| !c.is_control()).take(MAX_INITIALS_CHARS).collect::<String>()),
         Some(_) => return Err(CmdError::Params("`initials` must be a string".into())),
     };
+    let default_zoom = v.get("defaultZoom").map(default_zoom_param).transpose()?;
+    let override_zoom = bool_param(v, "overrideDocumentZoom")?;
     let units = match v.get("units") {
         None | Some(Value::Null) => None,
         // `auto` forgets the choice: lengths follow the region again (#838).
@@ -150,6 +154,8 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
 
     let setting = author.is_some()
         || initials.is_some()
+        || default_zoom.is_some()
+        || override_zoom.is_some()
         || units.is_some()
         || region.is_some()
         || folder.is_some()
@@ -164,6 +170,12 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(i) = initials {
         s.initials = i;
+    }
+    if let Some(zoom) = default_zoom {
+        s.prefs.default_zoom = zoom;
+    }
+    if let Some(override_zoom) = override_zoom {
+        s.prefs.override_document_zoom = override_zoom;
     }
     if let Some(u) = units {
         s.prefs.units = u;
@@ -217,6 +229,8 @@ pub fn current(s: &Session) -> Value {
     json!({
         "author": s.author,
         "initials": s.user_initials(),
+        "defaultZoom": default_zoom_value(pr.default_zoom),
+        "overrideDocumentZoom": pr.override_document_zoom,
         "units": s.units(),
         "unitsFromRegion": pr.units.is_none(),
         "region": {"language": region.language, "territory": region.territory, "paper": region.paper().0, "decimal": region.decimal().to_string()},
@@ -238,6 +252,35 @@ pub fn current(s: &Session) -> Value {
             .map(|(lang, dic)| json!({"language": lang.code(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
             .collect::<Vec<_>>(),
     })
+}
+
+/// The preferred opening zoom: a whole percentage, a fit mode, or the document's own choice.
+fn default_zoom_param(v: &Value) -> Result<Option<wordcraft_doc::Zoom>, CmdError> {
+    use wordcraft_doc::{Zoom, ZoomFit};
+    match v {
+        Value::Null => Ok(None),
+        Value::String(s) if s == "document" => Ok(None),
+        Value::String(s) if s == "onePage" => Ok(Some(Zoom { percent: 100, fit: Some(ZoomFit::OnePage) })),
+        Value::String(s) if s == "pageWidth" => Ok(Some(Zoom { percent: 100, fit: Some(ZoomFit::PageWidth) })),
+        Value::String(s) if s == "textWidth" => Ok(Some(Zoom { percent: 100, fit: Some(ZoomFit::TextWidth) })),
+        _ => v.as_u64().filter(|n| (10..=500).contains(n)).map(|n| Some(Zoom { percent: n as u32, fit: None })).ok_or_else(|| {
+            CmdError::Params("`defaultZoom` must be a whole percentage from 10 to 500, onePage, pageWidth, textWidth, document, or null".into())
+        }),
+    }
+}
+
+/// Serialize the setting in the same form `file.options` accepts.
+fn default_zoom_value(zoom: Option<wordcraft_doc::Zoom>) -> Value {
+    use wordcraft_doc::ZoomFit;
+    match zoom {
+        None => json!("document"),
+        Some(z) => match z.fit {
+            Some(ZoomFit::OnePage) => json!("onePage"),
+            Some(ZoomFit::PageWidth) => json!("pageWidth"),
+            Some(ZoomFit::TextWidth) => json!("textWidth"),
+            None => json!(z.percent),
+        },
+    }
 }
 
 /// A folder setting (`dictionariesFolder`, `userTemplatesFolder`): `auto` (or nothing) forgets

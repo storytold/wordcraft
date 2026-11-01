@@ -61,6 +61,9 @@ impl WordApp {
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
+        if self.session.prefs.default_zoom.is_some() {
+            self.session.apply_document_zoom();
+        }
         // Check spelling as you type follows the saved preference (#1792).
         self.session.view.proofing = self.session.prefs.check_spelling;
         // The saved dictionaries folder (#1063) is searched from the start.

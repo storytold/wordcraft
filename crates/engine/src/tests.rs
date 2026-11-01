@@ -11250,6 +11250,135 @@ fn rtf_list_round_trip_keeps_text() {
     }
 }
 
+/// #2080: defaults apply on New/Open, saved zoom wins unless explicitly overridden.
+#[test]
+fn default_document_zoom_respects_saved_zoom_and_explicit_override() {
+    use wordcraft_doc::{Document, Zoom, ZoomFit};
+    let mut session = s();
+    run(&mut session, "file.options", json!({"defaultZoom": 125}));
+    assert_eq!(session.view.zoom, 1.0, "changing the preference does not zoom this document");
+    run(&mut session, "file.new", json!({}));
+    assert_eq!(session.view.zoom, 1.25);
+    assert!(!session.dirty && session.doc.settings.zoom.is_none());
+    let mut doc = Document::from_text("Synthetic zoom fixture");
+    doc.settings.zoom = Some(Zoom { percent: 175, fit: Some(ZoomFit::OnePage) });
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let data = cmd::insert::base64_encode(&bytes);
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.zoom, 1.75);
+    assert_eq!(session.view.fit, "onePage");
+    run(&mut session, "file.options", json!({"overrideDocumentZoom": true}));
+    assert_eq!(session.view.zoom, 1.75, "the preference leaves the current view alone");
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.zoom, 1.25);
+    assert!(session.view.fit.is_empty());
+    assert_eq!(session.doc.settings.zoom, doc.settings.zoom, "opening does not rewrite the stored zoom");
+    assert!(!session.dirty);
+    run(&mut session, "file.open", json!({"path": "synthetic.txt", "data": cmd::insert::base64_encode(b"plain text")}));
+    assert_eq!(session.view.zoom, 1.25);
+    run(&mut session, "file.options", json!({"defaultZoom": "pageWidth"}));
+    run(&mut session, "file.new", json!({"template": "letter"}));
+    assert_eq!(session.view.fit, "pageWidth");
+    assert!(session.view.single_column);
+    run(&mut session, "file.options", json!({"defaultZoom": "document"}));
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.fit, "onePage");
+    assert_eq!(session.view.zoom, 1.75);
+    let mut legacy = Session::new(Document::new());
+    legacy.view.zoom = 0.8;
+    legacy.view.fit = "pageWidth".into();
+    legacy.set_document(doc);
+    assert_eq!(legacy.view.zoom, 0.8, "without a preference, non-file document switches keep their old view");
+    assert_eq!(legacy.view.fit, "pageWidth");
+}
+
+/// #2080: opening a second document applies the default without resetting either parked view.
+#[test]
+fn default_document_zoom_keeps_independent_open_document_views() {
+    let mut session = s();
+    run(&mut session, "file.options", json!({"defaultZoom": 125}));
+    run(&mut session, "text.insert", json!({"text": "Keep this synthetic document"}));
+    run(&mut session, "view.zoom", json!({"value": 175}));
+    let first = session.document_id();
+    run(
+        &mut session,
+        "file.open",
+        json!({
+            "path": "synthetic-second-zoom.txt",
+            "data": cmd::insert::base64_encode(b"Second synthetic document")
+        }),
+    );
+    let second = session.document_id();
+    assert_ne!(first, second);
+    assert_eq!(session.documents().len(), 2);
+    assert_eq!(session.view.zoom, 1.25);
+    run(&mut session, "view.zoom", json!({"value": 160}));
+    session.activate(first).unwrap();
+    assert!(session.dirty, "the unsaved first document remains open");
+    assert_eq!(session.view.zoom, 1.75);
+    run(&mut session, "file.options", json!({"defaultZoom": 200}));
+    assert_eq!(session.view.zoom, 1.75, "changing defaults leaves the current view alone");
+    session.activate(second).unwrap();
+    assert_eq!(session.view.zoom, 1.6, "activating an open document keeps its own zoom");
+}
+
+/// #2080: replacing the last closed document uses configured defaults without changing legacy views.
+#[test]
+fn default_document_zoom_applies_when_closing_the_last_document() {
+    for (preference, zoom, fit) in [(json!(125), 1.25, ""), (json!("pageWidth"), 1.0, "pageWidth")] {
+        let mut session = s();
+        run(&mut session, "file.options", json!({"defaultZoom": preference}));
+        run(&mut session, "view.zoom", json!({"value": 175}));
+        let closed = session.document_id();
+        session.close_document(closed).unwrap();
+        assert_ne!(session.document_id(), closed);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.view.zoom, zoom);
+        assert_eq!(session.view.fit, fit);
+        assert!(!session.dirty && session.doc.settings.zoom.is_none());
+    }
+    let mut legacy = s();
+    legacy.view.zoom = 0.8;
+    legacy.view.fit = "onePage".into();
+    let closed = legacy.document_id();
+    legacy.close_document(closed).unwrap();
+    assert_eq!(legacy.view.zoom, 0.8, "no configured default keeps the previous zoom");
+    assert_eq!(legacy.view.fit, "onePage");
+}
+
+/// #2080: invalid options are atomic and legacy saved preferences keep their other values.
+#[test]
+fn default_document_zoom_validates_options_and_saved_preferences() {
+    use wordcraft_doc::{Zoom, ZoomFit};
+    let mut session = s();
+    for value in [json!(0), json!(501), json!(-1), json!(125.5), json!(true), json!({}), json!([]), json!("invalid")] {
+        let prefs = session.prefs.clone();
+        assert!(session.run("file.options", &json!({"defaultZoom": value, "units": "centimeters"})).is_err());
+        assert_eq!(session.prefs, prefs);
+    }
+    run(&mut session, "file.options", json!({"defaultZoom": "onePage", "overrideDocumentZoom": true}));
+    assert_eq!(session.prefs.default_zoom, Some(Zoom { percent: 100, fit: Some(ZoomFit::OnePage) }));
+    let before = session.prefs.clone();
+    assert!(session.run("file.options", &json!({"defaultZoom": 200, "overrideDocumentZoom": "yes"})).is_err());
+    assert_eq!(session.prefs, before);
+    run(&mut session, "file.options", json!({"defaultZoom": null}));
+    assert!(session.prefs.default_zoom.is_none());
+    for value in [
+        json!(false),
+        json!("onePage"),
+        json!({"percent": 0}),
+        json!({"percent": 501}),
+        json!({"percent": 125.5}),
+        json!({"percent": 100, "fit": "invalid"}),
+    ] {
+        let prefs: crate::Prefs = serde_json::from_value(json!({"defaultZoom": value, "ignoreNumbers": false})).unwrap();
+        assert!(prefs.default_zoom.is_none());
+        assert!(!prefs.ignore_numbers);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({"ignoreNumbers": false})).unwrap();
+    assert!(legacy.default_zoom.is_none() && !legacy.override_document_zoom);
+}
+
 /// #3490: `table.cellMargins` preserves existing margins for any sides not passed.
 #[test]
 fn table_cell_margins_preserves_unpassed_sides() {

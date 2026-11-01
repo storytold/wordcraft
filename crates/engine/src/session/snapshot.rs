@@ -36,12 +36,26 @@ impl Session {
         {
             self.recovery_slot = Default::default();
         }
+        if self.prefs.default_zoom.is_some() {
+            self.apply_document_zoom();
+        }
         self.reset_history();
         self.clear_versions();
         self.touch();
         self.dirty = false;
         self.made_rev = self.rev;
         self.relayout();
+    }
+
+    /// Restore a document's saved zoom, or the user's default. Hosts also call this after
+    /// loading preferences for the first document; it changes only presentation, not the file.
+    pub fn apply_document_zoom(&mut self) {
+        let preferred = self.prefs.default_zoom.filter(|z| (10..=500).contains(&z.percent));
+        let saved = self.doc.settings.zoom;
+        let zoom = if self.prefs.override_document_zoom { preferred.or(saved) } else { saved.or(preferred) };
+        if let Some(zoom) = zoom {
+            crate::cmd::view::restore_zoom(self, zoom);
+        }
     }
 
     /// A snapshot to put back with [`Session::restore`], for a caller that runs a command and
