@@ -116,7 +116,16 @@ pub(crate) fn language_of(pack_locale: &str, endonym: &str) -> String {
     };
     let base = pack_locale.split('-').next().unwrap_or(pack_locale);
     let more = || MORE_LANGUAGES.iter().find(|(t, _)| *t == base).map(|(_, n)| *n);
-    match exact.or_else(prefixed).or_else(more) {
+    if let Some(n) = exact.or_else(prefixed) {
+        return tl!(n).to_string();
+    }
+    // A language with a region the list lacks (`de-ch`: German (Switzerland)), as the status bar
+    // names it.
+    let named = crate::ribbon::language_name(Some(pack_locale));
+    if !named.eq_ignore_ascii_case(pack_locale) {
+        return tl!(&named).to_string();
+    }
+    match more() {
         Some(n) => tl!(n).to_string(),
         None if !endonym.is_empty() => endonym.to_string(),
         None => pack_locale.to_string(),
@@ -534,6 +543,17 @@ mod tests {
         let (_, node) = tree.nodes.iter().find(|(_, n)| n.label().is_some_and(|l| l.starts_with(label)))?;
         let b = node.bounds()?;
         Some(((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0))
+    }
+
+    /// craft-proof calls Swiss German and Portugal's Portuguese pack languages (`de-ch`,
+    /// `pt-pt`); the status bar and the pack list still name them as German and Portuguese.
+    #[test]
+    fn swiss_and_portugal_text_keep_their_names() {
+        assert_eq!(crate::ribbon::language_name(Some("de-CH")), "German (Switzerland)");
+        assert_eq!(crate::ribbon::language_name(Some("pt-PT")), "Portuguese (Portugal)");
+        assert_eq!(super::language_of("de-ch", ""), "German (Switzerland)");
+        assert_eq!(super::language_of("pt-pt", ""), "Portuguese (Portugal)");
+        assert_eq!(super::language_of("ja", "日本語"), "Japanese");
     }
 
     /// CP4.3 review: a click the control channel made (MCP's `click`, `ui.click`) on the bar's

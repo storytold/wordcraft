@@ -511,8 +511,18 @@ fn reload(b: &Arc<dyn Backend>) {
 /// The full licence texts for About › Language data: the embedded English data, then each
 /// installed pack.
 pub fn licence_texts() -> Vec<(String, String)> {
-    wordcraft_proof::packs::licence_texts()
+    let mut texts = wordcraft_proof::packs::licence_texts();
+    // SCOWL's notices (with the Ispell BSD licence of its affix files), when English spells from
+    // the embedded SCOWL data; after the Moby and supplement entries.
+    if let Some(notice) = wordcraft_proof::scowl::notice() {
+        let at = texts.len().min(2);
+        texts.insert(at, (SCOWL_TITLE.into(), notice.into()));
+    }
+    texts
 }
+
+/// About › Language data's title for SCOWL's notices.
+pub const SCOWL_TITLE: &str = "English spelling dictionaries (SCOWL)";
 
 /// The pack locale for a document language tag: the whole tag (`pt-pt`), else its language
 /// (`nl` for `nl-NL`), whichever the index has. `None` for English and tags with no pack.
@@ -560,6 +570,19 @@ pub fn document_languages(s: &Session) -> Vec<String> {
 /// malformed tag. The one place the bar's language rule lives.
 pub fn proofable(tag: &str) -> bool {
     wordcraft_proof::ProofLang::from_tag(Some(tag)) != wordcraft_proof::ProofLang::Other
+}
+
+/// The Hunspell dictionary `tag`'s language needs and doesn't have, for the status bar's
+/// "(no dictionary)": craft-proof's [`wordcraft_proof::missing_dictionary`], except for a
+/// language craft-proof has no rules of its own for (`ProofLang::Pack`: Japanese, Chinese,
+/// Thai…) when no pack for it is available either, as no Hunspell dictionary may exist at all.
+pub fn missing_dictionary(tag: Option<&str>) -> Option<&'static str> {
+    let name = wordcraft_proof::missing_dictionary(tag)?;
+    let lang = wordcraft_proof::ProofLang::from_tag(tag);
+    if lang.pack_locale().is_some() && pack_for_tag(tag.unwrap_or(""), &available()).is_none() {
+        return None;
+    }
+    Some(name)
 }
 
 /// The packs the document's text asks for that are available and not installed: what the
@@ -675,6 +698,21 @@ mod tests {
     /// (`en` alone: English only); the default embeds the carry-over locales too, until Language
     /// packs are published and pinned (craft-proof's `DEFAULT_EMBED`; TODO(CP4.4): English only
     /// then).
+    /// About › Language data shows SCOWL's notices (the Ispell BSD licence among them) whenever
+    /// English spells from the embedded SCOWL data.
+    #[test]
+    fn about_shows_the_scowl_notice_when_scowl_is_embedded() {
+        let texts = super::licence_texts();
+        match wordcraft_proof::scowl::notice() {
+            Some(notice) => {
+                let entry = texts.iter().find(|(t, _)| t == super::SCOWL_TITLE).map(|(_, x)| x.as_str());
+                assert_eq!(entry, Some(notice));
+                assert!(notice.contains("Ispell") || notice.contains("ispell"), "the Ispell notice is part of it");
+            }
+            None => assert!(texts.iter().all(|(t, _)| t != super::SCOWL_TITLE), "no SCOWL data: no SCOWL entry"),
+        }
+    }
+
     #[test]
     fn the_default_build_embeds_only_english() {
         const CARRY_OVER: [&str; 5] = ["de", "pl", "pt", "it", "ru"];

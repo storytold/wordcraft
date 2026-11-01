@@ -352,5 +352,58 @@ mod tests {
         assert!(!issues.contains("\"labas\"") && !issues.contains("typography"), "{issues}");
     }
 
+    /// Japanese, Chinese and Thai have no Hunspell dictionary anywhere: without a pack for them
+    /// in the list the status bar doesn't say "(no dictionary)" and the bar offers nothing; once
+    /// the list has one, both do.
+    #[test]
+    fn a_language_with_no_pack_and_no_dictionary_asks_for_nothing() {
+        with_backend(FixedBackend::sample(), |s, _| {
+            for tag in ["ja-JP", "zh-CN", "th-TH"] {
+                assert_eq!(packs::missing_dictionary(Some(tag)), None, "{tag}");
+            }
+            s.run("document.setText", &json!({"text": "日本語のテキスト"})).unwrap();
+            s.run("select.all", &json!({})).unwrap();
+            s.run("review.language", &json!({"lang": "ja-JP"})).unwrap();
+            assert!(packs::missing(s).is_empty(), "no Japanese pack: nothing offered");
+        });
+        let mut b = FixedBackend::sample();
+        let ja = Pack { locale: "ja".into(), name: "日本語".into(), ..b.packs[0].clone() };
+        b.packs.push(ja);
+        with_backend(b, |s, _| {
+            assert!(packs::missing_dictionary(Some("ja-JP")).is_some(), "a Japanese pack is available");
+            s.run("document.setText", &json!({"text": "日本語のテキスト"})).unwrap();
+            s.run("select.all", &json!({})).unwrap();
+            s.run("review.language", &json!({"lang": "ja-JP"})).unwrap();
+            assert_eq!(packs::missing(s).into_iter().map(|p| p.locale).collect::<Vec<_>>(), ["ja"]);
+        });
+    }
+
+    /// Swiss German and European Portuguese are pack languages in craft-proof (`de-ch`, `pt-pt`:
+    /// their spelling is their own) but hyphenate and check grammar as German and Portuguese.
+    #[test]
+    fn swiss_german_and_portugal_portuguese_keep_their_languages_rules() {
+        use wordcraft_proof::ProofLang;
+        let de_ch = ProofLang::from_tag(Some("de-CH"));
+        let pt_pt = ProofLang::from_tag(Some("pt-PT"));
+        assert_eq!(de_ch.tag(), "de-ch");
+        assert_eq!(pt_pt.tag(), "pt-pt");
+        assert!(packs::proofable("de-CH") && packs::proofable("pt-PT"));
+        for word in ["Zusammenarbeit", "Rechtschreibung"] {
+            let german = wordcraft_proof::hyphen::word_breaks_in(word, ProofLang::De).0;
+            assert!(!german.is_empty(), "German hyphenates {word}");
+            assert_eq!(wordcraft_proof::hyphen::word_breaks_in(word, de_ch).0, german, "Swiss German hyphenates {word} as German");
+        }
+        for word in ["computador", "informação"] {
+            assert_eq!(
+                wordcraft_proof::hyphen::word_breaks_in(word, pt_pt).0,
+                wordcraft_proof::hyphen::word_breaks_in(word, ProofLang::Pt).0,
+                "{word}"
+            );
+        }
+        let messages = |lang| wordcraft_proof::check_grammar_in("Ele disse que que viria .", lang).into_iter().map(|i| i.message).collect::<Vec<_>>();
+        assert!(!messages(ProofLang::Pt).is_empty());
+        assert_eq!(messages(pt_pt), messages(ProofLang::Pt), "Portugal text gets the Portuguese grammar checks");
+    }
+
     use crate::packs::Pack;
 }
