@@ -477,3 +477,27 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+
+/// Formatting marks are an application preference: opening another document must not
+/// silently reset the ¶ toggle, and the setting must survive an application restart.
+#[test]
+fn show_formatting_marks_survives_new_document_and_restart() {
+    let mut first = app();
+    assert!(!first.session.view.marks);
+    first.run("view.marks", json!({"value": true})).unwrap();
+    assert!(first.session.view.marks);
+    assert!(!first.session.dirty);
+    first.run("file.new", json!({})).unwrap();
+    assert!(first.session.view.marks);
+    let bytes = serde_json::to_vec(&first.prefs()).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains(r#""showFormattingMarks":true"#));
+    let mut restored = app();
+    restored.apply_prefs(UiState::from_json(&bytes).unwrap());
+    assert!(restored.session.view.marks);
+    restored.run("view.marks", json!({"value": false})).unwrap();
+    let mut again = app();
+    again.apply_prefs(UiState::from_json(&serde_json::to_vec(&restored.prefs()).unwrap()).unwrap());
+    assert!(!again.session.view.marks);
+    assert!(!UiState::from_json(br#"{}"#).unwrap().show_formatting_marks);
+}
