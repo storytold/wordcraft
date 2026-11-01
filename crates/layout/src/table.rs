@@ -39,6 +39,21 @@ pub struct CellPart {
     /// (what the part of the row left on a page must hold); `None` for turned text and a cell
     /// covered by a vertical merge.
     pub end: Option<f32>,
+    /// How far a cell aligned to the middle or bottom of its row moved its content down, for
+    /// splitting the row; `None` for a cell at the top.
+    pub(crate) align: Option<CellAlign>,
+}
+
+/// The vertical alignment applied to a cell's content (see [`CellPart::align`]).
+#[derive(Clone)]
+pub(crate) struct CellAlign {
+    /// The cell's content in the row's `items`.
+    pub content: std::ops::Range<usize>,
+    pub valign: VAlign,
+    /// How far the content moved down.
+    pub dy: f32,
+    /// The height it was aligned by: the content and the cell's margins.
+    pub height: f32,
 }
 
 pub struct TableLayout {
@@ -824,10 +839,12 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     it.turn(tn.turn, ox, oy);
                 }
             }
+            let content = items.len();
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 items.push(it);
             }
+            let align = (dy > 0.0).then_some(CellAlign { content: content..items.len(), valign: c.valign, dy, height: align_h });
             let b = c.borders;
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
             // Horizontal edges run on over half of each visible vertical edge, so the corners
@@ -858,7 +875,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 clip: exact && c.h > span_h + 0.01,
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
-            parts.push(CellPart { top, items: first..items.len(), end });
+            parts.push(CellPart { top, items: first..items.len(), end, align });
         }
         out.push(RowLayout {
             height: rh,
@@ -878,7 +895,9 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
 /// Like Word, the part left on the page keeps the cells' bottom margin and border below its
 /// text and a cell's last paragraph its space after (a row only that much taller than the room
 /// left splits rather than moving on whole), and widow control keeps two lines of a paragraph on
-/// either side of the break. Each cell's text goes on at the top of the continuation, and the
+/// either side of the break. A cell aligned to the middle or bottom of the row is aligned within
+/// the part left on the page when all its text fits there, and starts at the top of the cell
+/// otherwise. Each cell's text goes on at the top of the continuation, and the
 /// continuation is as tall as the cell needing the most room, and at least the rest of the row
 /// (a minimum height holds over the pages).
 pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
@@ -903,15 +922,15 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let limit = cut - row.bottom.clamp(0.0, cut);
     let fits = |bottom: f32| bottom <= limit + 0.01;
     // Each cell's items: every item of a row is in one of its cells.
-    let cells: Vec<&[Placed]> = row.cells.iter().map(|c| row.items.get(c.items.clone()).unwrap_or(&[])).collect();
+    let (mut cells, mut ends, realign) = cells_from_top(row, limit);
     // A nested table's cell is deeper than the row's own.
     let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
     // The first line of each paragraph that moves on (`l1` when all of them stay), by cell and
     // item.
     let splits: Vec<Vec<usize>> = cells
         .iter()
-        .zip(&row.cells)
-        .map(|(items, c)| {
+        .zip(&ends)
+        .map(|(items, end)| {
             // Where the cell's text ends: the paragraph ending lowest is the cell's last.
             let lowest =
                 items.iter().filter_map(|it| text_lines(it).and_then(|(p, l0, l1, y)| crate::item_bottom(y, p, l0, l1))).fold(f32::MIN, f32::max);
@@ -921,7 +940,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     let Some((para, l0, l1, y)) = text_lines(it) else { return 0 };
                     // The cell's last paragraph ends with the cell's content (its space after).
                     let last = l1 == para.lines.len() && crate::item_bottom(y, para, l0, l1).is_some_and(|b| b >= lowest - 0.01);
-                    line_split(para, (l0, l1), y, limit, c.end.filter(|_| last))
+                    line_split(para, (l0, l1), y, limit, end.filter(|_| last))
                 })
                 .collect()
         })
@@ -942,6 +961,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
             return None;
         }
     }
+    align_in_part(row, &mut cells, &splits, &realign, &mut ends, cut);
     // The top of the first thing that moves on in each cell.
     let mut moved = vec![f32::MAX; cells.len()];
     // Whether each cell keeps anything on this page, and whether a line or picture of it that
@@ -1009,9 +1029,9 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     // bottom margin, the rest of the row for turned text), and at least the rest of the row.
     let full = (row.height - shifts.iter().copied().fold(f32::MAX, f32::min)).max(4.0);
     let mut need = row.height - cut;
-    for ((c, &m), &s) in row.cells.iter().zip(&moved).zip(&shifts) {
+    for ((end, &m), &s) in ends.iter().zip(&moved).zip(&shifts) {
         if m < f32::MAX {
-            need = need.max(c.end.map_or(row.height, |e| e + row.bottom) - s);
+            need = need.max(end.map_or(row.height, |e| e + row.bottom) - s);
         }
     }
     let height = need.clamp(4.0, full);
@@ -1021,7 +1041,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let geo_shift = |bottom: f32, shift: f32| if bottom >= row.height - 0.01 { rest } else { shift };
     let (mut a, mut b) = (Vec::new(), Vec::new());
     let mut parts = Vec::with_capacity(cells.len());
-    for (((c, items), splits), &shift) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts) {
+    for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
         let start = b.len();
         for (it, &split) in items.iter().zip(splits) {
             if let Some(r) = it.turned_bounds() {
@@ -1117,13 +1137,96 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                 }
             }
         }
-        parts.push(CellPart { top: c.top, items: start..b.len(), end: c.end.map(|e| e - shift) });
+        parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
     // The part left on the page is placed and never split again.
     Some((
         RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
         RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
     ))
+}
+
+type CellItems<'a> = Vec<std::borrow::Cow<'a, [Placed]>>;
+
+/// The items of each cell of a row being split, with each cell's content end, and the cells
+/// aligned to the middle or bottom that fit above `limit`. Those cells go back to the top first:
+/// Word runs such a cell from its top when its text doesn't all fit above the cut, and lines it
+/// up within the part left on the page (in [`align_in_part`]) when it does.
+fn cells_from_top(row: &RowLayout, limit: f32) -> (CellItems<'_>, Vec<Option<f32>>, Vec<Option<&CellAlign>>) {
+    let mut ends = Vec::with_capacity(row.cells.len());
+    let mut realign = Vec::with_capacity(row.cells.len());
+    let cells = row
+        .cells
+        .iter()
+        .map(|c| {
+            let items = row.items.get(c.items.clone()).unwrap_or(&[]);
+            let Some(al) = c.align.as_ref() else {
+                ends.push(c.end);
+                realign.push(None);
+                return std::borrow::Cow::Borrowed(items);
+            };
+            let mut items = std::borrow::Cow::Borrowed(items);
+            shift_content(&mut items, c, al, -al.dy);
+            let end = c.end.map(|e| e - al.dy);
+            ends.push(end);
+            realign.push(end.is_some_and(|e| e <= limit + 0.01).then_some(al));
+            items
+        })
+        .collect();
+    (cells, ends, realign)
+}
+
+/// Line up the middle and bottom cells marked in `realign` within the part of the row left on the
+/// page: as tall as the other cells' text kept there (by `splits`) and the bottom margin.
+fn align_in_part(
+    row: &RowLayout,
+    cells: &mut [std::borrow::Cow<[Placed]>],
+    splits: &[Vec<usize>],
+    realign: &[Option<&CellAlign>],
+    ends: &mut [Option<f32>],
+    cut: f32,
+) {
+    if realign.iter().all(Option::is_none) {
+        return;
+    }
+    let limit = cut - row.bottom.clamp(0.0, cut);
+    let mut kept = f32::MIN;
+    for ((items, splits), _) in cells.iter().zip(splits).zip(realign).filter(|(_, al)| al.is_none()) {
+        for (it, &split) in items.iter().zip(splits) {
+            let bottom = match (it.turned_bounds(), it) {
+                (Some(r), _) => Some(r.bottom()),
+                // A paragraph kept whole ends with its space after.
+                (None, Placed::Lines { para, l0, y, .. }) if split > *l0 => crate::item_bottom(*y, para, *l0, split)
+                    .filter(|&b| b <= limit + 0.01)
+                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(limit) } else { b }),
+                (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
+                    Some(rect.bottom())
+                }
+                _ => None,
+            };
+            if let Some(b) = bottom.filter(|&b| b <= limit + 0.01) {
+                kept = kept.max(b);
+            }
+        }
+    }
+    let part = if kept > f32::MIN { kept + row.bottom } else { cut };
+    for (((items, al), c), end) in cells.iter_mut().zip(realign).zip(&row.cells).zip(ends) {
+        let (Some(al), Some(e)) = (al, *end) else { continue };
+        let room = (part - al.height).max(0.0);
+        let dy = if al.valign == VAlign::Center { room / 2.0 } else { room };
+        let dy = dy.min((limit - e).max(0.0));
+        shift_content(items, c, al, dy);
+        *end = Some(e + dy);
+    }
+}
+
+/// Move the content of cell `c` (its items `items`) down by `dy`.
+fn shift_content(items: &mut std::borrow::Cow<[Placed]>, c: &CellPart, al: &CellAlign, dy: f32) {
+    for k in al.content.clone() {
+        if let Some(it) = k.checked_sub(c.items.start).and_then(|k| items.to_mut().get_mut(k)) {
+            it.translate(0.0, dy);
+        }
+    }
 }
 
 /// A cell paragraph's placed lines (not turned text): the paragraph, its lines `l0..l1` and the
