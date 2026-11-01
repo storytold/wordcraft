@@ -11596,6 +11596,42 @@ fn inspect_lists_range_fields() {
     assert!(part.get("fieldsTruncated").is_none(), "{part}");
 }
 
+/// #4467 review: a field name in lower case is a page field all the same, and a field in a table
+/// nested deeper than `document.inspect` walks (8 tables) is left out with `fieldsTruncated`.
+#[test]
+fn inspect_reads_field_names_in_any_case_and_bounds_nested_tables() {
+    use wordcraft_doc::{Block, CharProps, InlineObject, Paragraph, Table, para_block};
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    // A field `depth` tables deep.
+    let nested = |depth: usize| {
+        let mut p = Paragraph::new();
+        p.insert_object(0, field("page"), &CharProps::default()).unwrap();
+        let mut block = para_block(p);
+        for _ in 0..depth {
+            let mut t = Table::new(1, 1, 200.0);
+            t.rows[0].cells[0].blocks = vec![block];
+            block = std::sync::Arc::new(Block::Table(t));
+        }
+        block
+    };
+    for (depth, listed) in [(0, true), (8, true), (9, false)] {
+        let mut s = s();
+        let id = run(&mut s, "insert.pageNumber", json!({}))["story"].as_u64().unwrap();
+        let key = u32::try_from(id).unwrap();
+        s.doc.parts.get_mut(&key).unwrap().blocks = vec![nested(depth)];
+        let doc = run(&mut s, "document.inspect", json!({}));
+        let part = doc["parts"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+        if listed {
+            assert_eq!(part["fields"], json!([{"code": "page", "result": "1", "perPage": true}]), "{depth}");
+            assert!(part.get("fieldsTruncated").is_none(), "{depth}: {part}");
+        } else {
+            assert!(part.get("fields").is_none(), "{depth}: {part}");
+            assert_eq!(part["fieldsTruncated"], true, "{depth}");
+        }
+    }
+}
+
 /// #3676: a 1-based page parameter becomes a 0-based index without wrapping.
 /// On 32-bit and wasm the old cast truncated 2^32 to 0 and `0 - 1` panicked.
 #[test]
