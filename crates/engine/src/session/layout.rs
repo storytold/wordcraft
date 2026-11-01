@@ -2,7 +2,7 @@ use super::doc_state::{Selection, TypedWord, typed_range};
 use super::locale::SYSTEM_LOCALE;
 use super::snapshot_types::LayoutEntry;
 use super::view::DRAFT_WIDTH;
-use super::*;
+use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
     /// The current layout (recomputed when the document or view changed).

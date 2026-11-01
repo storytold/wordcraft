@@ -1,4 +1,6 @@
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::i18n;
+use super::{WordApp, json};
 
 impl WordApp {
     /// Read a Control-click as the right-click on macOS, then offer at most one synthetic gesture
