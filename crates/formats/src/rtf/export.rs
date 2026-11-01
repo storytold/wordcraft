@@ -468,6 +468,10 @@ impl Writer {
             Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
         }
+        // The paragraph's text direction, as Word writes it (`\rtlpar`; `\ltrpar` is the default).
+        if p.rtl {
+            out.push_str("\\rtlpar")
+        }
         if p.page_break {
             out.push_str("\\pagebb");
         }

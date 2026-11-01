@@ -190,6 +190,86 @@ fn cell_text_align_reaches_the_cell_paragraphs() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_keep_their_direction() {
+    // #2693: Word writes an RTL paragraph's direction as dir="rtl" (or CSS direction:rtl);
+    // reading it keeps the paragraph's bidi flag, and the export writes dir="rtl" back.
+    for src in [r#"<p dir="rtl">مرها</p>"#, r#"<p style="direction:rtl">مرها</p>"#, r#"<div dir="rtl"><p>مرها</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(p.rtl, "{src}");
+    }
+    let ltr = parse(r#"<p dir="ltr">مرها</p>"#);
+    let Some(FBlock::Para(p)) = ltr.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl, "ltr is not RTL");
+    // An explicit ltr wins over an RTL ancestor.
+    for src in [r#"<div dir="rtl"><p dir="ltr">abc</p></div>"#, r#"<div dir="rtl"><p style="direction:ltr">abc</p></div>"#] {
+        let parsed = parse(src);
+        let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+        assert!(!p.rtl, "{src}");
+    }
+    // The document keeps it as `w:bidi`, and the export writes dir="rtl" back.
+    let doc = model::to_doc(&parse(r#"<p dir="rtl">مرها</p>"#));
+    assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+    let out = export_fragment(&doc);
+    assert!(out.contains("dir=\"rtl\""), "{out}");
+    let back = model::to_doc(&parse(out.as_str()));
+    assert!(back.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+}
+
+#[test]
+fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
+    fn flags(f: &Flow) -> Vec<bool> {
+        f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect()
+    }
+    // The nearest enclosing block decides, by `dir` or CSS, at any depth.
+    for src in [
+        r#"<div dir="rtl"><div dir="ltr"><p>abc</p></div></div>"#,
+        r#"<div dir="rtl"><div style="direction:ltr"><p>abc</p></div></div>"#,
+        r#"<div dir="rtl"><div dir="ltr"><div><p>abc</p></div></div></div>"#,
+    ] {
+        assert_eq!(flags(&parse(src)), [false], "{src}");
+    }
+    for src in
+        [r#"<div dir="ltr"><div dir="rtl"><p>abc</p></div></div>"#, r#"<div dir="rtl"><div dir="ltr"><div dir="rtl"><p>abc</p></div></div></div>"#]
+    {
+        assert_eq!(flags(&parse(src)), [true], "{src}");
+    }
+    // A paragraph with its own direction still wins inside both.
+    assert_eq!(flags(&parse(r#"<div dir="rtl"><div dir="ltr"><p dir="rtl">a</p><p>b</p></div></div>"#)), [true, false]);
+    // Export and reimport keep each paragraph's direction.
+    let src = r#"<div dir="rtl"><p>a</p><div dir="ltr"><p>b</p></div><p>c</p></div>"#;
+    let doc = model::to_doc(&parse(src));
+    let bidi = |d: &wordcraft_doc::Document| {
+        d.body
+            .iter()
+            .filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p.props.bidi.unwrap_or(false)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bidi(&doc), [true, false, true]);
+    assert_eq!(bidi(&model::to_doc(&parse(export_fragment(&doc).as_str()))), [true, false, true]);
+
+    // Text directly in a table cell takes the cell's direction; blocks in the cell their own.
+    let cells = |src: &str| -> Vec<bool> { cell_paras(&parse(src))[0].iter().flatten().map(|p| p.rtl).collect() };
+    assert_eq!(cells(r#"<table><tr><td dir="rtl">text</td></tr></table>"#), [true]);
+    assert_eq!(cells(r#"<table><tr><td style="direction:rtl">text</td></tr></table>"#), [true]);
+    assert_eq!(cells(r#"<table><tr><td>text</td></tr></table>"#), [false]);
+    assert_eq!(cells(r#"<table dir="rtl"><tr><td>text</td><td dir="ltr">x</td></tr></table>"#), [true, false]);
+    assert_eq!(cells(r#"<table><tr><td dir="rtl"><p dir="ltr">a</p><p>b</p></td></tr></table>"#), [false, true]);
+    // A cell with no direction of its own inherits the surrounding block's.
+    assert_eq!(cells(r#"<div dir="rtl"><table><tr><td><p>a</p></td></tr></table></div>"#), [true]);
+
+    // Text directly in a table, outside any cell, and a caption take the table's direction.
+    for src in [r#"<table dir="rtl">loose<tr><td>x</td></tr></table>"#, r#"<table dir="rtl"><caption>cap</caption><tr><td>x</td></tr></table>"#] {
+        assert_eq!(flags(&parse(src)).first(), Some(&true), "{src}");
+    }
+    assert_eq!(flags(&parse(r#"<table>loose<tr><td>x</td></tr></table>"#)).first(), Some(&false));
+
+    // A continuation paragraph in a list item does not change the item's direction.
+    let f = parse(r#"<ul><li><p dir="ltr">first</p><p dir="rtl">second</p></li></ul>"#);
+    assert_eq!(flags(&f), [false], "the item keeps the first paragraph's direction");
+}
+
+#[test]
 fn reporter_sample_header_bold_and_right_aligned_cells() {
     // #1381: the reporter's table.
     let f = parse(

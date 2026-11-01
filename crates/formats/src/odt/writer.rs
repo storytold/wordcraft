@@ -153,6 +153,9 @@ impl Writer {
     fn para_style_at(&mut self, p: &Para, start: Option<&SecStart>) -> String {
         let parent = parent_style(p.kind).to_string();
         let mut props = String::new();
+        if p.rtl {
+            props.push_str(" style:writing-mode=\"rl-tb\"");
+        }
         match p.align {
             Some(Align::Center) => props.push_str(" fo:text-align=\"center\""),
             Some(Align::Right) => props.push_str(" fo:text-align=\"end\""),

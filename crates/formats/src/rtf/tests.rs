@@ -38,6 +38,32 @@ fn basic_reader() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_write_their_direction() {
+    // #2693: Word writes an RTL paragraph as `\rtlpar` (`\ltrpar` for LTR); reading it keeps
+    // the direction (para.rtl, which feeds w:bidi on the document), and export writes it back.
+    let rtf = br#"{\rtf1\ansi\pard\rtlpar RTL\par\pard\ltrpar LTR\par\pard plain\par}"#;
+    let flow = parse(rtf).unwrap();
+    let paras: Vec<&Para> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(paras[0].rtl, "rtlpar sets the direction");
+    assert!(!paras[1].rtl && !paras[2].rtl, "ltrpar and no word: not RTL");
+    // The words an earlier version wrote are still read.
+    let old = parse(br#"{\rtf1\ansi\pard\dir\rtldir RTL\par\pard\dir\ltrdir LTR\par}"#).unwrap();
+    let old: Vec<&Para> = old.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(old[0].rtl && !old[1].rtl, "rtldir and ltrdir are still read");
+    // Import keeps it as w:bidi on the document paragraph.
+    let doc = import(rtf).unwrap();
+    assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+    // Export writes \rtlpar, and not the unknown \dir\rtldir.
+    let out = export(&doc);
+    assert!(out.contains("\\rtlpar") && !out.contains("rtldir"), "{out}");
+    assert!(import(out.as_bytes()).unwrap().body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b {
+        p.props.bidi.unwrap_or(false)
+    } else {
+        false
+    }));
+}
+
+#[test]
 fn paragraph_borders() {
     // A heading with a grey rule under it, as hh.ru résumés write their section titles.
     let rtf = br"{\rtf1\ansi{\colortbl;\red0\green0\blue0;\red216\green216\blue216;}

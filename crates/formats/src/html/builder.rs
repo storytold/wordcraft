@@ -29,6 +29,8 @@ struct El {
     kind: ElKind,
     fmt: Fmt,
     align: Option<Align>,
+    /// `dir="rtl"` or CSS `direction:rtl` on this element.
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -46,6 +48,7 @@ struct TableB {
 struct ElementStyle {
     fmt: Fmt,
     align: Option<Align>,
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -237,9 +240,15 @@ impl<'r> Builder<'r> {
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
             let mut lists = 0usize;
+            let mut rtl_seen = false;
             for (i, e) in self.stack.iter().enumerate().rev() {
                 match e.kind {
                     ElKind::Cell => {
+                        // Text directly in a cell takes the cell's direction; a block inside the
+                        // cell (already seen) has its own.
+                        if !rtl_seen {
+                            p.rtl = e.rtl;
+                        }
                         // CSS inherits `text-align` from the cell, its row, row group and table
                         // (#1381); the paragraph's own (found above) wins.
                         if p.align.is_none() {
@@ -254,7 +263,13 @@ impl<'r> Builder<'r> {
                         }
                         break;
                     }
-                    ElKind::Table => break,
+                    ElKind::Table => {
+                        // Text directly in a table, outside any cell or block, takes the table's.
+                        if !rtl_seen {
+                            p.rtl = e.rtl;
+                        }
+                        break;
+                    }
                     ElKind::Heading(n) if p.kind == Kind::Normal => p.kind = Kind::Heading(n.clamp(1, 6)),
                     ElKind::Pre if p.kind == Kind::Normal => p.kind = Kind::Code,
                     ElKind::Quote if p.kind == Kind::Normal => p.kind = Kind::Quote,
@@ -269,6 +284,12 @@ impl<'r> Builder<'r> {
                 }
                 if p.align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
                     p.align = e.align;
+                }
+                // The innermost block's direction already includes what it inherits, so an
+                // explicit `dir="ltr"` inside an RTL block stays LTR.
+                if !rtl_seen && e.kind != ElKind::Inline {
+                    rtl_seen = true;
+                    p.rtl = e.rtl;
                 }
             }
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
@@ -628,6 +649,16 @@ impl<'r> Builder<'r> {
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind) -> ElementStyle {
         let mut fmt = self.fmt();
         let mut align = None;
+        // `dir="rtl"` or CSS `direction:rtl` on this element (inherited by block children).
+        // An explicit `dir="ltr"` (or `direction:ltr`) wins over an RTL ancestor.
+        // What it inherits is the nearest enclosing block's direction (which already includes
+        // that block's own `dir`), so an LTR block inside an RTL one keeps its descendants LTR.
+        let inherited = self.stack.iter().rev().find(|e| e.kind != ElKind::Inline).is_some_and(|e| e.rtl);
+        let mut rtl = match attr(attrs, "dir").map(|d| d.trim().to_ascii_lowercase()).as_deref() {
+            Some("rtl") => true,
+            Some("ltr") => false,
+            _ => inherited,
+        };
         let mut preserve = self.preserve();
         let mut page_break = false;
         let mut page_break_after = false;
@@ -663,12 +694,12 @@ impl<'r> Builder<'r> {
             align = Some(Align::Center);
         }
         if let Some(style) = attr(attrs, "style") {
-            apply_style(style, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+            apply_style(style, &mut fmt, &mut align, &mut rtl, &mut preserve, &mut page_break, &mut page_break_after);
         }
         if kind == ElKind::Pre {
             preserve = true;
         }
-        ElementStyle { fmt, align, preserve, page_break, page_break_after }
+        ElementStyle { fmt, align, rtl, preserve, page_break, page_break_after }
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
@@ -703,7 +734,7 @@ impl<'r> Builder<'r> {
         if kind != ElKind::Inline {
             self.flush();
         }
-        let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind);
+        let ElementStyle { mut fmt, align, rtl, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind);
         match kind {
             ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
             ElKind::Tr => {
@@ -764,7 +795,7 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, page_break_after, used: false });
+        self.stack.push(El { name: name.to_string(), kind, fmt, align, rtl, preserve, page_break, page_break_after, used: false });
     }
 
     pub(super) fn end(&mut self, name: &str) {

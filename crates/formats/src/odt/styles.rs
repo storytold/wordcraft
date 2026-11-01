@@ -47,6 +47,9 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    /// `style:writing-mode`: `Some(true)` for "rl-tb" (right to left), `Some(false)` for "lr-tb";
+    /// `None` when the style sets none (it then inherits from its parent style).
+    rtl: Option<bool>,
     page_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
@@ -84,6 +87,16 @@ pub(super) fn columns_of(a: &Attrs) -> Columns {
 /// A `style:column-sep` (ODF 1.3 §17.13) draws a line between columns unless its style is "none".
 pub(super) fn column_sep(a: &Attrs) -> bool {
     get(a, "style:style") != Some("none")
+}
+
+/// `style:writing-mode`: "rl-tb" is right-to-left, "lr-tb" left-to-right (ODF 1.1 wrote "rl" and
+/// "lr"); anything else (`page`, vertical modes) says nothing about the inline direction here.
+fn writing_mode_rtl(a: &Attrs) -> Option<bool> {
+    match get(a, "style:writing-mode")?.trim() {
+        "rl-tb" | "rl" => Some(true),
+        "lr-tb" | "lr" => Some(false),
+        _ => None,
+    }
 }
 
 fn default_font(a: &Attrs) -> Option<String> {
@@ -158,6 +171,7 @@ impl Styles {
                 "style" if q.starts_with("style:") => {
                     if let Some(name) = get(&a, "style:name") {
                         let info = StyleInfo {
+                            rtl: writing_mode_rtl(&a),
                             parent: get(&a, "style:parent-style-name").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
@@ -208,6 +222,7 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
+                        s.rtl = writing_mode_rtl(&a).or(s.rtl);
                         s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
@@ -318,6 +333,12 @@ impl Styles {
     /// Columns of a section style (whole chain).
     pub(super) fn columns(&self, name: &str) -> Option<Columns> {
         self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
+    }
+
+    /// Does this paragraph style read right to left? The nearest style in the chain that sets
+    /// `style:writing-mode` decides, so a child's "lr-tb" overrides its parent's "rl-tb".
+    pub(super) fn rtl(&self, name: &str) -> bool {
+        self.chain(name).iter().find_map(|(_, s)| s.rtl).unwrap_or(false)
     }
 
     /// Width in points of a table-column style (whole chain).

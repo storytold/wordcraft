@@ -93,6 +93,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
     out.align = p.align;
+    if p.rtl {
+        out.bidi = Some(true);
+    }
     let sp = p.spacing;
     out.space_before = sp.before;
     out.space_after = sp.after;
