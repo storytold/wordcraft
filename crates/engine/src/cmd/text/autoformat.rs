@@ -3,6 +3,7 @@ use super::{
     Block, Border, BorderStyle, CmdError, CmdResult, ListKind, NumRef, OBJ, Path, Pos, Selection, Session, StoryRef, Table, Value, delete_selection,
     p, sel_result, split_para, type_text_effect,
 };
+use std::sync::Arc;
 
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
 fn autoformat(s: &mut Session, text: &str) -> Option<String> {
@@ -164,7 +165,7 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     let found = if kind.is_bullet() { s.doc.numbering.find_kind(kind) } else { None };
     let num = match found {
         Some(n) => n,
-        None => s.doc.numbering.try_add_list(kind)?,
+        None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
     };
     let para = s.doc.para_mut(f.story, &f.path)?;
     para.delete(0, f.off)?;

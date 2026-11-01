@@ -19,9 +19,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     }
     if p::bool(v, "default") == Some(true) {
         let l = lang.clone().ok_or_else(|| CmdError::Params("`default` needs `lang`".into()))?;
-        s.doc.styles.default_chr.lang = Some(l.clone());
+        Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(l.clone());
         // A Normal style that names its own language follows the new default.
-        if let Some(n) = s.doc.styles.styles.iter_mut().find(|x| x.id == "Normal")
+        if let Some(n) = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "Normal")
             && n.chr.lang.is_some()
         {
             n.chr.lang = Some(l);

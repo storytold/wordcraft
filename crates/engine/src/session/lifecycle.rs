@@ -149,6 +149,7 @@ impl Session {
             math_latex: false,
             math_normal_text: false,
             also_selected,
+            member: None,
             prefs: Prefs::default(),
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),

@@ -140,6 +140,8 @@ impl Session {
         self.page_hint = page_hint;
         self.column_mode = column_mode;
         self.math = math;
+        // A picked Drawing Canvas member (#2637) is not part of a view's saved selection.
+        self.member = None;
         if current {
             self.hf_return = hf_return;
             self.typing_open = typing_open;

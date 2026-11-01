@@ -3,6 +3,7 @@
 //! results are what Word produces for the same keys.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::{BorderStyle, VertAlign};
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -483,7 +484,7 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "document default from the editing language");
     let mut s = self::s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     typ(&mut s, "Ala i kot ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "untagged text in the editing language");
     // `eng` is English too, as for proofing.
@@ -1065,7 +1066,7 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
     assert_eq!(indents(&s), (None, None));
     // A list level past the last one, from a style or set directly, goes to the last level.
     let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
-    let style = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
+    let style = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
     style.para.numbering = style.para.numbering.map(|n| wordcraft_doc::props::NumRef { level: u8::MAX, ..n });
     run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
     run(&mut s, "caret.docStart", json!({}));
@@ -1186,8 +1187,8 @@ fn two_enters_after_a_short_line_make_it_a_heading() {
     // A list item numbered by the Normal style is not body text either.
     let mut q = self::s();
     run(&mut q, "tools.autocorrect", json!({"headingStyles": true}));
-    let num = q.doc.numbering.try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
-    if let Some(normal) = q.doc.styles.get_mut("Normal") {
+    let num = Arc::make_mut(&mut q.doc.numbering).try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    if let Some(normal) = Arc::make_mut(&mut q.doc.styles).get_mut("Normal") {
         normal.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     }
     typ(&mut q, "Item\n\n");
@@ -2036,7 +2037,7 @@ fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     assert_eq!(bidi(&s, 1), Some(true), "Enter carries the paragraph's direction on, as in Word");
     // A style that sets left-to-right wins.
     let mut doc = Session::new(wordcraft_doc::Document::new());
-    if let Some(st) = doc.doc.styles.get_mut("Normal") {
+    if let Some(st) = Arc::make_mut(&mut doc.doc.styles).get_mut("Normal") {
         st.para.bidi = Some(false);
     }
     typ(&mut doc, "سلام");
@@ -3043,15 +3044,15 @@ fn style_inherited_list(kind: wordcraft_doc::numbering::ListKind, chain: bool) -
     use wordcraft_doc::props::NumRef;
     use wordcraft_doc::styles::Style;
     let mut doc = wordcraft_doc::Document::from_text("Alpha\nBeta");
-    let num = doc.numbering.try_add_list(kind).unwrap();
-    doc.styles.styles.push(Style {
+    let num = Arc::make_mut(&mut doc.numbering).try_add_list(kind).unwrap();
+    Arc::make_mut(&mut doc.styles).styles.push(Style {
         id: "ListBase".into(),
         name: "Original List".into(),
         para: wordcraft_doc::ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() },
         ..Default::default()
     });
     if chain {
-        doc.styles.styles.push(Style {
+        Arc::make_mut(&mut doc.styles).styles.push(Style {
             id: "ListChild".into(),
             name: "Original Derived".into(),
             based_on: Some("ListBase".into()),
@@ -3127,13 +3128,13 @@ fn list_toggle_uses_effective_level_and_override() {
             for explicit_kind in [false, true] {
                 let mut s = style_inherited_list(kind, true);
                 let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-                let num = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
+                let num = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
                 num.level = 1;
                 let num_id = num.num;
-                s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+                Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
                 if override_level {
-                    s.doc.numbering.abstracts[0].levels[1] = levels_for(opposite)[1].clone();
-                    s.doc.numbering.nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
+                    Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[1] = levels_for(opposite)[1].clone();
+                    Arc::make_mut(&mut s.doc.numbering).nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
                 }
                 let before = s.doc.clone();
                 let params = if explicit_kind { json!({"kind": if kind == ListKind::Bullet { "bullet" } else { "numbered" }}) } else { json!({}) };
@@ -3162,7 +3163,7 @@ fn list_paragraph_style_survives_inherited_toggle_off() {
     use wordcraft_doc::styles::Style;
     for kind in [ListKind::Bullet, ListKind::Numbered] {
         let mut s = style_inherited_list(kind, false);
-        *s.doc.styles.styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
+        *Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
             id: "ListParagraph".into(),
             name: "Original formatted list".into(),
             based_on: Some("ListBase".into()),
@@ -3217,7 +3218,7 @@ fn a_new_list_uses_the_requested_kind_after_a_mixed_format_list() {
     for (kind, command) in [(ListKind::Bullet, "para.bullets"), (ListKind::Numbered, "para.numbering")] {
         let mut s = style_inherited_list(kind, false);
         let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-        s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+        Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
         let num = s.doc.numbering.nums[0].id;
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 1 });
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props = ParaProps::default();
@@ -3273,7 +3274,7 @@ fn highlight_toggle_handles_mixed_inherited_and_pending_formatting() {
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], json!("0000FF"));
     run(&mut s, "format.highlight", json!({}));
     assert_eq!(s.run("format.state", &json!({})).unwrap()["highlight"], serde_json::Value::Null);
-    s.doc.styles.default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
+    Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(wordcraft_doc::props::Highlight::Blue);
     run(&mut s, "format.highlight", json!({"color":"blue"}));
     run(&mut s, "format.highlight", json!({}));
     assert!(s.doc.body[0].as_para().unwrap().runs.iter().all(|r| r.props.highlight == Some(wordcraft_doc::props::Highlight::None)));
@@ -3335,7 +3336,7 @@ fn highlight_toggle_checks_past_the_resolved_run_limit() {
                 .map(|i| Run { len: 1, props: CharProps { highlight: Some(Highlight::Blue), bold: Some(i % 2 == 0), ..Default::default() } })
                 .collect();
             if inherited {
-                doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             } else {
                 doc.para_mut(StoryRef::Body, &Pos::body(1, 0).path).unwrap().runs[0].props.highlight = Some(Highlight::Yellow);
             }
@@ -3395,7 +3396,7 @@ fn highlight_toggle_checks_whole_cell_marks() {
                 Pos::new(StoryRef::Body, path, 0)
             };
             if inherited {
-                s.doc.styles.default_chr.highlight = Some(Highlight::Yellow);
+                Arc::make_mut(&mut s.doc.styles).default_chr.highlight = Some(Highlight::Yellow);
             }
             for row in 0..2 {
                 for col in 0..2 {
@@ -3447,7 +3448,7 @@ fn highlight_toggle_checks_ordinary_paragraph_marks() {
     use wordcraft_doc::props::Highlight;
     for text in ["AB", "AB\n\nAB", "\n"] {
         let mut doc = wordcraft_doc::Document::from_text(text);
-        doc.styles.default_chr.highlight = Some(Highlight::Blue);
+        Arc::make_mut(&mut doc.styles).default_chr.highlight = Some(Highlight::Blue);
         let paths = doc.para_paths(StoryRef::Body);
         for path in &paths {
             let p = doc.para_mut(StoryRef::Body, path).unwrap();
