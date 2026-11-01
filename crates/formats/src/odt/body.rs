@@ -301,6 +301,8 @@ pub(super) struct Body<'a> {
     shape_kind: Option<wordcraft_doc::para::ShapeKind>,
     /// A custom shape's mirroring (left to right, top to bottom), from its geometry.
     shape_flip: (bool, bool),
+    /// A freeform shape's paths (a polygon's, polyline's, path's or regular polygon's).
+    shape_path: Option<std::sync::Arc<wordcraft_doc::freeform::Freeform>>,
     /// The turn of a group's member being read, from its `draw:transform`.
     member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
@@ -424,6 +426,7 @@ impl<'a> Body<'a> {
             frame_look: model::BoxLook::default(),
             shape_kind: None,
             shape_flip: (false, false),
+            shape_path: None,
             member_rot: None,
             group_at: None,
             group: None,
@@ -863,7 +866,7 @@ impl Body<'_> {
                 self.skip = 1;
             }
             // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
-            "rect" | "ellipse" | "line" | "custom-shape"
+            "rect" | "ellipse" | "circle" | "line" | "custom-shape" | "polygon" | "polyline" | "path" | "regular-polygon"
                 if q.starts_with("draw:") && self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc =>
             {
                 self.start_shape(q, a);
@@ -880,8 +883,8 @@ impl Body<'_> {
                     });
                 }
             }
-            // Other shapes, and shapes in groups, are left out, with their text. Groups are
-            // walked, so the pictures in them are still read.
+            // Connectors, captions and measures, and shapes where none is read (in a note, a
+            // comment, a shape's text or deleted text), are left out with their text.
             "rect" | "line" | "polyline" | "polygon" | "regular-polygon" | "path" | "circle" | "ellipse" | "connector" | "caption" | "measure"
             | "custom-shape"
                 if q.starts_with("draw:") =>
@@ -1467,7 +1470,8 @@ impl Body<'_> {
                     // each) holds no text.
                     let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));
                     let blocks = if kind != wordcraft_doc::para::ShapeKind::TextBox && empty { Vec::new() } else { blocks };
-                    Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look })
+                    let path = self.shape_path.take().filter(|_| kind == wordcraft_doc::para::ShapeKind::Freeform);
+                    Some(Inline::Shape { kind, w: w.unwrap_or(72.0), h: h.unwrap_or(1.0), float: float.map(Box::new), blocks, look, path })
                 }
                 (None, Some((linear, display))) => Some(Inline::Equation { linear, display }),
                 (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
@@ -1556,6 +1560,7 @@ impl Body<'_> {
             float.rot = rot;
         }
         self.frame_look = g.shape_look(kind, &self.styles.defs);
+        self.shape_path = super::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None)), Some(float), std::mem::take(&mut self.frame_look));
         self.start_note(a);

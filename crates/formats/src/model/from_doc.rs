@@ -298,7 +298,10 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
     use wordcraft_doc::para::ShapeKind;
     let (sx, sy) = scale;
     match o {
-        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, extra, .. } if *kind != ShapeKind::Freeform => {
+        // A freeform needs its paths.
+        InlineObject::Shape { kind, w, h, float, story, fill, stroke, stroke_width, extra, freeform, .. }
+            if *kind != ShapeKind::Freeform || freeform.is_some() =>
+        {
             // A connector is a straight line.
             let kind = match kind {
                 ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => ShapeKind::Line,
@@ -315,7 +318,8 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
             };
-            Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look })
+            let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
+            Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
         }
         InlineObject::Image { media, w, h, alt, float, .. } => {
             let data = doc.media.get(media)?;

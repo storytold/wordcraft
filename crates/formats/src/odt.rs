@@ -44,6 +44,7 @@ mod frames;
 mod import;
 mod limits;
 mod package;
+mod path;
 mod shapes;
 mod strokes;
 mod styles;

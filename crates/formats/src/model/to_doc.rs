@@ -315,7 +315,7 @@ impl<'a> Builder<'a> {
                 });
                 Some(InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: float.unwrap_or_default(), crop: [0.0; 4], ole: None })
             }
-            Inline::Shape { kind, w, h, float, blocks, look } => {
+            Inline::Shape { kind, w, h, float, blocks, look, path } => {
                 // A text box always has its story; a shape only when it holds text.
                 let story = if *kind == wordcraft_doc::para::ShapeKind::TextBox || !blocks.is_empty() {
                     let story = self.blocks(blocks, 1);
@@ -344,7 +344,10 @@ impl<'a> Builder<'a> {
                     stroke_width,
                     float: float.as_deref().cloned().unwrap_or_default(),
                     story,
-                    freeform: None,
+                    freeform: path
+                        .clone()
+                        .filter(|_| *kind == wordcraft_doc::para::ShapeKind::Freeform)
+                        .map(|f| std::sync::Arc::new((*f).clone().sanitized())),
                     effects: Default::default(),
                     extra: wordcraft_doc::connector::ShapeExtra {
                         dash: look.dash.clone(),

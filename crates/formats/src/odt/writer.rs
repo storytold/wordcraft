@@ -942,8 +942,8 @@ impl Writer {
                     self.comment(*id, comment, out);
                     prev_space = false;
                 }
-                Inline::Shape { kind, w, h, float, blocks, look } => {
-                    self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), look, blocks, out);
+                Inline::Shape { kind, w, h, float, blocks, look, path } => {
+                    self.drawing_shape(*kind, (*w, *h), Place::Text(float.as_deref()), (look, path.as_deref()), blocks, out);
                     prev_space = false;
                 }
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
@@ -1013,14 +1013,14 @@ impl Writer {
         kind: wordcraft_doc::para::ShapeKind,
         size: (f32, f32),
         place: Place<'_>,
-        look: &model::BoxLook,
+        (look, path): (&model::BoxLook, Option<&wordcraft_doc::freeform::Freeform>),
         blocks: &[FBlock],
         out: &mut String,
     ) {
         if kind == wordcraft_doc::para::ShapeKind::TextBox {
             self.text_box(size, place, look, blocks, out);
         } else {
-            self.shape(kind, size, place, look, blocks, out);
+            self.shape(kind, size, place, (look, path), blocks, out);
         }
     }
 
@@ -1072,8 +1072,8 @@ impl Writer {
         for m in members {
             let (x, y) = (at.0 + m.x, at.1 + m.y);
             match &m.inline {
-                Inline::Shape { kind, w, h, float, blocks, look } => {
-                    self.drawing_shape(*kind, (*w, *h), Place::Member(x, y, float.as_deref()), look, blocks, out)
+                Inline::Shape { kind, w, h, float, blocks, look, path } => {
+                    self.drawing_shape(*kind, (*w, *h), Place::Member(x, y, float.as_deref()), (look, path.as_deref()), blocks, out)
                 }
                 Inline::Image(img) => self.image(img, Place::Member(x, y, img.float.as_deref()), out),
                 Inline::Group { members, .. } if depth < model::MAX_GROUP_DEPTH => {
@@ -1125,7 +1125,7 @@ impl Writer {
         kind: wordcraft_doc::para::ShapeKind,
         size: (f32, f32),
         place: Place<'_>,
-        look: &model::BoxLook,
+        (look, path): (&model::BoxLook, Option<&wordcraft_doc::freeform::Freeform>),
         blocks: &[FBlock],
         out: &mut String,
     ) {
@@ -1137,7 +1137,11 @@ impl Writer {
         let style = self.graphic_style(format!("{props}{look_attrs}"));
         let body = self.story(blocks);
         self.boxes += 1;
-        let (element, geometry) = super::shapes::element_of(kind);
+        let (element, geometry) = match super::shapes::element_of(kind) {
+            // A freeform without paths has nothing to draw but its frame.
+            ("draw:path", _) if path.is_none() => ("draw:rect", None),
+            e => e,
+        };
         let len = |v: f32, least: f32| if v.is_finite() { v.clamp(least, 1584.0) } else { 72.0 };
         let at = if element == "draw:line" {
             {
@@ -1156,7 +1160,14 @@ impl Writer {
                 format!(" svg:x1=\"{}\" svg:y1=\"{}\" svg:x2=\"{}\" svg:y2=\"{}\"", pt(x1), pt(y1), pt(x2), pt(y2))
             }
         } else {
-            format!(" svg:width=\"{}\" svg:height=\"{}\"{xy}", pt(len(size.0, 1.0)), pt(len(size.1, 1.0)))
+            let (w, h) = (len(size.0, 1.0), len(size.1, 1.0));
+            let mut at = format!(" svg:width=\"{}\" svg:height=\"{}\"{xy}", pt(w), pt(h));
+            if let Some(f) = path.filter(|_| element == "draw:path") {
+                // Its paths in a view box of hundredths of a point (whole numbers, §19.570).
+                let (vw, vh) = ((w * 100.0).round().max(1.0) as u32, (h * 100.0).round().max(1.0) as u32);
+                at.push_str(&format!(" svg:viewBox=\"0 0 {vw} {vh}\" svg:d=\"{}\"", super::path::path_data(f, vw, vh)));
+            }
+            at
         };
         // Mirrored, as a custom shape's geometry says (§20.112, §20.113).
         let mirror = |on: bool, k: &str| if on { format!(" draw:mirror-{k}=\"true\"") } else { String::new() };
