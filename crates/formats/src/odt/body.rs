@@ -70,6 +70,8 @@ pub(super) struct Body<'a> {
     del: Option<DelState>,
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
+    /// Format changes open where text is being read (ODF records no old formatting).
+    active_fmt: Vec<(String, RevMark)>,
     /// The text field being read.
     field: Option<OpenField>,
     /// Where the frame being read floats.
@@ -144,6 +146,7 @@ impl<'a> Body<'a> {
             info_field: None,
             del: None,
             active_ins: Vec::new(),
+            active_fmt: Vec::new(),
             field: None,
             frame_float: None,
             frame_box: None,
@@ -438,6 +441,11 @@ impl Body<'_> {
     fn push_text(&mut self, t: &str) {
         let mut f = self.cur_fmt();
         f.ins = self.open_insertion();
+        // In a format change: a formatting revision whose old formatting is the text's own.
+        if let Some((_, mark)) = self.active_fmt.last().filter(|_| self.del.is_none()) {
+            let old = Fmt { ins: None, del: None, fmt_change: None, ..f.clone() };
+            f.fmt_change = Some(Box::new(model::FmtChange { mark: mark.clone(), old }));
+        }
         if self.para.is_none() {
             if t.trim().is_empty() {
                 return;
@@ -582,7 +590,11 @@ impl Body<'_> {
                     self.place_deletion(r.blocks, mark);
                 }
             }
-            "change-start" | "change-end" => change_mark(&self.regions, &mut self.active_ins, local(q) == "change-start", a),
+            "change-start" | "change-end" => {
+                let start = local(q) == "change-start";
+                change_mark(&self.regions, &mut self.active_ins, RevisionKind::Insert, start, a);
+                change_mark(&self.regions, &mut self.active_fmt, RevisionKind::Format, start, a);
+            }
             "note" | "annotation" | "text-box" | "sequence-decls" | "forms" | "variable-decls" | "user-field-decls" | "index-title-template" => {
                 self.skip = 1;
             }

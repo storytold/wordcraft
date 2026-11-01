@@ -112,7 +112,7 @@ impl Writer {
         // `dc:date` is required: a change without a date is dated now.
         let date = if m.date.trim().is_empty() { now_iso() } else { m.date.clone() };
         self.regions.push(format!(
-            "<text:changed-region text:id=\"{id}\"><text:{kind}><office:change-info><dc:creator>{}</dc:creator><dc:date>{}</dc:date></office:change-info>{body}</text:{kind}></text:changed-region>",
+            "<text:changed-region xml:id=\"{id}\" text:id=\"{id}\"><text:{kind}><office:change-info><dc:creator>{}</dc:creator><dc:date>{}</dc:date></office:change-info>{body}</text:{kind}></text:changed-region>",
             x(&m.author),
             x(&date)
         ));

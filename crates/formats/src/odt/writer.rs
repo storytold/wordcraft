@@ -313,6 +313,11 @@ impl Writer {
                     // A script, `file:`, UNC or other non-web target is written as plain text, as
                     // the HTML and Markdown exporters do (LibreOffice follows `file:`/UNC hrefs).
                     let link = f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l));
+                    // A tracked formatting change (§5.5.7): the text between its marks.
+                    let change = f.fmt_change.as_ref().map(|c| self.region("format-change", &c.mark, ""));
+                    if let Some(ct) = &change {
+                        out.push_str(&format!("<text:change-start text:change-id=\"{ct}\"/>"));
+                    }
                     if let Some(l) = link {
                         // An index entry's link looks like the entry, not like a web link.
                         let look = if self.in_index { " text:style-name=\"Index_20_Link\" text:visited-style-name=\"Index_20_Link\"" } else { "" };
@@ -325,6 +330,9 @@ impl Writer {
                     }
                     if link.is_some() {
                         out.push_str("</text:a>");
+                    }
+                    if let Some(ct) = change {
+                        out.push_str(&format!("<text:change-end text:change-id=\"{ct}\"/>"));
                     }
                 }
                 Inline::Image(img) => {

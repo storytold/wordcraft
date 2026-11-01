@@ -34,9 +34,10 @@ pub(in crate::odt) struct DelState {
     pub(in crate::odt) ins: Vec<(String, RevMark)>,
 }
 
-/// A `text:change-start` (`start`) or `text:change-end` (attributes `a`) among the insertions
-/// `open`: unknown ids, ends without a start and starts past [`MAX_OPEN_INSERTIONS`] are ignored.
-pub(in crate::odt) fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMark)>, start: bool, a: &Attrs) {
+/// A `text:change-start` (`start`) or `text:change-end` (attributes `a`) among the changes of
+/// `kind` open (insertions, or format changes): unknown ids, other kinds' marks, ends without a
+/// start and starts past [`MAX_OPEN_INSERTIONS`] are ignored.
+pub(in crate::odt) fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMark)>, kind: RevisionKind, start: bool, a: &Attrs) {
     let Some(id) = get(a, "text:change-id") else { return };
     if !start {
         if let Some(k) = open.iter().position(|(o, _)| o == id) {
@@ -44,7 +45,7 @@ pub(in crate::odt) fn change_mark(regions: &HashMap<String, Region>, open: &mut 
         }
         return;
     }
-    if let Some(r) = regions.get(id).filter(|r| r.kind == Some(RevisionKind::Insert))
+    if let Some(r) = regions.get(id).filter(|r| r.kind == Some(kind))
         && open.len() < MAX_OPEN_INSERTIONS
         && !open.iter().any(|(o, _)| o == id)
     {
@@ -57,7 +58,8 @@ impl Body<'_> {
     pub(in crate::odt) fn tracked_start(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "changed-region" if self.region.is_none() && self.region_count < MAX_REGIONS => {
-                let id = get(a, "text:id").unwrap_or_default().to_string();
+                // ODF 1.3 names it by `xml:id`; `text:id` is the older name, kept beside it.
+                let id = get(a, "text:id").or_else(|| get(a, "xml:id")).unwrap_or_default().to_string();
                 let r = Region { id: self.region_count as u32, ..Default::default() };
                 self.region_count += 1;
                 self.region = Some((id, r));
@@ -190,7 +192,7 @@ impl Body<'_> {
         if matches!(local(q), "change-start" | "change-end") {
             let regions = &self.regions;
             if let Some(d) = &mut self.del {
-                change_mark(regions, &mut d.ins, local(q) == "change-start", a);
+                change_mark(regions, &mut d.ins, RevisionKind::Insert, local(q) == "change-start", a);
             }
             return true;
         }

@@ -10,6 +10,7 @@ mod fields;
 mod flat;
 mod floats;
 mod fonts;
+mod format_changes;
 mod groups;
 mod headers;
 mod indexes;
