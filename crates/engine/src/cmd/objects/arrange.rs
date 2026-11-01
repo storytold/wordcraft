@@ -334,11 +334,20 @@ pub(super) fn align(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("`to` is margin, page or selected".into()));
     }
     let sect = crate::cmd::page::sect(s);
-    let area = |page: bool| match (across, page) {
+    let area_in = |sect: &wordcraft_doc::SectionProps, page: bool| match (across, page) {
         (true, false) => (sect.margin_left, sect.text_width()),
         (true, true) => (0.0, sect.page_w),
         (false, false) => (sect.margin_top, sect.text_height()),
         (false, true) => (0.0, sect.page_h),
+    };
+    let area = |page: bool| area_in(&sect, page);
+    // The section an object sits in decides its own page and margins.
+    let object_area = |s: &Session, pos: &Pos, page: bool| {
+        let i = match pos.story {
+            wordcraft_doc::StoryRef::Body => s.doc.section_index_of(pos.path.0.first().copied().unwrap_or(0) as usize),
+            _ => crate::cmd::page::section_index_of_focus(s),
+        };
+        s.doc.sections().get(i).map_or_else(|| area(page), |(_, x)| area_in(x, page))
     };
     if picked.len() < 2 {
         if to == "selected" {
@@ -373,12 +382,19 @@ pub(super) fn align(s: &mut Session, v: &Value) -> CmdResult {
         let (start, size) = if across { (hit.rect.x, hit.rect.w) } else { (hit.rect.y, hit.rect.h) };
         frames.push((pos.clone(), start, size));
     }
+    // Each object's own area to align to; "selected" shares one, and so does a distribution.
+    let page = to == "page";
+    let areas: Vec<(f32, f32)> = frames.iter().map(|f| object_area(s, &f.0, page)).collect();
     let (start, extent) = if to == "selected" {
         let lo = frames.iter().map(|f| f.1).fold(f32::INFINITY, f32::min);
         let hi = frames.iter().map(|f| f.1 + f.2).fold(f32::NEG_INFINITY, f32::max);
         (lo, hi - lo)
     } else {
-        area(to == "page")
+        let first = areas.first().copied().unwrap_or_else(|| area(page));
+        if how.starts_with("distribute") && areas.iter().any(|a| *a != first) {
+            return Err(CmdError::Disabled("objects in sections with different page sizes or margins can't be distributed against the page or margins".into()));
+        }
+        first
     };
     // Where each frame starts: aligned, or one after another with equal gaps from start to end.
     let mut targets: Vec<(Pos, f32)> = Vec::with_capacity(frames.len());
@@ -393,7 +409,8 @@ pub(super) fn align(s: &mut Session, v: &Value) -> CmdResult {
             at += size + gap;
         }
     } else {
-        targets.extend(frames.iter().map(|(pos, _, size)| (pos.clone(), align_start((start, extent), *size, &how))));
+        let own = |i: usize| if to == "selected" { (start, extent) } else { areas.get(i).copied().unwrap_or((start, extent)) };
+        targets.extend(frames.iter().enumerate().map(|(i, (pos, _, size))| (pos.clone(), align_start(own(i), *size, &how))));
     }
     // One at a time in document order: moving one can reflow the text a later one follows.
     targets.sort_by(|a, b| a.0.cmp(&b.0));

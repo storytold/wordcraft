@@ -650,6 +650,44 @@ fn position_options_place_by_offset_or_alignment() {
     }
 }
 
+/// Aligning several objects with the page or margins uses each object's own section, and a
+/// distribution across sections of different geometry is refused.
+#[test]
+fn align_to_page_uses_each_objects_own_section() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("document.setText", &json!({"text": "one\ntwo"})).unwrap();
+    // Section one is narrow with wide margins; section two is the default.
+    let mut narrow = wordcraft_doc::SectionProps::default();
+    narrow.page_w = 300.0;
+    narrow.margin_left = 50.0;
+    narrow.margin_right = 50.0;
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().section = Some(Box::new(narrow.clone()));
+    let wide = s.doc.sections().get(1).map(|(_, x)| (**x).clone()).unwrap();
+    assert!((wide.page_w - narrow.page_w).abs() > 1.0);
+    for block in [0, 1] {
+        s.sel = Selection::caret(Pos::body(block, 0));
+        s.run("insert.shape", &json!({"kind": "rectangle", "width": 40, "height": 30})).unwrap();
+        s.run("arrange.bounds", &json!({"page": block, "x": 20, "y": 100})).unwrap();
+    }
+    s.run("select.addObject", &json!({"objects": [0, 1]})).unwrap();
+    let picked = picked_objects(&s);
+    assert_eq!(picked.len(), 2);
+    s.run("arrange.align", &json!({"value": "right", "to": "page"})).unwrap();
+    let rects: Vec<f32> = picked.iter().map(|p| rect_of(&mut s, p)[0] + rect_of(&mut s, p)[2]).collect();
+    let mut got = rects.clone();
+    got.sort_by(f32::total_cmp);
+    let mut want = vec![narrow.page_w, wide.page_w];
+    want.sort_by(f32::total_cmp);
+    assert!(got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 0.5), "{got:?} vs {want:?}");
+    s.run("arrange.align", &json!({"value": "left", "to": "margin"})).unwrap();
+    let mut lefts: Vec<f32> = picked.iter().map(|p| rect_of(&mut s, p)[0]).collect();
+    lefts.sort_by(f32::total_cmp);
+    let mut want = vec![narrow.margin_left, wide.margin_left];
+    want.sort_by(f32::total_cmp);
+    assert!(lefts.iter().zip(&want).all(|(a, b)| (a - b).abs() < 0.5), "{lefts:?} vs {want:?}");
+    assert!(s.run("arrange.align", &json!({"value": "distributeHorizontally", "to": "page"})).is_err());
+}
+
 /// Align and Distribute: one object against the margin or page, several against each other.
 #[test]
 fn align_lines_objects_up_and_distributes_them() {
