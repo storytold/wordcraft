@@ -162,15 +162,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| list(s, v, ListKind::Numbered))
             .params(r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline", "off"?: bool}"#),
         CommandSpec::new("para.multilevel", "Multilevel List", "Home › Paragraph", |s, v| list(s, v, ListKind::Legal)).params(r#"{"kind"?: "legal|outline"}"#),
-        CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", |s, v| {
-            let lvl = p::u64(v, "level").unwrap_or(0).min(8) as u8;
-            fmt(s, &|p| {
-                if let Some(n) = p.numbering.as_mut() {
-                    n.level = lvl;
-                }
-            })
-        })
-        .params(r#"{"level": 0-8}"#),
+        CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", format::list_level)
+            .params(r#"{"level": 0-8}"#),
         CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
         CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
