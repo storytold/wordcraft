@@ -6,6 +6,7 @@ use wordcraft_doc::{Pos, Table};
 
 mod autospace;
 mod bidi;
+mod breaks;
 mod budget;
 mod complex;
 mod grid;
@@ -1229,7 +1230,7 @@ fn automatic_hyphenation_sees_only_the_text_laid_out() {
 
 #[test]
 fn page_break_char_starts_new_page() {
-    let mut d = Document::from_text("one");
+    let mut d = Document::from_text("one two");
     d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
     let l = lay(&d);
     assert_eq!(l.pages.len(), 2);
@@ -12423,8 +12424,9 @@ fn continuous_sections_running_off_a_page_go_onto_the_next() {
     assert_eq!((end.page, (end.top * 10.0).round()), (plain.page, (plain.top * 10.0).round()), "sections {end:?}, plain {plain:?}");
 }
 
-/// Bulleted empty marks past a full page's bottom draw nothing there, not even their bullets;
-/// those that fit keep theirs (#3907 review: a stray bullet below the column).
+/// Bulleted empty marks past a full page's bottom draw nothing there, not even their bullets
+/// (#3907 review: a stray bullet below the column); as each closes an empty section, those that
+/// fit draw no bullet either.
 #[test]
 fn stacked_marks_past_the_bottom_draw_no_label() {
     use wordcraft_doc::ListKind;
@@ -12449,7 +12451,7 @@ fn stacked_marks_past_the_bottom_draw_no_label() {
         }
         if *y < bottom - 0.01 { inside += 1 } else { below += 1 }
     }
-    assert!(inside > 10, "marks that fit keep their bullets: {inside}");
+    assert_eq!(inside, 0, "an empty paragraph closing a section draws no list label, as in Word, where it fits too");
     // Nor their line numbers (CodeRabbit).
     for i in 1..=marks {
         if let Some(s) = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().section.as_mut() {

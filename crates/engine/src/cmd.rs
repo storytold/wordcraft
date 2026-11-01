@@ -498,17 +498,33 @@ fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError
             p.mark = CharProps::default();
         }
     }
+    track_split(s, at, &new, mark_revs)?;
+    Ok(new)
+}
+
+/// Split the paragraph at `at` keeping its formatting on both sides: no next style, no list
+/// handling (tracked like Enter under Track Changes).
+pub fn split_para_keeping_format(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    let Some(mark_revs) = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)) else {
+        return Err(CmdError::Failed("no paragraph at caret".into()));
+    };
+    let new = s.doc.split_paragraph(at)?;
+    track_split(s, at, &new, mark_revs)?;
+    Ok(new)
+}
+
+/// Under Track Changes the mark a split at `at` added is an insertion; the paragraph after the
+/// split (`new`) keeps the original mark's revisions `mark_revs`, never those of the text at the
+/// split point (which would credit the split to the author who inserted that text).
+fn track_split(s: &mut Session, at: &Pos, new: &Pos, mark_revs: (Option<u32>, Option<u32>)) -> Result<(), CmdError> {
     if s.doc.settings.track_changes {
         let rid = new_revision(s, RevisionKind::Insert);
         let p = s.doc.para_mut(at.story, &at.path)?;
         p.mark.ins = Some(rid);
-        // The paragraph after the split ends with the original mark: it keeps that mark's
-        // revisions, never those of the text at the split point (which would credit the split
-        // to the author who inserted that text).
         let t = s.doc.para_mut(new.story, &new.path)?;
         (t.mark.ins, t.mark.del) = mark_revs;
     }
-    Ok(new)
+    Ok(())
 }
 
 /// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.

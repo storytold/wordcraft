@@ -3232,6 +3232,80 @@ fn a_new_list_uses_the_requested_kind_after_a_mixed_format_list() {
     }
 }
 
+/// Text, style and list of each body paragraph.
+fn styles_and_lists(s: &Session) -> Vec<(String, Option<String>, Option<wordcraft_doc::props::NumRef>)> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.style.clone(), p.props.numbering.filter(|n| n.num != 0))).collect()
+}
+
+/// Word for Mac 16.114 (Insert Page Break on a range at the end of a document, 2026-10-22): the
+/// break goes into a paragraph of its own, Normal and not in a list, and a new empty paragraph
+/// after it has the last paragraph's formatting (Heading 1 stays Heading 1, a bulleted or
+/// numbered item another item): two pages. Backspace at the start of that empty paragraph joins it
+/// to the break's paragraph, and the second page goes (a break ending the document starts none).
+/// In a list the first two take the item out of the list and its style, as at the start of any item
+/// (Word's scripted Backspace joins list items at once, also without a break, so it doesn't show
+/// the key's behaviour there).
+#[test]
+fn a_page_break_at_the_end_of_the_document_gets_a_paragraph_of_its_own() {
+    let cases: [(&str, Option<&str>); 4] = [("AAA", None), ("AAA", Some("para.heading1")), ("* AAA", None), ("1. AAA", None)];
+    for (keys, format) in cases {
+        let mut s = typed(keys);
+        if let Some(id) = format {
+            run(&mut s, id, json!({}));
+        }
+        let before = styles_and_lists(&s);
+        let (text, style, list) = before[0].clone();
+        assert_eq!(text, "AAA", "{keys} {format:?}");
+        run(&mut s, "text.pageBreak", json!({}));
+        let want = vec![(text.clone(), style.clone(), list), ("\u{c}".to_string(), None, None), (String::new(), style.clone(), list)];
+        assert_eq!(styles_and_lists(&s), want, "{keys} {format:?}");
+        assert_eq!(s.sel.focus, Pos::body(2, 0));
+        let l = s.layout();
+        assert_eq!((l.pages.len(), l.caret(&s.sel.focus).map(|c| c.page)), (2, Some(1)), "{keys} {format:?}");
+        run(&mut s, "text.backspace", json!({}));
+        if list.is_some() {
+            run(&mut s, "text.backspace", json!({}));
+            assert_eq!(styles_and_lists(&s)[2], (String::new(), None, None), "{keys}: the item leaves the list, then its style");
+            assert_eq!(s.layout().pages.len(), 2, "{keys}");
+            run(&mut s, "text.backspace", json!({}));
+        }
+        assert_eq!(styles_and_lists(&s), want[..2], "{keys} {format:?}");
+        assert_eq!(s.layout().pages.len(), 1, "{keys} {format:?}");
+    }
+}
+
+/// The ribbon's Page Break and Layout › Breaks › Page do the same; an empty document's paragraph
+/// takes the break (Word: the break's paragraph, then an empty one); away from the end the break
+/// stays a character in its paragraph; one undo step.
+#[test]
+fn page_break_commands_at_the_end_of_the_document_and_elsewhere() {
+    for (id, params) in [("insert.pageBreak", json!({})), ("layout.break", json!({"kind": "page"}))] {
+        let mut s = typed("AAA");
+        run(&mut s, id, params);
+        assert_eq!(paras(&s), [para("AAA", None), para("\u{c}", None), para("", None)], "{id}");
+    }
+    let mut s = s();
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(paras(&s), [para("\u{c}", None), para("", None)]);
+    let mut s = typed("AAABBB");
+    s.sel = crate::Selection::caret(Pos::body(0, 3));
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(paras(&s), [para("AAA\u{c}BBB", None)]);
+    let mut s = typed("AAA\nBBB");
+    s.sel = crate::Selection::caret(Pos::body(0, 3));
+    run(&mut s, "text.pageBreak", json!({}));
+    assert_eq!(paras(&s), [para("AAA\u{c}", None), para("BBB", None)]);
+    let mut s = typed("AAA");
+    run(&mut s, "text.pageBreak", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(paras(&s), [para("AAA", None)]);
+    let mut s = typed("AAA");
+    run(&mut s, "insert.blankPage", json!({}));
+    assert_eq!(paras(&s), [para("AAA\u{c}", None), para("\u{c}", None), para("", None)]);
+    let l = s.layout();
+    assert_eq!((l.pages.len(), l.caret(&s.sel.focus).map(|c| c.page)), (3, Some(1)));
+}
+
 /// #4085: the registered shortcut toggles the last selected highlight, while explicit
 /// colour commands remain idempotent setters for the palette, CLI and automation.
 #[test]
