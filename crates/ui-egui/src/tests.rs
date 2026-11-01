@@ -3737,6 +3737,34 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_eq!(body_text(h.state()), before, "typing went into the font size box, not the page");
 }
 
+/// Screen readers get the status bar's controls on the right from left to right, as they are on
+/// the screen and as Word gives them (they are laid out from the right), and the zoom slider in
+/// percent, as Word's ("Zoom 100", not the factor 1).
+#[test]
+fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness(typed());
+    h.run_steps(4);
+    let slider = h.get_by_role_and_label(Role::Slider, "Zoom");
+    let percent = (h.state().canvas.scale / crate::canvas::PX_PER_PT * 100.0).round();
+    assert_eq!(slider.accesskit_node().numeric_value().map(f64::round), Some(f64::from(percent)), "the slider's value is the percentage");
+    assert_eq!(slider.accesskit_node().max_numeric_value(), Some(500.0));
+    // The names in tree order, through the generic containers screen readers don't see.
+    fn names(node: egui_kittest::Node<'_>, out: &mut Vec<String>) {
+        for child in node.children() {
+            match child.accesskit_node().label() {
+                Some(label) => out.push(label),
+                None => names(child, out),
+            }
+        }
+    }
+    let group = h.get_by_role_and_label(Role::Button, "Focus").parent().expect("the controls on the right");
+    let mut order = Vec::new();
+    names(group, &mut order);
+    assert_eq!(order, ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"]);
+}
+
 /// #2068: fonts applied from the font box or the mini toolbar (`format.font`) and from the
 /// Font dialog (`format.set`) join Recently Used Fonts, most recent first, once each, ten at
 /// most; the list is kept in `ui.json` and read back tidied.
