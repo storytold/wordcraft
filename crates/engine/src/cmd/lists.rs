@@ -126,7 +126,14 @@ pub fn define_number(s: &mut Session, v: &Value) -> CmdResult {
     let id = s.doc.numbering.try_add_levels(None, levels)?;
     super::para::fmt(s, &|pp| {
         pp.numbering = Some(NumRef { num: id, level: 0 });
-        pp.style = Some("ListParagraph".into());
+        // The list level's indent applies, not a direct one; a Heading keeps its style.
+        pp.indent_left = None;
+        pp.indent_first = None;
+        pp.indent_left_chars = None;
+        pp.indent_first_chars = None;
+        if pp.style.is_none() || pp.style.as_deref() == Some("Normal") {
+            pp.style = Some("ListParagraph".into());
+        }
     })
 }
 
@@ -603,6 +610,26 @@ mod tests {
         for n in 1..=9 {
             assert_eq!(s.doc.styles.get(&format!("Heading{n}")).and_then(|st| st.para.numbering), None, "Heading{n}");
         }
+    }
+
+    /// #2787 (CodeRabbit): Define New Number Format keeps a Heading style, and a direct indent
+    /// gives way to the list level's indent.
+    #[test]
+    fn define_new_number_format_keeps_style_and_drops_direct_indent() {
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "Head"})).unwrap();
+        s.run("para.style", &json!({"style": "Heading1"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("para.style", &json!({"style": "Normal"})).unwrap();
+        s.run("text.insert", &json!({"text": "Body"})).unwrap();
+        s.run("para.indents", &json!({"left": 100.0, "firstLine": 20.0})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("para.defineNumber", &json!({"format": "decimal", "text": "%1."})).unwrap();
+        let p0 = s.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().props.clone();
+        let p1 = s.doc.para_at(&wordcraft_doc::Pos::body(1, 0)).unwrap().props.clone();
+        assert_eq!(p0.style.as_deref(), Some("Heading1"));
+        assert_eq!(p1.style.as_deref(), Some("ListParagraph"));
+        assert_eq!((p1.indent_left, p1.indent_first), (None, None));
     }
 
     /// #2787: Define New Number Format numbers the selection in a list of its own with the
