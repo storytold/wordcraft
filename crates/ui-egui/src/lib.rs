@@ -497,6 +497,9 @@ pub struct WordApp {
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The folders control requests may read and write (`--automation-read-root` /
+    /// `--automation-write-root`, #5047); `None`: not confined.
+    control_roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
     /// Monotonic geometry epoch; any size/DPI/zoom/surface/document change increments it,

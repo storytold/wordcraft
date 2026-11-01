@@ -4639,6 +4639,39 @@ fn control_execute(a: &mut WordApp, params: Value) -> Value {
     }
 }
 
+/// `wordcraft --control … --automation-write-root DIR` (#5047): a control request's save outside
+/// the write root is refused and writes nothing, one inside it is written, and the person's own
+/// Save As is not confined.
+#[test]
+fn control_requests_are_confined_to_the_automation_roots() {
+    let dir = std::env::temp_dir().join(format!("wc-ui-control-roots-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let roots = wordcraft_engine::file_access::AutomationRoots::new(None, Some(&work)).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut a = typed().with_control(rx).with_control_roots(roots);
+    let ctx = egui::Context::default();
+    let send = |a: &mut WordApp, path: &std::path::Path| {
+        let (req, reply) = ControlRequest::new("engine.execute", json!({"command": "file.saveAs", "params": {"path": path}}));
+        tx.send(req).unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        reply.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+    };
+    let (outside, inside) = (dir.join("outside.docx"), work.join("inside.docx"));
+    let r = send(&mut a, &outside);
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(r["error"].as_str().unwrap_or("").contains("outside the write root"), "{r}");
+    assert!(!outside.exists());
+    let r = send(&mut a, &inside);
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(inside.exists());
+    // The person at the keyboard saves where they like.
+    a.run("file.saveAs", json!({"path": outside})).unwrap();
+    assert!(outside.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A programmatic `file.close` on unsaved work doesn't quit and lose it (#1268).
 #[test]
 fn programmatic_close_keeps_unsaved_work() {

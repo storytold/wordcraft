@@ -38,6 +38,31 @@ pub struct Remote {
     /// The control key, looked up once per connection (the app picks a new one at every start).
     key: Option<String>,
     find_key: KeyFinder,
+    /// Where the key comes from, for the error when the app refuses it.
+    key_from: String,
+}
+
+/// Where `--connect` gets the control key (#5047).
+// No Debug: a token must not end up in a log line.
+#[derive(Clone, PartialEq)]
+pub enum KeySource {
+    /// `WORDCRAFT_CONTROL_KEY`, else the key file the app writes for the port.
+    Default,
+    /// A key given at launch (`--control-token`); `from` names the flag or variable.
+    Token { token: String, from: String },
+    /// The token file the app was started with (`--control-token-file`), read at every new
+    /// connection: the app may not have made it yet.
+    TokenFile { path: std::path::PathBuf, from: String },
+}
+
+impl KeySource {
+    fn finder(self) -> (KeyFinder, String) {
+        match self {
+            KeySource::Default => (Box::new(find_key), "WORDCRAFT_CONTROL_KEY or the app's key file".into()),
+            KeySource::Token { token, from } => (Box::new(move |_: &str| Ok(token.clone())), from),
+            KeySource::TokenFile { path, from } => (Box::new(move |_: &str| wordcraft_control_key::read_token_file(&path)), from),
+        }
+    }
 }
 
 /// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
@@ -107,11 +132,13 @@ fn targets(addr: &str) -> std::io::Result<Vec<SocketAddr>> {
 impl Remote {
     /// Connect to `addr` (`127.0.0.1:7981`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        Self::connect_with(addr, Box::new(find_key))
+        Self::connect_from(addr, KeySource::Default)
     }
 
-    fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key };
+    /// [`Remote::connect`], with the control key from `source`.
+    pub fn connect_from(addr: &str, source: KeySource) -> std::io::Result<Self> {
+        let (find_key, key_from) = source.finder();
+        let mut r = Self::unconnected(addr, find_key, key_from);
         r.reconnect()?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
@@ -119,10 +146,27 @@ impl Remote {
         Ok(r)
     }
 
+    fn unconnected(addr: &str, find_key: KeyFinder, key_from: String) -> Self {
+        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key, key_from }
+    }
+
+    #[cfg(test)]
+    fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
+        let mut r = Self::unconnected(addr, find_key, "the test".into());
+        r.reconnect()?;
+        Ok(r)
+    }
+
     /// A remote that connects on first use: the app may start after the MCP server, and a
     /// server that exits at once reads as failed for the client's whole session (#4078).
     pub fn lazy(addr: &str) -> Self {
-        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key: Box::new(find_key) }
+        Self::lazy_from(addr, KeySource::Default)
+    }
+
+    /// [`Remote::lazy`], with the control key from `source`.
+    pub fn lazy_from(addr: &str, source: KeySource) -> Self {
+        let (find_key, key_from) = source.finder();
+        Self::unconnected(addr, find_key, key_from)
     }
 
     /// The address the app is reached at, as given.
@@ -252,12 +296,7 @@ impl Backend for Remote {
         } else if unauthorized(&v) {
             self.conn = None;
             Err(self.key_warning().map_or_else(
-                || {
-                    format!(
-                        "unauthorized: the WordCraft app at {} refused the control key (from WORDCRAFT_CONTROL_KEY or the app's key file)",
-                        self.addr
-                    )
-                },
+                || format!("unauthorized: the WordCraft app at {} refused the control key (from {})", self.addr, self.key_from),
                 |w| format!("unauthorized: {w}"),
             ))
         } else {
@@ -419,6 +458,37 @@ mod tests {
     }
 
     const WAIT: Duration = Duration::from_secs(5);
+
+    /// `wordcraft-cli mcp --connect … --control-token / --control-token-file` (#5047): the token
+    /// given is sent; a token file is read when a connection opens, so the app may make it after
+    /// the bridge starts, and a refusal names where the key came from.
+    #[test]
+    fn a_key_given_at_launch_is_sent() {
+        const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let (port, seen) = fake_app(|req| match req["key"].as_str() {
+            Some(KEY) => Some((json!({"ok": true, "result": 1}), false)),
+            _ => Some((json!({"ok": false, "error": "unauthorized"}), true)),
+        });
+        let addr = format!("127.0.0.1:{port}");
+        let mut r = Remote::connect_from(&addr, KeySource::Token { token: KEY.into(), from: "--control-token".into() }).unwrap();
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], KEY);
+
+        let dir = std::env::temp_dir().join(format!("wordcraft-mcp-token-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("control.token");
+        let mut r = Remote::lazy_from(&addr, KeySource::TokenFile { path: path.clone(), from: "--control-token-file".into() });
+        // Not made yet: the call says why.
+        assert!(r.call("document.inspect", json!({})).unwrap_err().contains("control token file"));
+        let _ = wordcraft_control_key::server_token(None, Some(&path), || Ok(KEY.into())).unwrap();
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(1));
+
+        let wrong = "f".repeat(64);
+        let mut r = Remote::connect_from(&addr, KeySource::Token { token: wrong, from: "WORDCRAFT_CONTROL_TOKEN".into() }).unwrap();
+        let e = r.call("document.inspect", json!({})).unwrap_err();
+        assert!(e.contains("refused the control key (from WORDCRAFT_CONTROL_TOKEN)"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn sends_the_key_to_loopback() {

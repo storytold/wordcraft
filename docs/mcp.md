@@ -12,7 +12,18 @@ wordcraft-cli mcp --connect 127.0.0.1:7981 # …including clicks, keys and scree
 Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
 
 With `--connect`, the bridge sends the app's control key, which it reads from
-`WORDCRAFT_CONTROL_KEY` or from the key file the app writes at start. It sends the key only to
+`WORDCRAFT_CONTROL_KEY` or from the key file the app writes at start. An app started with a
+chosen key (`--control-token` or `--control-token-file`, as in PhotoCraft) can be given the same
+one (#5047):
+
+```sh
+wordcraft --control 7981 --control-token-file ~/.private/wordcraft-control.token &
+wordcraft-cli mcp --connect 127.0.0.1:7981 --control-token-file ~/.private/wordcraft-control.token
+```
+
+`WORDCRAFT_CONTROL_TOKEN` and `WORDCRAFT_CONTROL_TOKEN_FILE` stand in for the flags; a flag wins
+over its variable, and a token with a token file is an error. The token flags need `--connect`.
+See [Choosing the key at launch](control-protocol.md#choosing-the-key-at-launch). It sends the key only to
 loopback addresses; see [Keys](control-protocol.md#keys). The bridge serves even when the app
 isn't open yet: tool calls return "not reachable … will retry on each call" and succeed once the
 app's port opens (#4078), so a client that starts before WordCraft doesn't lose the server for
@@ -95,9 +106,12 @@ config works across the suite) keep the agent to the folders you give it:
 - The roots must be existing folders; a missing one stops the server with an error. Each flag is
   given once (`--flag <dir>` or `--flag=<dir>`).
 
-The flags confine the headless server; `--connect` with them is an error, since the server would
-otherwise talk to an app that isn't confined. WordCraft's desktop app has no equivalent flags yet,
-so a running app (`wordcraft --control`) is not confined.
+The flags confine the headless server; `--connect` with them is an error, since the bridge can't
+confine the app it talks to. The desktop app takes the same flags instead (#5047): start it with
+`wordcraft --control 7981 --automation-read-root DIR --automation-write-root DIR` (or
+`WORDCRAFT_AUTOMATION_READ_ROOT` / `WORDCRAFT_AUTOMATION_WRITE_ROOT`, which only the desktop app
+reads, as in PhotoCraft) to confine its control requests; see
+[Confining file access](control-protocol.md#confining-file-access).
 
 What the roots do not cover: commands that take no path (`text.insert`, `execute` of anything that
 works on the open document) can still read and change that document, and `get_text` and

@@ -34,7 +34,16 @@ fn help_and_h_print_the_options_and_exit() {
         let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         assert!(out.status.success(), "{flag}: status {:?}, stderr: {stderr}", out.status);
         assert!(stdout.starts_with("wordcraft — "), "{flag}: stdout: {stdout}");
-        for option in ["--sample", "--control PORT", "--version", "-h, --help"] {
+        for option in [
+            "--sample",
+            "--control PORT",
+            "--control-token HEX",
+            "--control-token-file PATH",
+            "--automation-read-root DIR",
+            "--automation-write-root DIR",
+            "--version",
+            "-h, --help",
+        ] {
             assert!(stdout.contains(option), "{flag}: {option} missing from: {stdout}");
         }
         assert!(stderr.is_empty(), "{flag}: stderr: {stderr}");

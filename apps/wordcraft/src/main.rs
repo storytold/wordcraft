@@ -5,7 +5,9 @@
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
 //! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`.
+//! removed on exit): a new one, or the one `--control-token` / `--control-token-file` give.
+//! `--automation-read-root` / `--automation-write-root` confine the files its requests reach
+//! (`launch_args`). See `docs/control-protocol.md`.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -18,6 +20,7 @@ mod default_apps;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+mod launch_args;
 mod logging;
 mod print;
 mod region;
@@ -295,15 +298,39 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT [--control-token HEX | --control-token-file PATH]
+            [--automation-read-root DIR] [--automation-write-root DIR]] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
+  --control-token HEX
+                      the control server's key, 64 hex digits, instead of a new one each start
+                      (or set WORDCRAFT_CONTROL_TOKEN); other users may see a command line
+  --control-token-file PATH
+                      read the key from PATH, a file only you can read; made with a new key
+                      when missing (or set WORDCRAFT_CONTROL_TOKEN_FILE)
+  --automation-read-root DIR
+                      control requests may read files only inside DIR
+                      (or set WORDCRAFT_AUTOMATION_READ_ROOT)
+  --automation-write-root DIR
+                      control requests may write files only inside DIR
+                      (or set WORDCRAFT_AUTOMATION_WRITE_ROOT); with either root, a root
+                      left out grants none of its access
   --version           print the version
   -h, --help          print this help
+
+A flag wins over its variable; an empty variable counts as unset. The token and root options
+apply with --control only, and --control-token with --control-token-file is an error.
 ";
+
+/// Print `wordcraft: <message>` to standard error and exit with status 2, before the window
+/// opens. Unlike `eprintln!`, never panics.
+fn usage_error(message: &str) -> ! {
+    let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: {message}\n"));
+    std::process::exit(2);
+}
 
 /// The commit the build came from (short), or `dev`.
 fn build_sha() -> &'static str {
@@ -311,13 +338,18 @@ fn build_sha() -> &'static str {
 }
 
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
-/// one (#1440). A `--control` port that isn't is an error.
+/// one (#1440). The value of `--control` or another option that takes one (`--flag VALUE` or
+/// `--flag=VALUE`) that isn't is an error.
 fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     let (mut args, mut files) = (Vec::new(), Vec::new());
+    let is_value_flag = |a: &str| launch_args::VALUE_FLAGS.contains(&a);
     for (i, a) in std::env::args_os().skip(1).enumerate() {
         match a.into_string() {
             Ok(a) => args.push(a),
-            Err(a) if args.last().is_some_and(|p| p == "--control") => {
+            Err(a)
+                if args.last().is_some_and(|p: &String| is_value_flag(p))
+                    || a.to_string_lossy().split_once('=').is_some_and(|(flag, _)| is_value_flag(flag)) =>
+            {
                 // Unlike `eprintln!`, never panics.
                 let (n, lossy) = (i + 1, a.to_string_lossy());
                 let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
@@ -385,8 +417,19 @@ fn main() -> eframe::Result {
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
+    let mut control_args = launch_args::ControlArgs::default();
+    let mut bad_option: Option<String> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
+        match control_args.consume(&a, &mut args) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            // The first one; reported after the loop, as a bad port is.
+            Err(e) => {
+                bad_option.get_or_insert(e);
+                continue;
+            }
+        }
         match a.as_str() {
             // A flag after `--control` stays a flag; a bad or missing port is an error (#1426).
             "--control" => {
@@ -415,6 +458,22 @@ fn main() -> eframe::Result {
         let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: --control needs a port number from 1 to 65535{got}\n"));
         std::process::exit(2);
     }
+    let control_args = bad_option.map_or_else(|| control_args.or_env(|name| std::env::var_os(name)), Err);
+    // With the control server on, its key and roots: a bad one stops the launch before the window
+    // opens, rather than running with a key or confinement the person didn't ask for.
+    let control_setup = match control_args {
+        Ok(a) if control_port.is_some() => match a.resolve(control_server::random_key) {
+            Ok(setup) => Some(setup),
+            Err(e) => usage_error(&format!("cannot configure the control channel: {e}")),
+        },
+        Ok(a) => {
+            if a.any() {
+                log::warn!("--control-token, --control-token-file and the automation roots are ignored without --control");
+            }
+            None
+        }
+        Err(e) => usage_error(&e),
+    };
     // The log file lives in the settings directory, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
@@ -514,10 +573,18 @@ fn main() -> eframe::Result {
                 app.mac_titlebar = bar;
             }
             let mut key_file = None;
-            if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
+            if let (Some(port), Some(setup)) = (control_port, control_setup)
+                && let Some((rx, file)) =
+                    control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref(), setup.key)
             {
-                app = app.with_control(rx);
+                if let Some(from) = setup.key_from {
+                    log::info!("control key from {from}");
+                }
+                if let Some(roots) = &setup.roots {
+                    let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
+                    log::info!("control requests confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+                }
+                app = app.with_control(rx).with_control_roots(setup.roots);
                 key_file = file;
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start

@@ -51,6 +51,12 @@ USAGE:
                                               export, merge output…) to DIR, links followed; a root left
                                               out grants none of its access. They apply to the headless
                                               server and are an error with --connect.
+                    [--control-token HEX | --control-token-file PATH]
+                                              with --connect, the app's control key, as the app was
+                                              started with (or WORDCRAFT_CONTROL_TOKEN /
+                                              WORDCRAFT_CONTROL_TOKEN_FILE; a flag wins over its
+                                              variable). Without them, the key comes from
+                                              WORDCRAFT_CONTROL_KEY or the app's key file.
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -271,13 +277,18 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
     Ok(())
 }
 
-/// Take `--automation-read-root` / `--automation-write-root` (each `--flag DIR` or `--flag=DIR`,
-/// once) out of `args`, and open the roots, which must be existing folders. Returns the arguments
-/// that are left. A malformed root flag is an error, never a root silently left out.
-fn automation_roots(
-    command: &str,
-    args: &[String],
-) -> Result<(Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, Vec<String>), String> {
+/// `mcp`'s automation flags: the roots, opened, and the control token flags as given.
+struct McpFlags {
+    roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>,
+    control_token: Option<String>,
+    control_token_file: Option<PathBuf>,
+}
+
+/// Take `--automation-read-root` / `--automation-write-root` and `--control-token` /
+/// `--control-token-file` (each `--flag VALUE` or `--flag=VALUE`, once) out of `args`, and open
+/// the roots, which must be existing folders. Returns the arguments that are left. A malformed
+/// flag is an error, never a root silently left out.
+fn automation_roots(command: &str, args: &[String]) -> Result<(McpFlags, Vec<String>), String> {
     let mut found = automation_args::AutomationArgs::new(None, None);
     let mut left = Vec::new();
     let mut it = args.iter().cloned();
@@ -288,7 +299,45 @@ fn automation_roots(
     }
     let roots = wordcraft_engine::file_access::AutomationRoots::new(found.read_root.as_deref(), found.write_root.as_deref())
         .map_err(|e| format!("{command}: {e}"))?;
-    Ok((roots, left))
+    Ok((McpFlags { roots, control_token: found.control_token, control_token_file: found.control_token_file }, left))
+}
+
+/// Where `mcp --connect` gets the app's control key (#5047, as PhotoCraft's bridge does):
+/// `--control-token` or `--control-token-file`, else `WORDCRAFT_CONTROL_TOKEN` or
+/// `WORDCRAFT_CONTROL_TOKEN_FILE` (`var` reads one; empty or blank counts as unset), else as
+/// before (`WORDCRAFT_CONTROL_KEY`, then the app's key file). A flag wins over its own variable;
+/// a token together with a token file, from flags or variables, is an error. A token is checked
+/// here, and so is a token file that exists already; one that doesn't is read once the app has
+/// made it.
+fn key_source(flags: &McpFlags, var: impl Fn(&str) -> Option<OsString>) -> Result<wordcraft_mcp::KeySource, String> {
+    let var = |name: &'static str| var(name).filter(|v| !v.to_str().is_some_and(|t| t.trim().is_empty())).map(|v| (v, name));
+    let token = match &flags.control_token {
+        Some(t) => Some((t.clone(), "--control-token")),
+        None => match var("WORDCRAFT_CONTROL_TOKEN") {
+            Some((v, name)) => Some((v.into_string().map_err(|_| format!("mcp: {name} is not valid Unicode"))?, name)),
+            None => None,
+        },
+    };
+    let file = match &flags.control_token_file {
+        Some(p) => Some((p.clone(), "--control-token-file")),
+        None => var("WORDCRAFT_CONTROL_TOKEN_FILE").map(|(v, name)| (PathBuf::from(v), name)),
+    };
+    match (token, file) {
+        (Some((_, a)), Some((_, b))) => Err(format!("mcp: {a} cannot be used with {b}")),
+        (Some((token, from)), None) => {
+            let token = wordcraft_control_key::client_token(Some(&token), None)
+                .map_err(|e| format!("mcp: {from}: {e}"))?
+                .ok_or_else(|| format!("mcp: {from}: no token"))?;
+            Ok(wordcraft_mcp::KeySource::Token { token, from: from.into() })
+        }
+        (None, Some((path, from))) => {
+            if path.symlink_metadata().is_ok() {
+                wordcraft_control_key::read_token_file(&path).map_err(|e| format!("mcp: {from}: {e}"))?;
+            }
+            Ok(wordcraft_mcp::KeySource::TokenFile { path, from: from.into() })
+        }
+        (None, None) => Ok(wordcraft_mcp::KeySource::Default),
+    }
 }
 
 /// The password a protected Word file is opened with: `--password` (which any other process on
@@ -596,16 +645,20 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
         }
         "mcp" => {
-            let (roots, rest) = automation_roots("mcp", &rest)?;
+            let (flags, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
             let author = arg_value(&rest, "--author");
             let connect = arg_value(&rest, "--connect");
-            if roots.is_some() && connect.is_some() {
+            if flags.roots.is_some() && connect.is_some() {
+                return Err("mcp: --automation-read-root and --automation-write-root confine the headless server; with --connect, start the app with them (wordcraft --control PORT --automation-read-root DIR …)".into());
+            }
+            if connect.is_none() && (flags.control_token.is_some() || flags.control_token_file.is_some()) {
                 return Err(
-                    "mcp: --automation-read-root and --automation-write-root confine the headless server; a running app is not confined by them"
+                    "mcp: --control-token and --control-token-file are the app's key for --connect; the headless server has no control channel"
                         .into(),
                 );
             }
+            let roots = flags.roots.clone();
             let backend: Box<dyn wordcraft_mcp::Backend> = match connect {
                 // The app's user name is the person's own setting; don't rewrite it from a flag.
                 Some(_) if author.is_some() => {
@@ -617,7 +670,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     if !valid_connect_addr(&addr) {
                         return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
                     }
-                    match wordcraft_mcp::Remote::connect(&addr) {
+                    let source = key_source(&flags, |name| std::env::var_os(name))?;
+                    match wordcraft_mcp::Remote::connect_from(&addr, source.clone()) {
                         Ok(remote) => {
                             eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
                             if let Some(w) = remote.key_warning() {
@@ -630,7 +684,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                         // (#4078).
                         Err(e) => {
                             eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
-                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
+                            Box::new(wordcraft_mcp::Remote::lazy_from(&addr, source))
                         }
                     }
                 }

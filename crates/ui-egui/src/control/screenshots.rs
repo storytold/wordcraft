@@ -390,7 +390,10 @@ fn completed_screenshot_action(
     match validate_image(&image, shot.expected) {
         Err(ImageCheck::Stale(_)) if shot.retries < SCREENSHOT_MAX_RETRIES => ShotAction::Restart,
         Err(ImageCheck::Stale(message) | ImageCheck::Invalid(message)) => ShotAction::Remove(error_reply(shot.token, message)),
-        Ok(()) => ShotAction::Remove(save_screenshot(image.as_ref(), shot.path.as_deref(), shot.token)),
+        // Written frames after the request: under the control roots all the same (#5047).
+        Ok(()) => ShotAction::Remove(wordcraft_engine::file_access::confine(app.control_roots.as_ref(), || {
+            save_screenshot(image.as_ref(), shot.path.as_deref(), shot.token)
+        })),
     }
 }
 
