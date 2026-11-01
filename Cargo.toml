@@ -26,7 +26,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
 # Pinned like the other craft-libs crates (each has its own rev). This rev is the head of
 # storytold/craft-libs#482, which adds craft-proof; move it to that PR's merge commit once merged.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "961162ad15b5992166d0f310763cd09a596772e8", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "48ed6f8cbd4104225a9ecde122d9fb8d1353b5a6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
