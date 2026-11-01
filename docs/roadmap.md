@@ -1,5 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** trivial (HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged; previously trivial: egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…), and the input-method handling has synthetic regressions while managed CI passed and native acceptance (#155–#164) remains open; previously trivial: M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
@@ -49,7 +50,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 |---|---|---|---|
 | M0 | Skeleton and vertical slice (model, layout, render, engine, Word-style UI, CLI, MCP, web) | done | — |
 | M1 | DOCX I/O | done (first version); real-world corpus not started; charts/SmartArt/OLE dropped | 45–75 h |
-| M2 | Home tab | done except Paste Special, Clipboard pane, Style Inspector, Manage Styles, Asian typography (PRs open for four) | 5–10 h |
+| M2 | Home tab | done except Paste Special, Clipboard pane, Style Inspector, Manage Styles, Asian typography (PRs open for four); additional editing command Delete Previous Sentence (#3693), outside the Word-parity count | 5–10 h |
 | M3 | Insert tab | mostly done; equations done (#191), icons done (#309); charts, SmartArt, 3D, screenshot, online media missing | 50–80 h |
 | M4 | Layout and Design tabs | done except column balancing, group | 6–10 h |
 | M5 | Tables | done (row splitting, floating tables, style formatting); custom table styles (#256); Draw Table and Eraser (#303) | 6–10 h |
@@ -72,8 +73,10 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 ## Revision history
 
+
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | #3693: Delete Previous Sentence command and keyboard dispatch, with sentence/paragraph/cell, selection, undo and tracking regressions. Additional WordCraft behavior; Word-parity estimates unchanged. |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-10-25 | trivial | egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…); input-method surrounding-delete and commit handling has synthetic regressions only, with managed CI passing; native acceptance (#155–#164) and native-speaker review remain open |
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
