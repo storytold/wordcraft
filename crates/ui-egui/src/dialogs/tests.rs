@@ -716,6 +716,69 @@ fn paragraph_dialog_sets_first_line_and_hanging_indents() {
     assert_eq!(props(h.state()).indent_first, Some(0.0));
 }
 
+/// The Special box opens from the paragraph: a first-line indent above 0 shows First line by its
+/// size, and By reads and takes lengths in the measurement unit File › Options sets (centimetres,
+/// points), as Word's dialog does.
+#[test]
+fn paragraph_dialog_special_box_opens_from_the_paragraph_in_the_measurement_unit() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = app_with("Some text");
+    let _ = app.run("para.set", json!({"props": {"indentFirst": 28.35}}));
+    app.session.prefs.units = Some(wordcraft_geom::Unit::Centimeters);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    // The frames before copy the unit for dialog code; the dialog opens in it.
+    h.run_steps(2);
+    let open = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let app = h.state_mut();
+        let d = Dialog::open("paragraph", app);
+        app.dialog = d;
+        h.run_steps(4);
+    };
+    let first = |h: &egui_kittest::Harness<'_, WordApp>| match &h.state().dialog {
+        Some(Dialog::Paragraph { first, .. }) => *first,
+        _ => panic!("no paragraph dialog"),
+    };
+    let special = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").accesskit_node().value().map(|v| v.to_string())
+    };
+    let ok = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    };
+    open(&mut h);
+    assert!((first(&h) - 1.0).abs() < 0.01, "1 cm: {}", first(&h));
+    assert_eq!(special(&h).as_deref(), Some("First line"));
+    // 2 typed over By counts 2 cm.
+    let by = h.get_all_by_label("By:").find(|n| n.accesskit_node().role() != egui::accesskit::Role::Label).expect("the By box");
+    by.click();
+    h.run_steps(2);
+    let by = h.get_all_by_label("By:").find(|n| n.accesskit_node().role() != egui::accesskit::Role::Label).expect("the By box");
+    by.type_text("2");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    ok(&mut h);
+    let set = props(h.state()).indent_first.unwrap_or_default();
+    assert!((set - 56.69).abs() < 0.05, "2 cm is {set} pt");
+    // In points: the same indent shows 56.69, and Hanging keeps it, below 0.
+    h.state_mut().session.prefs.units = Some(wordcraft_geom::Unit::Points);
+    h.run_steps(2);
+    open(&mut h);
+    assert!((first(&h) - set).abs() < 0.01, "in points: {}", first(&h));
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Special:").click();
+    h.run_steps(4);
+    h.get_by_label("Hanging").click();
+    h.run_steps(4);
+    ok(&mut h);
+    assert!((props(h.state()).indent_first.unwrap_or_default() + set).abs() < 0.01, "a hanging indent of the same size");
+}
 /// Selected paragraphs with different first-line indents: Special and By show blank, an
 /// unchanged OK leaves each indent as it was, and picking a kind starts By at half an inch for
 /// all of them.
