@@ -8,6 +8,7 @@ use super::headers::{HfLinks, bookmark_pages, headers_footers, headers_footers_r
 use super::notes::{MAX_NOTE_PAGES, NoteSeps, note_info, place_endnotes};
 use super::page::{PageBuilder, body_top_for, foot_top_for, item_bottom};
 use super::placed::Placed;
+use super::resume::Track;
 use super::table_flow::place_table;
 use super::{
     Arc, Block, Counters, DocLayout, Document, FieldCtx, HashMap, LayoutOptions, Page, Path, SectionProps, SectionStart, StoryRef, TextDirection,
@@ -47,15 +48,13 @@ struct Sec<'p> {
     tops: Tops,
 }
 
-/// Forget cached layouts made for another environment, and what the last pass used.
-fn reset_cache(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) {
-    let env = env_hash(doc, opts);
+/// Forget cached layouts made for another environment (`env`).
+fn reset_cache(cache: &mut LayoutCache, env: u64) {
     if env != cache.env {
         cache.paras.clear();
         cache.measures.clear();
         cache.env = env;
     }
-    cache.used.clear();
 }
 
 /// The walk state at the start of a pass, with the note references the body shows.
@@ -102,6 +101,8 @@ fn new_ctx<'a>(
         stacked_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        level_keys: Vec::new(),
+        ahead: Default::default(),
         fitted: HashMap::new(),
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
@@ -109,6 +110,8 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        boxes_before: 0,
+        fitted_unmeasured: false,
     }
 }
 
@@ -269,11 +272,10 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
 }
 
 /// Start the section on a new page, after the blank one that puts it on the right side if any.
-fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize)) {
+/// True if an empty page a page break started was taken back for it.
+fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<'p>, sec: &Sec<'p>, (mode, block): (Mode, usize)) -> bool {
     // A page holds text running one way: a section turning the other way starts a page.
-    if !mode.web {
-        pb.take_back_break_page();
-    }
+    let back = !mode.web && pb.take_back_break_page();
     let s = &ctx.doc.settings;
     let (filler, restart) = section_side(sec.start, sec.sect.page_num_start, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
     if filler && !mode.web {
@@ -286,6 +288,22 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
     }
     pb.foot_top = sec.tops.first_foot;
     pb.new_page(block, sec.tops.first);
+    back
+}
+
+/// Section `si` as it is laid out: turned on its side (vertical text), or the continuous views'
+/// page (`reflow`), or as it is.
+fn section_as_laid_out<'s>(
+    (turned, sections): (&'s [Option<SectionProps>], &[(usize, &'s SectionProps)]),
+    si: usize,
+    (mode, reflow_sect): (Mode, &'s SectionProps),
+) -> &'s SectionProps {
+    match (turned.get(si), sections.get(si)) {
+        (Some(Some(t)), _) => t,
+        _ if mode.reflow => reflow_sect,
+        (_, Some((_, s))) => s,
+        _ => reflow_sect,
+    }
 }
 
 /// Continuous: new column layout below the current text (its tallest column).
@@ -319,17 +337,24 @@ fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, outline: &Option<OutlinePass
     }
 }
 
-/// Place the blocks from `block` to `last`, balancing the columns of the last page if asked.
-/// Returns the block after them and the text boxes laid out in the balancing attempts thrown away.
+/// Place the blocks from `block` to `last` (of section `si`), balancing the columns of the last
+/// page if asked, marking the top of each page in `track` (`lp`: the loop's state). Returns the
+/// block after them and the text boxes laid out in the balancing attempts thrown away; or, when
+/// the pages fell back into step with an earlier pass ([`Track::begin`]), the block they did at
+/// and `None`.
 fn place_section_blocks<'p>(
     ctx: &mut Ctx,
     pb: &mut PageBuilder<'p>,
     outline: &Option<OutlinePass>,
     (mut block, last): (usize, usize),
     (balance, body_top): (bool, f32),
-) -> (usize, usize) {
+    (track, si, lp): (&mut Track, usize, (&VecDeque<(u32, usize)>, usize, TextDirection)),
+) -> (usize, Option<usize>) {
     let mut from = balance.then(|| (block, Snap::take(pb, ctx)));
     while block <= last && ctx.doc.body.get(block).is_some() {
+        if !balance && track.begin(ctx, pb, (block, si, body_top), lp) {
+            return (block, None);
+        }
         let before = balance.then(|| (pb.pages.len(), Snap::take(pb, ctx)));
         pb.mark_block();
         place_block(ctx, pb, outline, block, body_top);
@@ -341,7 +366,7 @@ fn place_section_blocks<'p>(
         block += 1;
     }
     let discarded = from.map_or(0, |(first, snap)| balance_columns(ctx, pb, (first, block), &snap, body_top));
-    (block, discarded)
+    (block, Some(discarded))
 }
 
 /// Endnotes at the end of the section: those referenced so far.
@@ -469,8 +494,19 @@ pub(crate) fn layout_pass(
     may_repeat: bool,
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
-    reset_cache(doc, cache, opts);
+    let env = env_hash(doc, opts);
+    // A pass with a first pass's inputs starts again from the last such pass where it can.
+    let first = may_repeat && may_rewrap && early.is_empty() && note_pages.is_empty() && *totals == Totals::first_guess(doc.sections().len());
+    let mut track = Track::new(doc, opts, env, first);
+    let earlier = if track.on() { cache.resume.take() } else { None };
+    reset_cache(cache, env);
     let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
+    let mut resume_at = track.start(earlier, doc, (&ctx.fields.notes, ctx.cache.used.len()));
+    if resume_at.is_none() && !track.joining() {
+        // What this pass uses (the cache keeps it); one started again, or that may join an earlier
+        // pass's pages, also keeps what that pass used.
+        ctx.cache.used.clear();
+    }
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
     let mode = Mode::of(opts.view);
@@ -488,38 +524,70 @@ pub(crate) fn layout_pass(
     let mut block = 0usize;
     let turned = turned_sections(&mut ctx, sections, mode.web);
     let mut prev_turn = TextDirection::Horizontal;
+    let sect_at = |si: usize| section_as_laid_out((&turned, sections), si, (mode, sect_ref));
+    let mut joined = false;
     for (si, (end, sect)) in sections.iter().enumerate() {
-        let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
-        let sect: &SectionProps = match turned.get(si) {
-            Some(Some(t)) => t,
-            _ if mode.reflow => sect_ref,
-            _ => sect,
-        };
-        let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
-        let start = if si == 0 { SectionStart::NextPage } else { sect.start };
-        let sec = Sec { si, sect, start, tops };
-        begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
-        if mode.web && si > 0 {
-            // one long page
-        } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
-            start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
-        } else {
-            continue_page(&mut pb, sect);
+        if resume_at.as_ref().is_some_and(|r| r.si() > si) {
+            continue;
         }
-        prev_turn = turn;
-        pb.foot_top = sec.tops.foot;
+        let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
+        let sect = sect_at(si);
+        let (from, balance, body_top) = match resume_at.take_if(|r| r.si() == si) {
+            Some(r) => {
+                let (resumed, lp, from, body_top) = r.put(&mut ctx, sect, early);
+                pb = resumed;
+                (endnotes, boxes_discarded, prev_turn) = lp;
+                (from, false, body_top)
+            }
+            None => {
+                let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
+                let start = if si == 0 { SectionStart::NextPage } else { sect.start };
+                let sec = Sec { si, sect, start, tops };
+                begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
+                if mode.web && si > 0 {
+                    // one long page
+                } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
+                    let pages = pb.pages.len();
+                    if start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block)) {
+                        track.taken_back(pages.saturating_sub(1));
+                    }
+                } else {
+                    continue_page(&mut pb, sect);
+                }
+                prev_turn = turn;
+                pb.foot_top = sec.tops.foot;
+                (block, prepare_section_end(&mut pb, sections, (si, mode.web)), sec.tops.body)
+            }
+        };
         let last = (*end).min(doc.body.len().saturating_sub(1));
-        let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
-        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
-        (block, boxes_discarded) = (next, boxes_discarded + discarded);
+        let lp = (&endnotes, boxes_discarded, prev_turn);
+        let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (from, last), (balance, body_top), (&mut track, si, lp));
+        block = next;
+        let Some(discarded) = discarded else {
+            joined = true;
+            break;
+        };
+        boxes_discarded += discarded;
         section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
     }
-    if pb.pages.is_empty() {
-        pb.new_page(0, sect_ref.margin_top);
+    if joined {
+        // Back in step with the earlier pass: its pages from there, and its walk after the body.
+        let Some((end, lp)) = track.join(&mut ctx, &mut pb) else {
+            // Not expected ([`Track::begin`] checks it can join): lay out from the first page.
+            return layout_pass(doc, cache, opts, note_pages, totals, may_repeat, (early, may_rewrap));
+        };
+        let si = end.sect_idx;
+        pb = end.with_refs(sect_at(si), early);
+        (endnotes, boxes_discarded, prev_turn) = lp;
+    } else {
+        if pb.pages.is_empty() {
+            pb.new_page(0, sect_ref.margin_top);
+        }
+        // The rest of the endnotes after the last paragraph.
+        let rest: Vec<u32> = endnotes.drain(..).map(|(id, _)| id).collect();
+        place_endnotes(&mut ctx, &mut pb, rest, block);
     }
-    // The rest of the endnotes after the last paragraph.
-    let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
-    place_endnotes(&mut ctx, &mut pb, rest, block);
+    track.keep(&mut ctx, &pb, (&endnotes, boxes_discarded, prev_turn));
     let mut pages = finish_pages(pb, doc, sections, mode.web);
     if mode.web {
         fit_web_page(&mut pages);
@@ -541,7 +609,7 @@ pub(crate) fn layout_pass(
     if opts.comment_balloons && !mode.web {
         balloons::add(&mut ctx, &mut lay);
     }
-    lay.text_boxes = ctx.boxes.total().saturating_sub(boxes_discarded);
+    lay.text_boxes = (ctx.boxes.total() + ctx.boxes_before).saturating_sub(boxes_discarded);
     Pass::Done(lay)
 }
 

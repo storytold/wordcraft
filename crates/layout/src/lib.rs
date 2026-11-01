@@ -50,6 +50,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod resume;
 mod table_flow;
 
 #[cfg(test)]

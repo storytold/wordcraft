@@ -54,6 +54,10 @@ pub(crate) struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     pub(crate) table_keys: Vec<(para::CellText, u64)>,
+    /// Cache-key hashes of list levels' label formatting ([`Ctx::level_key`]).
+    pub(crate) level_keys: Vec<(Level, u64)>,
+    /// The furthest body block looked at ahead of the one being placed ([`Ctx::look_ahead`]).
+    pub(crate) ahead: std::cell::Cell<usize>,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pub(crate) pin: Option<Pin>,
@@ -62,6 +66,9 @@ pub(crate) struct Ctx<'a> {
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
+    /// A box that resizes to fit its text was not measured where it was met (inside itself, too
+    /// deep, or no finite height): its entry in `fitted` stands for where it was first met.
+    pub(crate) fitted_unmeasured: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -69,6 +76,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+    /// Text boxes laid out on the pages a pass took from an earlier one, counted in
+    /// [`DocLayout::text_boxes`](crate::DocLayout::text_boxes) with `boxes` ([`crate::resume`]).
+    pub(crate) boxes_before: usize,
 }
 
 struct ParaEnvInput<'a> {
@@ -360,7 +370,7 @@ impl Ctx<'_> {
         let key = Key {
             rev: p.rev,
             width: width.to_bits(),
-            label: label.map(|(t, l)| format!("{t}|{}|{}|{:?}|{:?}|{:?}|{:?}", l.indent, l.hanging, l.suffix, l.align, l.tab, l.chr)),
+            label: label.map(|(t, l)| (t.clone(), self.level_key(l))),
             page_from: if page.is_some() && !self.fields.page_from.is_empty() { hash_of(&self.fields.page_from) } else { 0 },
             page,
             table: table.map(|t| self.table_key(t)).unwrap_or(0),
@@ -391,6 +401,30 @@ impl Ctx<'_> {
         }
         self.table_keys.push((t.clone(), h));
         h
+    }
+
+    /// The cache-key hash of how a list level formats its label, worked out once per level as
+    /// [`Ctx::table_key`] does: formatting it as text for every list paragraph on every pass
+    /// costs a measurable share of a layout.
+    fn level_key(&mut self, l: &Level) -> u64 {
+        if let Some((_, h)) = self.level_keys.iter().find(|(c, _)| c == l) {
+            return *h;
+        }
+        let h = hash_of(&format!("{}|{}|{:?}|{:?}|{:?}|{:?}", l.indent, l.hanging, l.suffix, l.align, l.tab, l.chr));
+        if self.level_keys.len() >= 64 {
+            self.level_keys.clear();
+        }
+        self.level_keys.push((l.clone(), h));
+        h
+    }
+
+    /// Body block `i`, looked at before it is placed (keep with next, and the spacing and borders
+    /// a paragraph shares with the next): noted, as a layout started again from a page before an
+    /// edit is only the same as one from the first page when nothing before that page looked at
+    /// the edited blocks ([`crate::resume`]).
+    pub(crate) fn look_ahead(&self, i: usize) -> usize {
+        self.ahead.set(self.ahead.get().max(i));
+        i
     }
 
     fn para_env<'b>(&'b self, input: ParaEnvInput<'b>) -> para::ParaEnv<'b> {
