@@ -184,14 +184,15 @@ pub const REFERENCE_NOT_FOUND: &str = "Error! Reference source not found.";
 /// `\p` ("above" or "below") and the paragraph number switches `\r`, `\n` and `\w` keep the
 /// stored result, and so does a REF to a bookmark that ends in a later paragraph: Word shows such
 /// a bookmark's paragraphs as paragraphs of the result, which a field's one-paragraph result
-/// can't hold (measured in Word for Windows). A bookmark in a text box is found too, and a REF to
-/// it shows the box's text as `stored` holds it, its own fields not yet refreshed, as Word's
-/// output does. The document's bookmarks are looked up once, and each bookmark's text read once,
-/// however many fields refer to it.
+/// can't hold (measured in Word for Windows). A bookmark in a header, footer, footnote, endnote,
+/// comment or text box is found too, and a REF to it shows that text as `stored` holds it, its
+/// own fields not yet refreshed, as Word's output does (measured in Word for Windows). The
+/// document's bookmarks are looked up once, and each bookmark's text read once, however many
+/// fields refer to it.
 fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut out = Vec::new();
     let mut starts: std::collections::HashMap<String, Pos> = std::collections::HashMap::new();
-    for (name, start) in doc.bookmarks().into_iter().chain(text_box_bookmarks(doc)) {
+    for (name, start) in doc.bookmarks().into_iter().chain(part_bookmarks(doc)) {
         // The first of two bookmarks with one name, as `bookmark_text` takes.
         starts.entry(name).or_insert(start);
     }
@@ -224,13 +225,11 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
     out
 }
 
-/// The bookmarks in the document's text boxes, in story order.
-fn text_box_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
+/// The bookmarks outside the body (headers, footers, notes, comments and text boxes), in story
+/// order.
+fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
     let mut out = Vec::new();
-    for (id, part) in &doc.parts {
-        if part.kind != wordcraft_doc::PartKind::TextBox {
-            continue;
-        }
+    for id in doc.parts.keys() {
         let story = StoryRef::Part(*id);
         for path in doc.para_paths(story) {
             let Some(p) = doc.para(story, &path) else { continue };

@@ -567,9 +567,6 @@ fn output_shows_fresh_seq_styleref_and_ref_results() {
     assert!(output_fields(&s.doc).is_none());
 }
 
-/// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
-/// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
-/// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
 #[test]
 fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
     // Measured in Word for Windows, every SEQ result stored as a stale 9: output numbers a text
@@ -621,6 +618,68 @@ fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
     assert_eq!(refs, ["B Fig 9"], "{results:?}");
 }
 
+/// Printed or exported, a body REF to a bookmark in a header, footer, footnote, endnote or
+/// comment shows the bookmarked text, as Word's output does (measured in Word for Windows, each
+/// REF stored as "stale"), rather than Word's missing-bookmark error.
+#[test]
+fn output_shows_references_to_bookmarks_outside_the_body() {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let mark = |name: &str, id: u32| {
+        format!(r#"<w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>Target {name}</w:t></w:r><w:bookmarkEnd w:id="{id}"/>"#)
+    };
+    let field = |name: &str| {
+        format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF {name} \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stale</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        )
+    };
+    let names = ["HDR", "FTR", "FN", "EN", "CMT"];
+    let refs: String = names.iter().map(|n| field(n)).collect();
+    let document = format!(
+        r#"<w:document {ns}><w:body>{refs}<w:p><w:r><w:t>Body </w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r><w:commentRangeStart w:id="0"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/></w:sectPr></w:body></w:document>"#
+    );
+    let header = format!(r#"<w:hdr {ns}><w:p>{}</w:p></w:hdr>"#, mark("HDR", 1));
+    let footer = format!(r#"<w:ftr {ns}><w:p>{}</w:p></w:ftr>"#, mark("FTR", 2));
+    let footnotes =
+        format!(r#"<w:footnotes {ns}><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>{}</w:p></w:footnote></w:footnotes>"#, mark("FN", 3));
+    let endnotes = format!(r#"<w:endnotes {ns}><w:endnote w:id="1"><w:p><w:r><w:endnoteRef/></w:r>{}</w:p></w:endnote></w:endnotes>"#, mark("EN", 4));
+    let comments = format!(r#"<w:comments {ns}><w:comment w:id="0" w:author="probe"><w:p>{}</w:p></w:comment></w:comments>"#, mark("CMT", 5));
+    let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="{rel}/header" Target="header1.xml"/><Relationship Id="rIdF" Type="{rel}/footer" Target="footer1.xml"/><Relationship Id="rIdN" Type="{rel}/footnotes" Target="footnotes.xml"/><Relationship Id="rIdE" Type="{rel}/endnotes" Target="endnotes.xml"/><Relationship Id="rIdC" Type="{rel}/comments" Target="comments.xml"/></Relationships>"#
+    );
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let files = [
+        ("_rels/.rels", root.to_string()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/document.xml", document),
+        ("word/header1.xml", header),
+        ("word/footer1.xml", footer),
+        ("word/footnotes.xml", footnotes),
+        ("word/endnotes.xml", endnotes),
+        ("word/comments.xml", comments),
+    ];
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in &files {
+        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+    }
+    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh references");
+    let mut results = Vec::new();
+    for path in out.para_paths(StoryRef::Body) {
+        for o in &out.para(StoryRef::Body, &path).unwrap().objects {
+            if let InlineObject::Field { result, .. } = o {
+                results.push(result.clone());
+            }
+        }
+    }
+    let expected: Vec<String> = names.iter().map(|n| format!("Target {n}")).collect();
+    assert_eq!(results, expected);
+}
+
+/// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
+/// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
+/// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
 #[test]
 fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("See "));
