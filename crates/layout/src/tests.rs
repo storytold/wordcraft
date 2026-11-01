@@ -5411,10 +5411,118 @@ fn box_float_origins_respect_vertical_anchor_with_space_before() {
                 let r = shapes(items).into_iter().find(|r| (r.w - 37.0).abs() < 0.01).unwrap();
                 r.y - y
             };
-            let expected = if anchor == Anchor::Paragraph { -24.0 } else { 0.0 };
+            // From the paragraph or from its first line: above the space before (#3978).
+            let expected = if matches!(anchor, Anchor::Paragraph | Anchor::Line) { -24.0 } else { 0.0 };
             assert!((gap(24.0) - gap(0.0) - expected).abs() < 0.01, "{context} {anchor:?}: float/text gap must change by {expected}");
         }
     }
+}
+
+/// Issue #3978: an object placed relative to its line (`wp:positionV relativeFrom="line"`,
+/// ECMA-376 Part 1 §20.4.2.11) starts from the top of the line that holds its anchor, not from
+/// its paragraph's top. On the first line that top is the paragraph's, above its space before.
+/// Word for Mac 16.114, a three-line paragraph (line breaks, exact 20 pt lines, 12 pt before),
+/// 10 pt squares anchored on each line 0 and 6 pt (and -6 pt) from it: their tops from the
+/// paragraph's top above its space before are 0, 32 and 52 pt (+6 / -6) in the body, a header
+/// and a table cell; with no space before, 0, 20 and 40. Placed from the paragraph instead, all
+/// three are at 0, as before.
+#[test]
+fn objects_placed_from_their_line_start_at_the_line_holding_their_anchor() {
+    use wordcraft_doc::{
+        PartKind,
+        para::{Anchor, Float, Wrap},
+        props::LineSpacing,
+    };
+    // Squares told apart by width: 10 + line + offset index / 10.
+    let offsets = [0.0f32, 6.0, -6.0];
+    let para = |before: f32, anchor: Anchor| {
+        let mut p = wordcraft_doc::Paragraph::with_text("L1x\nL2x\nL3x", Default::default());
+        p.props.space_before = Some(before);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        // From the end, so the earlier offsets stay where they are.
+        for (line, off) in [(2usize, 11usize), (1, 7), (0, 3)] {
+            for (k, y) in offsets.iter().enumerate().rev() {
+                let float = Float { wrap: Wrap::InFrontOfText, v_rel: anchor, y: *y, x: 200.0 + 20.0 * k as f32, ..Default::default() };
+                p.insert_object(off, rect_shape(10.0 + line as f32 + k as f32 / 10.0, 10.0, float), &Default::default()).unwrap();
+            }
+        }
+        p
+    };
+    for context in ["body", "header", "cell"] {
+        for before in [0.0f32, 12.0] {
+            for anchor in [Anchor::Line, Anchor::Paragraph] {
+                let mut d = Document::from_text("Body");
+                // No space after above it, so the paragraph keeps all its space before.
+                d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(0.0);
+                let p = para(before, anchor);
+                let story = match context {
+                    "header" => {
+                        let id = d.add_part(PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+                        d.last_section.headers.default = Some(id);
+                        StoryRef::Part(id)
+                    }
+                    "cell" => {
+                        let mut t = Table::new(1, 1, 468.0);
+                        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+                        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+                        StoryRef::Body
+                    }
+                    _ => {
+                        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Para(p)).unwrap();
+                        StoryRef::Body
+                    }
+                };
+                let l = lay(&d);
+                let page = &l.pages[0];
+                let items = if context == "header" { &page.header } else { &page.items };
+                // The paragraph's first line, then its top above the space before.
+                let text_top = items
+                    .iter()
+                    .find_map(|i| match i {
+                        Placed::Lines { story: s, y, path, .. } if *s == story && (context == "header" || path.0.first() == Some(&1)) => Some(*y),
+                        _ => None,
+                    })
+                    .unwrap();
+                let top = text_top - before;
+                let squares = shapes(items);
+                for line in 0..3usize {
+                    for (k, off) in offsets.iter().enumerate() {
+                        let w = 10.0 + line as f32 + k as f32 / 10.0;
+                        let r = squares.iter().find(|r| (r.w - w).abs() < 0.01).unwrap();
+                        let word = match (anchor, line) {
+                            (Anchor::Line, 0) | (Anchor::Paragraph, _) => *off,
+                            _ => before + 20.0 * line as f32 + off,
+                        };
+                        assert!(
+                            (r.y - top - word).abs() < 0.5,
+                            "{context}, {before} pt before, {anchor:?}, line {}, {off} pt: {} (Word {word})",
+                            line + 1,
+                            r.y - top
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// #3978: an object placed from a line of its paragraph that falls on a later page is not
+/// dropped past the bottom of the page its paragraph starts on (it keeps the paragraph's top).
+#[test]
+fn an_object_placed_from_a_line_on_a_later_page_stays_on_the_page() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "Line of text.\n".repeat(80);
+    let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+    let float = Float { wrap: Wrap::Square, v_rel: Anchor::Line, y: 0.0, ..Default::default() };
+    p.insert_object(text.len() - 1, rect_shape(30.0, 30.0, float), &Default::default()).unwrap();
+    let mut d = Document::from_text("Body");
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Para(p)).unwrap();
+    let l = lay(&d);
+    let page_h = d.last_section.page_h;
+    let all: Vec<Rect> = l.pages.iter().flat_map(|pg| shapes(&pg.items)).collect();
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert!(all.iter().all(|r| r.y >= 0.0 && r.bottom() <= page_h), "{all:?}");
 }
 
 /// Inside a text box whose shape style gives its text a colour (`a:fontRef`, typically white on

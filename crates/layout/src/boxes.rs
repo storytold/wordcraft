@@ -1,6 +1,6 @@
 use super::ctx::{Ctx, page_anchored};
 use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
+    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, line_drops, place_objects, rel_exclusions, wrap_area,
 };
 use super::page::PageFrame;
 use super::placed::Placed;
@@ -275,31 +275,54 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // A header or footer cell's floats placed on the page: no room taken in the cell.
                 let mut pinned = HashMap::new();
                 let left_out = left_out_objects(ctx.doc, p, table.map(|t| &t.chr), ctx.opts.show_hidden, ctx.hide_deleted);
-                for (oi, o) in p.objects.iter().enumerate() {
-                    let Some((w, h, float)) = floating(o) else { continue };
-                    if left_out(oi) {
-                        continue;
-                    }
-                    if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
-                        let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
-                        pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
-                        continue;
-                    }
-                    // Only paragraph-relative placement excludes space-before. Line anchors
-                    // and frameless page/margin fallbacks retain the text-top origin.
-                    let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
-                    let r = float_rect(frame, (0.0, width), float_y, w, h, float);
-                    let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
-                    floats.insert(oi, r);
-                }
-                let rel = rel_exclusions(&excl, 0.0, y);
-                if !rel.is_empty() {
-                    pl = ctx.para_labelled(p, width, table, &rel, label);
-                }
                 // Bordered paragraphs: room for their borders, those of a group joined in one box.
                 let cell = table.map(|t| &t.para);
                 let (above, below) = (joined(ctx.doc, blocks, i, i.checked_sub(1), cell), joined(ctx.doc, blocks, i, Some(i + 1), cell));
+                let excl_mark = excl.len();
+                // Objects placed from a line after the first start at that line (#3978): placed
+                // again once the lines are known, and the text laid out around them there.
+                let mut drops = HashMap::new();
+                for pass in 0..2 {
+                    excl.truncate(excl_mark);
+                    floats.clear();
+                    pinned.clear();
+                    for (oi, o) in p.objects.iter().enumerate() {
+                        let Some((w, h, float)) = floating(o) else { continue };
+                        if left_out(oi) {
+                            continue;
+                        }
+                        if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float))
+                        {
+                            let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
+                            pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
+                            continue;
+                        }
+                        // Placed from the paragraph or its line: from the paragraph's top above its
+                        // space before, or the top of the later line holding the anchor. Frameless
+                        // page/margin fallbacks keep the text's top.
+                        let float_y = match float.v_rel {
+                            Anchor::Paragraph => para_top,
+                            Anchor::Line => para_top + drops.get(&oi).copied().unwrap_or(0.0),
+                            _ => y,
+                        };
+                        let r = float_rect(frame, (0.0, width), float_y, w, h, float);
+                        let outline = ctx.wrap_outline(o);
+                        excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
+                        floats.insert(oi, r);
+                    }
+                    let rel = rel_exclusions(&excl, 0.0, y);
+                    if !rel.is_empty() || pass > 0 {
+                        pl = ctx.para_labelled(p, width, table, &rel, label.clone());
+                    }
+                    if pass > 0 {
+                        break;
+                    }
+                    let room = if above { 0.0 } else { Edges::own(&pl, 0, pl.lines.len()).top };
+                    drops = line_drops(p, &pl, y - para_top, room);
+                    if drops.is_empty() {
+                        break;
+                    }
+                }
                 let mut edges = Edges::own(&pl, 0, pl.lines.len());
                 if above {
                     edges.top = 0.0;
