@@ -565,6 +565,13 @@ impl<'e> Breaker<'e> {
             (LineSpacing::AtLeast(v), None) => natural.max(v),
             (LineSpacing::Exactly(v), _) => v,
         };
+        // The empty line's caret follows the alignment, as an empty paragraph's does.
+        let slack = (self.base_right - rp.indent_left).max(0.0);
+        let shift = match rp.align {
+            Align::Center => slack / 2.0,
+            Align::Right => slack,
+            _ => 0.0,
+        };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
         self.lines.push(Line {
@@ -575,7 +582,7 @@ impl<'e> Breaker<'e> {
             text_desc: desc,
             c0: self.n,
             c1: self.n,
-            xs: vec![x0],
+            xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
             leaders: Vec::new(),
             end: LineEnd::Para,
             start: pl.text_len,
