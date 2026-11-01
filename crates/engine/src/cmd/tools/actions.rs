@@ -330,3 +330,41 @@ pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
     }
     Ok(Value::Object(out))
 }
+
+/// The rows of an `insert.spreadsheet` call: `values` (a rectangular array of cells) or `csv`.
+pub(super) fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> {
+    let Some(values) = v.get("values").filter(|x| !x.is_null()) else {
+        return Ok(crate::cmd::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6")));
+    };
+    let list = values.as_array().ok_or_else(|| CmdError::Params("`values` must be an array of rows".into()))?;
+    if list.is_empty() || list.len() > 1000 {
+        return Err(CmdError::Params("`values` needs 1 to 1000 rows".into()));
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(list.len());
+    for (r, row) in list.iter().enumerate() {
+        let cells = row.as_array().ok_or_else(|| CmdError::Params(format!("`values` row {} is not an array", r + 1)))?;
+        if cells.is_empty() || cells.len() > 63 {
+            return Err(CmdError::Params(format!("`values` row {} needs 1 to 63 cells", r + 1)));
+        }
+        if rows.first().is_some_and(|f| f.len() != cells.len()) {
+            return Err(CmdError::Params(format!(
+                "`values` row {} has {} cells, row 1 has {}",
+                r + 1,
+                cells.len(),
+                rows.first().map_or(0, Vec::len)
+            )));
+        }
+        let mut out = Vec::with_capacity(cells.len());
+        for cell in cells {
+            out.push(match cell {
+                Value::String(x) => x.clone(),
+                Value::Number(x) => x.to_string(),
+                Value::Bool(x) => x.to_string(),
+                Value::Null => String::new(),
+                _ => return Err(CmdError::Params(format!("`values` row {} holds a cell that is not text, a number or a boolean", r + 1))),
+            });
+        }
+        rows.push(out);
+    }
+    Ok(rows)
+}

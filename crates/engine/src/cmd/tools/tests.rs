@@ -175,6 +175,42 @@ fn proofing_language_options() {
     assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
 }
 
+/// #2242: `insert.spreadsheet` fills a table from `values`, with a repeating header and a style.
+#[test]
+fn spreadsheet_takes_values_header_and_style() {
+    let mut s = Session::new(Document::from_text(""));
+    s.run("insert.spreadsheet", &json!({"values": [["Month", "Cases"], ["Jan", 12], ["Feb", null]], "header": true, "style": "TableGrid"})).unwrap();
+    let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (3, 2));
+    assert!(t.rows[0].props.header && !t.rows[1].props.header);
+    assert_eq!(t.rows[1].cells[1].blocks[0].as_para().unwrap().text, "12");
+    assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
+}
+
+/// #2242: malformed `values` is an error, never a panic, and leaves the document alone.
+#[test]
+fn spreadsheet_rejects_hostile_values() {
+    let wide: Vec<Value> = (0..64).map(|i| json!(i)).collect();
+    let many: Vec<Value> = (0..1001).map(|_| json!(["x"])).collect();
+    for bad in [
+        json!("x"),
+        json!(5),
+        json!([]),
+        json!(["a"]),
+        json!([["a", "b"], ["c"]]),
+        json!([wide]),
+        json!(many),
+        json!([[{"a": 1}]]),
+        json!([[[1]]]),
+        json!([[]]),
+    ] {
+        let mut s = Session::new(Document::from_text("keep"));
+        assert!(s.run("insert.spreadsheet", &json!({"values": bad})).is_err(), "{bad}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+        assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+    }
+}
+
 /// The inspector's removals delete straight from the document, so they aren't tracked: on a
 /// document that tracks changes the text would go with no revision to show for it, and the
 /// revision trail would be broken behind the user's back. The removal is refused instead,
