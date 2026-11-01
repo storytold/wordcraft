@@ -79,6 +79,8 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
+| 2026-10-14 | minor | Thai layout tasks 1–2: dictionary line breaking, safe emergency boundaries and DOCX Thai Distributed round trips; task 3 is Thai group spacing and explicit automatic-mode decision |
+| 2026-10-14 | minor | Thai task 3: capped Thai Justify/Thai Distributed spacing and per-paragraph mode selection; same-environment A4 PDF/DOCX round trips checked with Angsana New and Tahoma. Sarabun skipped because absent. |
 | 2026-10-12 | minor | M15: Portuguese proofing (pt-BR spelling from the installed VERO dictionary, suggestions, grammar, hyphenation; Review › Language gains Português (Brasil)) |
 | 2026-10-11 | trivial | M15: Polish interface and Polish proofing landed |
 | 2026-10-11 | trivial | M3: icons landed (#309) |

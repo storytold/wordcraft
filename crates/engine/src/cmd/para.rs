@@ -40,6 +40,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "right" => Align::Right,
                 "justify" | "both" => Align::Justify,
                 "distribute" => Align::Distribute,
+                "thaiDistribute" => Align::ThaiDistribute,
                 // Logical edges, whatever the paragraph's direction.
                 "start" => return fmt(s, &|p| p.align = Some(Align::Left)),
                 "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
@@ -48,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // An explicit value sets it (no toggling back to the start edge like the buttons).
             set_align(s, a)
         })
-        .params(r#"{"value": "left|center|right|justify|distribute (as seen on the page) | start|end (reading direction)"}"#),
+        .params(r#"{"value": "left|center|right|justify|distribute|thaiDistribute (as seen on the page) | start|end (reading direction)"}"#),
         CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| direction(s, v, true))
             .params(r#"{"value"?: bool (false = left to right)}"#),
         CommandSpec::new("para.ltr", "Left-to-Right Text Direction", "Home › Paragraph", |s, v| direction(s, v, false))
@@ -212,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| p.outline_level = l)
         }),
         CommandSpec::new("para.set", "Set Paragraph Formatting", "Home › Paragraph › Paragraph", set_props).params(
-            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
+            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute|thaiDistribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
         ),
         CommandSpec::new("para.dialog", "Paragraph Settings", "Home › Paragraph", |s, _| {
             s.push_ui_request(json!({"open": "paragraph"}));

@@ -42,6 +42,7 @@ rayon = "1"
 unicode-bidi = "0.3"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
+icu_segmenter = { version = "=2.3.0", default-features = false, features = ["compiled_data"] }
 unicode-script = "0.5"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }

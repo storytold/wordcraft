@@ -129,12 +129,21 @@ pub struct Cluster {
     pub g1: u32,
     /// A line may break after this cluster.
     pub break_after: bool,
+    /// An overlong word may break here if no word opportunity fits on the line.
+    pub(super) emergency_break_after: bool,
     /// Height above the baseline for objects (images), points.
     pub obj_h: f32,
     /// Depth below the baseline for objects (equations), points.
     pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
+}
+
+#[cfg(test)]
+impl Cluster {
+    pub(crate) fn for_test(kind: ClKind, adv: f32, break_after: bool) -> Self {
+        Self { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, emergency_break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

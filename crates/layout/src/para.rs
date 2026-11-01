@@ -350,7 +350,7 @@ mod label_spacing_tests {
             (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &env, mark_style, Some(&level));
+        break_lines(&mut pl, &p, &env, mark_style, Some(&level), false, &[]);
         pl.lines
     }
 
@@ -436,6 +436,95 @@ mod tests {
             };
             assert_eq!(bidi::strong_rtl(c), strong, "{:04x}", c as u32);
             assert_eq!(chars::is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
+        }
+    }
+
+    #[test]
+    fn non_thai_paragraph_has_no_thai_emergency_breaks() {
+        use crate::{LayoutCache, LayoutOptions, Placed};
+        use wordcraft_doc::{Document, StoryRef};
+
+        let doc = Document::from_text("English words and ligatures");
+        let layout = crate::layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        let para = layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == vec![0] => Some(para),
+                _ => None,
+            })
+            .expect("body paragraph is laid out");
+        assert!(!para.clusters.is_empty());
+        assert!(para.clusters.iter().all(|cluster| !cluster.emergency_break_after));
+    }
+
+    #[test]
+    fn bare_bookmark_offsets_map_to_visible_thai_boundaries() {
+        use crate::{LayoutCache, LayoutOptions, Placed};
+        use wordcraft_doc::{Document, Pos, StoryRef};
+
+        let text = "ภาษาไทย".repeat(20);
+        let marker_at = "ภาษา".len();
+        let mut doc = Document::from_text(&text);
+        doc.insert_object(&Pos::body(0, marker_at), InlineObject::BookmarkStart { name: "top".into() }, &Default::default()).unwrap();
+        let mut cache = LayoutCache::new();
+        let layout = crate::layout(&doc, &mut cache, &LayoutOptions::default());
+        let para = layout
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == vec![0] => Some(para),
+                _ => None,
+            })
+            .expect("body paragraph is laid out");
+        let marker_end = marker_at + OBJ.len_utf8();
+        let mut checked = 0;
+        for cluster in &para.clusters {
+            if !matches!(cluster.kind, ClKind::Text | ClKind::Space) {
+                continue;
+            }
+            let visible_end = if cluster.start >= marker_end { cluster.end - OBJ.len_utf8() } else { cluster.end };
+            let safe = crate::kinsoku::is_safe_line_break(&text, visible_end);
+            assert_eq!(
+                cluster.emergency_break_after, safe,
+                "emergency boundary after paragraph byte {} maps to visible byte {visible_end}",
+                cluster.end
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the bookmark is followed by laid out Thai text");
+    }
+
+    #[test]
+    fn hidden_and_deleted_source_cannot_expose_combining_mark_emergency_breaks() {
+        use crate::{LayoutCache, LayoutOptions, Placed};
+        use wordcraft_doc::{Document, Pos, StoryRef};
+
+        let text = "aX\u{0301}ก";
+        assert!(!crate::kinsoku::is_safe_line_break("a\u{0301}ก", 1), "the visible boundary between the base and combining mark is unsafe");
+        for deleted in [false, true] {
+            let mut doc = Document::from_text(text);
+            if deleted {
+                doc.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.del = Some(0)).unwrap();
+            } else {
+                doc.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.hidden = Some(true)).unwrap();
+            }
+            let mut cache = LayoutCache::new();
+            let options = LayoutOptions { hide_deleted: true, ..Default::default() };
+            let layout = crate::layout(&doc, &mut cache, &options);
+            let para = layout
+                .pages
+                .iter()
+                .flat_map(|page| &page.items)
+                .find_map(|item| match item {
+                    Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == vec![0] => Some(para),
+                    _ => None,
+                })
+                .expect("body paragraph is laid out");
+            let base = para.clusters.iter().find(|c| c.end == 1).expect("base character has its own layout cluster");
+            assert!(!base.emergency_break_after, "hidden/deleted source must not make the combining mark a line start (deleted={deleted})");
         }
     }
 
