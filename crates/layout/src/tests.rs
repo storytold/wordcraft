@@ -5945,6 +5945,41 @@ fn no_line_break_inside_a_query_address() {
     }
 }
 
+/// A path that starts after a space ("caption /_back") wraps whole: UAX #14 has no break between
+/// the space and the slash, so the break before the slash is the only one there.
+#[test]
+fn a_path_after_a_space_wraps_whole() {
+    let text = "enregistrement /_back_office_reports";
+    let mut wrapped = 0;
+    // Down to the width where the path still fits on a line (it no longer does at 425 pt).
+    for m in 100..=420 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let lines = body_lines(&lay(&d), text);
+        if lines.len() < 2 {
+            continue; // fits on one line
+        }
+        wrapped += 1;
+        assert_eq!(lines, ["enregistrement ", "/_back_office_reports"], "the path is split at margin {m}");
+    }
+    assert!(wrapped > 50, "{wrapped} widths wrapped");
+}
+
+/// A question mark in CJK text keeps the break after it: only a query's `?` before an ASCII
+/// letter, digit or underscore loses it.
+#[test]
+fn a_question_mark_in_cjk_text_keeps_its_break() {
+    let text = "你好?世界".repeat(40);
+    let mut ended = false;
+    for m in 300..=440 {
+        let mut d = Document::from_text(&text);
+        d.last_section.margin_right = m as f32;
+        let lines = body_lines(&lay(&d), &text);
+        ended |= lines[..lines.len() - 1].iter().any(|l| l.ends_with('?'));
+    }
+    assert!(ended, "no line ever ends after the question mark");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
