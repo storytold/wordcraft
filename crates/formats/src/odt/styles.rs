@@ -877,15 +877,22 @@ impl Styles {
 
     /// The custom style `odt` names (a common paragraph style other than Standard and the
     /// kinds' styles), with its parent and own formatting; `None` for any other style.
-    pub(super) fn named_style(&self, odt: &str) -> Option<NamedStyle> {
-        let s = self.map.get(odt).filter(|s| !s.auto && odt != "Standard")?;
+    /// Whether `odt` names a custom style ([`Self::named_style`]), without building it.
+    pub(super) fn is_named(&self, odt: &str) -> bool {
+        let Some(s) = self.map.get(odt).filter(|s| !s.auto && odt != "Standard") else { return false };
         let lower = |n: &str| n.to_ascii_lowercase().replace("_20_", " ");
         // The kinds' styles, and the note text styles (WordCraft's Footnote Text and Endnote
         // Text stand for them), are no custom styles.
         let special = |n: &str| kind_named(n).is_some() || matches!(n, "footnote" | "endnote");
-        if special(&lower(odt)) || s.display.as_deref().is_some_and(|d| special(&lower(d))) {
+        !(special(&lower(odt)) || s.display.as_deref().is_some_and(|d| special(&lower(d))))
+    }
+
+    pub(super) fn named_style(&self, odt: &str) -> Option<NamedStyle> {
+        if !self.is_named(odt) {
             return None;
         }
+        let s = self.map.get(odt)?;
+        let lower = |n: &str| n.to_ascii_lowercase().replace("_20_", " ");
         let parent = match s.parent.as_deref() {
             None | Some("Standard") => Parent::Normal,
             Some(p) => match self.map.get(p) {
@@ -943,7 +950,7 @@ impl Styles {
         }
         // The nearest custom style: its formatting stays in it; the automatic styles over it give
         // the paragraph's own.
-        let named_at = chain.iter().take(kind_at).position(|(n, _)| self.named_style(n).is_some());
+        let named_at = chain.iter().take(kind_at).position(|(n, _)| self.is_named(n));
         let named = named_at.and_then(|i| chain.get(i)).map(|(n, _)| n.to_string());
         let kind_at = named_at.unwrap_or(kind_at);
         let align = if named.is_some() { chain.iter().take(kind_at).find_map(|(_, s)| s.align) } else { chain.iter().find_map(|(_, s)| s.align) };

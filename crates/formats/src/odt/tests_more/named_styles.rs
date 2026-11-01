@@ -107,3 +107,23 @@ fn no_style_is_written_twice() {
         assert_eq!(paragraph_styles, 1, "{name}");
     }
 }
+
+#[test]
+fn many_paragraphs_in_custom_styles_open_quickly() {
+    // Each paragraph checked its style chain by building every custom style in it.
+    let tabs: String = (0..60).map(|i| format!(r#"<style:tab-stop style:position="{i}pt"/>"#)).collect();
+    let chain: String = (0..15)
+        .map(|i| {
+            let parent = if i == 0 { "Standard".to_string() } else { format!("S{}", i - 1) };
+            format!(r#"<style:style style:name="S{i}" style:family="paragraph" style:parent-style-name="{parent}"><style:paragraph-properties><style:tab-stops>{tabs}</style:tab-stops></style:paragraph-properties></style:style>"#)
+        })
+        .collect();
+    let styles = format!(r#"<office:document-styles {NS_T}><office:styles>{chain}</office:styles></office:document-styles>"#);
+    let body = r#"<text:p text:style-name="S14">x</text:p>"#.repeat(20_000);
+    let content =
+        format!(r#"<office:document-content {NS_T}><office:body><office:text>{body}</office:text></office:body></office:document-content>"#);
+    let t = std::time::Instant::now();
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(d.body.len(), 20_000);
+    assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+}
