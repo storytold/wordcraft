@@ -354,6 +354,36 @@ fn many_document_count_fields_do_not_rescan_the_body() {
     assert!(elapsed < std::time::Duration::from_secs(10), "count fields took {elapsed:?}");
 }
 
+/// #3620: NUMCHARS has a separate cache. This 200,000-word workload exceeds the
+/// ten-second limit on the old CLI path; retain the separate NUMWORDS regression.
+#[test]
+fn many_document_character_count_fields_do_not_rescan_the_body() {
+    let mut doc = wordcraft_doc::Document::from_text(&"one two three four five six seven eight nine ten\n".repeat(20_000));
+    let mut blocks = Vec::new();
+    for _ in 0..6_000 {
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: "NUMCHARS".into(), result: "stale".into(), locked: false, dirty: true, code: false, form: String::new() },
+            &wordcraft_doc::CharProps::default(),
+        )
+        .unwrap();
+        blocks.push(para_block(p));
+    }
+    let header = doc.add_part(PartKind::Header, blocks);
+    let mut s = Session::new(doc);
+    s.sel = Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
+    let started = std::time::Instant::now();
+    update_fields(&mut s).unwrap();
+    let elapsed = started.elapsed();
+    let got = story_fields(&s, StoryRef::Part(header));
+    assert_eq!(got.len(), 6_000);
+    for (_, result) in got {
+        assert_eq!(result, "780000");
+    }
+    assert!(elapsed < std::time::Duration::from_secs(10), "count fields took {elapsed:?}");
+}
+
 /// Results within one paragraph see the same counts; the next paragraph sees the previous
 /// paragraph's new results. The counts are discarded before the next update or text edit.
 #[test]
