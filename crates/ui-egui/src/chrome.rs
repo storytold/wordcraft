@@ -653,8 +653,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     }
                     // Reading zoom changes only reading presentation, never the normal view zoom.
-                    let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
+                    // In percent, as the commands take it and Word's slider gives it to screen
+                    // readers ("Zoom 100").
+                    let mut v = 100.0 * if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
+                    let slider = egui::Slider::new(&mut v, if reading { 75.0..=150.0 } else { 10.0..=500.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
                     let response = ui.add(slider);
                     response.widget_info(|| {
@@ -662,7 +664,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     });
                     if response.changed() {
                         let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                        let _ = app.run(command, json!({"value": v.round()}));
                     }
                     if small_icon(ui, "minus", tl!("Zoom Out")) {
                         if reading {
@@ -717,6 +719,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if resp.clicked() {
                         let _ = app.run("view.focus", json!({}));
                     }
+                    // Laid out from the right, these controls were made from the zoom to Focus:
+                    // screen readers get them from left to right, as they are on the screen and
+                    // as Word gives them.
+                    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                        let mut children = node.children().to_vec();
+                        children.reverse();
+                        node.set_children(children);
+                    });
                 });
                 if let Some((msg, at)) = &app.status_msg
                     && crate::now_ms() - at < 6000.0
