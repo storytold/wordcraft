@@ -7199,7 +7199,7 @@ fn recent_list_edits_are_final_and_persist() {
     a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
         saved_hook.set(saved_hook.get() + 1);
         let _ = serde_json::to_string(&app.prefs()).unwrap();
-        Ok(())
+        Ok(true)
     }));
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
     // The open document is on the list, at the back.
@@ -7251,11 +7251,11 @@ fn recent_list_edits_are_final_and_persist() {
 
 /// Issue #2716: when the immediate preferences write fails, both recent commands say so (result
 /// and status line) instead of reporting plain success; the removal still holds for this run.
-/// A host with no hook reports `saved: null`.
+/// A host with no hook, or one that wrote nothing, reports `saved: null`.
 #[test]
 fn recent_list_edits_report_a_failed_preferences_save() {
     let mut a = app();
-    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err("disk full".to_string())));
+    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err::<bool, _>("disk full".to_string())));
     a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
 
     let r = a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
@@ -7270,10 +7270,14 @@ fn recent_list_edits_report_a_failed_preferences_save() {
     assert_eq!(r["removed"], 1);
     assert!(a.ui.recent.is_empty());
 
-    a.services.save_prefs = None;
-    a.ui.recent = vec!["/tmp/alpha.docx".into()];
-    let r = a.run("ui.recentClear", json!({})).unwrap();
-    assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
+    // No hook, or a hook that wrote nothing (preferences switched off): `saved` is null.
+    for hook in [None, Some(Box::new(|_: &WordApp| Ok(false)) as Box<dyn Fn(&WordApp) -> Result<bool, String>>)] {
+        a.services.save_prefs = hook;
+        a.ui.recent = vec!["/tmp/alpha.docx".into()];
+        let r = a.run("ui.recentClear", json!({})).unwrap();
+        assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.starts_with("Removed")), "{:?}", a.status_msg);
+    }
 }
 
 /// Issue #2716: taking documents off the list needs no open document — the Start screen shows

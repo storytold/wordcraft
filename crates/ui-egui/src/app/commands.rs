@@ -1027,15 +1027,9 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
     }
 }
 
-/// Commands that work while no document is open (#1129): opening or creating one, closing the
-/// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
-/// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
-/// Keyboard).
-/// Everything else needs a document, `ui.*` included: only the interface commands listed here
-/// (tabs, Backstage, dialogs, appearance, opening files) work without one.
 /// The result fields of a command that saves the preferences at once: `saved` is true when the
 /// write worked, false with `saveError` when it failed (the change still holds for this run) and
-/// null when the host has no preferences hook.
+/// null when the host has no preferences hook or wrote nothing.
 fn add_saved(r: &mut Value, saved: Option<Result<(), String>>) {
     r["saved"] = match &saved {
         None => Value::Null,
@@ -1046,6 +1040,12 @@ fn add_saved(r: &mut Value, saved: Option<Result<(), String>>) {
     }
 }
 
+/// Commands that work while no document is open (#1129): opening or creating one, closing the
+/// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
+/// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
+/// Keyboard).
+/// Everything else needs a document, `ui.*` included: only the interface commands listed here
+/// (tabs, Backstage, dialogs, appearance, opening files) work without one.
 pub(crate) fn works_without_document(id: &str) -> bool {
     matches!(
         id,

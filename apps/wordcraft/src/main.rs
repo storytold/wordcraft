@@ -231,18 +231,19 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
-/// Saves the preferences and says why when it could not. Nothing to write (prefs disabled or no
-/// settings folder) counts as success.
-fn try_save_prefs(app: &WordApp) -> Result<(), String> {
+/// Saves the preferences and says why when it could not. `Ok(false)`: nothing was written
+/// because preferences are switched off or there is no settings folder.
+fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
     if !prefs_enabled() {
-        return Ok(());
+        return Ok(false);
     }
-    let Some(p) = prefs_path() else { return Ok(()) };
+    let Some(p) = prefs_path() else { return Ok(false) };
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
-    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))
+    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
+    Ok(true)
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
