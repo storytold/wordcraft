@@ -615,6 +615,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// #4589: the pen each call names: every Line Style the menu offers, Word's default ½ pt when
+    /// no weight is given, weights clamped to Word's ¼–6 pt, an unknown style drawn single, and no
+    /// pen at all when the call names none of style, width and colour.
+    #[test]
+    fn the_pen_takes_each_style_a_default_weight_and_clamps() {
+        for style in ["single", "double", "dotted", "dashed", "thick", "triple", "dotDash", "wave"] {
+            let b = pen(&json!({"style": style})).unwrap();
+            assert_eq!((b.style.ooxml(), b.width, b.color), (style, 0.5, None), "{style}");
+        }
+        assert_eq!(pen(&json!({"style": "zigzag"})).map(|b| b.style), Some(BorderStyle::Single));
+        assert_eq!(pen(&json!({"width": 99.0})).map(|b| b.width), Some(6.0));
+        assert_eq!(pen(&json!({"width": 0.0})).map(|b| b.width), Some(0.25));
+        assert_eq!(pen(&json!({"width": "x", "color": "FF0000"})).map(|b| (b.width, b.color)), Some((0.5, Rgb::parse("FF0000"))));
+        assert_eq!(pen(&json!({"x0": 1.0})), None);
+        assert_eq!(pen(&json!({"style": null})), None);
+    }
+
     /// Each row's cell spans.
     fn shape(t: &Table) -> Value {
         json!(t.rows.iter().map(|r| r.cells.iter().map(|c| c.span()).collect::<Vec<_>>()).collect::<Vec<_>>())
