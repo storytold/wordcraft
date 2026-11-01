@@ -162,7 +162,14 @@ pub fn is_custom_style(doc: &Document, id: &str) -> bool {
 fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
     let tabs = p.tabs.clone().filter(|t| !t.is_empty());
     let style = p.style.clone().filter(|id| is_custom_style(doc, id));
-    let x = wordcraft_doc::props::ParaProps { tabs, shading: p.shading, style, contextual_spacing: p.contextual_spacing, ..Default::default() };
+    let x = wordcraft_doc::props::ParaProps {
+        tabs,
+        shading: p.shading,
+        style,
+        contextual_spacing: p.contextual_spacing,
+        bidi: p.bidi.filter(|b| *b),
+        ..Default::default()
+    };
     (x != wordcraft_doc::props::ParaProps::default()).then(|| Box::new(x))
 }
 

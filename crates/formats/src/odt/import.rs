@@ -246,6 +246,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             shading: look.shading,
             tabs: look.tabs.clone(),
             contextual_spacing: look.contextual,
+            bidi: look.rtl.filter(|r| *r),
             ..Default::default()
         };
         let style = wordcraft_doc::styles::Style {

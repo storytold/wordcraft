@@ -525,6 +525,9 @@ impl Writer {
         if let Some(c) = p.extra.as_ref().and_then(|x| x.contextual_spacing) {
             props.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
+        if p.extra.as_ref().and_then(|x| x.bidi) == Some(true) {
+            props.push_str(" style:writing-mode=\"rl-tb\"");
+        }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();
         if props.is_empty() && master.is_empty() {
             return parent;

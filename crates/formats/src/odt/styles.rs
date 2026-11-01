@@ -187,6 +187,8 @@ struct StyleInfo {
     declared_auto: bool,
     /// `style:contextual-spacing` of a paragraph style.
     contextual: Option<bool>,
+    /// `style:writing-mode` of a paragraph style: right to left or not.
+    rtl: Option<bool>,
     /// `fo:border*` of a paragraph style, each side's padding as its distance from the text.
     para_borders: Option<Borders>,
     /// `fo:background-color` of a paragraph style (`Some(None)`: transparent, stated).
@@ -308,6 +310,8 @@ pub(super) struct ParaLook {
     pub(super) tabs: Option<Vec<TabStop>>,
     /// No spacing between paragraphs of one style (`style:contextual-spacing`).
     pub(super) contextual: Option<bool>,
+    /// Right to left (`style:writing-mode`).
+    pub(super) rtl: Option<bool>,
     /// Borders (when a side shows) and background.
     pub(super) borders: Option<Borders>,
     pub(super) shading: Option<Rgb>,
@@ -573,6 +577,12 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     }
     if let Some(c) = get(a, "style:contextual-spacing") {
         s.contextual = Some(c.trim() == "true");
+    }
+    // `page` (the page's direction) is left to the section.
+    match get(a, "style:writing-mode").map(str::trim) {
+        Some("rl-tb" | "rl" | "tb-rl") => s.rtl = Some(true),
+        Some("lr-tb" | "lr" | "tb-lr") => s.rtl = Some(false),
+        _ => {}
     }
     if let Some(bg) = get(a, "fo:background-color") {
         s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
@@ -1015,6 +1025,7 @@ impl Styles {
             borders: s.para_borders.filter(|b| b.any_visible()),
             shading: s.para_shading.flatten(),
             contextual: s.contextual,
+            rtl: s.rtl,
             ..Default::default()
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
@@ -1072,6 +1083,7 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.any_visible());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
-        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual }
+        let rtl = own().find_map(|(_, s)| s.rtl);
+        ParaLook { kind, align, page_break: pb, rule, keep_next, fmt: f, spacing, tabs, borders, shading, named, contextual, rtl }
     }
 }

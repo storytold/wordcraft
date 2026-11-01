@@ -109,6 +109,9 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
         if let Some(c) = pp.contextual_spacing {
             attrs.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
+        if pp.bidi == Some(true) {
+            attrs.push_str(" style:writing-mode=\"rl-tb\"");
+        }
         attrs.push_str(&super::writer::border_attrs(pp.borders));
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));

@@ -567,6 +567,9 @@ impl Body<'_> {
         if let Some(c) = look.contextual {
             p.extra.get_or_insert_with(Default::default).contextual_spacing = Some(c);
         }
+        if look.rtl == Some(true) {
+            p.extra.get_or_insert_with(Default::default).bidi = Some(true);
+        }
         if let Some(mut tabs) = look.tabs {
             // LibreOffice measures tabs from the indent (its `TabsRelativeToIndent`); Word from
             // the margin.
