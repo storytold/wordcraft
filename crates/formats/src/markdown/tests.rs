@@ -762,6 +762,26 @@ fn a_run_of_unclosed_display_openers_parses_in_linear_time() {
     assert_eq!(para_texts(&flow).len(), 1);
 }
 
+/// Past 32 levels (`MAX_NEST`) the math reader stops recursing and the surplus `}` ends the
+/// equation, so what follows the deep group is lost; the file still opens.
+#[test]
+fn display_math_nesting_stops_at_the_reader_limit() {
+    let linear = |open: &str, close: &str, n: usize| {
+        let eqs = equations(&parse(&format!("$$a {}x{} z$$", open.repeat(n), close.repeat(n))));
+        assert_eq!(eqs.len(), 1, "{open:?} at {n}");
+        assert!(eqs[0].1, "{open:?} at {n}");
+        eqs[0].0.clone()
+    };
+    assert_eq!(linear("{", "}", 32), "a x z");
+    assert_eq!(linear("{", "}", 33), "a x");
+    assert_eq!(linear("{", "}", 100_000), "a x");
+    for (open, close) in [("\\frac{", "}{y}"), ("\\sqrt{", "}"), ("x^{", "}"), ("\\hat{", "}")] {
+        assert!(linear(open, close, 32).ends_with(" z"), "{open:?}");
+        assert!(!linear(open, close, 33).contains('z'), "{open:?}");
+        assert!(linear(open, close, 100_000).contains('x'), "{open:?}");
+    }
+}
+
 /// Equations are written as LaTeX between dollars: a `$$…$$` line for a display equation
 /// alone in its paragraph, `$…$` for any other (a heading's too), with escaped bars in a
 /// table cell. Before, Markdown wrote their linear text and reopening the file lost them (#4130).
