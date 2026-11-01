@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::props::Rgb;
+
 /// Most items in a SmartArt graphic.
 pub const MAX_ITEMS: usize = 100;
 /// Longest item text, characters.
@@ -198,11 +200,14 @@ pub struct SmartArtItem {
     pub text: String,
     #[serde(default)]
     pub level: u8,
+    /// Fill of the item's shape in place of the style's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgb>,
 }
 
 impl SmartArtItem {
     pub fn new(text: impl Into<String>, level: u8) -> SmartArtItem {
-        SmartArtItem { text: text.into(), level }
+        SmartArtItem { text: text.into(), level, color: None }
     }
 }
 
@@ -255,6 +260,46 @@ impl SmartArtSpec {
             it.level = it.level.min(most);
             prev = Some(it.level);
         }
+        // An item with no shape of its own (text inside another item's shape) has nothing to
+        // colour: a colour left from when it was a top-level item is dropped. Items the style
+        // gives a shape (Hierarchy, Radial) keep theirs.
+        if self.has_custom_colors() {
+            let bare: Vec<usize> = (0..self.items.len()).filter(|&i| self.style_accent(i).is_none()).collect();
+            for i in bare {
+                if let Some(it) = self.items.get_mut(i) {
+                    it.color = None;
+                }
+            }
+        }
+    }
+
+    /// Whether any item has its own colour.
+    pub fn has_custom_colors(&self) -> bool {
+        self.items.iter().any(|it| it.color.is_some())
+    }
+
+    /// Give every item the style's colour again.
+    pub fn clear_custom_colors(&mut self) {
+        for it in &mut self.items {
+            it.color = None;
+        }
+    }
+
+    /// The theme accent (1–6) the style gives item `i`; `None` when the item has no shape of
+    /// its own (it is text inside another item's shape).
+    pub fn style_accent(&self, i: usize) -> Option<usize> {
+        let it = self.items.get(i)?;
+        let tops = || self.items.iter().take(i).filter(|o| o.level == 0).count();
+        match self.layout {
+            SmartArtLayout::Hierarchy => Some(self.colors.accent(i)),
+            SmartArtLayout::Radial if i == 0 => Some(self.colors.accent(0)),
+            SmartArtLayout::Radial => {
+                let parents = self.parents();
+                let spoke = |j: usize| j > 0 && matches!(parents.get(j), Some(Some(0)) | Some(None));
+                spoke(i).then(|| self.colors.accent((1..i).filter(|j| spoke(*j)).count() + 1))
+            }
+            _ => (it.level == 0).then(|| self.colors.accent(tops())),
+        }
     }
 
     /// The graphic after `sanitize`.
@@ -297,6 +342,18 @@ pub fn clean_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_drops_colours_of_items_without_a_shape_of_their_own() {
+        let c = Some(crate::props::Rgb(1, 2, 3));
+        let item = |level: u8| SmartArtItem { color: c, ..SmartArtItem::new("x", level) };
+        let list = SmartArtSpec { layout: SmartArtLayout::BasicList, items: vec![item(0), item(1)], ..Default::default() }.sanitized();
+        assert_eq!((list.items[0].color, list.items[1].color), (c, None), "a sub-item has no shape to colour");
+        let tree = SmartArtSpec { layout: SmartArtLayout::Hierarchy, items: vec![item(0), item(1)], ..Default::default() }.sanitized();
+        assert_eq!((tree.items[0].color, tree.items[1].color), (c, c), "every Hierarchy item has a shape");
+        let radial = SmartArtSpec { layout: SmartArtLayout::Radial, items: vec![item(0), item(1), item(2)], ..Default::default() }.sanitized();
+        assert_eq!((radial.items[1].color, radial.items[2].color), (c, None), "a spoke keeps its colour, what is under it does not");
+    }
 
     #[test]
     fn sanitize_caps_items_text_and_levels() {
