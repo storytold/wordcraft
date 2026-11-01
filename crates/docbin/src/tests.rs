@@ -2405,6 +2405,53 @@ fn a_difat_repeating_one_fat_sector_is_refused_before_cfb_builds_the_fat() {
     assert!(wordcraft_doc::cfb_guard::check(&cfb_file(&[("WordDocument", &[0u8; 4096])])).is_ok());
 }
 
+/// `f`, a compound file whose header lists its FAT sectors, with `spare` more FAT sectors added
+/// at its end, as some writers keep: listed after the others in the header, marked as FAT
+/// sectors (`FATSECT`) in the FAT, and their own entries free.
+fn with_spare_fat_sectors(mut f: Vec<u8>, spare: u32) -> Vec<u8> {
+    let u32_at = |f: &[u8], at: usize| u32::from_le_bytes([f[at], f[at + 1], f[at + 2], f[at + 3]]);
+    let s_len = 1usize << u16::from_le_bytes([f[0x1E], f[0x1F]]);
+    let fat_sectors = u32_at(&f, 0x2C);
+    let first_fat = u32_at(&f, 0x4C) as usize;
+    let sectors = (f.len().div_ceil(s_len) - 1) as u32;
+    f.resize((sectors as usize + 1 + spare as usize) * s_len, 0xFF);
+    for k in 0..spare {
+        let s = sectors + k;
+        assert!((s as usize) < s_len / 4, "the first FAT sector maps the new ones");
+        f[0x4C + (fat_sectors + k) as usize * 4..][..4].copy_from_slice(&s.to_le_bytes());
+        f[(first_fat + 1) * s_len + s as usize * 4..][..4].copy_from_slice(&0xFFFF_FFFDu32.to_le_bytes());
+    }
+    f[0x2C..0x30].copy_from_slice(&(fat_sectors + spare).to_le_bytes());
+    f
+}
+
+/// #5109: a compound file listing more FAT sectors than its sectors need (an encrypted package of
+/// 78 sectors listed 4) was refused before `cfb` opened it ("the DIFAT lists 4 FAT sectors in a
+/// file of 78 sectors"), though it is valid and opened before the guard. It opens again.
+#[test]
+fn a_compound_file_with_spare_fat_sectors_opens() {
+    let doc = struct_doc(&structured_spec("Hello world\r", 12));
+    // The same streams in 512-byte sectors (version 3, as the issue's file), as well as the
+    // 4096-byte ones `struct_doc` writes.
+    let mut comp = cfb::CompoundFile::open(std::io::Cursor::new(doc.as_slice())).expect("cfb open");
+    let table_name = if comp.is_stream("/1Table") { "1Table" } else { "0Table" };
+    let mut stream = |name: &str| {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut comp.open_stream(name).expect("stream"), &mut v).expect("read");
+        v
+    };
+    let (word, table) = (stream("/WordDocument"), stream(&format!("/{table_name}")));
+    let v3 = cfb_file_in(cfb::Version::V3, &[("WordDocument", &word), (table_name, &table)], &[]);
+    for (what, f) in [("version 3", v3), ("version 4", doc)] {
+        let f = with_spare_fat_sectors(f, 3);
+        let u32_at = |at: usize| u32::from_le_bytes([f[at], f[at + 1], f[at + 2], f[at + 3]]);
+        assert_eq!(u32_at(0x2C), 4, "{what}: four FAT sectors, where one maps the file");
+        assert_eq!(wordcraft_doc::cfb_guard::check(&f), Ok(()), "{what}");
+        let doc = read(&f).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(body_texts(&doc).first().map(String::as_str), Some("Hello world"), "{what}");
+    }
+}
+
 /// A compound file `cfb` writes in `version`: `streams` at its root, then `extra` streams under
 /// an `ObjectPool` storage (where Word keeps embedded objects).
 fn cfb_file_in(version: cfb::Version, streams: &[(&str, &[u8])], extra: &[(&str, &[u8])]) -> Vec<u8> {

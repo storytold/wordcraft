@@ -352,6 +352,35 @@ fn a_repeating_difat_is_refused_before_cfb_opens_it() {
     assert!(matches!(wordcraft_docx::decrypt(&f, None), Err(e) if e.to_string().contains("FAT sectors in a file of")));
 }
 
+/// #5109: a password-protected `.docx` whose compound file keeps spare FAT sectors (one of 78
+/// sectors listed 4, where one maps them) was refused by the guard since 0.12. Spare FAT sectors
+/// are added to an encrypted package here as such a writer keeps them: listed after the others in
+/// the header, marked as FAT sectors in the FAT, their own entries free. It decrypts and opens.
+#[test]
+fn an_encrypted_package_with_spare_fat_sectors_opens() {
+    let mut d = wordcraft_doc::Document::from_text("Behind a password");
+    d.normalize_runs();
+    let f = wordcraft_docx::encrypt_with_spin_count(&write(&d).unwrap(), "pw", 10).unwrap();
+    let u32_at = |f: &[u8], at: usize| u32::from_le_bytes([f[at], f[at + 1], f[at + 2], f[at + 3]]);
+    let s_len = 1usize << u16::from_le_bytes([f[0x1E], f[0x1F]]);
+    let fat_sectors = u32_at(&f, 0x2C);
+    let first_fat = u32_at(&f, 0x4C) as usize;
+    let sectors = (f.len().div_ceil(s_len) - 1) as u32;
+    let spare = 3;
+    let mut f = f;
+    f.resize((sectors as usize + 1 + spare as usize) * s_len, 0xFF);
+    for k in 0..spare {
+        let s = sectors + k;
+        assert!((s as usize) < s_len / 4, "the first FAT sector maps the new ones");
+        f[0x4C + (fat_sectors + k) as usize * 4..][..4].copy_from_slice(&s.to_le_bytes());
+        f[(first_fat + 1) * s_len + s as usize * 4..][..4].copy_from_slice(&0xFFFF_FFFDu32.to_le_bytes());
+    }
+    f[0x2C..0x30].copy_from_slice(&(fat_sectors + spare).to_le_bytes());
+    assert!(wordcraft_docx::is_encrypted(&f));
+    let package = wordcraft_docx::decrypt(&f, Some("pw")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(read(&package).unwrap().plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "Behind a password");
+}
+
 #[test]
 fn comments_with_non_numeric_ids_open_in_linear_time() {
     // Each generated id was checked against every id given so far, so a comments part with many
