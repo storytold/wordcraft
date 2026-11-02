@@ -1756,3 +1756,80 @@ fn number_boxes_say_their_unit_while_edited() {
     assert!(names.iter().any(|n| n == "Indent from left:"), "named by their labels: {names:?}");
     assert!(names.iter().all(|n| !n.ends_with("cm") && !n.ends_with('"')), "not by their unit: {names:?}");
 }
+
+/// #3172: a length box shows the unit picked in File › Options (centimetres, inches, points,
+/// millimetres), while it is edited too, and reads what is typed as Word does: a number alone in
+/// that unit, a number with the unit ("1,5 cm"), or another unit, converted ("1 in" in centimetres
+/// is 2,54 cm), with the region's decimal comma.
+#[test]
+fn length_boxes_show_the_chosen_unit_and_convert_a_typed_one() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let left = |h: &egui_kittest::Harness<'static, WordApp>| h.get_by_role_and_label(Role::SpinButton, "Left:").value().unwrap_or_default();
+    for (units, shown, typed, read) in [
+        ("centimeters", "0 cm", "1,5 cm", "1,5 cm"),
+        ("centimeters", "0 cm", "2", "2 cm"),
+        ("centimeters", "0 cm", "1 in", "2,54 cm"),
+        ("inches", "0\"", "1,5", "1,5\""),
+        ("inches", "0\"", "2,54 cm", "1\""),
+        ("points", "0 pt", "1 in", "72 pt"),
+        ("millimeters", "0 mm", "1 cm", "10 mm"),
+    ] {
+        let mut app = app_with("Some text");
+        app.run("file.options", json!({"region": "it-IT", "units": units})).unwrap();
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+        h.run_steps(4);
+        assert_eq!(left(&h), shown, "{units}: the box shows the unit");
+        h.get_by_role_and_label(Role::SpinButton, "Left:").click();
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(Role::SpinButton, "Left:").is_focused(), "{units}: a click edits the box");
+        assert_eq!(left(&h), shown, "{units}: and the unit stays while it is edited");
+        h.get_by_role_and_label(Role::SpinButton, "Left:").type_text(typed);
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(left(&h), read, "{units}: {typed:?} reads as {read:?}");
+    }
+}
+
+/// #3172: in each dialog this change touched, the number boxes are named by the labels shown
+/// beside them, as Word's are, and none by its unit: egui named a box by its suffix ("cm", "pt",
+/// `"`), and a box never linked to its label had only that name.
+#[test]
+fn number_boxes_are_named_by_their_labels_in_each_dialog() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let units = ["cm", "mm", "pt", "pi", "\"", "%", "°", "px"];
+    let dialogs: [(&str, &[&str]); 8] = [
+        ("paragraph", &["Left:", "Right:", "First line:", "Before:", "After:", "Line spacing:"]),
+        ("tableProperties", &["Preferred width:", "Indent from left:", "Specify height:"]),
+        ("tableCellMargins", &["Top:", "Left:", "Bottom:", "Right:"]),
+        ("columns", &["Width: 1", "Spacing: 1", "Width: 2"]),
+        ("dropCap", &["Lines to drop:", "Distance from text:"]),
+        ("lineNumbers", &["Start at:", "From text:", "Count by:"]),
+        ("hyphenation", &["Hyphenation zone:"]),
+        ("defineList", &["Aligned at:", "Text indent at:", "Add tab stop at:"]),
+    ];
+    for (dialog, want) in dialogs {
+        let mut app = app_with("Some text");
+        if dialog.starts_with("table") {
+            app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        }
+        if dialog == "columns" {
+            app.run("layout.columns", json!({"count": 2})).unwrap();
+        }
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        let opened = Dialog::open(dialog, h.state_mut());
+        assert!(opened.is_some(), "{dialog} opens");
+        h.state_mut().dialog = opened;
+        h.run_steps(4);
+        let names: Vec<String> = h.query_all_by_role(Role::SpinButton).filter_map(|n| n.accesskit_node().label()).collect();
+        for name in want {
+            assert!(names.iter().any(|n| n == name), "{dialog}: a box is named {name:?}: {names:?}");
+        }
+        assert!(names.iter().all(|n| !units.contains(&n.trim())), "{dialog}: no box is named by its unit: {names:?}");
+    }
+}
