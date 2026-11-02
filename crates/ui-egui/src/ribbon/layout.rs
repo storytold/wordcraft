@@ -133,8 +133,9 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         let spaced = |ui: &mut Ui, text: egui::RichText| {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.label(text);
-            });
+                ui.label(text)
+            })
+            .inner
         };
         egui::Grid::new("layout_para").spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Indent")).small().strong());
@@ -146,23 +147,25 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
-            ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let label = ui.label(egui::RichText::new(tl!("Left:")).small());
+            let field = egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2);
+            if ui.add_sized(FIELD, field).labelled_by(label.id).changed() {
                 let _ = app.run("para.indents", json!({"left": l * k}));
             }
-            spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let label = spaced(ui, egui::RichText::new(tl!("Before:")).small());
+            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).points()).labelled_by(label.id).changed() {
                 let _ = app.run("para.spacing", json!({"before": b}));
             }
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
-            ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let label = ui.label(egui::RichText::new(tl!("Right:")).small());
+            let field = egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2);
+            if ui.add_sized(FIELD, field).labelled_by(label.id).changed() {
                 let _ = app.run("para.indents", json!({"right": r * k}));
             }
-            spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let label = spaced(ui, egui::RichText::new(tl!("After:")).small());
+            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).points()).labelled_by(label.id).changed() {
                 let _ = app.run("para.spacing", json!({"after": a}));
             }
             ui.end_row();

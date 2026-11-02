@@ -14,6 +14,7 @@ use wordcraft_engine::cmd::shape_fill::{self, LINEAR_DIRECTIONS, PATH_DIRECTIONS
 use wordcraft_layout::display::paint_for;
 
 use crate::WordApp;
+use crate::options::MeasureExt;
 use crate::theme::Tokens;
 
 /// Stable storage id for a fill drag's undo mark.
@@ -257,9 +258,9 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         }
 
         if let GradientKind::Linear { angle, scaled } = g.kind {
-            ui.label(tl!("Angle"));
+            let label = ui.label(tl!("Angle"));
             let mut a = angle;
-            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).suffix("°").speed(1.0));
+            let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.9).unit_text("°").speed(1.0)).labelled_by(label.id);
             if r.changed() {
                 apply(app, ui, Some(&with(g, |g| g.kind = GradientKind::Linear { angle: a, scaled })), Some(&r));
             }
@@ -297,9 +298,9 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         apply(app, ui, Some(&set(GradStop { color: c, ..stop })), None);
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Position"));
+        let label = ui.label(tl!("Position"));
         let mut p = stop.pos;
-        let r = ui.add(egui::DragValue::new(&mut p).range(0.0..=100.0).suffix("%").speed(0.5).fixed_decimals(0));
+        let r = ui.add(egui::DragValue::new(&mut p).range(0.0..=100.0).unit_text("%").speed(0.5).fixed_decimals(0)).labelled_by(label.id);
         if r.changed() {
             let mut st = g.stops.clone();
             let i = stops::move_to(&mut st, sel, p);

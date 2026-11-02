@@ -148,9 +148,10 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
         let mut out = None;
         crate::widgets::row(ui, |ui| {
-            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
+            let label = ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
             let mut v = pt / k;
-            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
+            let field = egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2);
+            let r = ui.add_sized(vec2(72.0, 18.0), field).labelled_by(label.id);
             if r.changed() {
                 out = Some((v * k, r.dragged() && !r.drag_started()));
             }

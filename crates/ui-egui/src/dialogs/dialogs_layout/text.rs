@@ -51,20 +51,21 @@ pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumber
     ui.checkbox(&mut f.on, tl!("Add line numbering"));
     ui.add_enabled_ui(f.on, |ui| {
         egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            ui.label(tl!("Start at:"));
-            ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767));
+            let label = ui.label(tl!("Start at:"));
+            ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767)).labelled_by(label.id);
             ui.end_row();
-            ui.label(tl!("From text:"));
+            let label = ui.label(tl!("From text:"));
             ui.horizontal(|ui| {
                 ui.checkbox(&mut f.auto_distance, tl!("Auto"));
                 ui.add_enabled(
                     !f.auto_distance,
                     egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2),
-                );
+                )
+                .labelled_by(label.id);
             });
             ui.end_row();
-            ui.label(tl!("Count by:"));
-            ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100));
+            let label = ui.label(tl!("Count by:"));
+            ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100)).labelled_by(label.id);
             ui.end_row();
         });
         heading(ui, "Numbering:");
@@ -113,8 +114,9 @@ pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut Hyphenation
     ui.checkbox(&mut f.auto, tl!("Automatically hyphenate document"));
     ui.checkbox(&mut f.caps, tl!("Hyphenate words in CAPS"));
     egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Hyphenation zone:"));
-        ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2));
+        let label = ui.label(tl!("Hyphenation zone:"));
+        ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2))
+            .labelled_by(label.id);
         ui.end_row();
         ui.label(tl!("Limit consecutive hyphens to:"));
         let no_limit = tl!("No limit").to_string();

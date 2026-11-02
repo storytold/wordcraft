@@ -70,7 +70,7 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 };
                 let key = egui::Id::unique(("picture_transparency", media, off));
                 let mut v = ui.data(|d| d.get_temp::<f64>(key)).unwrap_or(0.0);
-                let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).suffix("%"));
+                let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).unit_text("%")).accessible_name(tl!("Transparency"));
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(key, v));
                     if r.dragged() && !r.drag_started() {
@@ -168,10 +168,11 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 let cropping = crate::crop::active(app).is_some();
                 small(ui, app, "crop", Some("Crop"), "Crop", crate::widgets::ButtonAction::new("ui.crop", json!({}), cropping));
-                for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
+                for (i, (side, name)) in [("L", "Left:"), ("T", "Top:"), ("R", "Right:"), ("B", "Bottom:")].iter().enumerate() {
                     ui.label(egui::RichText::new(tl!(side)).small());
                     let mut v = crop0[i] * 100.0;
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=95.0).suffix("%"));
+                    let field = egui::DragValue::new(&mut v).speed(0.5).range(0.0..=95.0).unit_text("%");
+                    let r = ui.add(field).accessible_name(format!("{} {}", tl!("Crop"), tl!(name)));
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
