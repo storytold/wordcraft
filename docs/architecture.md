@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-01 · **Change:** minor (proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-11-02 · **Change:** trivial (craft-proof's row says what a build without the Language data keeps: English spelling from an installed Hunspell English or the built-in list, rule hyphenation for Bulgarian, Turkish and Russian; previously minor: proofing moved out: `wordcraft-proof` is craft-libs' `craft-proof`, its Language data craft-i18n's `language-data/` embedded from `CRAFT_I18N_DIR`; previously major: crate and layer inventory, source counts, proofing languages and module boundaries re-measured from this checkout; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today. The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -69,6 +69,7 @@ crate name links to its source tree.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | craft-proof's row: without the Language data English spelling falls back to an installed Hunspell English or the built-in Moby list, and only pattern hyphenation is off (#5202 review) |
 | 2026-11-01 | minor | `proof` left the workspace: it is `craft-proof` in storytold/craft-libs (with its history), and the spelling and hyphenation data is craft-i18n's `language-data/` (`CRAFT_I18N_DIR`); `assets/spelling` and `assets/hyphenation` are gone |
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
