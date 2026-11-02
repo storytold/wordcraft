@@ -355,3 +355,15 @@ fn tools_address_an_open_document_by_id() {
     assert_eq!(tool(&mut s, "get_text", json!({}))["text"].as_str().unwrap().trim(), "Second");
     assert_eq!(tool(&mut s, "get_text", json!({"doc": first}))["text"].as_str().unwrap().trim(), "First more again");
 }
+
+/// #3676: a page number that cannot fit an index is rejected, not silently rendered as
+/// page 1 (the old cast truncated 2^32 to 0 on 32-bit and wasm).
+#[test]
+fn render_page_rejects_a_page_number_that_does_not_fit() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    let r = call(&mut s, 30, "tools/call", json!({"name": "render_page", "arguments": {"page": 1u64 << 32, "scale": 0.5}}));
+    assert_eq!(r["result"]["isError"], true, "page 2^32: {r}");
+    let r = call(&mut s, 31, "tools/call", json!({"name": "render_page", "arguments": {"page": 1, "scale": 0.5}}));
+    assert_eq!(r["result"]["isError"], false, "page 1 still renders: {r}");
+}
