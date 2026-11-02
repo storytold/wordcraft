@@ -46,6 +46,13 @@ pub struct ZoteroLink {
     methods: Vec<String>,
 }
 
+impl ZoteroLink {
+    /// Whether an alert from Zotero is waiting for an answer.
+    pub(crate) fn alert_open(&self) -> bool {
+        self.alert.is_some()
+    }
+}
+
 /// Focus requests from the bridge.
 struct AppHost<'a> {
     ctx: &'a egui::Context,
@@ -156,6 +163,11 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     if app.zotero.busy.is_none() {
         return;
     }
+    // Each window polls as it draws: the window showing the document the command started in
+    // answers it.
+    if app.windows.native() && app.session.document_id() != app.zotero.document && app.session.is_open(app.zotero.document) {
+        return;
+    }
     let mut changed = false;
     // One alert at a time: Zotero sends nothing else while it waits for the answer.
     while app.zotero.alert.is_none() {
@@ -217,6 +229,10 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
 /// Zotero's question, as a dialog.
 pub fn show_alert(app: &mut WordApp, ctx: &egui::Context) {
     let Some(a) = app.zotero.alert.as_ref() else { return };
+    // In the window showing the document Zotero is working on.
+    if app.windows.native() && app.session.document_id() != app.zotero.document && app.session.is_open(app.zotero.document) {
+        return;
+    }
     // Buttons and the value Zotero expects for each.
     // macOS puts the default button last (rightmost), with Cancel just before it.
     let buttons: &[(&str, i64)] = match (a.buttons, cfg!(target_os = "macos")) {
@@ -336,6 +352,9 @@ mod tests {
             json!(["Document_complete", [1]]),
         ]);
         let mut app = WordApp::new(Session::new(Document::new()), Services::default());
+        // One window showing each document in turn (the web app); with a window per document,
+        // the first document's window carries on with the citation.
+        app.windows.single();
         app.zotero.options.addr = addr;
         let ctx = egui::Context::default();
         app.ctx = Some(ctx.clone());
