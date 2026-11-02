@@ -167,7 +167,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let lvl = p::u64(v, "level").unwrap_or(0).min(8) as u8;
             fmt(s, &|p| {
                 if let Some(n) = p.numbering.as_mut() {
+                    let moved = n.level != lvl;
                     n.level = lvl;
+                    if moved {
+                        format::drop_direct_indents(p);
+                    }
                 }
             })
         })
