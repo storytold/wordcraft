@@ -25,7 +25,7 @@ use crate::Session;
 fn records(id: &str) -> bool {
     !(id.starts_with("review.accept")
         || id.starts_with("review.reject")
-        || matches!(id, "review.compare" | "review.combine" | "edit.undo" | "edit.redo")
+        || matches!(id, "review.compare" | "review.combine" | "edit.undo" | "edit.redo" | "edit.repeatOrRedo")
         || id.starts_with("file."))
 }
 

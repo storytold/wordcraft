@@ -85,7 +85,7 @@ impl Session {
             self.doc.settings.track_changes = true;
         }
         // Macro recording and Repeat.
-        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
+        let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat" | "edit.repeatOrRedo")
             && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
         // A password never lands in a recorded macro or Repeat.
         let kept = || {
@@ -98,7 +98,7 @@ impl Session {
         if record && let Some((_, steps)) = self.recording.as_mut() {
             steps.push((id.to_string(), kept()));
         }
-        if spec.mutates && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
+        if spec.mutates && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat" | "edit.repeatOrRedo") {
             self.last_command = Some((id.to_string(), kept()));
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
@@ -381,7 +381,7 @@ impl Session {
         if !spec.mutates && self.sel != *sel_before {
             self.typing_open = false;
         }
-        if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.redo") {
+        if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeatOrRedo") {
             self.note_edit();
         }
         // Outline view: collapsed headings follow edits; the caret stays where it shows.

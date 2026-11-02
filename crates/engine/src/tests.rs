@@ -215,6 +215,9 @@ fn word_default_shortcuts_resolve_function_keys() {
     assert_eq!(id("F12"), Some("file.saveAs"));
     assert_eq!(id("Mod+Alt+M"), Some("review.newComment"));
     assert_eq!(id("Mod+H"), Some("edit.findReplace"));
+    // #4286: Mod+Y is Repeat or Redo; pure Redo is Mod+Shift+Z.
+    assert_eq!(id("Mod+Y"), Some("edit.repeatOrRedo"));
+    assert_eq!(id("Mod+Shift+Z"), Some("edit.redo"));
 }
 
 #[test]
@@ -11598,4 +11601,74 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #4286: Ctrl+Y repeats the last action when there is nothing to redo.
+#[test]
+fn ctrl_y_repeats_when_redo_is_empty() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(text(&s), "Hello");
+    assert!(!s.can_redo());
+    run(&mut s, "edit.repeatOrRedo", json!({}));
+    assert_eq!(text(&s), "HelloHello");
+}
+
+/// #4286: Ctrl+Y redoes when the redo stack has actions.
+#[test]
+fn ctrl_y_redoes_when_redo_is_available() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second"}));
+    assert_eq!(text(&s), "First\nSecond");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "First\n");
+    assert!(s.can_redo());
+
+    // Redoes to "First\nSecond"
+    run(&mut s, "edit.repeatOrRedo", json!({}));
+    assert_eq!(text(&s), "First\nSecond");
+    assert!(!s.can_redo());
+
+    // Now that redo is empty, repeating runs the last command again
+    run(&mut s, "edit.repeatOrRedo", json!({}));
+    assert_eq!(text(&s), "First\nSecondSecond");
+}
+
+/// #4286: Ctrl+Y is refused under document protection.
+#[test]
+fn ctrl_y_refused_on_protected_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "hi"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    s.last_command = Some(("text.insert".into(), json!({"text": "hi"})));
+    let before = text(&s);
+    assert!(!s.can_redo());
+    assert!(s.run("edit.repeatOrRedo", &json!({})).is_err());
+    assert_eq!(text(&s), before);
+}
+
+/// #4286: Ctrl+Y returns an error when there is nothing to redo and nothing to repeat.
+#[test]
+fn ctrl_y_nothing_to_repeat_returns_error() {
+    let mut s = s();
+    assert!(!s.can_redo());
+    assert!(matches!(s.run("edit.repeatOrRedo", &json!({})), Err(crate::CmdError::Failed(_))));
+}
+
+/// #4286: A user's remapped Mod+Y is kept, and customizing Mod+Y tracks conflicts.
+#[test]
+fn ctrl_y_custom_keymap_and_conflict_kept() {
+    let mut s = s();
+    assert_eq!(s.keymap.resolve(&s.registry, "Mod+Y").map(|c| c.id), Some("edit.repeatOrRedo"));
+    assert_eq!(s.keymap.resolve(&s.registry, "Mod+Shift+Z").map(|c| c.id), Some("edit.redo"));
+
+    let r = s.run("tools.customizeKeyboard", &json!({"assign": {"command": "format.bold", "key": "Mod+Y"}, "key": "Mod+Y"})).unwrap();
+    assert_eq!(r["replaced"].as_str(), Some("edit.repeatOrRedo"));
+    assert_eq!(s.keymap.resolve(&s.registry, "Mod+Y").map(|c| c.id), Some("format.bold"));
+
+    let r2 = s.run("tools.customizeKeyboard", &json!({"assign": {"command": "edit.redo", "key": "Mod+Y"}, "key": "Mod+Y"})).unwrap();
+    assert_eq!(r2["replaced"].as_str(), Some("format.bold"));
+    assert_eq!(s.keymap.resolve(&s.registry, "Mod+Y").map(|c| c.id), Some("edit.redo"));
 }
