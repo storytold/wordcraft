@@ -67,7 +67,8 @@ pub(super) fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> b
 #[derive(Clone, Debug)]
 pub struct StyleRun {
     pub face: FaceRef,
-    /// Primary font requested by the run, before a fallback face was chosen for a missing glyph.
+    /// The face the run's font resolves to, which `face` replaces where it lacks a character (a
+    /// fallback face, the East Asian font for CJK): the face new text typed in the run asks for.
     pub requested_face: FaceRef,
     pub size: f32,
     pub synth_bold: bool,
