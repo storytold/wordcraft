@@ -1582,6 +1582,8 @@ fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, al
             // Keep the question and its source edits available for retry or Cancel.
             return false;
         }
+        // Successful OK must not be treated as a title-bar Cancel by the dialog host.
+        *back = None;
     }
     ok
 }
