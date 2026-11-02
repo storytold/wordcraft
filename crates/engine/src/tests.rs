@@ -11704,8 +11704,16 @@ fn text_from_file_brings_the_files_pictures() {
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering =
         Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
     let key = src.doc.add_media(tiny_png(), "png");
-    let image =
-        wordcraft_doc::InlineObject::Image { media: key, w: 20.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = wordcraft_doc::InlineObject::Image {
+        media: key,
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, image, &Default::default()).unwrap();
     let path = dir.join("pictures.docx");
     std::fs::write(&path, wordcraft_docx::write(&src.doc).unwrap()).unwrap();
