@@ -355,3 +355,70 @@ fn enclosed_fraction_edges() {
         }
     }
 }
+
+fn edge_test_ctx(face: FaceRef) -> Ctx {
+    Ctx {
+        face,
+        t: None,
+        upem: face.upem as f32,
+        base: 14.0,
+        color: Rgb::BLACK,
+        text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+        nodes: 0,
+        path: Vec::new(),
+        node_stack: Vec::new(),
+    }
+}
+
+#[test]
+fn edge_scan_budget_is_shared() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+    let mut cx = edge_test_ctx(FaceRef::of(&font));
+    let opening = [MNode::Run(MRun::new("⟨((")), MNode::Run(MRun::new("x"))];
+    let closing = [MNode::Run(MRun::new("x")), MNode::Run(MRun::new("))⟩"))];
+    // Two nodes plus three fence characters and the first non-fence character.
+    const SCAN_COST: usize = 6;
+    const REPEATS: usize = 2;
+    cx.nodes = MAX_NODES - REPEATS * SCAN_COST - 1;
+    for remaining in (0..REPEATS).rev() {
+        assert_eq!(cx.edge_index(opening.iter().enumerate(), Cls::Open), Some(1));
+        assert_eq!(cx.nodes, MAX_NODES - remaining * SCAN_COST - 1, "charge characters, not UTF-8 bytes or nodes alone");
+    }
+    let visited = std::cell::Cell::new(0);
+    let nodes = opening.iter().enumerate().inspect(|_| visited.set(visited.get() + 1));
+    assert_eq!(cx.edge_index(nodes, Cls::Open), None, "the next scan exhausts before classifying its first character");
+    assert_eq!(cx.nodes, MAX_NODES);
+    assert_eq!(visited.get(), 1, "do not inspect the remaining nodes after exhaustion");
+    assert_eq!(cx.edge_index(opening.iter().enumerate(), Cls::Open), None);
+    assert_eq!(cx.nodes, MAX_NODES, "an exhausted lookup spends no further budget");
+
+    cx.nodes = MAX_NODES - SCAN_COST;
+    assert_eq!(cx.edge_index(closing.iter().enumerate().rev(), Cls::Close), Some(0));
+    assert_eq!(cx.nodes, MAX_NODES, "reverse discovery charges the same work");
+    assert_eq!(cx.edge_index(closing.iter().enumerate().rev(), Cls::Close), None);
+    assert_eq!(cx.nodes, MAX_NODES);
+}
+
+#[test]
+fn radical_scan_exhaustion() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+    let mut cx = edge_test_ctx(FaceRef::of(&font));
+    let st = St { level: 0, display: false, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
+    let fraction = MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] };
+    let body = [MNode::Rad { deg: vec![], deg_hide: true, e: vec![MNode::Run(MRun::new("⟨((")), fraction] }];
+    let rules = |b: &Bx| b.items.iter().filter(|i| matches!(i, MItem::Rect { .. })).count();
+    assert_eq!(rules(&cx.arg(&body, st, 0)), 2, "ordinary layout draws the radical and fraction rules");
+
+    // One outer node, then the fence node and its three characters exhaust inspection.
+    cx.nodes = MAX_NODES - 5;
+    let limited = cx.arg(&body, st, 0);
+    assert_eq!(rules(&limited), 0, "the exhausted radicand is not rendered");
+    assert_eq!(cx.nodes, MAX_NODES + 1, "the existing row cap stops its first render attempt");
+    let spent = cx.nodes;
+    assert!(cx.row(&body, St { frac_edges: FracEdges::Tight, ..st }, 0, 0).is_empty());
+    assert_eq!(cx.nodes, spent, "an exhausted row returns before edge discovery");
+}
