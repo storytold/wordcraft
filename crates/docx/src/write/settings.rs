@@ -172,6 +172,8 @@ pub(super) fn write_comment_ids(
     if comment_paras.is_empty() {
         return;
     }
+    // Keep the existing exact-string reservation rule, including comments without a written part.
+    let reserved: std::collections::HashSet<&str> = doc.comments.values().filter_map(|c| c.durable_id.as_deref()).collect();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut next = 0x1000_0000u32;
     let mut rows: Vec<(String, String, Option<String>)> = Vec::new();
@@ -183,7 +185,7 @@ pub(super) fn write_comment_ids(
             None => loop {
                 next = next.saturating_add(1);
                 let d = format!("{next:08X}");
-                if !used.contains(&d) && !doc.comments.values().any(|o| o.durable_id.as_deref() == Some(d.as_str())) {
+                if !used.contains(&d) && !reserved.contains(d.as_str()) {
                     break d;
                 }
             },
