@@ -435,6 +435,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let lo = wordcraft_layout::LayoutOptions {
         view: wordcraft_layout::ViewMode::Print,
         comment_balloons: markup.markup && markup.comments,
+        hide_deleted: !markup.markup,
         numeral: markup.numeral,
         filename: Some(filename.into()),
         filepath: Some(filepath.into()),
