@@ -404,7 +404,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, obj_desc: 0.0 };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -423,9 +423,18 @@ impl<'e> Breaker<'e> {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
-                    if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
+                    if matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+                        (st.ascent, st.descent)
+                    } else {
+                        ((c.obj_h + c.obj_shift).max(0.0), (c.obj_d - c.obj_shift).max(0.0))
+                    }
                 } else {
-                    ex.obj_asc = ex.obj_asc.max(c.obj_h);
+                    // A run's `w:position` shifts its picture too (MathType lowers an equation
+                    // object into its line). Keep the object's own extent separate from the text
+                    // descent: exact spacing leaves the text baseline alone and lets the object
+                    // overflow, while other spacing grows the line to its full shifted height.
+                    ex.obj_asc = ex.obj_asc.max((c.obj_h + c.obj_shift).max(0.0));
+                    ex.obj_desc = ex.obj_desc.max((-c.obj_shift).max(0.0));
                     (st.ascent, st.descent)
                 }
             } else {
@@ -449,10 +458,9 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, obj_desc } = self.extents(pl, range);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -469,26 +477,34 @@ impl<'e> Breaker<'e> {
                 }
             }
         }
+        // A picture's full shifted extent, above and below the baseline, as the floor the line
+        // spacing multiplier may not shrink below. Zero for a picture that already fits the text.
+        // Computed after the label's ascent: a tall label must not leave a lowered picture
+        // sticking out below the line (#5187 review).
+        let pictures = if obj_asc > asc || obj_desc > desc { asc.max(obj_asc) + desc.max(obj_desc) } else { 0.0 };
         // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
         // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
         // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
         // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
-        let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
-            (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(pictures), false),
+            (LineSpacing::AtLeast(v), None) => (natural.max(pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
+        // A lowered picture's descent is part of the line's descent for automatic, minimum and
+        // multiple spacing, so the baseline keeps the picture inside the line. Exact spacing must
+        // keep the text's own descent: the picture is allowed to overflow the fixed line box.
+        let desc_layout = if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { desc } else { desc.max(obj_desc) };
         let baseline = if centred {
             let up = asc.max(obj_asc);
-            self.top + ((height - up - desc) / 2.0).max(0.0) + up
+            self.top + ((height - up - desc_layout) / 2.0).max(0.0) + up
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            self.top + baseline_offset(rp.line_spacing, asc, height, desc_layout).max(obj_asc.min(height - desc_layout))
         };
         Measure { height, baseline, text_asc, text_desc }
     }
@@ -634,6 +650,7 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    obj_desc: f32,
 }
 
 /// A line's height and baseline, and the extent of its text.
