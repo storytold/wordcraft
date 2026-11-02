@@ -62,13 +62,21 @@ impl<'a> Builder<'a> {
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let jamo = matches!(u32::from(dc), 0x1100..=0x11FF | 0xA960..=0xA97F | 0xD7B0..=0xD7FF);
+            let ok = |f: FaceRef, ch: char| f.covers(ch) && (!jamo || f.has_layout_tables());
             let face = match cur {
                 Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
-                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
-                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
+                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| ok(f, c)) => primary_ea,
+                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| ok(f, dc)) => run_face,
+                _ if ok(primary, dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                _ if !complex && east_asian(c) && ea_face.is_some_and(|f| ok(f, dc)) => ea_face,
+                Some(SegKey { face: Some(face), .. })
+                    if ok(face, dc)
+                        && (wordcraft_fonts::script_fallbacks(dc).is_empty()
+                            || wordcraft_fonts::fallback_rank(dc, &face.get().family) <= wordcraft_fonts::script_fallbacks(dc).len()) =>
+                {
+                    Some(face)
+                }
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
@@ -170,14 +178,15 @@ impl<'a> Builder<'a> {
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them.
+        // it is installed (or maps to a named platform substitute, e.g. Malgun Gothic → Apple SD
+        // Gothic Neo on macOS) and covers them.
         let primary_ea = rc
             .font_ea
             .as_ref()
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
-            .filter(|r| !r.substituted)
-            .map(|r| r.face);
+            .map(|f| (f, wordcraft_fonts::word::resolve(f, rc.bold, rc.italic)))
+            .filter(|(f, r)| !r.substituted || wordcraft_fonts::word::has_named_substitutes(f))
+            .map(|(_, r)| r.face);
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
@@ -199,9 +208,18 @@ impl<'a> Builder<'a> {
         // ideographs beside a Simplified-Chinese sans for the rest). Whitespace and characters the
         // primary covers don't constrain the choice. `None` keeps the per-character fallback.
         let ea_face: Option<FaceRef> = {
+            let jamo = |ch: char| matches!(u32::from(ch), 0x1100..=0x11FF | 0xA960..=0xA97F | 0xD7B0..=0xD7FF);
+            let ok = |f: FaceRef, ch: char| f.covers(ch) && (!jamo(ch) || f.has_layout_tables());
             let ea: Vec<char> = text
                 .chars()
-                .filter(|c| crate::kinsoku::is_east_asian(*c) && !primary.covers(*c) && !c.is_whitespace() && !c.is_control() && *c != SOFT_HYPHEN)
+                .filter(|c| {
+                    east_asian(*c)
+                        && !ok(primary, *c)
+                        && !primary_ea.is_some_and(|f| ok(f, *c))
+                        && !c.is_whitespace()
+                        && !c.is_control()
+                        && *c != SOFT_HYPHEN
+                })
                 .collect();
             if ea.is_empty() {
                 None

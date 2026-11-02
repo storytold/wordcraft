@@ -227,15 +227,16 @@ pub(super) const RUN_FALLBACK_CACHE_CHARS: usize = 1 << 20;
 
 /// Loaded faces other than `exclude`, in fallback order: for right-to-left text the fonts made
 /// for the script first (so a word isn't split across fonts, which breaks Arabic joining); for a
-/// complex-script character `complex` (Thai, Myanmar…) faces with OpenType layout tables, the
-/// script's own families first, as the per-character fallback ranks them; then the fallback
-/// family, upright, nearest to regular weight.
-pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, complex: Option<char>) -> Vec<&Arc<FontFace>> {
+/// script with preferred families `preferred` (Hangul, Thai, Myanmar…), faces with OpenType layout
+/// tables when `preferred` requires them, and the script's own families ahead of other faces; then
+/// the fallback family, upright, nearest to regular weight.
+pub(super) fn fallback_order(faces: &[Arc<FontFace>], exclude: u32, rtl: bool, preferred: Option<char>) -> Vec<&Arc<FontFace>> {
     let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
     let rank =
         |f: &FontFace| if rtl { RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len()) } else { 0 };
-    let shaping = |f: &FontFace| match complex {
-        Some(c) => (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
+    let complex = preferred.is_some_and(crate::needs_layout_tables);
+    let shaping = |f: &FontFace| match preferred {
+        Some(c) => (complex && !f.has_layout_tables(), crate::fallback_rank(c, &f.family)),
         None => (false, 0),
     };
     order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));

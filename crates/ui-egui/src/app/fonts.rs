@@ -21,7 +21,7 @@ impl WordApp {
     /// those collections are too large to add here.
     pub(super) fn ensure_caption_fonts(&mut self) {
         let stem = self.title_stem();
-        if stem.chars().any(wordcraft_fonts::is_cjk) {
+        if stem.chars().any(theme::is_hangul_or_cjk) {
             self.want_system_cjk = true;
         }
         let new = theme::faces_for_preedit(&stem, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
@@ -39,6 +39,13 @@ impl WordApp {
     /// Borrow the document fonts' fallback faces for them, as the caption does. Looked at once per
     /// document revision; CJK text uses the CJK UI font instead.
     pub(super) fn ensure_comment_fonts(&mut self) {
+        if !self.want_system_cjk
+            && (wordcraft_engine::cmd::smart_art::selected_smart_art(&self.session)
+                .is_some_and(|g| g.items.iter().any(|it| it.text.chars().any(theme::is_hangul_or_cjk)))
+                || self.session.clip_history.items().iter().any(|i| i.preview().chars().any(theme::is_hangul_or_cjk)))
+        {
+            self.want_system_cjk = true;
+        }
         let key = (self.session.document_id(), self.session.rev());
         if self.comment_fonts_for == Some(key) {
             return;
@@ -50,7 +57,13 @@ impl WordApp {
             chars.extend(c.author.chars());
             chars.extend(doc.plain_text(wordcraft_doc::StoryRef::Part(c.part)).chars());
         }
-        if chars.iter().any(|c| wordcraft_fonts::is_cjk(*c)) {
+        if chars.iter().any(|c| theme::is_hangul_or_cjk(*c))
+            || (!self.want_system_cjk
+                && (doc.plain_text(wordcraft_doc::StoryRef::Body).chars().any(theme::is_hangul_or_cjk)
+                    || doc.parts.keys().any(|id| doc.plain_text(wordcraft_doc::StoryRef::Part(*id)).chars().any(theme::is_hangul_or_cjk))
+                    || doc.styles.styles.iter().any(|s| !s.builtin && s.name.chars().any(theme::is_hangul_or_cjk))
+                    || doc.revisions.iter().any(|r| r.author.chars().any(theme::is_hangul_or_cjk))))
+        {
             self.want_system_cjk = true;
         }
         let text: String = chars.into_iter().collect();
@@ -70,7 +83,7 @@ impl WordApp {
     pub(super) fn ensure_recover_fonts(&mut self) {
         use std::hash::{Hash, Hasher};
         let docs = self.session.recovery_documents();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = std::hash::DefaultHasher::new();
         docs.iter().for_each(|d| d.name.hash(&mut hasher));
         let key = hasher.finish();
         if self.recover_fonts_for == Some(key) {
@@ -78,7 +91,7 @@ impl WordApp {
         }
         self.recover_fonts_for = Some(key);
         let chars: std::collections::BTreeSet<char> = docs.iter().flat_map(|d| d.name.chars()).collect();
-        if chars.iter().any(|c| wordcraft_fonts::is_cjk(*c)) {
+        if chars.iter().any(|c| theme::is_hangul_or_cjk(*c)) {
             self.want_system_cjk = true;
         }
         let text: String = chars.into_iter().collect();
@@ -100,7 +113,7 @@ impl WordApp {
         }
         self.recent_fonts_for = self.ui.recent.clone();
         for p in &self.ui.recent {
-            if p.chars().any(wordcraft_fonts::is_cjk) {
+            if p.chars().any(theme::is_hangul_or_cjk) {
                 self.want_system_cjk = true;
             }
             let new = theme::faces_for_preedit(p, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
@@ -139,7 +152,7 @@ impl WordApp {
                 text.push_str(s);
             }
         }
-        if text.chars().any(wordcraft_fonts::is_cjk) {
+        if text.chars().any(theme::is_hangul_or_cjk) {
             self.want_system_cjk = true;
         }
         let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {

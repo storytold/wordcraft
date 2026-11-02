@@ -706,3 +706,77 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// [`named_face`] whose `cmap` maps the sorted `chars` to glyph 1.
+fn named_face_covering(file: &str, family: &str, chars: &[char]) -> Vec<u8> {
+    let mut data = named_face(file, family);
+    let mut sorted = chars.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut cmap = Vec::new();
+    cmap.extend_from_slice(&0u16.to_be_bytes());
+    cmap.extend_from_slice(&1u16.to_be_bytes());
+    cmap.extend_from_slice(&3u16.to_be_bytes());
+    cmap.extend_from_slice(&10u16.to_be_bytes());
+    cmap.extend_from_slice(&12u32.to_be_bytes());
+    cmap.extend_from_slice(&12u16.to_be_bytes());
+    cmap.extend_from_slice(&0u16.to_be_bytes());
+    cmap.extend_from_slice(&(16u32 + 12 * sorted.len() as u32).to_be_bytes());
+    cmap.extend_from_slice(&0u32.to_be_bytes());
+    cmap.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+    for c in sorted {
+        cmap.extend_from_slice(&u32::from(c).to_be_bytes());
+        cmap.extend_from_slice(&u32::from(c).to_be_bytes());
+        cmap.extend_from_slice(&1u32.to_be_bytes());
+    }
+    data.resize(data.len().next_multiple_of(4), 0);
+    let offset = data.len() as u32;
+    let count = u16::from_be_bytes(data[4..6].try_into().unwrap()) as usize;
+    let entry = (0..count).map(|i| 12 + i * 16).find(|i| &data[*i..*i + 4] == b"cmap").unwrap();
+    data[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
+    data[entry + 12..entry + 16].copy_from_slice(&(cmap.len() as u32).to_be_bytes());
+    data.extend_from_slice(&cmap);
+    data
+}
+
+#[test]
+fn hangul_fallback_prefers_korean_faces_over_loaded_chinese_faces_and_requires_jamo_tables() {
+    let chars = ['A', '가', '한', 'ㄱ', '\u{1112}', '\u{1161}'];
+    let dir = std::env::temp_dir().join(format!("dc-sysfonts-{}-hangul", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Catalog a Korean system font on disk, while pre-loading PingFang SC and MS Gothic in memory first.
+    std::fs::write(dir.join("AppleSDGothicNeo.ttf"), named_face_covering("SourceSans3-Regular.ttf", "Apple SD Gothic Neo", &chars)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let primary = db.face("Source Serif 4", "Regular");
+    assert!(db.add_font(named_face_covering("SourceSans3-Regular.ttf", "PingFang SC", &chars)) > 0);
+    assert!(db.add_font(named_face_covering("SourceSans3-Regular.ttf", "MS Gothic", &chars)) > 0);
+    // Even before Apple SD Gothic Neo is loaded, Hangul fallback loads the cataloged Korean face
+    // rather than settling for the already-loaded Chinese/Japanese faces.
+    assert!(!db.is_loaded("Apple SD Gothic Neo"));
+    assert_eq!(db.fallback_for('가', primary.id()).unwrap().family, "Apple SD Gothic Neo");
+    assert_eq!(db.fallback_for('ㄱ', primary.id()).unwrap().family, "Apple SD Gothic Neo");
+    assert_eq!(db.fallback_for_run(&['한', 'ㄱ'], primary.id(), false, false).unwrap().family, "Apple SD Gothic Neo");
+
+    // With system fallback off, loaded Korean faces still outrank earlier-loaded non-Korean faces,
+    // and conjoining Hangul Jamo skip faces that lack OpenType layout tables.
+    let mut bare_kr = named_face_covering("SourceSans3-Regular.ttf", "Apple SD Gothic Neo", &chars);
+    let count = u16::from_be_bytes(bare_kr[4..6].try_into().unwrap()) as usize;
+    for i in (0..count).map(|r| 12 + r * 16) {
+        if &bare_kr[i..i + 4] == b"GSUB" || &bare_kr[i..i + 4] == b"GPOS" {
+            bare_kr[i..i + 4].copy_from_slice(b"xxxx");
+        }
+    }
+    let db2 = FontDb::with_font_dirs(Vec::new());
+    db2.set_system_fallback(false);
+    let p2 = db2.face("Source Serif 4", "Regular");
+    assert!(db2.add_font(named_face_covering("SourceSans3-Regular.ttf", "PingFang SC", &chars)) > 0);
+    assert!(db2.add_font(bare_kr) > 0);
+    assert!(db2.add_font(named_face_covering("SourceSans3-Regular.ttf", "Malgun Gothic", &chars)) > 0);
+    // Precomposed '가' does not require GSUB, so Apple SD Gothic Neo (rank 0) wins over PingFang SC and Malgun Gothic (rank 1).
+    assert_eq!(db2.fallback_for('가', p2.id()).unwrap().family, "Apple SD Gothic Neo");
+    // Conjoining Jamo U+1112 requires GSUB/GPOS, so Malgun Gothic (has GSUB) beats bare Apple SD Gothic Neo and PingFang SC.
+    assert_eq!(db2.fallback_for('\u{1112}', p2.id()).unwrap().family, "Malgun Gothic");
+    assert_eq!(db2.fallback_for_run(&['\u{1112}', '\u{1161}'], p2.id(), false, false).unwrap().family, "Malgun Gothic");
+    let _ = std::fs::remove_dir_all(dir);
+}
