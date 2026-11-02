@@ -118,19 +118,17 @@ impl Reader<'_> {
     /// thousandths of a percent: 10 000 = 10 % opaque): its alpha is multiplied into the pixels
     /// and the result kept as a PNG under its own key (`image5_a10000.png`), made once however
     /// often the picture is used, so layout, screen and PDF need no new path and a save keeps
-    /// the fade. `media` itself when the fade is a no-op or the picture can't be decoded
-    /// (a metafile, an unknown format, too large), tried once per picture.
+    /// the fade. The key is one no other picture has: a file may already be called that.
+    /// `media` itself when the fade is a no-op or the picture can't be decoded (a metafile, an
+    /// unknown format, over [`MAX_FADE_PIXELS`] or the document's [`MAX_FADE_TOTAL_PIXELS`]),
+    /// tried once per picture.
     pub fn faded_media(&mut self, media: &str, amt: i64) -> String {
         if amt >= 100_000 {
             return media.to_string();
         }
         let amt = amt.clamp(0, 100_000);
-        let key = match media.rsplit_once('.') {
-            Some((stem, _)) if !stem.is_empty() => format!("{stem}_a{amt}.png"),
-            _ => format!("{media}_a{amt}.png"),
-        };
-        if self.doc.media.contains_key(&key) {
-            return key;
+        if let Some(key) = self.fades.get(&(media.to_string(), amt)) {
+            return key.clone();
         }
         // One failed decode is enough: a picture used many times is not decoded (and warned
         // about) again.
@@ -138,9 +136,17 @@ impl Reader<'_> {
             return media.to_string();
         }
         let Some(bytes) = self.doc.media.get(media).cloned() else { return media.to_string() };
-        match fade_image(&bytes, amt as f32 / 100_000.0) {
+        match fade_image(&bytes, amt as f32 / 100_000.0, &mut self.fade_budget) {
             Some(png) => {
+                let stem = media.rsplit_once('.').map_or(media, |(stem, _)| if stem.is_empty() { media } else { stem });
+                let mut key = format!("{stem}_a{amt}.png");
+                let mut n = 1;
+                while self.doc.media.contains_key(&key) {
+                    n += 1;
+                    key = format!("{stem}_a{amt}_{n}.png");
+                }
                 self.doc.media.insert(key.clone(), Arc::new(png));
+                self.fades.insert((media.to_string(), amt), key.clone());
                 key
             }
             None => {
@@ -292,18 +298,26 @@ impl Reader<'_> {
     }
 }
 
-/// Longest picture side we are willing to decode for a fade (as the PDF export's limit).
-const MAX_FADE_SIDE: u32 = 30_000;
+/// Most pixels of one picture we are willing to decode for a fade: 256 MiB as RGBA.
+const MAX_FADE_PIXELS: u64 = 64_000_000;
+
+/// Most pixels a document may decode for fades in all: a file can ask for many fades of many
+/// pictures, each under [`MAX_FADE_PIXELS`].
+pub(super) const MAX_FADE_TOTAL_PIXELS: u64 = 4 * MAX_FADE_PIXELS;
 
 /// `data` (any raster format the `image` crate reads) with every pixel's alpha multiplied by
-/// `alpha` (0–1), re-encoded as PNG. `None` when it can't be decoded or is unreasonably large.
-fn fade_image(data: &[u8], alpha: f32) -> Option<Vec<u8>> {
-    let fmt = image::guess_format(data).ok()?;
-    let dec = image::load_from_memory_with_format(data, fmt).ok()?;
-    let (w, h) = (dec.width(), dec.height());
-    if w == 0 || h == 0 || w > MAX_FADE_SIDE || h > MAX_FADE_SIDE {
+/// `alpha` (0–1), re-encoded as PNG. Its size is read from its header, before anything is decoded:
+/// `None` when it can't be decoded, is over [`MAX_FADE_PIXELS`] or more than `budget` has left
+/// (from which its pixels are taken).
+fn fade_image(data: &[u8], alpha: f32, budget: &mut u64) -> Option<Vec<u8>> {
+    let reader = || image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok();
+    let (w, h) = reader()?.into_dimensions().ok()?;
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels == 0 || pixels > MAX_FADE_PIXELS || pixels > *budget {
         return None;
     }
+    *budget -= pixels;
+    let dec = reader()?.decode().ok()?;
     let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
     let mut rgba = dec.into_rgba8();
     for px in rgba.pixels_mut() {
@@ -312,4 +326,44 @@ fn fade_image(data: &[u8], alpha: f32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     image::DynamicImage::ImageRgba8(rgba).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::new(w, h).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    }
+
+    /// A BMP header alone: it says how big the picture is, with no pixels to decode.
+    fn bmp_header(w: u32, h: u32) -> Vec<u8> {
+        let mut b = b"BM".to_vec();
+        b.extend_from_slice(&[0; 8]);
+        b.extend_from_slice(&54u32.to_le_bytes());
+        b.extend_from_slice(&40u32.to_le_bytes());
+        b.extend_from_slice(&w.to_le_bytes());
+        b.extend_from_slice(&h.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&24u16.to_le_bytes());
+        b.extend_from_slice(&[0; 24]);
+        b
+    }
+
+    /// A picture's size is judged from its header, and the budget is only spent on what fits.
+    #[test]
+    fn fades_are_bounded_before_decoding() {
+        let mut budget = MAX_FADE_TOTAL_PIXELS;
+        assert_eq!(fade_image(&bmp_header(8001, 8000), 0.5, &mut budget), None);
+        assert_eq!(budget, MAX_FADE_TOTAL_PIXELS, "too large: nothing is spent");
+        // Within the limit, so the header is believed and only the decode fails.
+        assert_eq!(fade_image(&bmp_header(100, 100), 0.5, &mut budget), None);
+        assert_eq!(budget, MAX_FADE_TOTAL_PIXELS - 10_000);
+        let mut budget = 4;
+        assert!(fade_image(&png(2, 2), 0.5, &mut budget).is_some());
+        assert_eq!(budget, 0);
+        assert_eq!(fade_image(&png(1, 1), 0.5, &mut budget), None, "the document's budget is spent");
+    }
 }

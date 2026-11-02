@@ -73,6 +73,10 @@ pub(crate) struct Reader<'p> {
     media_by_path: HashMap<String, String>,
     /// Pictures an `a:alphaModFix` could not fade (undecodable): not tried again.
     unfadable: HashSet<String>,
+    /// The faded copy made of each picture at each fade (`faded_media`).
+    fades: HashMap<(String, i64), String>,
+    /// Pixels this document may still decode for fades (see `MAX_FADE_TOTAL_PIXELS`).
+    fade_budget: u64,
     hf_by_path: HashMap<String, u32>,
     /// Header/footer parts being read right now (see [`MAX_HF_DEPTH`]).
     hf_depth: usize,
@@ -157,6 +161,8 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
         unfadable: HashSet::new(),
+        fades: HashMap::new(),
+        fade_budget: parts::MAX_FADE_TOTAL_PIXELS,
         hf_by_path: HashMap::new(),
         hf_depth: 0,
         footnotes: HashMap::new(),

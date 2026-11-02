@@ -978,6 +978,31 @@ fn alpha_mod_fix_fades_the_picture() {
     let Some(InlineObject::Image { media, .. }) = paras(&d)[0].objects.first() else { panic!() };
     assert_eq!(media, "pic.png");
     assert_eq!(d.media.len(), 1);
+    // A file already called what the faded copy would be stays that file; the copy gets its own key.
+    let mut other = Vec::new();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255])))
+        .write_to(&mut std::io::Cursor::new(&mut other), image::ImageFormat::Png)
+        .unwrap();
+    let doc = format!(
+        r#"<w:document {W_NS}><w:body><w:p>{}{}</w:p></w:body></w:document>"#,
+        pic("").replace("rIdImg", "rIdOther"),
+        pic(r#"<a:alphaModFix amt="25000"/>"#)
+    );
+    let r = rels(&[("rIdImg", "image", "media/pic.png"), ("rIdOther", "image", "media/pic_a25000.png")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", r.as_bytes()),
+        ("word/media/pic.png", &png),
+        ("word/media/pic_a25000.png", &other),
+    ]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let media: Vec<&str> =
+        paras(&d)[0].objects.iter().map(|o| if let InlineObject::Image { media, .. } = o { media.as_str() } else { "?" }).collect();
+    assert_eq!(media, ["pic_a25000.png", "pic_a25000_2.png"]);
+    assert_eq!(d.media.get("pic_a25000.png").unwrap().as_slice(), &other[..]);
+    let faded = image::load_from_memory(d.media.get("pic_a25000_2.png").unwrap()).unwrap().into_rgba8();
+    assert_eq!(faded.get_pixel(0, 0).0, [255, 0, 0, 64]);
 }
 
 #[test]
