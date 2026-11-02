@@ -22,8 +22,11 @@ struct SuccessContext<'a> {
 
 /// What the front end saves between runs from the session (`WordApp::prefs`) and every later
 /// document is edited with: the user name and initials, the editing preferences (AutoCorrect,
-/// the default proofing language…), the keyboard shortcuts, the ribbon and Check Spelling as You
-/// Type. [`Session::preferences_locked`] keeps commands from changing it (#3622).
+/// the default proofing language…), the keyboard shortcuts, the ribbon, Check Spelling as You
+/// Type, the Read Aloud speed and citation skipping, and the pens added to the Draw gallery.
+/// [`Session::preferences_locked`] keeps commands from changing it (#3622). View switches the front
+/// end also keeps (the Navigation pane, Dark page, where the Styles pane sits) aren't included:
+/// they change how the window looks, not what is written.
 #[derive(PartialEq)]
 struct KeptPrefs {
     author: String,
@@ -32,6 +35,9 @@ struct KeptPrefs {
     keymap: crate::KeyMap,
     ribbon: crate::RibbonLayout,
     proofing: bool,
+    read_aloud_rate: f32,
+    skip_citations: bool,
+    pens: Vec<crate::cmd::draw::CustomPen>,
 }
 
 struct ElsewhereContext {
@@ -52,6 +58,9 @@ impl Session {
             keymap: self.keymap.clone(),
             ribbon: self.ribbon.clone(),
             proofing: self.view.proofing,
+            read_aloud_rate: self.read_aloud.rate(),
+            skip_citations: self.read_aloud.skip_citations,
+            pens: self.view.draw.pens.clone(),
         }
     }
 
@@ -60,13 +69,16 @@ impl Session {
         if kept.prefs.dictionaries_folder != self.prefs.dictionaries_folder {
             crate::cmd::options::use_dictionaries_folder(kept.prefs.dictionaries_folder.as_deref());
         }
-        let KeptPrefs { author, initials, prefs, keymap, ribbon, proofing } = kept;
+        let KeptPrefs { author, initials, prefs, keymap, ribbon, proofing, read_aloud_rate, skip_citations, pens } = kept;
         self.author = author;
         self.initials = initials;
         self.prefs = prefs;
         self.keymap = keymap;
         self.ribbon = ribbon;
         self.view.proofing = proofing;
+        self.read_aloud.set_rate(read_aloud_rate);
+        self.read_aloud.skip_citations = skip_citations;
+        self.view.draw.pens = pens;
     }
 
     /// With the preferences locked (`before` taken), puts back what the command changed and turns

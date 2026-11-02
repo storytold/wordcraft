@@ -6,9 +6,22 @@ use serde_json::{Value, json};
 
 use crate::{CmdError, KeyMap, Prefs, RibbonLayout, Session};
 
-/// What the desktop app saves between runs from the session (`WordApp::prefs`).
-fn kept(s: &Session) -> (String, String, Prefs, KeyMap, RibbonLayout, bool) {
-    (s.author.clone(), s.initials.clone(), s.prefs.clone(), s.keymap.clone(), s.ribbon.clone(), s.view.proofing)
+/// What the desktop app saves between runs from the session (`WordApp::prefs`), apart from the
+/// view switches (Navigation pane, Dark page, Styles pane), which the lock leaves alone.
+type Kept = (String, String, Prefs, KeyMap, RibbonLayout, bool, f32, bool, Vec<crate::cmd::draw::CustomPen>);
+
+fn kept(s: &Session) -> Kept {
+    (
+        s.author.clone(),
+        s.initials.clone(),
+        s.prefs.clone(),
+        s.keymap.clone(),
+        s.ribbon.clone(),
+        s.view.proofing,
+        s.read_aloud.rate(),
+        s.read_aloud.skip_citations,
+        s.view.draw.pens.clone(),
+    )
 }
 
 fn locked() -> Session {
@@ -34,6 +47,9 @@ fn changes() -> Vec<(&'static str, Value)> {
         ("review.proofing", json!({})),
         ("review.wordCount", json!({"includeTextBoxes": false})),
         ("review.language", json!({"lang": "pl-PL", "default": true})),
+        ("draw.addPen", json!({"kind": "highlighter", "color": "00FF00", "width": 6})),
+        ("readAloud.speed", json!({"value": 2})),
+        ("readAloud.skipCitations", json!({})),
     ]
 }
 

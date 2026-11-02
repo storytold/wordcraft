@@ -141,17 +141,27 @@ the same rule (unsaved changes need `{"force": true}`), and the active window st
 
 ### Preferences
 
-Requests can't change what the app saves for later documents: the user name and initials,
-AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options
-settings, including the ones the window keeps itself (`ui.theme`, `ui.startScreen`,
-`ui.language`…). A command that would, by any method (`engine.execute`, the bare id, or with
-`doc`), is refused with an error that names `--allow-preference-changes`, and what it did is undone
-(#3622), except words it added to the user dictionary (`file.options` `addWords`,
-`review.addToDictionary`), which the guard doesn't cover yet. An agent reading a document could
-otherwise be steered by text in it into leaving an AutoCorrect entry or a rebound Save shortcut
-behind. Asking for a setting without changing it still answers. Start the app with
+Commands can't change what the app saves for later documents: the user name and initials,
+AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, the File › Options settings
+(including the ones the window keeps itself: `ui.theme`, `ui.startScreen`, `ui.language`…), the
+Read Aloud settings and the pens added to the Draw gallery. A command that would, sent by any
+method (`engine.execute`, the bare id, or with `doc`), is refused with an error that names
+`--allow-preference-changes`, and what that command did is undone (#3622). An agent reading a
+document could otherwise be steered by text in it into leaving an AutoCorrect entry or a rebound
+Save shortcut behind. Asking for a setting without changing it still answers. Start the app with
 `wordcraft --control 7981 --allow-preference-changes` to allow changes. The user's own changes, in
 the window, are never affected.
+
+What the lock doesn't cover yet:
+
+- Synthetic input (`ui.click`, `ui.clickText`, `ui.key`, `ui.text`, `ui.drag`) is played back
+  after the request returns, so clicking through File › Options can still change a setting.
+- Words added to the user dictionary (`file.options` `addWords`, `review.addToDictionary`) stay,
+  even when the same request is refused for another setting.
+- A macro (`tools.macros` `run`) whose later step is refused keeps its earlier steps' edits, as
+  it does when any step fails.
+- View switches the app also remembers (the Navigation pane, Dark page, where panes sit) are not
+  preferences and aren't locked.
 
 ### Native printing
 
