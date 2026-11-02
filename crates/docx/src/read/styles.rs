@@ -308,14 +308,26 @@ impl Reader<'_> {
         if let Some(s) = l.child_val("w:start").and_then(u32_of) {
             lv.start = s;
         }
-        if let Some(f) = l.child_val("w:numFmt") {
-            lv.format = NumFormat::from_ooxml(f);
+        if let Some(nf) = l.child("w:numFmt") {
+            if let Some(f) = nf.attr("w:val") {
+                lv.format = NumFormat::from_ooxml(f);
+            }
+            // MS-OI29500 17.9.17: a custom pattern may ride directly on w:numFmt without the
+            // w14 AlternateContent wrapper (some generators write it that way; Word accepts it).
+            if nf.attr("w:val") == Some("custom")
+                && let Some(p) = nf.attr("w:format")
+            {
+                lv.custom_format = Some(p.chars().take(256).collect());
+            }
         }
         // A Word 2010 custom number format: `w:format` rides on the AlternateContent Choice that
         // requires w14; the Fallback's numFmt is what pre-2010 readers show, and is what we use
         // whenever the pattern can't be rendered (doc numbering::custom_format_label).
         if let Some(ac) = l.child("mc:AlternateContent") {
-            if let Some(p) = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt")).and_then(|f| f.attr("w:format")) {
+            if let Some(f) = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt"))
+                && f.attr("w:val") == Some("custom")
+                && let Some(p) = f.attr("w:format")
+            {
                 lv.custom_format = Some(p.chars().take(256).collect());
             }
             if let Some(f) = ac.child("mc:Fallback").and_then(|fb| fb.child_val("w:numFmt")) {

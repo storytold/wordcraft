@@ -399,7 +399,7 @@ impl Counters {
                     _ if def.legal => NumFormat::Decimal,
                     f => f,
                 };
-                let custom = level_def(k).and_then(|l| l.custom_format.as_deref());
+                let custom = level_def(k).and_then(|l| l.custom_format.as_deref()).filter(|_| !def.legal);
                 label.push_str(&custom_format_label(custom, fmt, val));
                 if label.len() > MAX_LABEL_BYTES {
                     break;
@@ -426,9 +426,10 @@ pub fn custom_format_label(custom: Option<&str>, fallback: NumFormat, n: u32) ->
 }
 
 /// The zero-pad width of a Word custom format like "0001, 0002, 0003, ..." — `None` unless every
-/// sample is an equal-width digit string starting with a zero.
+/// sample is an equal-width digit string starting with a zero. A trailing ellipsis ("..." or the
+/// one-character "…", both written by Word-family producers) is a continuation marker, not a sample.
 fn custom_pad_width(pattern: &str) -> Option<usize> {
-    let samples: Vec<&str> = pattern.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "...").collect();
+    let samples: Vec<&str> = pattern.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "..." && *s != "…").collect();
     let first = *samples.first()?;
     let width = first.chars().count();
     if !matches!(width, 2..=9) || !first.starts_with('0') {
@@ -467,6 +468,18 @@ mod tests {
             c.next_label(&n, id, 0);
         }
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0013]");
+    }
+
+    #[test]
+    fn a_custom_number_format_ellipsis_is_not_a_sample() {
+        // The documented form uses the one-character ellipsis ("0001, 0002, …"); it marks the
+        // continuation and must not defeat the padding the numeric samples declare.
+        for pattern in ["0001, 0002, …", "0001, 0002, ...", "0001, 0002,…"] {
+            let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some(pattern.into()), ..Level::default() });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0001]", "{pattern}");
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0002]", "{pattern}");
+        }
     }
 
     #[test]
@@ -676,6 +689,22 @@ mod tests {
         assert_eq!(c.next_label(&n, id, 1).unwrap().0, "1.1.");
         assert_eq!(c.next_label(&n, id, 2).unwrap().0, "1.1.1.");
         assert_eq!(c.next_label(&n, id, 1).unwrap().0, "1.2.");
+    }
+
+    #[test]
+    fn legal_numbering_suppresses_custom_format() {
+        // A patent's [0001] level plus a legal child level: Word shows [1.1], not [0001.1].
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0] =
+                Level { format: NumFormat::Decimal, text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() };
+            a.levels[1] = Level { format: NumFormat::Decimal, text: "[%1.%2]".into(), legal: true, ..Level::default() };
+        }
+        let mut c = Counters::default();
+        let mut l = |lv| c.next_label(&n, id, lv).unwrap().0;
+        assert_eq!(l(0), "[0001]");
+        assert_eq!(l(1), "[1.1]", "legal numbering shows referenced levels in decimal, custom format included");
     }
 
     #[test]
