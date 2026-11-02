@@ -1,5 +1,7 @@
 use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
 use super::{Arc, Document, Session};
+use crate::cmd::text::LeadIn;
+use wordcraft_doc::props::CharProps;
 
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
@@ -30,14 +32,15 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo {
-            label: label.to_string(),
-            doc,
-            sel,
-            pending: self.pending.clone(),
-            column: None,
-            lead_in: self.lead_in.clone(),
-        }));
+        let typing = (self.pending.clone(), self.lead_in.clone());
+        self.push_undo_typing(label, doc, sel, typing);
+    }
+
+    /// [`Self::push_undo`] with the typing formatting and list-item lead-in that Undo puts back:
+    /// those in effect before the automatic change, when the change ended a lead-in.
+    pub(crate) fn push_undo_typing(&mut self, label: &str, doc: Document, sel: Selection, typing: (Option<CharProps>, Option<LeadIn>)) {
+        let (pending, lead_in) = typing;
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending, column: None, lead_in }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;

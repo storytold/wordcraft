@@ -31,6 +31,7 @@ fn remove_number(s: &mut Session, f: &Pos, n: NumRef) -> CmdResult {
 
 fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     s.pending = None;
     if !s.sel.is_collapsed() {
         let effect = delete_selection_effect(s)?;
@@ -61,6 +62,9 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         }
         s.sel = Selection { anchor: a, focus: f };
         let effect = delete_selection_effect(s)?;
+        if let Some(l) = lead_in {
+            super::lead_in::keep_after_backspace(s, l);
+        }
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
             content_changed: effect.content_changed,

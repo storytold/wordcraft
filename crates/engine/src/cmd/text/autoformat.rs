@@ -85,6 +85,8 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let f = s.sel.focus.clone();
     let typed = s.doc.para_at(&f).cloned().map(|p| (p, s.sel.clone()));
     let leading = super::lead_in::is_active(s);
+    // What typing used before an automatic change, for Undo of a change that ends a lead-in.
+    let typing = (s.pending.clone(), s.lead_in.clone());
     // A list label ("a. ") becomes a list before AutoCorrect could capitalise it.
     let listed = text == " " && s.prefs.autocorrect.enabled && list_autoformat(s)?;
     if !listed {
@@ -117,7 +119,8 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         if let Ok(p) = doc.para_mut(f.story, &f.path) {
             *p = para;
             p.touch();
-            s.push_undo("AutoFormat", doc, sel);
+            let typing = if leading && s.lead_in.is_none() { typing } else { (s.pending.clone(), s.lead_in.clone()) };
+            s.push_undo_typing("AutoFormat", doc, sel, typing);
             // Undo right after it makes the capitalised word an exception.
             let depth = s.undo_steps_so_far();
             if let Some(c) = s.autocap.as_mut().filter(|c| c.depth == u64::MAX) {

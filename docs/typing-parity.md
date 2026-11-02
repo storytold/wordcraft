@@ -295,8 +295,11 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   item, setting the caret and pasting end it (`formatting_picked_or_a_caret_move_ends_the_lead_in`,
   `pasted_text_ends_the_lead_in`); text a command types, such as Insert › Date & Time, ends the
   lead-in at its first punctuation character like typed text
-  (`text_a_command_types_ends_the_lead_in_at_its_punctuation`); Undo and Redo take it with the typed text
-  (`undo_and_redo_take_the_repeated_lead_in_with_the_typing`); with Track Changes on the text is a
+  (`text_a_command_types_ends_the_lead_in_at_its_punctuation`); Backspace inside the lead-in keeps it
+  (`backspace_in_a_lead_in_keeps_the_lead_in`); Undo and Redo take it with the typed text, also Undo
+  of a period AutoFormat added after two spaces
+  (`undo_and_redo_take_the_repeated_lead_in_with_the_typing`,
+  `typing_after_undo_or_redo_in_a_lead_in_goes_on_with_the_lead_in`); with Track Changes on the text is a
   tracked insertion, and while formatting is limited to the document's styles nothing is repeated
   (`a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
