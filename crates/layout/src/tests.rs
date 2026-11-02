@@ -8973,6 +8973,62 @@ fn keep_with_next_chain_carries_over_when_the_last_paragraph_cannot_start() {
     assert_eq!(pages(fit, false), [0, 0, 0, 1], "without the control one line stays: {fit}");
 }
 
+/// Keep with next stops at a next-page section break, measured in Word for Windows (Microsoft 365,
+/// through Microsoft Graph): the paragraph that closes a section stays at the bottom of its page
+/// even though the next section's first line won't fit there, and so does a kept heading before
+/// it. WordCraft moved it to a page of its own, and the next section then started one more: the
+/// FCFCOA Financial Questionnaire's blank page 2 and the consent orders kit's blank page after its
+/// two-column page, where the empty paragraph holding the section break has a heading style with
+/// keep with next.
+#[test]
+fn keep_with_next_stops_at_a_next_page_section_break() {
+    use wordcraft_doc::section::SectionProps;
+    // Pages of the kept paragraph(s) and of the next section's first line, and the page count.
+    let pages = |fillers: usize, heading: bool, text: &str, section: bool, kept: bool| {
+        let mut d = Document::new();
+        let plain = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        let para = |text: &str, keep: bool| {
+            let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+            x.props = ParaProps { keep_next: Some(keep), ..plain.clone() };
+            x
+        };
+        d.body = (0..fillers).map(|i| wordcraft_doc::para_block(para(&format!("F{i}"), false))).collect();
+        if heading {
+            d.body.push(wordcraft_doc::para_block(para("HEADING", kept)));
+        }
+        let mut closing = para(text, kept);
+        if section {
+            closing.section = Some(Box::new(SectionProps::default()));
+        }
+        d.body.push(wordcraft_doc::para_block(closing));
+        d.body.push(wordcraft_doc::para_block(para("NEXT", false)));
+        d.body.push(wordcraft_doc::para_block(para("MORE", false)));
+        let l = lay(&d);
+        let n = d.body.len();
+        let kept_pages: Vec<usize> = (fillers..n - 2).map(|b| l.caret(&Pos::body(b, 0)).unwrap().page).collect();
+        (kept_pages, l.caret(&Pos::body(n - 2, 0)).unwrap().page, l.pages.len())
+    };
+    // The filler count that leaves room for one more line, and not for the next one.
+    let fit =
+        (20..100).find(|n| pages(*n, false, "CLOSING", false, false) == (vec![0], 1, 2)).expect("a filler count that fills the page but one line");
+    // Without the section break, keep with next moves it over (the control).
+    assert_eq!(pages(fit, false, "CLOSING", false, true), (vec![1], 1, 2), "keep with next moves it");
+    // Closing a section, it stays: with text, or empty (the court forms).
+    assert_eq!(pages(fit, false, "CLOSING", true, true), (vec![0], 1, 2), "with text");
+    assert_eq!(pages(fit, false, "", true, true), (vec![0], 1, 2), "empty");
+    // A kept heading before the empty closing paragraph stays with it: the empty paragraph stays
+    // on a full page anyway, so the heading needs room only for itself.
+    assert_eq!(pages(fit, true, "", true, true), (vec![0, 0], 1, 2), "a kept heading, one line of room");
+    assert_eq!(pages(fit - 1, true, "", true, true), (vec![0, 0], 1, 2), "a kept heading, two lines of room");
+    assert_eq!(pages(fit - 1, true, "CLOSING", true, true), (vec![0, 0], 1, 2), "a kept heading, closing text");
+}
+
 /// Keep lines together on the paragraph after a kept heading: when the whole paragraph does
 /// not fit below the heading, both move over. Word does not leave a kept heading holding part
 /// of a paragraph that keep lines together will not split (#966).

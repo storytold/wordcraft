@@ -11,6 +11,7 @@ use super::{
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
+use wordcraft_doc::section::SectionStart;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
@@ -720,6 +721,11 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let before = f.gap_before(ctx, pb, broke_before);
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
+    // The paragraph that closes a section before a new page keeps with nothing (see
+    // `keeps_next`). (Rare: only then is its shared layout copied.)
+    if f.pl.rp.keep_next && !keeps_next(ctx, p, block, f.pl.rp.keep_next) {
+        Arc::make_mut(&mut f.pl).rp.keep_next = false;
+    }
     let applied_before = f.keep_together(ctx, pb, rooms, before);
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
@@ -869,6 +875,26 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     after
 }
 
+/// Whether body paragraph `block` keeps with the one after it. Keep with next stops at a
+/// next-page section break: measured in Word, the paragraph that closes a section stays at the
+/// bottom of its page when the next section starts a new page, and a kept paragraph before it keeps
+/// with it there. Moving it made a page of its own, and the next section then started one more: a
+/// blank page (the FCFCOA court forms end sections with an empty paragraph in a heading style that
+/// keeps with next).
+fn keeps_next(ctx: &Ctx, p: &Paragraph, block: usize, keep_next: bool) -> bool {
+    keep_next && !(p.section.is_some() && closes_before_new_page(ctx, block))
+}
+
+/// Whether body paragraph `block` carries a section break whose next section starts a new page
+/// (in a view with pages).
+fn closes_before_new_page(ctx: &Ctx, block: usize) -> bool {
+    if matches!(ctx.opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+        return false;
+    }
+    let sections = ctx.doc.sections();
+    sections.iter().position(|(end, _)| *end == block).and_then(|i| sections.get(i + 1)).is_some_and(|(_, s)| s.start != SectionStart::Continuous)
+}
+
 /// The room the paragraphs after `block` need on the page for keep with next: enough of the
 /// next one to start there — its first line, two of its lines with widow/orphan control (it
 /// doesn't leave a single line at the bottom of a page; it moves over whole instead), all three
@@ -911,7 +937,12 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
-            if pl.rp.keep_next && depth < 8 {
+            // An empty paragraph closing a section before a new page stays on its page whatever
+            // room is left (`Flow::stays_at_bottom`), so it needs none here.
+            if p.text.is_empty() && p.section.is_some() && closes_before_new_page(ctx, block + 1) {
+                return 0.0;
+            }
+            if keeps_next(ctx, p, block + 1, pl.rp.keep_next) && depth < 8 {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
                 pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
             } else {
