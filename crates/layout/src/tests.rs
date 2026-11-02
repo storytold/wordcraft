@@ -12762,3 +12762,36 @@ fn header_margin_table_area() {
         }
     }
 }
+
+#[test]
+fn korean_text_wraps_by_eojeol_and_emergency_breaks_overlong_words() {
+    // 1. Default word_wrap wraps Korean at spaces (어절), never splitting "문서입니다." across lines.
+    let text = "한국어 문서입니다. macOS에서 Word를 2026년에 작성합니다.";
+    let mut d = Document::from_text(text);
+    d.last_section.page_w = 240.0;
+    d.last_section.margin_left = 20.0;
+    d.last_section.margin_right = 20.0;
+    let l = lay(&d);
+    let para =
+        l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert!(para.lines.len() >= 2, "narrow column wraps Korean paragraph across multiple lines");
+    for line in para.lines.iter().skip(1) {
+        let prev = text[..line.start].chars().next_back();
+        assert_eq!(prev, Some(' '), "each wrapped line starts right after a space: {:?}", &text[line.start..line.stop]);
+    }
+
+    // 2. An overlong unspaced Korean token wider than the column still emergency-breaks cleanly at
+    // syllable boundaries without overflowing or looping.
+    let overlong = "대한민국헌법제1조제1항대한민국은민주공화국이다대한민국의주권은국민에게있고모든권력은국민으로부터나온다";
+    let mut d_long = Document::from_text(overlong);
+    d_long.last_section.page_w = 180.0;
+    d_long.last_section.margin_left = 20.0;
+    d_long.last_section.margin_right = 20.0;
+    let l_long = lay(&d_long);
+    let p_long =
+        l_long.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert!(p_long.lines.len() >= 3, "overlong unspaced Korean word emergency-wraps across lines");
+    for line in &p_long.lines {
+        assert!(overlong.is_char_boundary(line.start) && overlong.is_char_boundary(line.stop));
+    }
+}

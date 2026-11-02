@@ -55,20 +55,72 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
             }
         }
     }
-    if !word_wrap {
+    if word_wrap {
+        // Word's default `<w:wordWrap/>`: Korean wraps by space-delimited 어절 (like Latin words),
+        // not between syllables as UAX #14's `H2`/`H3`/`JL`/`JV`/`JT` classes allow. Keep breaks
+        // after spaces, hyphens and CJK ideographs (`漢字|한글`, `서울-|부산`), while keeping mixed
+        // Latin/digit+Hangul words (`macOS에서`, `Word를`, `2026년에`) and attached brackets/percent
+        // (`(한국어)를`, `한국어(Korean)`, `50%가`) intact.
+        opps.retain(|&i| {
+            let (Some(p), Some(n)) = (prev_char(i), next_char(i)) else { return true };
+            if is_non_ea_word_char(p) && is_non_ea_word_char(n) && (is_hangul(p) || is_hangul(n)) {
+                return false;
+            }
+            if is_hangul(p) && matches!(n, '.' | ',' | '!' | '?' | ':' | ';' | '…' | ')' | ']' | '}' | '”' | '’' | '(' | '[' | '{') {
+                return false;
+            }
+            if matches!(p, ')' | ']' | '}' | '%' | '‰' | '」' | '』' | '）' | '〉' | '》' | '】' | '〕' | '〗' | '〙' | '〛' | '］' | '｝')
+                && is_hangul(n)
+            {
+                return false;
+            }
+            true
+        });
+    } else {
         // Between any two letters or digits that are not East Asian (whole graphemes, so accents
-        // stay with their letters).
-        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c));
+        // and NFD conjoining Hangul Jamo stay with their syllables).
+        let breakable = |g: &str| g.chars().next().is_some_and(|c| is_hangul(c) || (c.is_alphanumeric() && !is_east_asian(c)));
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
-            if prev.is_some_and(latin) && latin(g) {
+            if prev.is_some_and(breakable) && breakable(g) {
                 opps.push(i);
             }
             prev = Some(g);
         }
+        if kinsoku {
+            opps.retain(|&i| {
+                let (Some(p), Some(n)) = (prev_char(i), next_char(i)) else { return true };
+                !(matches!(p, ')' | ']' | '}' | '%' | '‰' | '」' | '』' | '）' | '〉' | '》' | '】' | '〕' | '〗' | '〙' | '〛' | '］' | '｝')
+                    && is_hangul(n))
+            });
+        }
     }
+    // Never split a conjoining Hangul Jamo syllable across lines, regardless of kinsoku/word_wrap.
+    opps.retain(|&i| !prev_char(i).zip(next_char(i)).is_some_and(|(p, n)| splits_conjoining_jamo(p, n)));
     opps.sort_unstable();
     opps.dedup();
+}
+
+/// A Hangul or non-East-Asian word character (letters, digits and combining marks/joiners,
+/// excluding U+200B zero-width space so explicit break opportunities stay intact).
+fn is_non_ea_word_char(c: char) -> bool {
+    is_hangul(c)
+        || (!is_east_asian(c)
+            && (c.is_alphanumeric()
+                || (!c.is_ascii()
+                    && !c.is_control()
+                    && c != '\u{200B}'
+                    && matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::NSM | unicode_bidi::BidiClass::BN))))
+}
+
+/// Whether breaking between `prev` and `next` splits a conjoining Hangul Jamo syllable (`L+V+T`).
+fn splits_conjoining_jamo(prev: char, next: char) -> bool {
+    let (p, n) = (u32::from(prev), u32::from(next));
+    let is_l = |u: u32| matches!(u, 0x1100..=0x115F | 0xA960..=0xA97F);
+    let is_v = |u: u32| matches!(u, 0x1160..=0x11A7 | 0xD7B0..=0xD7C6);
+    let is_t = |u: u32| matches!(u, 0x11A8..=0x11FF | 0xD7CB..=0xD7FF);
+    let is_s = |u: u32| matches!(u, 0xAC00..=0xD7A3);
+    (is_l(p) && (is_l(n) || is_v(n))) || ((is_v(p) || is_s(p)) && (is_v(n) || is_t(n))) || (is_t(p) && is_t(n))
 }
 
 /// Which of two adjacent characters is the Asian one, when the paragraph's automatic spacing puts
@@ -148,5 +200,57 @@ mod tests {
         assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
+    }
+
+    #[test]
+    fn korean_word_wrap_breaks_by_eojeol_and_preserves_syllables_when_off() {
+        // Default word_wrap == true: Korean wraps at spaces (어절), never between syllables or before trailing punctuation.
+        assert_eq!(breaks("한국어 문서입니다.", true, true), ["문"]);
+        assert_eq!(breaks("한국어 문서입니다.", false, true), ["문"]);
+        // Mixed English/digit stems + Korean particles stay together as single 어절 units.
+        assert_eq!(breaks("macOS에서 Word를 2026년에", true, true), ["W", "2"]);
+        // CJK ideographs still break before Hangul, while Hangul syllables stay joined.
+        assert_eq!(breaks("漢字한글", true, true), ["字", "한"]);
+        // Hyphens allow breaking before the post-hyphen Hangul word.
+        assert_eq!(breaks("서울-부산", true, true), ["부"]);
+        // Opening/closing brackets and quotes stay attached to the enclosed Korean word.
+        assert!(breaks("(한국어)", true, true).is_empty());
+        assert!(breaks("“한국어”", true, true).is_empty());
+        assert!(breaks("(한국어)를", true, true).is_empty());
+        assert_eq!(breaks("안녕 (한국어) 문서", true, true), ["(", "문"]);
+        assert_eq!(breaks("안녕 “한국어” 문서", true, true), ["“", "문"]);
+        // NFD decomposed Hangul ("한글 문서") also wraps only at spaces when word_wrap == true.
+        let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF} \u{1106}\u{116E}\u{11AB}\u{1109}\u{1165}";
+        assert_eq!(breaks(nfd, true, true), ["\u{1106}"]);
+        // word_wrap == false (`<w:wordWrap w:val="0"/>`): syllable breaks are permitted, while
+        // kinsoku still protects punctuation and NFD conjoining Jamo never split mid-syllable.
+        assert_eq!(breaks("한국어 문서입니다.", true, false), ["국", "어", "문", "서", "입", "니", "다"]);
+        assert_eq!(breaks("한국어。", true, false), ["국", "어"]);
+        assert_eq!(breaks(nfd, true, false), ["\u{1100}", "\u{1106}", "\u{1109}"]);
+        assert_eq!(breaks(nfd, false, false), ["\u{1100}", "\u{1106}", "\u{1109}"]);
+    }
+
+    #[test]
+    fn korean_word_wrap_keeps_braces_and_cjk_closing_brackets_attached() {
+        // ASCII opening brace `{` after Hangul stays attached just like `(` and `[`.
+        assert!(breaks("한글{중괄호}", true, true).is_empty());
+        assert!(breaks("한글{중괄호}를", true, true).is_empty());
+        assert_eq!(breaks("안녕 한글{중괄호} 문서", true, true), ["한", "문"]);
+
+        // Korean particles after CJK closing brackets and corner quotes stay attached.
+        for token in ["「한글」을", "『한국어』가", "《문서》를", "（한글）을", "【제목】이", "〈항목〉은", "〔부록〕에"]
+        {
+            assert!(breaks(token, true, true).is_empty(), "{token}: {:?}", breaks(token, true, true));
+        }
+        assert_eq!(breaks("안녕 「한글」을 읽다", true, true), ["「", "읽"]);
+        assert_eq!(breaks("안녕 『한국어』가 좋다", true, true), ["『", "좋"]);
+        // With `word_wrap = false` and `kinsoku = true`, inter-syllable breaks remain permitted
+        // while closing-bracket + Hangul particle boundaries stay protected.
+        assert_eq!(breaks("「조항」을", true, false), ["항"]);
+        assert!(breaks("「조항」을", false, false).contains(&"을".to_string()));
+        // Explicit U+200B zero-width space keeps its break opportunity under `word_wrap = true`,
+        // whereas U+2060 word joiner suppresses breaking.
+        assert_eq!(breaks("한국어\u{200B}단어", true, true), ["단"]);
+        assert!(breaks("한국어\u{2060}단어", true, true).is_empty());
     }
 }
