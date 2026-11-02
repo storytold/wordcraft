@@ -652,4 +652,18 @@ mod tests {
         s.run("para.bullets", &json!({})).unwrap();
         assert_eq!(s.run("para.getNumberingValue", &json!({})).unwrap(), json!({"value": null}));
     }
+
+    /// Review of #5245: restarting or setting the value of a nested item leaves the levels
+    /// above it counting on, so the next top-level item after it is still 3.
+    #[test]
+    fn restarting_a_nested_item_keeps_the_levels_above_counting() {
+        for (cmd, args) in [("para.restartNumbering", json!({})), ("para.setNumberingValue", json!({"value": 5}))] {
+            let mut s = numbered_at(&["One", "Two", "Sub", "Three"], &[(0, "numbered"), (1, "numbered"), (2, "numbered"), (3, "numbered")]);
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+            s.run("para.listLevel", &json!({"level": 1})).unwrap();
+            s.run(cmd, &args).unwrap();
+            let got = shown(&mut s);
+            assert_eq!((got[0].as_deref(), got[1].as_deref(), got[3].as_deref()), (Some("1."), Some("2."), Some("3.")), "{cmd}: {got:?}");
+        }
+    }
 }

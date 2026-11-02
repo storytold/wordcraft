@@ -22,7 +22,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::TableProperties { .. } => table_properties_dialog(app, ui, d),
         Dialog::CellMargins { .. } => cell_margins_arm(app, ui, d),
         Dialog::InsertTable { .. } => insert_table_dialog(app, ui, d),
-        Dialog::NumberingValue { value } => numbering_value_dialog(app, ui, value),
+        Dialog::NumberingValue { value, was } => numbering_value_dialog(app, ui, value, *was),
         Dialog::PageSetup { .. } => page_setup_dialog(app, ui, d),
         Dialog::Link { .. } => link_dialog(app, ui, d),
         Dialog::Bookmark { name, by_location, hidden, deleted } => bookmark(app, ui, name, by_location, hidden, deleted),
@@ -551,11 +551,11 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
-fn numbering_value_dialog(app: &mut WordApp, ui: &mut Ui, value: &mut u32) -> bool {
+fn numbering_value_dialog(app: &mut WordApp, ui: &mut Ui, value: &mut u32, was: u32) -> bool {
     let label = ui.label(tl!("Set value to:"));
     ui.add(egui::DragValue::new(value).range(0..=100_000)).labelled_by(label.id);
     let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok {
+    if ok && *value != was {
         let _ = app.run("para.setNumberingValue", json!({"value": *value}));
     }
     ok || cancel

@@ -163,6 +163,9 @@ pub enum Dialog {
     /// shows, the rest of the list counting on from it.
     NumberingValue {
         value: u32,
+        /// The number as opened: OK on an unchanged box changes nothing (a list numbered past
+        /// the box's 100000 keeps its numbers).
+        was: u32,
     },
     PageSetup {
         top: f32,
@@ -689,7 +692,8 @@ impl Dialog {
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
             "numberingValue" => {
                 let v = app.session.run("para.getNumberingValue", &json!({})).ok()?;
-                Dialog::NumberingValue { value: v.get("value").and_then(Value::as_u64)?.min(100_000) as u32 }
+                let value = v.get("value").and_then(Value::as_u64)?.min(100_000) as u32;
+                Dialog::NumberingValue { value, was: value }
             }
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);

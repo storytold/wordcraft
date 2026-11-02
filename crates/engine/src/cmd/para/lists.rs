@@ -90,11 +90,14 @@ pub(crate) fn restart_at(s: &mut Session, value: Option<u32>) -> CmdResult {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
     let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-    if let Some(value) = value
-        && let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new)
-    {
-        num.start_overrides.retain(|(l, _)| *l != n.level);
-        num.start_overrides.push((n.level, value));
+    if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new) {
+        // Only this level and the ones below start again: a later item of a level above, moved
+        // to the new instance too, counts on (1., 2., a., then 3.).
+        num.start_overrides.retain(|(l, _)| *l >= n.level);
+        if let Some(value) = value {
+            num.start_overrides.retain(|(l, _)| *l != n.level);
+            num.start_overrides.push((n.level, value));
+        }
     }
     let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
     for path in paths {

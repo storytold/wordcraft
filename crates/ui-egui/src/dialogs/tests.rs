@@ -1708,8 +1708,8 @@ fn set_numbering_value_dialog_opens_on_the_shown_number_and_sets_it() {
     assert!(Dialog::open("numberingValue", &mut app).is_none(), "not in a list");
     app.session.sel = wordcraft_engine::Selection::caret(Pos::body(2, 0));
     app.dialog = Dialog::open("numberingValue", &mut app);
-    assert!(matches!(app.dialog, Some(Dialog::NumberingValue { value: 2 })), "{:?}", app.dialog);
-    if let Some(Dialog::NumberingValue { value }) = &mut app.dialog {
+    assert!(matches!(app.dialog, Some(Dialog::NumberingValue { value: 2, was: 2 })), "{:?}", app.dialog);
+    if let Some(Dialog::NumberingValue { value, .. }) = &mut app.dialog {
         *value = 5;
     }
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
