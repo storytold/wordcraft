@@ -41,6 +41,9 @@ js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
+# Language packs (CP4.3): downloaded, verified and unpacked by the suite's font store.
+craft-font-store = { workspace = true }
+craft-font-catalog = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
