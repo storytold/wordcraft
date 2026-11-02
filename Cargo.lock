@@ -6831,7 +6831,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-law"
-version = "0.13.2"
+version = "0.14.0"
 dependencies = [
  "image",
  "log",
@@ -6850,7 +6850,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-law-ui"
-version = "0.13.2"
+version = "0.14.0"
 dependencies = [
  "egui",
  "egui_kittest",
