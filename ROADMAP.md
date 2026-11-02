@@ -231,6 +231,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
+| 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-01 | Markdown export: a list inside a block quote stays in the quote (`> - item`), its continuation lines included; it was read as quoted list paragraphs but written without `>`, so the list moved out of the quote on every save |
@@ -689,6 +691,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
@@ -697,6 +700,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-01 | trivial | Progress log: tab leader dots spaced and placed as in Word |
 | 2026-10-31 | trivial | Progress log: a list level above counts its first number at the first deeper item |
 | 2026-11-01 | trivial | Progress log: paragraph side borders lie outside the text (#5036) |
+| 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |

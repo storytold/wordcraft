@@ -21,7 +21,14 @@ wordcraft-docbin = { path = "crates/docbin" }
 wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
-wordcraft-proof = { path = "crates/proof" }
+# Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
+# language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
+# `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
+# Pinned like the other craft-libs crates (each has its own rev). This rev is the head of
+# storytold/craft-libs#483 (SCOWL English, stacked on #482, which adds craft-proof), fetched
+# from storytold (GitHub serves PR heads from the base repo); merged with a merge commit, it
+# stays in storytold main, so the pin needs no follow-up.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "6e45fda67c6d748b4775428cc495e26006a3bf4a", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
