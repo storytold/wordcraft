@@ -73,7 +73,7 @@ fn other_path_alpha_defaults() {
         ..Default::default()
     };
     let mut out = graphic_draws(&Document::new(), &graphic, rect, 1.0);
-    out.push(path_arrowhead(&[(4.0, 4.0), (28.0, 28.0)], Rgb::BLACK, 2.0, Default::default()).unwrap());
+    out.push(path_arrowhead(&[(4.0, 4.0), (28.0, 28.0)], Rgb::BLACK, 2.0, ArrowStyle::default()).unwrap());
     let extra = ShapeExtra { arrow_start: true, arrow_end: true, ..Default::default() };
     line_draws(rect, ShapeKind::ElbowConnector, Some(Rgb::BLACK), 2.0, Default::default(), &extra, &mut out);
     assert_eq!(out.len(), 5);
