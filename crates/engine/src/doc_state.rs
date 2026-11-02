@@ -46,7 +46,8 @@ pub struct ColumnBlock {
     /// Set when the block is whole table cells (Select Cell, Row, Column or Table, or the mouse in
     /// a table's selection areas): one segment per paragraph of the cells.
     pub cells: Option<CellRange>,
-    /// Disjoint text ranges, sorted and apart, when this block represents a separate selection.
+    /// Set when the selection is separate pieces of text (Ctrl+drag, `select.add`, #788): each
+    /// piece's `(start, end)`, sorted and apart; `segments` splits them at paragraph ends.
     pub pieces: Option<Vec<(Pos, Pos)>>,
 }
 
