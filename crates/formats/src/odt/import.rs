@@ -395,6 +395,8 @@ struct Parsed {
     track: Option<bool>,
     /// The document's default font.
     font: Option<String>,
+    /// The document's default font size, points.
+    size: Option<f32>,
     /// The custom paragraph styles the paragraphs use, parents included, parents first.
     named: Vec<super::styles::NamedStyle>,
     /// Their ODF names, alongside.
@@ -552,6 +554,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         last,
         track,
         font: styles.doc_font(),
+        size: styles.doc_size(),
         spacing: styles.doc_spacing(),
         looks: styles.kind_looks(),
         named,
@@ -589,6 +592,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         last,
         track,
         font,
+        size,
         spacing,
         looks,
         named,
@@ -621,6 +625,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {
         doc.styles.default_chr.font = font;
+    }
+    if size.is_some() {
+        doc.styles.default_chr.size = size;
     }
     doc.styles.default_chr.kern = kern.then_some(1.0);
     doc.styles.default_chr.overlay(&scripts);

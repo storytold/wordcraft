@@ -443,6 +443,8 @@ pub(super) struct NamedStyle {
 struct DateStyles {
     /// The style being read: its name and parts.
     data: Option<(String, Vec<super::datastyle::Part>)>,
+    /// It orders its parts as the locale does (§19.341 `number:automatic-order`).
+    auto_order: bool,
     /// In its `number:text`.
     in_text: bool,
 }
@@ -454,7 +456,10 @@ impl DateStyles {
         use super::datastyle::{Part, part, picture};
         match ev {
             Ev::Start(q, a) => match local(q) {
-                "date-style" | "time-style" => self.data = get(a, "style:name").map(|n| (n.to_string(), Vec::new())),
+                "date-style" | "time-style" => {
+                    self.data = get(a, "style:name").map(|n| (n.to_string(), Vec::new()));
+                    self.auto_order = local(q) == "date-style" && get(a, "number:automatic-order").is_some_and(|v| v.trim() == "true");
+                }
                 "text" => self.in_text = self.data.is_some(),
                 name => {
                     let on = |k: &str, v: &str| get(a, k).is_some_and(|x| x.trim() == v);
@@ -471,6 +476,7 @@ impl DateStyles {
                     if let Some((name, parts)) = self.data.take()
                         && out.len() < MAX_DATA_STYLES
                     {
+                        let parts = if std::mem::take(&mut self.auto_order) { super::datastyle::auto_ordered(&parts) } else { parts };
                         out.insert(name, picture(&parts));
                     }
                 }
@@ -920,6 +926,8 @@ pub(super) struct Styles {
     pub(super) lists: HashMap<String, Vec<ListLevel>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
+    /// The default paragraph style's font size (`fo:font-size` in `style:default-style`), points.
+    default_size: Option<f32>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
     /// Tab stops are measured from the paragraph's indent (LibreOffice's `TabsRelativeToIndent`
@@ -978,6 +986,9 @@ impl Styles {
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
+                    if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
+                        self.default_size = Some(sz.min(1638.0));
+                    }
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                     script_properties(&a, &mut self.default_scripts, &self.faces);
                 }
@@ -1058,6 +1069,18 @@ impl Styles {
     }
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
+    /// The document's default font size: the Standard paragraph style's (the document's
+    /// defaults, as for [`Styles::doc_font`]), else the default style's.
+    pub(super) fn doc_size(&self) -> Option<f32> {
+        self.map
+            .get("Standard")
+            .filter(|s| !s.auto)
+            .and_then(|s| s.fmt.size)
+            .or(self.default_size)
+            .filter(|v| v.is_finite() && *v >= 1.0)
+            .map(|v| v.min(1638.0))
+    }
+
     pub(super) fn doc_font(&self) -> Option<String> {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
@@ -1302,6 +1325,11 @@ impl Styles {
         };
         let mut fmt = Fmt::default();
         s.fmt.apply(&mut fmt);
+        // A style with no parent inherits the default style, not Standard (the document's
+        // defaults here): its size, when Standard's differs.
+        if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
+            fmt.size = self.default_size;
+        }
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),

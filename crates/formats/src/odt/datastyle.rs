@@ -182,3 +182,43 @@ pub(super) fn picture_of(instr: &str) -> Option<String> {
     };
     (!pic.is_empty()).then(|| pic.chars().take(MAX_PICTURE).collect())
 }
+
+/// A date's parts in the order and with the separators the locale gives them, for a date style
+/// with `number:automatic-order` (§19.341): its weekday, month, day and year as US English
+/// orders them (LibreOffice's "November 2, 2026", or "11/2/2026" with a numeric month). Its own
+/// text between them is left out; a time's parts stay as they are.
+pub(super) fn auto_ordered(parts: &[Part]) -> Vec<Part> {
+    let find = |f: fn(&Part) -> bool| parts.iter().find(|p| f(p)).cloned();
+    let weekday = find(|p| matches!(p, Part::Weekday(_)));
+    let month = find(|p| matches!(p, Part::Month(..)));
+    let day = find(|p| matches!(p, Part::Day(_)));
+    let year = find(|p| matches!(p, Part::Year(_)));
+    let Some(month) = month else { return parts.to_vec() };
+    let textual = matches!(month, Part::Month(_, true));
+    let text = |s: &str| Part::Text(s.to_string());
+    let mut out = Vec::new();
+    if let Some(w) = weekday {
+        out.extend([w, text(", ")]);
+    }
+    out.push(month);
+    if let Some(d) = day {
+        out.extend([text(if textual { " " } else { "/" }), d]);
+    }
+    if let Some(y) = year {
+        out.extend([text(if textual { ", " } else { "/" }), y]);
+    }
+    // A time with it keeps its own parts, after.
+    let time: Vec<Part> = parts.iter().filter(|p| matches!(p, Part::Hours(_) | Part::Minutes(_) | Part::Seconds(_) | Part::AmPm)).cloned().collect();
+    if !time.is_empty() {
+        out.push(text(" "));
+        for (i, p) in time.into_iter().enumerate() {
+            if i > 0 && !matches!(p, Part::AmPm) {
+                out.push(text(":"));
+            } else if matches!(p, Part::AmPm) {
+                out.push(text(" "));
+            }
+            out.push(p);
+        }
+    }
+    out
+}

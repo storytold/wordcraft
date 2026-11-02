@@ -284,3 +284,18 @@ fn hostile_variables_never_panic() {
         let _ = export(&d).unwrap();
     }
 }
+
+#[test]
+fn a_date_in_the_locales_order_shows_so() {
+    // LibreOffice's letters: year, month by name and day, `number:automatic-order`: shown in
+    // the locale's order, "November 2, 2026" in US English.
+    let styles = format!(
+        r#"<office:document-styles {NS_T} xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"><office:styles><number:date-style style:name="N112" number:automatic-order="true"><number:year number:style="long"/><number:month number:style="long" number:textual="true"/><number:day/></number:date-style><number:date-style style:name="N2" number:automatic-order="true"><number:day/><number:month/><number:year number:style="long"/></number:date-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:date style:data-style-name="N112" text:date-value="2026-11-02">2026November2</text:date> <text:date style:data-style-name="N2" text:date-value="2026-11-02">2112026</text:date></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let codes: Vec<String> = fields(&d).into_iter().map(|(c, _)| c).collect();
+    assert_eq!(codes, [r#"DATE \@ "MMMM d, yyyy""#, r#"DATE \@ "M/d/yyyy""#]);
+}

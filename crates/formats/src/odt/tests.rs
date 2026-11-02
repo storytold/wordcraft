@@ -1159,3 +1159,46 @@ pub(super) fn styles_of(bytes: &[u8]) -> String {
     let mut z = archive(bytes);
     String::from_utf8(read_entry(&mut z, "styles.xml").unwrap()).unwrap()
 }
+
+#[test]
+fn the_default_styles_font_size_is_the_documents() {
+    // LibreOffice's letter templates: 10 pt in `style:default-style`; the Standard style's own
+    // size (the document's defaults) wins over it.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hi</text:p></office:text></office:body></office:document-content>"#
+    );
+    let default_only = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="10pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let doc = import(&package(&content, Some(&default_only))).unwrap();
+    assert_eq!(doc.styles.default_chr.size, Some(10.0));
+    let p = doc.body[0].as_para().unwrap();
+    assert_eq!(doc.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 10.0);
+    let standard = default_only.replace(
+        "</office:styles>",
+        r#"<style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:style></office:styles>"#,
+    );
+    let d = import(&package(&content, Some(&standard))).unwrap();
+    assert_eq!(d.styles.default_chr.size, Some(11.0));
+    let p = d.body[0].as_para().unwrap();
+    assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
+    // Written back as the default style's.
+    let s = entry(&export(&doc).unwrap(), "styles.xml");
+    assert!(s.contains(r#"fo:font-size="10pt""#), "{s}");
+}
+
+#[test]
+fn a_style_with_no_parent_takes_the_default_styles_size() {
+    // The default style says 12 pt, Standard 11 pt (the document's defaults); a style with no
+    // parent inherits the default style's 12 pt, as LibreOffice shows it.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Loose">Hi</text:p><text:p>Plain</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties fo:font-size="11pt"/></style:style><style:style style:name="Loose" style:family="paragraph"/></office:styles></office:document-styles>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let sizes: Vec<f32> =
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size).collect();
+    assert_eq!(sizes, [12.0, 11.0]);
+}
