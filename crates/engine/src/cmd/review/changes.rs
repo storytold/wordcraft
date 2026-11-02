@@ -91,6 +91,25 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
+/// What a listed change was made to, so that it can be accepted or rejected alone.
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    /// Text runs of one paragraph.
+    Runs,
+    /// The paragraph mark at the end of `a`'s paragraph.
+    Mark,
+    /// The paragraph's own formatting.
+    Para,
+    /// The section break on `a`'s paragraph.
+    Section,
+    /// The document's last section.
+    LastSection,
+    /// The table, row or cell `a` is in.
+    Table,
+    Row,
+    Cell,
+}
+
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
 /// `delete`, `format`), revision, and for a formatting change the properties it set.
 struct Change {
@@ -99,11 +118,12 @@ struct Change {
     kind: &'static str,
     rev: Option<u32>,
     props: Vec<Value>,
+    target: Target,
 }
 
 impl Change {
-    fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
-        Change { a, b, kind: "format", rev: Some(rev), props }
+    fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>, target: Target) -> Change {
+        Change { a, b, kind: "format", rev: Some(rev), props, target }
     }
 }
 
@@ -121,7 +141,7 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     } else {
         a.clone()
     };
-    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new() })
+    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), target: Target::Mark })
 }
 
 /// A deletion inside another revision's insertion (or move destination): a change of its own, by
@@ -219,7 +239,12 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
 /// `author`, only that author's changes (Word's Accept/Reject All Changes Shown with one
 /// reviewer shown).
 pub(super) fn resolve_all_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
-    let out = match p::str(v, "author") {
+    let author = match v.get("author") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(a)) => Some(a.as_str()),
+        Some(_) => return Err(CmdError::Params("`author` must be a string".into())),
+    };
+    let out = match author {
         Some(author) => resolve_author(s, author, accept)?,
         None => resolve_all(s, accept)?,
     };
@@ -233,9 +258,17 @@ pub(super) fn resolve_all_then(s: &mut Session, v: &Value, accept: bool) -> CmdR
 /// with `next`, the next change is selected afterwards.
 pub(super) fn resolve_sel_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
     let next = p::bool(v, "next") == Some(true);
-    match p::u64(v, "change") {
+    let change = match v.get("change") {
+        None | Some(Value::Null) => None,
+        Some(n) => Some(
+            n.as_u64()
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
+                .ok_or_else(|| CmdError::Params("`change` must be a non-negative whole number".into()))?,
+        ),
+    };
+    match change {
         Some(n) => {
-            resolve_listed(s, usize::try_from(n).unwrap_or(usize::MAX), accept)?;
+            resolve_listed(s, n, accept)?;
             if next { select_next_unresolved(s) } else { sel_result(s) }
         }
         None => resolve_sel(s, accept, next),
@@ -243,44 +276,84 @@ pub(super) fn resolve_sel_then(s: &mut Session, v: &Value, accept: bool) -> CmdR
 }
 
 /// Accept or reject entry `n` of `review.changes`, and only it: where a deletion was made inside
-/// another author's insertion, the two share their text, and Accept or Reject on that text would
-/// resolve both. An insertion or deletion of text or of a paragraph mark is resolved by its
-/// revision alone; a move, a formatting change or a table's change as Accept or Reject on its
-/// range would (a move takes its other end with it).
+/// another author's insertion (or a formatting change on it), the changes share their text, and
+/// Accept or Reject on that text would resolve them all. Each change is resolved by its revision,
+/// on what it was made to; a move takes its other end with it.
 fn resolve_listed(s: &mut Session, n: usize, accept: bool) -> Result<(), CmdError> {
-    let list = changes(s);
-    let Some(c) = list.get(n) else {
+    let mut list = changes(s);
+    if n >= list.len() {
         return Err(CmdError::Params(format!("`change` {n}: review.changes lists {} changes", list.len())));
-    };
-    let (a, b, kind, rev) = (c.a.clone(), c.b.clone(), c.kind, c.rev);
-    let (del, rev) = match (kind, rev) {
-        ("insert", Some(rev)) => (false, rev),
-        ("delete", Some(rev)) => (true, rev),
-        _ => {
-            s.sel = Selection { anchor: a, focus: b };
-            resolve_sel(s, accept, false)?;
-            return Ok(());
+    }
+    let Change { a, b, kind, rev, target, .. } = list.swap_remove(n);
+    let rev = rev.ok_or_else(|| CmdError::Params(format!("`change` {n} has no revision")))?;
+    match (kind, target) {
+        ("moveFrom" | "moveTo", _) => {
+            let names = s.doc.move_name(Some(rev)).map(str::to_string).into_iter().collect();
+            crate::cmd::moves::resolve(s, &names, accept)?;
         }
-    };
-    let on_mark = s.doc.para(a.story, &a.path).is_some_and(|p| a.off == p.len() && (if del { p.mark.del } else { p.mark.ins }) == Some(rev));
-    if on_mark {
-        // Accepting a deletion or rejecting an insertion removes the mark: the paragraphs join
-        // (or an empty paragraph goes away). The mark at the end of a story stays.
-        let removed = del == accept && (crate::cmd::remove_empty_para(s, a.story, &a.path)? || crate::cmd::join_next_para(s, a.story, &a.path)?);
-        if !removed {
+        ("insert" | "delete", Target::Mark) => resolve_listed_mark(s, &a, kind == "delete", accept)?,
+        ("insert" | "delete", _) => resolve_revision_runs(s.doc.para_mut(a.story, &a.path)?, a.off, b.off, kind == "delete", rev, accept)?,
+        (_, Target::Runs) => {
             let para = s.doc.para_mut(a.story, &a.path)?;
-            if del {
-                para.mark.del = None;
-            } else {
-                para.mark.ins = None;
+            para.format(a.off, b.off, &|c| {
+                if c.fmt_change.as_ref().is_some_and(|ch| ch.rev == rev) {
+                    fmt_revisions::resolve_char(c, accept);
+                }
+            })?;
+            para.touch();
+        }
+        (_, Target::Mark | Target::Para | Target::Section) => {
+            let para = s.doc.para_mut(a.story, &a.path)?;
+            match target {
+                Target::Mark => fmt_revisions::resolve_char(&mut para.mark, accept),
+                Target::Para => fmt_revisions::resolve_para(&mut para.props, accept),
+                _ => {
+                    if let Some(sec) = para.section.as_deref_mut() {
+                        fmt_revisions::resolve_section(sec, accept);
+                    }
+                }
             }
             para.touch();
         }
-    } else if a.path == b.path {
-        resolve_revision_runs(s.doc.para_mut(a.story, &a.path)?, a.off, b.off, del, rev, accept)?;
+        (_, Target::LastSection) => fmt_revisions::resolve_section(&mut s.doc.last_section, accept),
+        (_, Target::Table | Target::Row | Target::Cell) => {
+            let (tp, r, c) = a.path.cell().ok_or_else(|| CmdError::Params(format!("`change` {n} is not in a table")))?;
+            let t = s.doc.table_mut(a.story, &tp)?;
+            match target {
+                Target::Table => fmt_revisions::resolve_table(t, accept),
+                Target::Row => {
+                    if let Some(row) = t.rows.get_mut(r) {
+                        fmt_revisions::resolve_row(row, accept);
+                    }
+                }
+                _ => {
+                    if let Some(cell) = t.rows.get_mut(r).and_then(|x| x.cells.get_mut(c)) {
+                        fmt_revisions::resolve_cell(cell, accept);
+                    }
+                }
+            }
+        }
     }
     s.sel = Selection::caret(a);
     s.clamp_selection();
+    Ok(())
+}
+
+/// Accept or reject the insertion (or with `del` the deletion) of the paragraph mark at `a`,
+/// leaving the other revision on it as it is. Accepting a deletion or rejecting an insertion
+/// removes the mark: the paragraphs join (or an empty paragraph goes away). The mark at the end
+/// of a story stays.
+fn resolve_listed_mark(s: &mut Session, a: &Pos, del: bool, accept: bool) -> Result<(), CmdError> {
+    if del == accept && (crate::cmd::remove_empty_para(s, a.story, &a.path)? || crate::cmd::join_next_para(s, a.story, &a.path)?) {
+        return Ok(());
+    }
+    let para = s.doc.para_mut(a.story, &a.path)?;
+    if del {
+        para.mark.del = None;
+    } else {
+        para.mark.ins = None;
+    }
+    para.touch();
     Ok(())
 }
 
@@ -428,24 +501,35 @@ fn changes(s: &Session) -> Vec<Change> {
             let row = t.rows.get(r);
             let cell = row.and_then(|x| x.cells.get(c));
             let found = [
-                (r == 0 && c == 0).then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props)))).flatten(),
-                (c == 0).then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props))))).flatten(),
-                cell.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::cell_diff(&x.props)))),
+                (r == 0 && c == 0)
+                    .then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props), Target::Table)))
+                    .flatten(),
+                (c == 0)
+                    .then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props), Target::Row))))
+                    .flatten(),
+                cell.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::cell_diff(&x.props), Target::Cell))),
             ];
-            for (rev, props) in found.into_iter().flatten() {
-                out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props));
+            for (rev, props, target) in found.into_iter().flatten() {
+                out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props, target));
             }
         }
         if let Some(ch) = &p.props.fmt_change {
-            out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
+            out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props), Target::Para));
         }
         for (r, c) in p.run_ranges() {
             let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), target: Target::Runs });
             }
             if let Some((rev, kind)) = nested_deletion(&s.doc, c.ins, c.del) {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: Some(rev), props: Vec::new() });
+                out.push(Change {
+                    a: mk(&path, r.start),
+                    b: mk(&path, r.end),
+                    kind,
+                    rev: Some(rev),
+                    props: Vec::new(),
+                    target: Target::Runs,
+                });
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
@@ -455,12 +539,12 @@ fn changes(s: &Session) -> Vec<Change> {
             {
                 last.b = mk(&path, r.end);
             } else {
-                out.push(Change::format(mk(&path, r.start), mk(&path, r.end), ch.rev, props));
+                out.push(Change::format(mk(&path, r.start), mk(&path, r.end), ch.rev, props, Target::Runs));
             }
         }
         if let Some(ch) = &p.mark.fmt_change {
             let end = mk(&path, p.len());
-            out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::char_diff(&p.mark)));
+            out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::char_diff(&p.mark), Target::Mark));
         }
         if let Some(m) = mark_change(s, StoryRef::Body, &path) {
             let nested = nested_deletion(&s.doc, p.mark.ins, p.mark.del).map(|(rev, kind)| Change {
@@ -469,18 +553,19 @@ fn changes(s: &Session) -> Vec<Change> {
                 kind,
                 rev: Some(rev),
                 props: Vec::new(),
+                target: Target::Mark,
             });
             out.push(m);
             out.extend(nested);
         }
         if let Some(ch) = p.section.as_ref().and_then(|x| x.fmt_change.as_ref().map(|ch| (ch.rev, x))) {
             let end = mk(&path, p.len());
-            out.push(Change::format(end.clone(), end, ch.0, fmt_revisions::section_diff(ch.1)));
+            out.push(Change::format(end.clone(), end, ch.0, fmt_revisions::section_diff(ch.1), Target::Section));
         }
     }
     if let Some(ch) = &s.doc.last_section.fmt_change {
         let end = s.doc.end_of(StoryRef::Body);
-        out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::section_diff(&s.doc.last_section)));
+        out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::section_diff(&s.doc.last_section), Target::LastSection));
     }
     out
 }
