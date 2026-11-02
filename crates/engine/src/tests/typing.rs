@@ -1506,6 +1506,29 @@ fn an_autocorrect_rewrite_keeps_the_lead_in_and_a_double_space_period_ends_it() 
 }
 
 #[test]
+fn text_after_punctuation_autoformat_adds_takes_the_formatting_after_the_lead_in() {
+    // "Dont " becomes "Don't ": the apostrophe ends the lead-in, and the "t" and the space after
+    // it take the formatting typing would have had.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nDont more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Don't more");
+    let bold: Vec<_> = (0..p.len()).map(|i| char_at(&s, 1, i).bold).collect();
+    assert_eq!(bold, [Some(true), Some(true), Some(true), Some(true), None, None, None, None, None, None]);
+    // The space typed after a period AutoFormat adds after two spaces.
+    let mut s = with_list_lead_in();
+    run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext  more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Next. more");
+    assert_eq!((char_at(&s, 1, 4).bold, char_at(&s, 1, 5).bold), (Some(true), None));
+}
+
+#[test]
 fn text_a_command_types_ends_the_lead_in_at_its_punctuation() {
     // Insert › Date & Time as text: the lead-in ends at the date's first slash.
     let mut s = with_list_lead_in();

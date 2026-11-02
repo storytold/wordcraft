@@ -295,7 +295,9 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   item, setting the caret and pasting end it (`formatting_picked_or_a_caret_move_ends_the_lead_in`,
   `pasted_text_ends_the_lead_in`); text a command types, such as Insert › Date & Time, ends the
   lead-in at its first punctuation character like typed text
-  (`text_a_command_types_ends_the_lead_in_at_its_punctuation`); Backspace inside the lead-in keeps it
+  (`text_a_command_types_ends_the_lead_in_at_its_punctuation`), and so does punctuation that
+  AutoCorrect or AutoFormat adds, such as "don't" for "dont"
+  (`text_after_punctuation_autoformat_adds_takes_the_formatting_after_the_lead_in`); Backspace inside the lead-in keeps it
   (`backspace_in_a_lead_in_keeps_the_lead_in`); Undo and Redo take it with the typed text, also Undo
   of a period AutoFormat added after two spaces
   (`undo_and_redo_take_the_repeated_lead_in_with_the_typing`,

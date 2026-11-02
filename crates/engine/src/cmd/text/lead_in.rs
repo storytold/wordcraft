@@ -75,14 +75,48 @@ pub(super) fn is_active(s: &Session) -> bool {
 }
 
 /// After AutoCorrect rewrote the text before the caret during a lead-in: the lead-in goes on at
-/// the caret, or ends when the paragraph now has a punctuation character before the caret.
+/// the caret, or ends when the paragraph now has a punctuation character before the caret. The
+/// text from after that character to the caret then takes the formatting that follows the lead-in.
 pub(super) fn follow(s: &mut Session) {
     let f = s.sel.focus.clone();
-    let punctuated = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).is_some_and(|t| t.chars().any(is_punctuation));
+    let first_punctuation = |t: &str| t.char_indices().find(|(_, c)| is_punctuation(*c)).map(|(i, c)| i + c.len_utf8());
+    let after = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).and_then(first_punctuation);
     let Some(l) = s.lead_in.as_mut().filter(|l| l.at.story == f.story && l.at.path == f.path) else { return };
-    l.at = f;
-    if punctuated {
-        finish(s);
+    l.at = f.clone();
+    let Some(after) = after else { return };
+    if let Some(changes) = active(s).map(body_changes)
+        && after < f.off
+        && let Ok(p) = s.doc.para_mut(f.story, &f.path)
+        && p.format(after, f.off, &|c| apply_changes(c, &changes)).is_ok()
+    {
+        p.touch();
+    }
+    finish(s);
+}
+
+/// The properties, except [`KEPT`] ones, whose value in the lead-in differs from the formatting
+/// that follows it, with that formatting's value (`None` when it leaves the property unset).
+fn body_changes(l: &LeadIn) -> Vec<(String, Option<Value>)> {
+    let object = |c: &CharProps| match serde_json::to_value(c) {
+        Ok(Value::Object(m)) => m,
+        _ => Map::new(),
+    };
+    let (lead, body) = (object(&l.lead), object(&l.body));
+    let keys: std::collections::BTreeSet<&String> = lead.keys().chain(body.keys()).collect();
+    keys.into_iter().filter(|k| !KEPT.contains(&k.as_str()) && lead.get(*k) != body.get(*k)).map(|k| (k.clone(), body.get(k).cloned())).collect()
+}
+
+/// Set the properties in `changes` on `c` and leave every other property as it is.
+fn apply_changes(c: &mut CharProps, changes: &[(String, Option<Value>)]) {
+    let Ok(Value::Object(mut m)) = serde_json::to_value(&*c) else { return };
+    for (k, v) in changes {
+        match v {
+            Some(v) => m.insert(k.clone(), v.clone()),
+            None => m.remove(k),
+        };
+    }
+    if let Ok(new) = serde_json::from_value(Value::Object(m)) {
+        *c = new;
     }
 }
 
