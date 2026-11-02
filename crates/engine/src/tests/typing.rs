@@ -294,6 +294,26 @@ fn tab_and_shift_tab_into_a_cell_that_starts_with_a_nested_table_stay_in_it() {
     }
 }
 
+/// In a table nested in a cell, Shift+Tab goes back through the nested table's cells, selecting
+/// their content, and its first cell stays, as in Word (observed with `PrevCell`): it doesn't go
+/// out to the cell around it.
+#[test]
+fn shift_tab_in_a_nested_table_stays_in_it() {
+    let mut s = table_between(1, 1);
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    typ(&mut s, "n11\tn12\tn21");
+    let back = |s: &mut Session| {
+        run(s, "text.backTab", json!({}));
+        (s.selected_text(), s.sel.focus.path.0.len())
+    };
+    assert_eq!(back(&mut s), ("n12".to_string(), 7), "the end of the row above, in the nested table's cell");
+    assert_eq!(back(&mut s).0, "n11");
+    assert_eq!(back(&mut s).0, "n11", "the nested table's first cell stays");
+    for end in [&s.sel.anchor, &s.sel.focus] {
+        assert!(end.path.0.starts_with(&[1, 1, 1, 0, 0, 0]), "still in the nested table's first cell: {:?}", s.sel);
+    }
+}
+
 #[test]
 fn up_and_down_leave_a_selection_from_its_start_and_its_end() {
     let mut s = typed("One\nTwo words here\nThree is a longer line\nFour");
@@ -319,6 +339,18 @@ fn up_and_down_leave_a_selection_from_its_start_and_its_end() {
     // And right to left: Up still goes from its start.
     let is_a = Selection { anchor: Pos::body(2, 10), focus: Pos::body(2, 6) };
     assert_eq!(press(&mut s, is_a, "caret.up"), press(&mut s, caret(Pos::body(2, 6)), "caret.up"));
+    // The same at a line that a paragraph wraps to: Shift+Down from the first line's start ends
+    // at the second line's start, and Down goes to that line, not to the third.
+    let mut s = typed(&"wrapping words ".repeat(40));
+    s.sel = caret(Pos::body(0, 0));
+    s.goal_x = None;
+    run(&mut s, "caret.down", json!({"extend": true}));
+    let second = s.sel.focus.clone();
+    let line = |s: &mut Session, p: &Pos| s.layout().line_bounds(p, s.page_hint);
+    assert_eq!(line(&mut s, &second).map(|l| l.0), Some(second.clone()), "Shift+Down ends at the second line's start");
+    let selected = s.sel.clone();
+    let down = press(&mut s, selected, "caret.down");
+    assert_eq!(line(&mut s, &down.focus), line(&mut s, &second), "Down goes to the second line: {down:?}");
 }
 
 #[test]
