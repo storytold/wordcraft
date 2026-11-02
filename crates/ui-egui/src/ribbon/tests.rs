@@ -721,9 +721,20 @@ fn align_menu_reaches_left_and_right_not_just_center() {
     a.run("insert.picture", json!({"data": png_data()})).unwrap();
     let frame = |a: &crate::WordApp| wordcraft_engine::cmd::objects::selected(&a.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| (f.wrap, f.x)));
     assert!(matches!(frame(&a), Some((wordcraft_doc::para::Wrap::Inline, _))), "a freshly inserted picture is inline");
-    let mut h = egui_kittest::Harness::builder()
-        .with_size(egui::vec2(300.0, 300.0))
-        .build_ui_state(|ui, app: &mut crate::WordApp| align_menu(ui, app, None), a);
+    // The menu marks Align to Page/Margin with ✓, which only the interface fonts carry; they
+    // take effect the frame after they are set.
+    let mut fonts = false;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 300.0)).build_ui_state(
+        move |ui, app: &mut crate::WordApp| {
+            if !fonts {
+                crate::theme::install_fonts(ui.ctx());
+                fonts = true;
+                return;
+            }
+            align_menu(ui, app, None)
+        },
+        a,
+    );
     h.run();
     h.get(item("Align")).click();
     h.run();

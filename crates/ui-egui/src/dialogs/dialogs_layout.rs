@@ -2,12 +2,13 @@
 //! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
 //! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
 //! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Convert Text to Table
-//! (Insert › Table, #2592), Size (Picture Format › Size, #2573) and Format Page Numbers (Insert ›
+//! (Insert › Table, #2592), Size (Picture Format › Size, #2573), Layout's Position tab (Layout ›
+//! Arrange › Position › More Layout Options…) and Format Page Numbers (Insert ›
 //! Header & Footer › Page Number ▸ Format Page Numbers…, #1113). Each ends by running a
 //! command (`layout.lineNumbers`, `layout.hyphenation`, `layout.manualHyphenation` with
 //! `caret.set` and `text.optionalHyphen`, `review.language`, `mailings.envelopes`,
 //! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.fromText`,
-//! `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same result without
+//! `picture.size`, `arrange.positionOptions`, `layout.pageNumberFormat`), so scripts and agents get the same result without
 //! the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
 
 use egui::{Ui, vec2};
@@ -27,8 +28,8 @@ mod print;
 mod table;
 mod text;
 
-pub use page::{PageNumbersForm, SizeForm};
-use page::{page_numbers_ui, size_ui};
+pub use page::{PageNumbersForm, PositionForm, SizeForm};
+use page::{page_numbers_ui, position_ui, size_ui};
 #[cfg(test)]
 pub(crate) use print::envelope_label;
 #[cfg(test)]
@@ -57,6 +58,7 @@ pub enum LayoutDialog {
     TextToTable(TextToTableForm),
     TableToText(TableToTextForm),
     Size(SizeForm),
+    Position(Box<PositionForm>),
     PageNumbers(PageNumbersForm),
 }
 
@@ -75,6 +77,7 @@ impl LayoutDialog {
             LayoutDialog::TextToTable(_) => "textToTable",
             LayoutDialog::TableToText(_) => "tableToText",
             LayoutDialog::Size(_) => "pictureSize",
+            LayoutDialog::Position(_) => "layoutPosition",
             LayoutDialog::PageNumbers(_) => "pageNumbers",
         }
     }
@@ -94,6 +97,7 @@ impl LayoutDialog {
             LayoutDialog::TextToTable(_) => "Convert Text to Table",
             LayoutDialog::TableToText(_) => "Convert to Text",
             LayoutDialog::Size(_) => "Size",
+            LayoutDialog::Position(_) => "Layout",
             LayoutDialog::PageNumbers(_) => "Page Number Format",
         }
     }
@@ -114,6 +118,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
         "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
+        "layoutPosition" => LayoutDialog::Position(Box::new(PositionForm::read(app)?)),
         "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
         _ => return None,
     })
@@ -134,6 +139,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
         LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
         LayoutDialog::Size(f) => size_ui(app, ui, f),
+        LayoutDialog::Position(f) => position_ui(app, ui, f),
         LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
     }
 }

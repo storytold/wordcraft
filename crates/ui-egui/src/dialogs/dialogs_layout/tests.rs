@@ -584,6 +584,124 @@ fn selected_size(a: &WordApp) -> (f32, f32) {
     o.frame().map(|(w, h, _)| (w, h)).unwrap()
 }
 
+fn float_of(a: &WordApp) -> wordcraft_doc::para::Float {
+    let (_, o) = wordcraft_engine::cmd::objects::selected(&a.session).unwrap();
+    o.frame().unwrap().2.clone()
+}
+
+/// More Layout Options… (`arrange.positionOptions` without a position) opens the Position tab
+/// on the selected shape; OK sends only the axis that changed, in one undo step, and a drag
+/// while it is open starts the form over.
+#[test]
+fn position_dialog_sets_an_alignment_or_an_offset() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("one\ntwo")), Services::default());
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 150, "y": 200})).unwrap();
+    let was = float_of(&a);
+    assert_eq!(a.run("arrange.positionOptions", json!({})).unwrap(), json!({"pending": "layoutPosition"}));
+    let LayoutDialog::Position(mut f) = form(&mut a) else { panic!("position") };
+    assert!(!f.inline && !f.horizontal.aligned && !f.vertical.aligned, "a dragged shape is placed by offsets");
+    assert_eq!((f.horizontal.offset, f.vertical.offset), (was.x, was.y));
+    assert_eq!(f.params(), json!({}), "nothing changed, nothing to send");
+    f.horizontal.aligned = true;
+    f.horizontal.align = "right".into();
+    f.horizontal.align_to = "page".into();
+    assert_eq!(f.params(), json!({"horizontal": {"align": "right", "relativeTo": "page"}}));
+    a.run("arrange.positionOptions", f.params()).unwrap();
+    let now = float_of(&a);
+    assert_eq!((now.h_rel, now.h_align, now.v_rel, now.y), (Anchor::Page, Some(FloatAlign::End), was.v_rel, was.y));
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(float_of(&a), was, "one undo step");
+    // An offset from the page's top.
+    a.run("ui.dialog", json!({"name": "layoutPosition"})).unwrap();
+    let LayoutDialog::Position(mut f) = form(&mut a) else { panic!("position") };
+    f.vertical.offset = 300.0;
+    f.vertical.offset_to = "page".into();
+    a.run("arrange.positionOptions", f.params()).unwrap();
+    let r = a.session.layout().object(&f.at, 0).unwrap().rect;
+    assert!((r.y - 300.0).abs() < 0.5, "{r:?}");
+    // The object moves while the dialog is open: the form reads it again.
+    a.run("ui.dialog", json!({"name": "layoutPosition"})).unwrap();
+    let LayoutDialog::Position(mut f) = form(&mut a) else { panic!("position") };
+    a.run("arrange.nudge", json!({"dx": 6})).unwrap();
+    assert!(f.follow(&mut a));
+    assert_eq!(f.horizontal.offset, float_of(&a).x);
+    // Nothing selected: the dialog closes.
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    assert!(!f.follow(&mut a));
+}
+
+/// The Position tab draws for an inline and a floating object with either kind of position
+/// picked, without one of egui's debug assertions firing (`add_space` in its grid did).
+#[test]
+fn position_dialog_draws() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+    let mut a = picture_app(40, 20);
+    for floating in [false, true] {
+        if floating {
+            a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
+        }
+        a.run("ui.dialog", json!({"name": "layoutPosition"})).unwrap();
+        let mut d = form(&mut a);
+        for aligned in [false, true] {
+            if let LayoutDialog::Position(f) = &mut d {
+                (f.horizontal.aligned, f.vertical.aligned) = (aligned, aligned);
+            }
+            let close = std::cell::Cell::new(true);
+            ctx.run_ui(egui::RawInput::default(), |ui| close.set(body(&mut a, ui, &mut d))).drop_without_applying_deltas();
+            assert!(!close.get(), "the dialog stays open while drawn");
+        }
+    }
+}
+
+/// An offset past the field's ±4000 pt, as a .docx can hold (its reader takes up to 14,400 pt),
+/// survives drawing the tab: egui doesn't clamp it into the field, so OK sends nothing.
+#[test]
+fn position_dialog_keeps_an_offset_past_its_range() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let mut a = picture_app(40, 20);
+    a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
+    let at = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    let para = a.session.doc.para_mut(at.story, &at.path).unwrap();
+    para.object_at_mut(at.off).and_then(|o| o.float_mut()).unwrap().x = 5000.0;
+    para.touch();
+    a.session.touch();
+    a.run("ui.dialog", json!({"name": "layoutPosition"})).unwrap();
+    let mut d = form(&mut a);
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        body(&mut a, ui, &mut d);
+    })
+    .drop_without_applying_deltas();
+    let LayoutDialog::Position(f) = &d else { panic!("position") };
+    assert_eq!(f.horizontal.offset, 5000.0);
+    assert_eq!(f.params(), json!({}), "nothing typed, nothing to send");
+}
+
+/// An In Line with Text picture opens at its place on the page, and OK floats it there with
+/// both axes set.
+#[test]
+fn position_dialog_floats_an_inline_picture() {
+    let mut a = picture_app(40, 20);
+    let at = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    let r0 = a.session.layout().object(&at, 0).unwrap().rect;
+    a.run("ui.dialog", json!({"name": "layoutPosition"})).unwrap();
+    let LayoutDialog::Position(mut f) = form(&mut a) else { panic!("position") };
+    assert!(f.inline);
+    assert_eq!((f.horizontal.offset_to.as_str(), f.vertical.offset_to.as_str()), ("page", "page"));
+    f.horizontal.offset += 50.0;
+    let p = f.params();
+    assert!(p.get("horizontal").is_some() && p.get("vertical").is_some(), "{p}");
+    a.run("arrange.positionOptions", p).unwrap();
+    assert_ne!(float_of(&a).wrap, wordcraft_doc::para::Wrap::Inline);
+    let r = a.session.layout().object(&at, 0).unwrap().rect;
+    assert!((r.x - r0.x - 50.0).abs() < 0.5 && (r.y - r0.y).abs() < 0.5, "{r0:?} -> {r:?}");
+}
+
 /// #2573: Picture Format › Size's launcher (`picture.size` without a size) opens the Size
 /// dialog on the selected picture: its size, the scale of its original size, Lock aspect ratio
 /// and Reset; OK resizes it in one undo step.
