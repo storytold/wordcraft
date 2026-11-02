@@ -116,6 +116,7 @@ ended by a manual break.
 
 ## Tests
 
+`doc::khmer`, `doc::thai`, `layout::khmer_just`, `layout/tests/khmer.rs` (filling, no stretch
 `doc::khmer`, `doc::thai`, `layout::khmer_just`, `layout/tests_khmer.rs` (filling, no stretch
 inside a syllable, rank order, ZWSP, Latin text), `docx/tests/roundtrip.rs`
 (`thai_distributed_and_khmer_justify_stay_apart`), `docx::read::props::khmer_tests`.

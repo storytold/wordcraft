@@ -36,6 +36,8 @@ pub(crate) use chars::{caps_char, push_caps};
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
+pub(crate) use justify::cluster_gaps;
+#[cfg(test)]
 use lines::break_lines;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
@@ -97,55 +99,6 @@ pub struct ParaLayout {
     /// Thai Distributed and Khmer Justify: for each cluster, what the gap after it is (a space, a
     /// word boundary, a syllable boundary, or nothing to stretch). Empty for other alignments.
     pub gaps: Vec<wordcraft_doc::khmer::Gap>,
-}
-
-/// Assign Thai and Khmer expansion opportunities to the cluster after each boundary.
-pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster]) -> Vec<wordcraft_doc::khmer::Gap> {
-    use wordcraft_doc::khmer::{self, Gap};
-    let slice = |c: &Cluster| text.get(c.start..c.end).unwrap_or("");
-    let mut out = vec![Gap::None; clusters.len()];
-    let mut k = 0;
-    while let Some(c) = clusters.get(k) {
-        k += 1;
-        let t = slice(c);
-        if c.kind == ClKind::Space {
-            if let Some(g) = out.get_mut(k - 1) {
-                *g = Gap::Space;
-            }
-            continue;
-        }
-        if c.kind != ClKind::Text {
-            continue;
-        }
-        let Some(before) = t.chars().next_back() else { continue };
-        let mut j = k;
-        let mut zwsp = false;
-        while let Some(n) = clusters.get(j) {
-            let marker = slice(n);
-            let zwsp_text = n.kind == ClKind::Text && !marker.is_empty() && marker.chars().all(khmer::is_zero_width_space);
-            if n.kind != ClKind::Marker && !zwsp_text {
-                break;
-            }
-            zwsp |= zwsp_text || (!marker.is_empty() && marker.chars().all(khmer::is_zero_width_space));
-            j += 1;
-        }
-        let Some(next) = clusters.get(j).filter(|n| n.kind == ClKind::Text) else { continue };
-        let Some(after) = slice(next).chars().next() else { continue };
-        if khmer::is_zero_width_space(before) {
-            continue;
-        }
-        let gap =
-            match (khmer::is_khmer(before) || khmer::is_khmer(after), wordcraft_doc::thai::is_thai(before) || wordcraft_doc::thai::is_thai(after)) {
-                (true, _) => khmer::gap_between(before, after, zwsp),
-                (false, true) => wordcraft_doc::thai::gap_between(before, after),
-                _ if zwsp => Gap::Word,
-                _ => Gap::None,
-            };
-        if let Some(g) = out.get_mut(j - 1) {
-            *g = gap;
-        }
-    }
-    out
 }
 
 // Share the visible label line between line measurement and drawing.

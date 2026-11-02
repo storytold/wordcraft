@@ -2,7 +2,7 @@ use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
-use super::justify::hyphenation_points;
+use super::justify::{cluster_gaps, hyphenation_points};
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
@@ -593,7 +593,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
-    let gaps = if matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify) { super::cluster_gaps(&p.text, &b.clusters) } else { Vec::new() };
+    let gaps =
+        if matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify) { super::justify::cluster_gaps(&p.text, &b.clusters) } else { Vec::new() };
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,
@@ -621,6 +622,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         auto_space,
         gaps,
     };
+    if matches!(pl.rp.align, Align::ThaiDistribute | Align::KhmerJustify) {
+        pl.gaps = cluster_gaps(&p.text, &pl.clusters);
+    }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
