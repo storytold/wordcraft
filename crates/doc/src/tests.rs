@@ -18,6 +18,20 @@ fn word_count() {
     assert_eq!(count_words(" -- "), 0);
 }
 
+/// #4547: each Han ideograph and kana counts as a word; punctuation and Hangul spacing don't change.
+#[test]
+fn word_count_counts_each_chinese_and_japanese_character() {
+    // #4547: unspaced Chinese counted as one word per run.
+    assert_eq!(count_words("我们今天去公园。"), 7);
+    assert_eq!(count_words("WordCraft是一个文字处理器，很好用！"), 1 + 11);
+    assert_eq!(count_words("ひらがなとカタカナ"), 9);
+    assert_eq!(count_words("ｶﾀｶﾅ"), 4);
+    assert_eq!(count_words("ｶﾞｷﾞ"), 2, "voiced sound marks belong to their kana");
+    assert_eq!(count_words("。、・「」"), 0);
+    // Korean is spaced: Hangul counts by tokens.
+    assert_eq!(count_words("안녕하세요 세계"), 2);
+}
+
 #[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();
@@ -61,6 +75,23 @@ fn word_count_includes_numbered_labels_with_nothing_suffix() {
     // and label "2." and text "Banana Cherry" as 3 words (total: 5 words),
     // even though LevelSuffix::Nothing produces no visible separator between label and text.
     assert_eq!(d.word_count(), 5);
+}
+
+/// #4547: a generated CJK list label such as 第十二章 still counts as one word.
+#[test]
+fn word_count_keeps_a_cjk_list_label_one_word() {
+    let mut d = Document::new();
+    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
+    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    a.levels[0].format = section::NumFormat::ChineseCounting;
+    a.levels[0].text = "第%1章".into();
+    a.levels[0].start = 12;
+    let mut p = Paragraph::with_text("总结", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
+    d.body = vec![Arc::new(Block::Para(p))];
+    // The label 第十二章 stays one word (#4547 changed only document text); 总结 is two.
+    assert_eq!(d.word_count(), 1 + 2);
 }
 
 #[test]
