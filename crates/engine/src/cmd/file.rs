@@ -141,10 +141,13 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .key("Mod+W / Mod+F4")
-        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask)}"#)
+        .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
+        CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
+            .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "linkTarget"?: string | null} | null (removes)}}; text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -208,7 +211,8 @@ fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
 }
 
-/// Create a blank document in the saved proofing language, or use the requested template.
+/// Open a new document beside the open ones and make it active: a blank one in the saved
+/// proofing language, or the requested template.
 fn new(s: &mut Session, v: &Value) -> CmdResult {
     let doc = match p::str(v, "template").unwrap_or("blank") {
         "sample" => crate::sample::sample_document(),
@@ -217,14 +221,13 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "report" => crate::sample::report(),
         _ => normal_document(s),
     };
-    s.set_document(doc);
-    s.path = None;
+    s.add_document(doc);
     sel_result(s)
 }
 
 /// A blank document on the Normal template: the region's paper (#838), written in the editing
 /// language (the templates' text is English).
-fn normal_document(s: &Session) -> Document {
+pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
         d.styles.default_chr.lang = Some(lang.clone());
@@ -232,12 +235,22 @@ fn normal_document(s: &Session) -> Document {
     d
 }
 
-/// Open a document, using the saved proofing default only for plain text and Markdown.
+/// Open a document, using the saved proofing default only for plain text and Markdown. A file
+/// that is already open becomes the active document instead (`"alreadyOpen": true`). The file
+/// replaces an untouched blank document; otherwise it opens beside the open documents.
 fn open(s: &mut Session, v: &Value) -> CmdResult {
     let Some(path) = p::str(v, "path") else {
         s.push_ui_request(json!({"open": "openFile"}));
         return sel_result(s);
     };
+    if p::str(v, "data").is_none()
+        && let Some(id) = s.find_open(std::path::Path::new(path))
+    {
+        s.activate(id)?;
+        return Ok(
+            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
+        );
+    }
     let password = p::str(v, "password");
     let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
@@ -260,7 +273,13 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     {
         doc.styles.default_chr.lang = Some(lang.clone());
     }
-    s.set_document(doc);
+    match s.used_because() {
+        None => s.set_document(doc),
+        Some(why) => {
+            log::info!("file.open: opened beside document {}, not in its place: {why}", s.document_id());
+            s.add_opened_document(doc);
+        }
+    }
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
@@ -269,7 +288,26 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    Ok(
+        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
+    )
+}
+
+/// Close a document with no window to ask about it (agents, headless sessions).
+fn close_document(s: &mut Session, v: &Value) -> CmdResult {
+    let id = match v.get("id").filter(|x| !x.is_null()) {
+        None => s.document_id(),
+        Some(x) => x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?,
+    };
+    if !s.is_open(id) {
+        return Err(CmdError::Params(format!("no open document has id {id}")));
+    }
+    let dirty = s.documents().iter().any(|d| d.id == id && d.dirty);
+    if dirty && p::bool(v, "force") != Some(true) {
+        return Err(CmdError::Failed("the document has unsaved changes: save it first, or pass \"force\": true to discard them".into()));
+    }
+    s.close_document(id)?;
+    Ok(json!({"closed": id, "active": s.document_id(), "documents": s.documents()}))
 }
 
 /// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
@@ -390,7 +428,7 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
         s.push_ui_request(json!({"open": "exportPng"}));
         return Ok(json!({"exported": false}));
     };
-    let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
+    let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
@@ -405,6 +443,15 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
     Ok(json!({"path": path, "width": img.width, "height": img.height, "bytes": png.len()}))
+}
+
+/// Text and its bookmark association cross the dialog/command boundary together on rename.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkedCustomText<'a> {
+    value: &'a str,
+    #[serde(borrow)]
+    link_target: Option<&'a str>,
 }
 
 fn properties(s: &mut Session, v: &Value) -> CmdResult {
@@ -422,7 +469,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.category, "category");
     if let Some(custom) = v.get("custom") {
         let Some(m) = custom.as_object() else {
-            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+            return Err(CmdError::Params("`custom` must be an object of name → text, linked text value, or null".into()));
         };
         // Removals first: a case-only rename sends the old spelling as null and the new one
         // with its value, and `set_custom_prop` matches names case-insensitively, so setting
@@ -433,17 +480,32 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
         for (name, val) in m {
-            match val {
-                // Removals took the name as stored above: a file opened from an older Word may
-                // hold one longer than today's limit, and it must still be deletable (#2982).
-                Value::Null => {}
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => {
-                    if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
-                        return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
-                    }
-                    s.doc.set_custom_prop(name, x);
+            let bad_value =
+                || CmdError::Params(format!("custom property `{name}` must be text (≤ {MAX_CUSTOM_VALUE} bytes), a linked text value, or null"));
+            let (value, target) = match val {
+                // Removal also accepts names longer than today's limit (#2982).
+                Value::Null => continue,
+                Value::String(value) => (value.as_str(), None),
+                Value::Object(_) => {
+                    let linked: LinkedCustomText<'_> = serde::Deserialize::deserialize(val).map_err(|_| bad_value())?;
+                    (linked.value, Some(linked.link_target))
                 }
-                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+                _ => return Err(bad_value()),
+            };
+            if value.len() > MAX_CUSTOM_VALUE {
+                return Err(bad_value());
+            }
+            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            }
+            if target.flatten().is_some_and(|t| t.len() > MAX_CUSTOM_VALUE) {
+                return Err(CmdError::Params(format!("custom property bookmark targets are at most {MAX_CUSTOM_VALUE} bytes")));
+            }
+            s.doc.set_custom_prop(name, value);
+            if let Some(target) = target
+                && let Some(prop) = s.doc.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
+            {
+                prop.link_target = target.map(str::to_string);
             }
         }
     }
@@ -457,7 +519,7 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
 /// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
 /// too (#2982).
 pub const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command. The Custom Properties dialog
+/// Largest custom property value or bookmark target we accept from a command. The Custom Properties dialog
 /// validates with it too (#2982).
 pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 

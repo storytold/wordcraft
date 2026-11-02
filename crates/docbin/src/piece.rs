@@ -117,6 +117,12 @@ impl PieceTable {
         }
     }
 
+    /// The raw Prm of the piece holding `cp` (0, no properties, when there is none): two CPs
+    /// with the same value get the same [`PrmRef`].
+    pub(crate) fn prm_of(&self, cp: u32) -> u16 {
+        self.piece_of(cp).map_or(0, |p| p.prm)
+    }
+
     fn piece_of(&self, cp: u32) -> Option<&Pcd> {
         let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
         if i >= self.pieces.len() {
