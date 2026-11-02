@@ -1062,6 +1062,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-proof"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=48ed6f8cbd4104225a9ecde122d9fb8d1353b5a6#48ed6f8cbd4104225a9ecde122d9fb8d1353b5a6"
+dependencies = [
+ "log",
+ "miniz_oxide 0.9.1",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
@@ -6654,6 +6664,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "craft-print",
+ "craft-proof",
  "craft-update",
  "dispatch2",
  "eframe",
@@ -6676,7 +6687,6 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
- "wordcraft-proof",
  "wordcraft-ui-egui",
  "zbus",
 ]
@@ -6759,6 +6769,7 @@ version = "0.14.0"
 dependencies = [
  "cfb",
  "chrono",
+ "craft-proof",
  "encoding_rs",
  "getrandom 0.3.4",
  "image",
@@ -6778,7 +6789,6 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-pdf",
- "wordcraft-proof",
  "wordcraft-render",
  "zeroize",
  "zip 3.0.0",
@@ -6829,6 +6839,7 @@ dependencies = [
 name = "wordcraft-layout"
 version = "0.14.0"
 dependencies = [
+ "craft-proof",
  "image",
  "js-sys",
  "kurbo",
@@ -6842,7 +6853,6 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-metafile",
- "wordcraft-proof",
 ]
 
 [[package]]
@@ -6884,16 +6894,6 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-metafile",
-]
-
-[[package]]
-name = "wordcraft-proof"
-version = "0.14.0"
-dependencies = [
- "log",
- "miniz_oxide 0.9.1",
- "proptest",
- "unicode-normalization",
 ]
 
 [[package]]

@@ -387,7 +387,6 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
     match lang {
         ProofLang::Pl => tl!("Polish"),
         ProofLang::Pt => tl!("Portuguese (Brazil)"),
-        ProofLang::PtPt => tl!("Portuguese (Portugal)"),
         ProofLang::It => tl!("Italian"),
         ProofLang::Hr => tl!("Croatian"),
         ProofLang::Tr => tl!("Turkish"),

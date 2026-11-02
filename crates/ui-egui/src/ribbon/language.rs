@@ -70,9 +70,9 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     }
 }
 
-/// The name of a Portuguese tag, read as `ProofLang::from_tag` reads it, so the label and the
-/// menu's check mark match the spelling proofed (#1028 review): a POSIX `.UTF-8` or `@euro` tail
-/// and ISO 639-2 `por` are understood, and a private-use `pt-x-PT` has no region. A region is
+/// The name of a Portuguese tag, its region read as craft-proof's `ProofLang::from_tag` reads it
+/// (#1028 review): a POSIX `.UTF-8` or `@euro` tail and ISO 639-2 `por` are understood, and a
+/// private-use `pt-x-PT` has no region. A region is
 /// named ("Portuguese (Portugal)", "Portuguese (Angola)"); no region is Brazil's, as proofed.
 fn portuguese_name(tag: &str) -> String {
     let base = tag.split(['.', '@']).next().unwrap_or(tag);
