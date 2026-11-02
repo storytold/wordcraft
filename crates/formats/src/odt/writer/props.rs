@@ -72,7 +72,28 @@ pub(in crate::odt) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String
         extra: Some(Box::new(cp.clone())),
         ..Default::default()
     };
-    text_props(&f)
+    let mut p = text_props(&f);
+    // What a style turns off that the style it is based on may turn on: said so, or the parent's
+    // bold, italic, underline or strike-through would show through.
+    if cp.bold == Some(false) {
+        p.push_str(" fo:font-weight=\"normal\" style:font-weight-asian=\"normal\"");
+        if cp.bold_cs.is_none() {
+            p.push_str(" style:font-weight-complex=\"normal\"");
+        }
+    }
+    if cp.italic == Some(false) {
+        p.push_str(" fo:font-style=\"normal\" style:font-style-asian=\"normal\"");
+        if cp.italic_cs.is_none() {
+            p.push_str(" style:font-style-complex=\"normal\"");
+        }
+    }
+    if cp.underline == Some(Underline::None) {
+        p.push_str(" style:text-underline-style=\"none\"");
+    }
+    if cp.strike == Some(false) && cp.double_strike != Some(true) {
+        p.push_str(" style:text-line-through-style=\"none\"");
+    }
+    p
 }
 
 /// `fo:text-align` for `a` (ODF 1.3 §20.223).

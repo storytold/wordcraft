@@ -100,4 +100,12 @@ fn columns_are_written_with_their_share_of_the_table() {
     );
     let c = content_of(&export(&d).unwrap());
     assert!(c.contains(r#"style:column-width="72pt" style:rel-column-width="7200*""#) && c.contains(r#"style:rel-column-width="21600*""#), "{c}");
+    // An aligned table keeps its widths: LibreOffice lays one out oddly with shares.
+    let left = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="4in" table:align="left"/></style:style>"#;
+    let d = doc(
+        &format!("{styles}{left}"),
+        r#"<table:table table:style-name="T"><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
+    );
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"table:align="left""#) && !c.contains("rel-column-width"), "{c}");
 }

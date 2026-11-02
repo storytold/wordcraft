@@ -267,11 +267,31 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             kind: wordcraft_doc::styles::StyleKind::Paragraph,
             based_on: (based_on != id).then_some(based_on),
             para,
-            chr: model::char_props(&look.fmt),
+            chr: turned_off(model::char_props(&look.fmt), def.off),
             ..Default::default()
         };
         doc.styles.upsert(style);
     }
+}
+
+/// `chr` with what a style turns off (`off`: bold, italic, underline, strike-through) said so:
+/// otherwise the style it is based on would show through (LibreOffice's agenda dates, not bold
+/// under bold titles).
+fn turned_off(mut chr: wordcraft_doc::props::CharProps, off: [bool; 4]) -> wordcraft_doc::props::CharProps {
+    let [bold, italic, underline, strike] = off;
+    if bold {
+        chr.bold = Some(false);
+    }
+    if italic {
+        chr.italic = Some(false);
+    }
+    if underline {
+        chr.underline = Some(wordcraft_doc::props::Underline::None);
+    }
+    if strike {
+        chr.strike = Some(false);
+    }
+    chr
 }
 
 /// Give the document's style for paragraph kind `kind` the look the file gives its own: its text

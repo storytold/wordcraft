@@ -148,3 +148,20 @@ fn a_style_based_on_libreoffices_heading_keeps_it() {
         "{s}"
     );
 }
+
+#[test]
+fn what_a_style_turns_off_stays_off() {
+    // LibreOffice's agenda: "AgendaDate" is based on the bold "AgendaTitles" and turns bold off.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Titles" style:family="paragraph"><style:text-properties fo:font-weight="bold" fo:font-style="italic" style:text-underline-style="solid"/></style:style><style:style style:name="Date" style:family="paragraph" style:parent-style-name="Titles"><style:text-properties fo:font-weight="normal" fo:font-style="normal" style:text-underline-style="none"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Titles">T</text:p><text:p text:style-name="Date">D</text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, Some(&styles))).unwrap()).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    let date = s.split(r#"style:name="Date""#).nth(1).and_then(|r| r.split("</style:style>").next()).unwrap_or("missing");
+    for want in [r#"fo:font-weight="normal""#, r#"fo:font-style="normal""#, r#"style:text-underline-style="none""#] {
+        assert!(date.contains(want), "{want} in {date}");
+    }
+}

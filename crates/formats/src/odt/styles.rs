@@ -419,6 +419,9 @@ pub(super) struct NamedStyle {
     pub(super) name: String,
     pub(super) parent: Parent,
     pub(super) look: ParaLook,
+    /// What it turns off, which a style it is based on may turn on: bold, italic, underline,
+    /// strike-through (`fo:font-weight="normal"`…).
+    pub(super) off: [bool; 4],
 }
 
 /// Reads date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1286,7 +1289,8 @@ impl Styles {
             ..Default::default()
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
-        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look })
+        let off = [s.fmt.bold, s.fmt.italic, s.fmt.underline, s.fmt.strike].map(|v| v == Some(false));
+        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look, off })
     }
 
     pub(super) fn para(&self, name: &str) -> ParaLook {

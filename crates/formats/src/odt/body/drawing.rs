@@ -131,7 +131,7 @@ impl Body<'_> {
                         o.replacement = img.clone().map(std::sync::Arc::new);
                     }
                     let shown = img
-                        .and_then(|data| make_img(data, w, h, alt.trim()))
+                        .and_then(|data| picture(data, w, h, alt.trim()))
                         .or_else(|| crate::odt::objects::placeholder(&o.mime).and_then(|p| make_img(p, w, h, alt.trim())));
                     shown.map(|mut img| {
                         img.float = float.map(Box::new);
@@ -139,7 +139,7 @@ impl Body<'_> {
                         Inline::Image(img)
                     })
                 }
-                (None, None) => img.and_then(|data| make_img(data, w, h, alt.trim())).map(|mut img| {
+                (None, None) => img.and_then(|data| picture(data, w, h, alt.trim())).map(|mut img| {
                     img.float = float.map(Box::new);
                     if let Some(clip) = self.frame_clip.take() {
                         img.crop = crop_fractions(clip, &img.data);
@@ -331,4 +331,36 @@ impl Body<'_> {
             n.text_box = Some(frame);
         }
     }
+}
+
+/// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
+/// keeps clip art and logos so), sized `w` × `h` (points) when the frame says.
+pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
+    if wordcraft_metafile::is_metafile(&data) {
+        // An EMF starts with its header record, type 1.
+        let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
+        // Its own size, when the frame gives none: a placeable WMF's or an EMF's frame, points.
+        let natural = if w.is_some() && h.is_some() { None } else { metafile_size(&data) };
+        return Some(model::sized_img(std::sync::Arc::new(data), ext, natural, w, h, alt));
+    }
+    make_img(data, w, h, alt)
+}
+
+/// A metafile's own size, points, from its header: a placeable WMF's bounding box in its units
+/// per inch, or an EMF's frame (`rclFrame`, 0.01 mm). `None` when the header doesn't say.
+fn metafile_size(d: &[u8]) -> Option<(f32, f32)> {
+    let i16_at = |o: usize| d.get(o..o + 2).map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])));
+    let i32_at = |o: usize| d.get(o..o + 4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32);
+    let (w, h) = if d.starts_with(&[0xd7, 0xcd, 0xc6, 0x9a]) {
+        let inch = d.get(14..16).map(|b| f32::from(u16::from_le_bytes([b[0], b[1]]))).filter(|v| *v > 0.0)?;
+        let (l, t, r, b) = (i16_at(6)?, i16_at(8)?, i16_at(10)?, i16_at(12)?);
+        ((r - l).abs() / inch * 72.0, (b - t).abs() / inch * 72.0)
+    } else if d.get(..4) == Some(&[1, 0, 0, 0]) {
+        let (l, t, r, b) = (i32_at(24)?, i32_at(28)?, i32_at(32)?, i32_at(36)?);
+        let pt = 72.0 / 2540.0;
+        ((r - l).abs() * pt, (b - t).abs() * pt)
+    } else {
+        return None;
+    };
+    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w.min(1584.0), h.min(1584.0)))
 }

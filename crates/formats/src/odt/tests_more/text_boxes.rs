@@ -197,3 +197,89 @@ fn a_chain_to_nothing_itself_or_round_is_not_linked() {
     // C → D → C: one of the two links is undone.
     assert!(l[2].1.is_none() || l[3].1.is_none(), "{l:?}");
 }
+
+#[test]
+fn a_picture_in_a_section_in_a_page_anchored_text_box_is_kept() {
+    // LibreOffice's fax templates: page-anchored text boxes before the first paragraph, the
+    // last holding the company logo in a section.
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 300]].concat();
+    let boxes = r#"<draw:frame text:anchor-type="page" text:anchor-page-number="1" svg:x="1in" svg:y="2in" svg:width="4in"><draw:text-box fo:min-height="0.4in"><text:p/><text:p>Important!</text:p></draw:text-box></draw:frame><draw:frame text:anchor-type="page" text:anchor-page-number="1" svg:x="1in" svg:y="0.8in" svg:width="1.5in"><draw:text-box fo:min-height="1.2in"><text:p/><text:section text:name="Company Logo"><text:p><draw:frame draw:style-name="fr4" text:anchor-type="paragraph" svg:width="1in" svg:height="0.7in"><draw:image xlink:href="Pictures/logo.png"/></draw:frame></text:p></text:section></draw:text-box></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="fr4" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style></office:automatic-styles><office:body><office:text>{boxes}<text:p>Fax.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.png", &png)]);
+    let d = import(&pkg).unwrap();
+    let pictures: usize = d
+        .parts
+        .values()
+        .flat_map(|p| p.blocks.iter())
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter(|o| matches!(o, InlineObject::Image { .. }))
+        .count();
+    assert_eq!(pictures, 1, "the logo in its box");
+    assert_eq!(boxes_of(&d), 2);
+    // And saved in it.
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert_eq!(c.matches("<draw:image ").count(), 1, "{c}");
+    // Its frame's style derives from Graphics: LibreOffice shows a floating picture in a text box
+    // only so.
+    assert!(c.contains(r#"style:family="graphic" style:parent-style-name="Graphics""#), "{c}");
+}
+
+/// A tiny placeable Windows metafile, 1 in × 0.5 in: its header and its end record.
+fn wmf() -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&[0xd7, 0xcd, 0xc6, 0x9a, 0, 0]);
+    for n in [0i16, 0, 1440, 720] {
+        v.extend_from_slice(&n.to_le_bytes());
+    }
+    v.extend_from_slice(&1440u16.to_le_bytes());
+    v.extend_from_slice(&[0, 0, 0, 0]);
+    let check = v.chunks(2).take(10).fold(0u16, |a, c| a ^ u16::from_le_bytes([c[0], c[1]]));
+    v.extend_from_slice(&check.to_le_bytes());
+    // The standard header: a memory metafile, 9 words, version 3, its size, no objects.
+    for w in [1u16, 9, 0x300] {
+        v.extend_from_slice(&w.to_le_bytes());
+    }
+    v.extend_from_slice(&12u32.to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    v.extend_from_slice(&3u32.to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    // The end record.
+    v.extend_from_slice(&3u32.to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    v
+}
+
+#[test]
+fn a_windows_metafile_picture_is_kept() {
+    // LibreOffice keeps clip art and logos as WMF or EMF: they were dropped.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D} xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p><draw:frame text:anchor-type="as-char"><draw:image xlink:href="Pictures/logo.wmf"/></draw:frame> and <draw:frame text:anchor-type="as-char" svg:width="2in" svg:height="1in"><draw:image xlink:href="Pictures/logo.wmf"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/logo.wmf", &wmf())]);
+    let d = import(&pkg).unwrap();
+    let sizes: Vec<(f32, f32)> = d.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Image { w, h, .. } = o { Some((*w, *h)) } else { None })
+        .collect();
+    // Its own size (1 in × 0.5 in) when the frame gives none, else the frame's.
+    assert_eq!(sizes, [(72.0, 36.0), (144.0, 72.0)]);
+    // Saved with its own media type.
+    let saved = export(&d).unwrap();
+    assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains("image/x-wmf"));
+    assert_eq!(import(&saved).unwrap().body[0].as_para().unwrap().objects.len(), 2);
+}
+
+fn boxes_of(d: &Document) -> usize {
+    d.body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter(|o| matches!(o, InlineObject::Shape { kind: ShapeKind::TextBox, .. }))
+        .count()
+}

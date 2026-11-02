@@ -270,7 +270,7 @@ impl Writer {
             Place::Text(None) if clip.is_empty() => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
             _ => {
                 let (anchor, props, xy) = placement(place, img.w, img.h);
-                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{props}{clip}"))))
+                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{}{props}{clip}", super::GRAPHICS_PARENT))))
             }
         };
         out.push_str(&format!(

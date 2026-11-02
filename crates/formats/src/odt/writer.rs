@@ -87,6 +87,9 @@ pub(super) const NS: &str = concat!(
 /// Marks a graphic style (in `Writer::graphic_styles`) as a text box frame's: derived from the
 /// Frame style (see `Writer::automatic_styles`).
 pub(super) const FRAME_PARENT: &str = "\u{0}frame";
+/// Marks a graphic style as a picture frame's: derived from the Graphics style, without which
+/// LibreOffice doesn't show a floating picture inside a text box.
+pub(super) const GRAPHICS_PARENT: &str = "\u{0}graphics";
 
 pub(super) fn pt(v: f32) -> String {
     let s = format!("{:.2}", v);
@@ -800,11 +803,17 @@ impl Writer {
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {
-                // Its share of the table too (§20.334 `style:rel-column-width`), so a table filling
-                // the margins of a narrower page keeps its columns' proportions.
-                let rel = if w.is_finite() { (w.clamp(0.0, 1584.0) * 100.0).round().max(1.0) as u32 } else { 1 };
+                // A table filling the margins gives its columns' shares too (§20.334
+                // `style:rel-column-width`), so on a narrower page they keep their proportions.
+                // (LibreOffice lays out an aligned table with shares otherwise: only these.)
+                let share = if align == "margins" {
+                    let rel = if w.is_finite() { (w.clamp(0.0, 1584.0) * 100.0).round().max(1.0) as u32 } else { 1 };
+                    format!(" style:rel-column-width=\"{rel}*\"")
+                } else {
+                    String::new()
+                };
                 s.push_str(&format!(
-                    "<style:style style:name=\"Table{tn}.C{}\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"{}\" style:rel-column-width=\"{rel}*\"/></style:style>",
+                    "<style:style style:name=\"Table{tn}.C{}\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"{}\"{share}/></style:style>",
                     c + 1,
                     pt(*w)
                 ));
@@ -826,9 +835,12 @@ impl Writer {
         for (i, props) in self.graphic_styles.iter().enumerate() {
             // A text box's frame derives from LibreOffice's Frame style, without which
             // LibreOffice ignores its border (`fo:border`) and outlines it as a drawing shape.
-            let (parent, props) = match props.strip_prefix(FRAME_PARENT) {
-                Some(rest) => (" style:parent-style-name=\"Frame\"", rest),
-                None => ("", props.as_str()),
+            let (parent, props) = if let Some(rest) = props.strip_prefix(FRAME_PARENT) {
+                (" style:parent-style-name=\"Frame\"", rest)
+            } else if let Some(rest) = props.strip_prefix(GRAPHICS_PARENT) {
+                (" style:parent-style-name=\"Graphics\"", rest)
+            } else {
+                ("", props.as_str())
             };
             s.push_str(&format!(
                 "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"{parent}><style:graphic-properties{props}/></style:style>",

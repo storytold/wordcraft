@@ -531,8 +531,9 @@ impl Body<'_> {
             self.para_cont = false;
         }
         self.fmt.push(base);
-        // Drawings waiting outside a paragraph come first in it.
-        if !self.loose.is_empty() && self.note.is_none() {
+        // Drawings waiting outside a paragraph come first in it, when it is the text's own (not
+        // a text box's, a note's or a cell's).
+        if !self.loose.is_empty() && self.at_body_level() {
             let mut loose = std::mem::take(&mut self.loose);
             loose.append(&mut p.inlines);
             p.inlines = loose;

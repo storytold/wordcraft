@@ -147,6 +147,8 @@ pub fn mime_of(ext: &str) -> &'static str {
         "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
+        "wmf" => "image/x-wmf",
+        "emf" => "image/x-emf",
         _ => "application/octet-stream",
     }
 }
