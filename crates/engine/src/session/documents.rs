@@ -456,6 +456,9 @@ impl Session {
     }
 
     fn add(&mut self, mut doc: Document, untitled: u32) -> u64 {
+        if let Err(e) = self.detect_document_language(&mut doc) {
+            log::warn!("proofing language on open: {e}");
+        }
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();

@@ -31,7 +31,13 @@ impl Session {
     /// Start an editing session at the document beginning with empty history and
     /// default view, preferences and a yellow highlighter independent of document undo.
     pub fn new(doc: Document) -> Self {
-        Self::with_registry(doc, Arc::new(crate::cmd::registry()))
+        let mut session = Self::with_registry(doc, Arc::new(crate::cmd::registry()));
+        let mut doc = session.doc.clone();
+        if let Err(e) = session.detect_document_language(&mut doc) {
+            log::warn!("proofing language on open: {e}");
+        }
+        session.doc = doc;
+        session
     }
 
     /// Initialise session defaults while sharing the immutable command registry with previews.

@@ -299,6 +299,53 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
     LANGUAGES.iter().map(|l| (l.lang, l.slot.installed_path())).collect()
 }
 
+/// Installed Cyrillic Hunspell pairs, including languages not yet connected to proofing.
+/// The order is search-directory priority, then BCP 47 tag. Discovery does not load a dictionary
+/// or imply spelling support. Cached until the dictionaries setting/generation changes.
+pub fn installed_cyrillic_languages() -> Vec<String> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(u64, Vec<String>)>> = Mutex::new(None);
+    let generation = dictionary_generation();
+    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((previous, tags)) = &*cache
+        && *previous == generation
+    {
+        return tags.clone();
+    }
+    let tags = discover_cyrillic_languages();
+    *cache = Some((generation, tags.clone()));
+    tags
+}
+
+fn discover_cyrillic_languages() -> Vec<String> {
+    if cfg!(target_arch = "wasm32") {
+        return Vec::new();
+    }
+    const TAGS: &[(&str, &str)] = &[
+        ("be-BY", "be_BY"),
+        ("bg-BG", "bg_BG"),
+        ("kk-KZ", "kk_KZ"),
+        ("ky-KG", "ky_KG"),
+        ("mk-MK", "mk_MK"),
+        ("mn-MN", "mn_MN"),
+        ("ru-RU", "ru_RU"),
+        ("sr-RS", "sr_RS"),
+        ("tg-TJ", "tg_TJ"),
+        ("uk-UA", "uk_UA"),
+    ];
+    let extensions: Vec<String> = TAGS.iter().flat_map(|(_, name)| hunspell::lo_ext_dirs(name)).collect();
+    let mut found = Vec::new();
+    for dir in hunspell::search_dirs(Some(&extensions)) {
+        for &(tag, name) in TAGS {
+            let primary = name.split('_').next().unwrap_or(name);
+            if !found.iter().any(|t| t == tag) && hunspell::find_in(&dir, &[name, primary]).is_some() {
+                found.push(tag.to_string());
+            }
+        }
+    }
+    found
+}
+
 /// Why the dictionary found for `lang` failed to load (unsupported encoding, too large, a parse
 /// error), if it was read and failed. Doesn't read anything itself: a dictionary nobody has
 /// checked yet reports `None` (#2830).

@@ -337,7 +337,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
-            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
+            r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (Latin/Cyrillic automatic language detection; true also processes existing text), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
         ),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);

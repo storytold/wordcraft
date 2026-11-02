@@ -407,7 +407,9 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
         if !part.is_empty() {
             inserted = true;
             let starts_para = direction_unset(s, &at);
+            let start = at.off;
             at = s.doc.insert_text(&at, &part, &props)?;
+            s.detect_inserted_language(&at, start..at.off)?;
             // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
             // sets makes it a right-to-left paragraph, so the caret and text start at the right
             // margin. Paragraphs that already have letters, or a direction, keep theirs.

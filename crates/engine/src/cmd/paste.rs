@@ -363,6 +363,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    s.detect_fragment_language(&mut frag)?;
     let end = s.doc.insert_fragment(&at, &frag)?;
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
@@ -377,6 +378,11 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
                 p.touch();
             }
         }
+    }
+    let first_end = if at.path == end.path { end.off } else { s.doc.para_at(&at).map_or(at.off, Paragraph::len) };
+    s.detect_inserted_language(&at, at.off..first_end)?;
+    if at.path != end.path {
+        s.detect_inserted_language(&end, 0..end.off)?;
     }
     s.sel = Selection::caret(end);
     Ok(())

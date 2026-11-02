@@ -3631,3 +3631,40 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+/// #3353: the same path as keyboard/IME commits assigns languages and keeps one typing undo.
+#[test]
+fn automatic_proofing_language_follows_typed_scripts_and_undo() {
+    let mut s = s();
+    s.prefs.autocorrect.enabled = false;
+    s.prefs.default_language = Some("ru-RU".into());
+    typ(&mut s, "hello русский hello");
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.props_of_char("hello ".len()).lang.as_deref(), Some("ru-RU"));
+    assert_eq!(p.props_of_char("hello русский ".len()).lang.as_deref(), Some("en-US"));
+    let typed = s.doc.clone();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc, typed);
+}
+
+#[test]
+fn automatic_proofing_language_handles_plain_paste_disabled_and_neutral_text() {
+    let mut s = s();
+    s.prefs.default_language = Some("ru-RU".into());
+    run(&mut s, "edit.pasteText", json!({"text": "русский\nhello"}));
+    assert_eq!(s.doc.body[0].as_para().unwrap().props_of_char(0).lang.as_deref(), Some("ru-RU"));
+    let p = s.doc.body[1].as_para().unwrap();
+    assert_eq!(s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0)).lang.as_deref(), Some("en-US"));
+    run(&mut s, "review.language", json!({"detect": false}));
+    run(&mut s, "text.insert", json!({"text": " русский"}));
+    let p = s.doc.body[1].as_para().unwrap();
+    assert_eq!(s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char("hello ".len())).lang.as_deref(), Some("en-US"));
+    run(&mut s, "review.language", json!({"detect": true}));
+    let p = s.doc.body[1].as_para().unwrap();
+    let lang = p.props_of_char(p.len() - 1).lang.clone();
+    run(&mut s, "text.insert", json!({"text": " 123 ! 😀"}));
+    let p = s.doc.body[1].as_para().unwrap();
+    assert_eq!(p.props_of_char(p.len() - 1).lang, lang);
+}

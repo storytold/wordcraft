@@ -169,20 +169,8 @@ pub fn detect_language(text: &str) -> Option<&'static str> {
     let mut n = [0usize; 10];
     let mut ukrainian = false;
     for c in text.chars().filter(|c| c.is_alphabetic()) {
-        let i = match c {
-            '\u{0400}'..='\u{052F}' | '\u{1C80}'..='\u{1C8F}' | '\u{2DE0}'..='\u{2DFF}' | '\u{A640}'..='\u{A69F}' => {
-                ukrainian |= matches!(c, 'і' | 'ї' | 'є' | 'ґ' | 'І' | 'Ї' | 'Є' | 'Ґ');
-                0
-            }
-            '\u{0370}'..='\u{03FF}' | '\u{1F00}'..='\u{1FFF}' => 1,
-            '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}' => 2,
-            '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}' => 3,
-            '\u{0E00}'..='\u{0E7F}' => 4,
-            '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{AC00}'..='\u{D7AF}' => 5,
-            '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' => 6,
-            '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{2FFFF}' => 7,
-            _ => 8,
-        };
+        ukrainian |= crate::scripts::ukrainian_letter(c);
+        let i = (crate::scripts::of_char(c) as usize).min(8);
         if let Some(k) = n.get_mut(i) {
             *k += 1;
         }
@@ -223,17 +211,11 @@ fn plain_tag(tag: &str) -> Option<&str> {
 /// The script group a language is written in, for the languages [`detect_language`] can tell
 /// apart by script (the primary subtag in, the detected tag out).
 fn script_language(primary: &str) -> Option<&'static str> {
-    Some(match primary {
-        "ru" | "uk" | "be" | "bg" | "sr" | "mk" | "kk" | "ky" | "mn" | "tg" => "ru",
-        "el" => "el",
-        "ar" | "fa" | "ur" | "ps" | "ku" | "sd" | "ug" => "ar",
-        "he" | "yi" => "he",
-        "th" => "th",
-        "ko" => "ko",
-        "ja" => "ja",
-        "zh" => "zh",
-        _ => return None,
-    })
+    // Historically Read Aloud only used two-letter tags for script compatibility.
+    if primary.len() != 2 {
+        return None;
+    }
+    crate::scripts::of_language(primary).and_then(crate::scripts::speech_group)
 }
 
 /// The language to speak `text` in: the document's `explicit` tag when it fits the text, else the

@@ -55,7 +55,7 @@ pub fn set_dictionary_dir(dir: Option<PathBuf>) {
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
 /// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR` — so both
 /// the primary-language folder and the dashed full name are tried.
-fn lo_ext_dirs(name: &str) -> Vec<String> {
+pub(crate) fn lo_ext_dirs(name: &str) -> Vec<String> {
     let primary = name.split(['-', '_']).next().unwrap_or(name);
     let dashed = name.replace('_', "-");
     let first = format!("dict-{primary}");
