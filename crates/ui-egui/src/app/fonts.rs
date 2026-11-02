@@ -59,8 +59,8 @@ impl WordApp {
         }
         if chars.iter().any(|c| theme::is_hangul_or_cjk(*c))
             || (!self.want_system_cjk
-                && (doc.plain_text(wordcraft_doc::StoryRef::Body).chars().any(theme::is_hangul_or_cjk)
-                    || doc.parts.keys().any(|id| doc.plain_text(wordcraft_doc::StoryRef::Part(*id)).chars().any(theme::is_hangul_or_cjk))
+                && (blocks_have_cjk(&doc.body, 0)
+                    || doc.parts.values().any(|part| blocks_have_cjk(&part.blocks, 0))
                     || doc.styles.styles.iter().any(|s| !s.builtin && s.name.chars().any(theme::is_hangul_or_cjk))
                     || doc.revisions.iter().any(|r| r.author.chars().any(theme::is_hangul_or_cjk))))
         {
@@ -238,4 +238,16 @@ impl WordApp {
             self.styled = true;
         }
     }
+}
+
+/// Zero-allocation in-place scan for Hangul/CJK characters across `blocks`, skipping pure-ASCII
+/// paragraphs without building temporary story `String`s.
+fn blocks_have_cjk(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize) -> bool {
+    if depth >= 16 {
+        return false;
+    }
+    blocks.iter().any(|b| match b.as_ref() {
+        wordcraft_doc::Block::Para(p) => !p.text.is_ascii() && p.text.chars().any(theme::is_hangul_or_cjk),
+        wordcraft_doc::Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).any(|c| blocks_have_cjk(&c.blocks, depth + 1)),
+    })
 }
