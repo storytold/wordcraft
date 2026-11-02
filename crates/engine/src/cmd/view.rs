@@ -177,11 +177,11 @@ fn full_screen_available(_: &Session) -> Option<&'static str> {
 
 fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     if read && !s.view.read_mode {
-        // Reading controls are session-only, and reset on each entry to the view, except the
-        // Page color, which stays as it was last set.
+        // Width, size and spacing reset on each entry. Page Color follows the saved preference.
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
+        s.view.read_page_color = s.prefs.read_page_color;
     }
     s.view.mode = m;
     s.view.read_mode = read;
@@ -256,6 +256,7 @@ fn read_page_color(s: &mut Session, v: &Value) -> CmdResult {
         _ => return Err(CmdError::Params("reading page color must be none, sepia, or inverse".into())),
     };
     s.view.read_page_color = color;
+    s.prefs.read_page_color = color;
     Ok(json!({"pageColor": color}))
 }
 

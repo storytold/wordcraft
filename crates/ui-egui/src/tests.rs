@@ -560,6 +560,29 @@ fn alignment_guides_are_a_ui_command_and_survive_a_restart() {
     assert!(old.alignment_guides, "older settings leave it on");
 }
 
+#[test]
+fn reading_page_color_restores_for_new_documents_and_windows() {
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    let mut a = app();
+    a.run("view.readMode", json!({})).unwrap();
+    a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved).unwrap());
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("view.readMode", json!({})).unwrap();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("file.new", json!({})).unwrap();
+    b.run("view.readMode", json!({})).unwrap();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    let first_window = b.windows.shown();
+    b.new_window();
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Sepia);
+    b.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
+    assert!(b.enter_window(first_window));
+    assert_eq!(b.session.view.read_page_color, ReadPageColor::Inverse);
+}
+
 /// File › Options › Advanced › Animation: the caret's animation is a UI command, kept between
 /// runs.
 #[test]
@@ -5197,6 +5220,9 @@ fn check_spelling_survives_restart() {
     // Settings saved before #1792 have no key: spelling stays on.
     second.apply_prefs(serde_json::from_str("{}").unwrap());
     assert!(second.session.view.proofing);
+    let conflicting = serde_json::from_value(json!({"checkSpelling": true, "editing": {"checkSpelling": false}})).unwrap();
+    second.apply_prefs(conflicting);
+    assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
 }
 
 #[test]
