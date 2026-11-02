@@ -311,6 +311,9 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    PdfImportReport {
+        warnings: Vec<String>,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -511,6 +514,7 @@ impl Dialog {
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
+            Dialog::PdfImportReport { .. } => "pdfImportReport",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
@@ -556,6 +560,19 @@ impl Dialog {
             }
             "mailings.checkErrors" => {
                 Some(Dialog::CheckErrors { unknown: strings("unknownFields"), records: v.get("records").and_then(Value::as_u64).unwrap_or(0) })
+            }
+            // A PDF the user opened shows what its conversion left out. Only commands the user ran
+            // come here; a script or agent gets the same warnings in the command's result.
+            "file.open" if v.pointer("/import/format").and_then(Value::as_str) == Some("pdf") => {
+                let warnings = v
+                    .pointer("/import/warnings")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect();
+                Some(Dialog::PdfImportReport { warnings })
             }
             _ => None,
         }

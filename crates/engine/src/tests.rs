@@ -10742,6 +10742,79 @@ fn html_converted_to_docx_keeps_bold_headers_and_right_aligned_cells() {
 }
 
 #[test]
+fn pdf_import_is_editable_and_save_as_does_not_overwrite_the_source() {
+    let original = wordcraft_doc::Document::from_text("Editable PDF text");
+    let bytes = wordcraft_pdf::export(&original, &Default::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("wordcraft-pdf-import-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.pdf");
+    std::fs::write(&source, &bytes).unwrap();
+    let mut session = s();
+    let result = run(&mut session, "file.open", json!({"path": source.to_string_lossy()}));
+    assert_eq!(result["import"]["format"], "pdf");
+    assert_eq!(result["import"]["saveAsRequired"], true);
+    assert!(session.path.is_none() && session.dirty);
+    assert_eq!(session.file_name.as_deref(), Some("source"), "Save As suggests the PDF's name");
+    assert!(text(&session).contains("Editable PDF text"));
+    run(&mut session, "text.insert", json!({"text": "Changed: "}));
+    assert_eq!(run(&mut session, "file.save", json!({}))["saved"], false);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    let copy = dir.join("converted.docx");
+    run(&mut session, "file.saveAs", json!({"path": copy.to_string_lossy()}));
+    let reopened = crate::io::open_path(&copy).unwrap();
+    assert!(reopened.plain_text(StoryRef::Body).starts_with("Changed: Editable PDF text"));
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(copy).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn pdf_import_sniffs_renamed_files_and_failed_open_preserves_the_current_document() {
+    let bytes = wordcraft_pdf::export(&wordcraft_doc::Document::from_text("PDF content"), &Default::default()).unwrap();
+    let data = crate::cmd::insert::base64_encode(&bytes);
+    let mut session = s();
+    for name in ["renamed.txt", "renamed.docx", "renamed.html", "no-extension", "scan.PDF"] {
+        let result = run(&mut session, "file.open", json!({"path": name, "data": data}));
+        assert_eq!(result["import"]["format"], "pdf", "{name}");
+        assert!(session.path.is_none() && session.dirty, "{name}");
+        assert!(text(&session).contains("PDF content"));
+    }
+    let before = text(&session);
+    let invalid = crate::cmd::insert::base64_encode(b"%PDF-corrupt");
+    assert!(session.run("file.open", &json!({"path": "broken.pdf", "data": invalid})).is_err());
+    assert_eq!(text(&session), before);
+    assert!(session.dirty && session.path.is_none());
+    assert!(crate::io::OPEN_EXTS.contains(&"pdf"));
+}
+
+#[test]
+fn a_word_document_named_pdf_opens_as_the_word_document() {
+    let bytes = crate::io::save_bytes("letter.docx", &wordcraft_doc::Document::from_text("Word content")).unwrap();
+    let mut session = s();
+    let result = run(&mut session, "file.open", json!({"path": "letter.pdf", "data": crate::cmd::insert::base64_encode(&bytes)}));
+    assert!(result.get("import").is_none(), "{result}");
+    assert!(text(&session).contains("Word content"));
+}
+
+#[test]
+fn an_oversized_pdf_is_refused_before_it_is_read() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-pdf-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Sparse: the size is past the import limit without writing 64 MiB.
+    for name in ["big.pdf", "big-renamed.txt"] {
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
+        std::io::Write::write_all(&mut &file, b"%PDF-1.7\n").unwrap();
+        file.set_len(wordcraft_pdf::import::MAX_BYTES as u64 + 1).unwrap();
+        let e = crate::io::open_path_report(&path, None).err().unwrap();
+        assert!(e.contains("import limit"), "{name}: {e}");
+        std::fs::remove_file(path).unwrap();
+    }
+    std::fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn exported_page_images_draw_headers_at_full_strength() {
     // file.exportPng (and `wordcraft-cli render`) drew headers and footers dimmed, as the screen
     // does while the body is edited; Word's exported pages and WordCraft's PDF don't.

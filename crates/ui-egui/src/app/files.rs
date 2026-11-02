@@ -326,6 +326,9 @@ impl WordApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_dropped_files(&mut self, files: Vec<egui::DroppedFileHandle>) {
         let before = self.session.document_id();
+        // A dialog the drop opens (a PDF's import report) stays; the one open before it goes when
+        // the drop brings in a document.
+        let dialog_before = self.dialog.take();
         let mut placed_picture = false;
         for f in &files {
             let path = f.path().to_string_lossy().to_string();
@@ -353,9 +356,10 @@ impl WordApp {
         }
         if self.session.document_id() != before {
             self.autosave_path = None;
-            self.dialog = None;
             self.ui.backstage = false;
             self.canvas.want_focus = true;
+        } else if self.dialog.is_none() {
+            self.dialog = dialog_before;
         }
         if !files.is_empty() {
             self.ensure_caption_fonts();
