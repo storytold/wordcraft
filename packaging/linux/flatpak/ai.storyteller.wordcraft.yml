@@ -18,6 +18,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: wordcraft
 finish-args:
+  - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland, plus X11. Plain `x11` (not `fallback-x11`) so the sandbox always has a
   # DISPLAY: GNOME has no Wayland data-control protocol, so the clipboard (arboard, the picture
   # paste fallback) reads it through X11 even in a Wayland session (#1368).
