@@ -17,3 +17,6 @@ brotli-decompressor = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-script = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+unicode-normalization = "0.1"
