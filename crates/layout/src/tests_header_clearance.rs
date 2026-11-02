@@ -213,3 +213,64 @@ fn plain_header_total_stays_local() {
     let pass = layout_pass(&doc, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, (&EarlyFloats::new(), true));
     assert!(matches!(pass, Pass::Done(laid) if laid.pages.len() == 10), "a header without exclusions must not request a body repeat");
 }
+
+/// TopAndBottom clears a table to the right; Square permits that same placement.
+#[test]
+fn narrow_header_clears_tables() {
+    for wrap in [Wrap::TopAndBottom, Wrap::Square] {
+        for float in [None, Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 300.0, y: 90.0, overlap: false, ..Default::default() })] {
+            let mut doc = Document::new();
+            let mut table = Table::new(if float.is_some() { 1 } else { 12 }, 1, 120.0);
+            table.props.style = None;
+            table.props.cell_margins = Some([0.0; 4]);
+            table.props.indent = Some(228.0);
+            table.props.float = float;
+            for (i, row) in table.rows.iter_mut().enumerate() {
+                row.props.header = float.is_none() && i == 0;
+                row.props.height_rule = HeightRule::Exact;
+                row.props.height = Some(if float.is_some() {
+                    40.0
+                } else if i == 0 {
+                    20.0
+                } else {
+                    100.0
+                });
+                row.props.cant_split = true;
+            }
+            doc.body = vec![Arc::new(Block::Table(table))];
+            let mut p = Paragraph::new();
+            let object = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 105.0, dist: 0.0, ..Default::default() };
+            p.insert_object(0, rect_shape(40.0, 30.0, object), &Default::default()).unwrap();
+            let id = doc.add_part(PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+            doc.last_section.headers.default = Some(id);
+            let before = doc.clone();
+            let laid = lay(&doc);
+            assert_eq!(doc, before);
+            if float.is_none() {
+                assert!(laid.pages.len() > 1, "exercise repeated header rows");
+            }
+            let mut cells = 0;
+            let mut crosses = false;
+            for page in &laid.pages {
+                let mut rows = 0;
+                for item in &page.items {
+                    if let Placed::Cell { rect, story: StoryRef::Body, .. } = item {
+                        rows += 1;
+                        cells += 1;
+                        assert!(rect.x > 112.0, "the table must sit beside the header object");
+                        let crossing = rect.y < 134.99 && rect.bottom() > 105.01;
+                        if wrap == Wrap::TopAndBottom {
+                            assert!(!crossing, "table crosses TopAndBottom header: {rect:?}");
+                        }
+                        crosses |= crossing;
+                    }
+                }
+                if float.is_none() {
+                    assert!(rows > 1, "continued pages retain a header and body row");
+                }
+            }
+            assert!(cells > 0);
+            assert_eq!(crosses, wrap == Wrap::Square, "Square keeps its horizontal bounds");
+        }
+    }
+}

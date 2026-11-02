@@ -80,10 +80,6 @@ fn apply(app: &mut WordApp, ui: &Ui, fill: Option<&Fill>, resp: Option<&Response
 
 /// The pane, while open.
 pub fn pane(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Format Shape") {
-        let _ = app.run("view.formatShapePane", serde_json::json!({"value": false}));
-        return;
-    }
     // A drag that applied as it went ends as one undo step.
     if !ui.input(|i| i.pointer.any_down())
         && let Some(mark) = ui.data_mut(|d| {
@@ -233,7 +229,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         ui.label(tl!("Type"));
         let t = type_of(&g.kind);
         let mut pick = t;
-        egui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
             for (i, (label, _)) in TYPES.iter().enumerate() {
                 ui.selectable_value(&mut pick, i, tl!(label));
             }

@@ -22,6 +22,10 @@ pub mod txt;
 
 use wordcraft_doc::Document;
 
+/// Most entries an ODT or spreadsheet package may declare, as many as a Word package
+/// (`wordcraft_docx::package::MAX_ENTRIES`); checked before `zip` parses them (#3660).
+pub const MAX_ZIP_ENTRIES: u64 = 20_000;
+
 /// Extensions this crate handles.
 pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx"];
 
@@ -91,5 +95,7 @@ pub fn export_with(ext: &str, doc: &Document, opts: &ExportOptions) -> Option<Re
     Some(out.map(|bytes| comments::append(&ext, doc, bytes)))
 }
 
+#[cfg(test)]
+mod test_log;
 #[cfg(test)]
 mod tests;
