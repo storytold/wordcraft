@@ -1102,7 +1102,14 @@ fn paint_white_space_seams(painter: &egui::Painter, rects: &[Rect], geo: &Geomet
     }
 }
 
-fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, geo: &Geometry, secondary_clicked: bool) {
+fn handle_secondary_selection(
+    app: &mut WordApp,
+    resp: &egui::Response,
+    rects: &[Rect],
+    layout: &std::sync::Arc<DocLayout>,
+    geo: &Geometry,
+    secondary_clicked: bool,
+) {
     // Selected table cells: a right-click off them drops them, even between the selection's ends
     // (beside a selected column), so the menu acts on the cell clicked.
     if secondary_clicked
@@ -1143,10 +1150,11 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         if crate::objects::select_at(app, layout, rects, geo.scale, p) {
             app.canvas.context_issue = None;
             app.canvas.context_synonyms = None;
-        } else if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+        } else if let Some(target) = layout.hit_visual(page, x, y, app.session.sel.focus.story) {
+            let pos = target.position();
             let (a, b) = app.session.sel.ordered();
-            if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            if !(a <= *pos && *pos <= b) || app.session.sel.is_collapsed() {
+                cursor::set_visual_caret(app, target, SelectionMode::Replace, (page, x, y));
             }
             context_suggestions(app);
         }

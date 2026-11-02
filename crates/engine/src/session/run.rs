@@ -1,6 +1,6 @@
 use super::doc_state::{ColumnBlock, Selection};
 use super::ime_state::ImeCaretState;
-use super::snapshot_types::RunSnapshot;
+use super::snapshot_types::{LayoutSlots, RunSnapshot};
 use super::{Arc, CharProps, CmdError, DocLayout, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, VisualPos, document_id_mark};
 use crate::CommandSpec;
 
@@ -30,6 +30,20 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    fn restore_layouts(&mut self, before: Option<LayoutSlots>) {
+        if let Some(entries) = before {
+            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == self.rev));
+        }
+    }
+
+    fn restore_visual(&mut self, result: &crate::CmdResult, before: (Option<VisualPos>, Option<VisualPos>)) {
+        if result.is_ok() {
+            return;
+        }
+        self.visual_anchor = before.0.filter(|hint| hint.position() == &self.sel.anchor);
+        self.visual_focus = before.1.filter(|hint| hint.position() == &self.sel.focus);
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -134,6 +148,8 @@ impl Session {
         // trace.
         let dirty_before = spec.mutates.then_some(self.dirty);
         let rev_restore = spec.mutates.then_some(self.rev);
+        // Rollback must retain owners evicted by temporary layouts. layout() still checks eligibility.
+        let layout_before = spec.mutates.then(|| self.layout.clone());
         // These mutating commands can replace the open document and discard its saved versions.
         // Keep the versions until the command and the protected-region post-check have both
         // succeeded; rejected commands must leave the old document and its snapshots together.
@@ -267,22 +283,15 @@ impl Session {
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
                 }
+                self.restore_layouts(layout_before);
                 if let Some(b) = blocks_before {
                     self.building_blocks = b;
                 }
                 self.status = e.to_string();
             }
         }
-        self.restore_failed_visual(&result, visual_before);
+        self.restore_visual(&result, visual_before);
         result
-    }
-
-    fn restore_failed_visual(&mut self, result: &Result<Value, CmdError>, before: (Option<VisualPos>, Option<VisualPos>)) {
-        if result.is_ok() {
-            return;
-        }
-        self.visual_anchor = before.0.filter(|hint| hint.position() == &self.sel.anchor);
-        self.visual_focus = before.1.filter(|hint| hint.position() == &self.sel.focus);
     }
 
     /// Geometry for a session endpoint, including valid transient visual affinity.
