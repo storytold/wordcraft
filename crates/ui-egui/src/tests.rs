@@ -3737,6 +3737,84 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     assert_eq!(body_text(h.state()), before, "typing went into the font size box, not the page");
 }
 
+/// Screen readers get the status bar's controls on the right from left to right, as they are on
+/// the screen and as Word gives them (they are laid out from the right), and the zoom slider in
+/// percent, as Word's ("Zoom 100", not the factor 1). A percentage set on the slider, by a screen
+/// reader or by dragging, is the zoom: 100 is the factor 1. In Read Mode the slider is the Text
+/// Size, 75 to 150 percent, and moves the reading zoom only.
+#[test]
+fn status_bar_zoom_is_in_percent_and_its_controls_in_reading_order() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness(typed());
+    h.run_steps(4);
+    let slider = h.get_by_role_and_label(Role::Slider, "Zoom");
+    let percent = (h.state().canvas.scale / crate::canvas::PX_PER_PT * 100.0).round();
+    assert_eq!(slider.accesskit_node().numeric_value().map(f64::round), Some(f64::from(percent)), "the slider's value is the percentage");
+    assert_eq!(slider.accesskit_node().max_numeric_value(), Some(500.0));
+    // The names in tree order, through the generic containers screen readers don't see.
+    fn names(node: egui_kittest::Node<'_>, out: &mut Vec<String>) {
+        for child in node.children() {
+            match child.accesskit_node().label() {
+                Some(label) => out.push(label),
+                None => names(child, out),
+            }
+        }
+    }
+    let group = h.get_by_role_and_label(Role::Button, "Focus").parent().expect("the controls on the right");
+    let mut order = Vec::new();
+    names(group, &mut order);
+    assert_eq!(order, ["Focus", "Read Mode", "Print Layout", "Web Layout", "Zoom Out", "Zoom", "Zoom In"]);
+    // Dragging the slider with the mouse to a point along it.
+    fn drag_along(h: &mut egui_kittest::Harness<'static, WordApp>, label: &str, fraction: f32) -> f64 {
+        let rect = h.get_by_role_and_label(Role::Slider, label).rect();
+        let (from, to) = (rect.center(), egui::pos2(rect.min.x + rect.width() * fraction, rect.center().y));
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.run_steps(2);
+        h.event(egui::Event::PointerMoved(to));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Slider, label).accesskit_node().numeric_value().map_or(0.0, f64::round)
+    }
+    // Set as a screen reader sets it.
+    for percent in [250.0, 100.0] {
+        h.get_by_role_and_label(Role::Slider, "Zoom").set_value_accesskit(percent);
+        h.run_steps(3);
+        let shown = h.get_by_role_and_label(Role::Slider, "Zoom").accesskit_node().numeric_value().map(f64::round);
+        assert_eq!(shown, Some(percent), "the slider shows the percentage set on it");
+        let factor = f64::from(percent as f32 / 100.0);
+        assert!((f64::from(h.state().session.view.zoom) - factor).abs() < 1e-4, "{percent} is the zoom {factor}: {}", h.state().session.view.zoom);
+        let scale = h.state().canvas.scale / crate::canvas::PX_PER_PT;
+        assert!((f64::from(scale) - factor).abs() < 1e-4, "the page is drawn at {percent}%: {scale}");
+    }
+    let dragged = drag_along(&mut h, "Zoom", 0.75);
+    assert!(dragged > 100.0, "dragging right zooms in: {dragged}");
+    let scale = f64::from(h.state().canvas.scale / crate::canvas::PX_PER_PT);
+    assert!((scale - dragged / 100.0).abs() < 1e-4, "the page is drawn at the {dragged}% dragged to: {scale}");
+    h.get_by_role_and_label(Role::Slider, "Zoom").set_value_accesskit(100.0);
+    h.run_steps(3);
+    h.state_mut().run("view.readMode", json!({})).unwrap();
+    h.run_steps(3);
+    let size = h.get_by_role_and_label(Role::Slider, "Text Size");
+    let range = (size.accesskit_node().min_numeric_value(), size.accesskit_node().max_numeric_value());
+    assert_eq!(range, (Some(75.0), Some(150.0)), "Read Mode's Text Size goes from 75 to 150 percent");
+    size.set_value_accesskit(120.0);
+    h.run_steps(3);
+    let shown = h.get_by_role_and_label(Role::Slider, "Text Size").accesskit_node().numeric_value().map(f64::round);
+    assert_eq!(shown, Some(120.0), "the Text Size slider shows the percentage set on it");
+    let view = &h.state().session.view;
+    assert!((view.read_zoom - 1.2).abs() < 1e-4, "120 is the reading zoom 1.2: {}", view.read_zoom);
+    assert!((view.zoom - 1.0).abs() < 1e-4, "the normal zoom stays at 100%: {}", view.zoom);
+    let dragged = drag_along(&mut h, "Text Size", 0.25);
+    assert!((75.0..120.0).contains(&dragged), "dragging left makes the text smaller: {dragged}");
+    let view = &h.state().session.view;
+    assert!((f64::from(view.read_zoom) - dragged / 100.0).abs() < 1e-4, "the reading zoom follows the {dragged}% dragged to: {}", view.read_zoom);
+    assert!((view.zoom - 1.0).abs() < 1e-4, "the normal zoom still stays at 100%: {}", view.zoom);
+}
+
 /// #2068: fonts applied from the font box or the mini toolbar (`format.font`) and from the
 /// Font dialog (`format.set`) join Recently Used Fonts, most recent first, once each, ten at
 /// most; the list is kept in `ui.json` and read back tidied.
