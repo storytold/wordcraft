@@ -167,9 +167,8 @@ fn children_of_choice(ac: &El) -> Option<&El> {
 }
 
 /// Gather `name` children (rows, cells), looking through content controls, custom XML and the
-/// selected alternate-content branch; each
-/// with the content controls that open before it and how many close after it. `pending` holds
-/// controls opened but not yet given to an element.
+/// selected alternate-content branch; each with the content controls that open before it and how
+/// many close after it. `pending` holds controls opened but not yet given to an element.
 fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pending: &mut Vec<ContentControl>, depth: usize) {
     if depth > 8 {
         return;
