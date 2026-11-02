@@ -2099,6 +2099,53 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
 }
 
+/// #3584: a percentage pattern (`pctN`, `solid`) is drawn as its pattern colour over the fill at
+/// that coverage, as Word draws it; the court forms' `pct80` black-on-white Part headings were white.
+/// The values are Word's own: its PDF export draws `pct10` black on white as `E5E5E5`.
+#[test]
+fn patterned_shading_is_drawn_as_the_colour_it_averages_to() {
+    let cell = |shd: &str| format!(r#"<w:tc><w:tcPr><w:shd {shd}/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>"#);
+    let shds = [
+        r#"w:val="pct80" w:color="auto" w:fill="FFFFFF""#,
+        r#"w:val="pct25" w:color="auto" w:fill="FFFFFF""#,
+        r#"w:val="pct50" w:color="FF0000" w:fill="FFFFFF""#,
+        r#"w:val="solid" w:color="auto" w:fill="FFFFFF""#,
+        r#"w:val="pct10" w:color="auto" w:fill="auto""#,
+        r#"w:val="pct12" w:color="000000" w:fill="FFFFFF""#,
+        r#"w:val="clear" w:color="auto" w:fill="BFBFBF""#,
+        r#"w:val="clear" w:color="auto" w:fill="auto""#,
+        r#"w:val="horzStripe" w:color="auto" w:fill="DDEBF7""#,
+        r#"w:val="pct80" w:color="000000" w:themeColor="accent1" w:fill="FFFFFF""#,
+    ];
+    let row: String = shds.iter().map(|s| cell(s)).collect();
+    let body = format!(
+        r#"<w:tbl><w:tblPr/><w:tr>{row}</w:tr></w:tbl>
+<w:p><w:pPr><w:shd w:val="pct25" w:color="auto" w:fill="FFFFFF"/></w:pPr><w:r><w:rPr><w:shd w:val="pct50" w:color="auto" w:fill="FFFFFF"/></w:rPr><w:t>p</w:t></w:r></w:p>"#
+    );
+    let d = themed_docx(&body, "", None);
+    let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+    let fills: Vec<Option<Rgb>> = t.rows[0].cells.iter().map(|c| c.props.shading).collect();
+    assert_eq!(
+        fills[..9],
+        [
+            Some(Rgb(0x33, 0x33, 0x33)),
+            Some(Rgb(0xBF, 0xBF, 0xBF)),
+            Some(Rgb(0xFF, 0x7F, 0x7F)),
+            Some(Rgb::BLACK),
+            Some(Rgb(0xE5, 0xE5, 0xE5)),
+            Some(Rgb(0xDF, 0xDF, 0xDF)),
+            Some(Rgb(0xBF, 0xBF, 0xBF)),
+            None,
+            Some(Rgb(0xDD, 0xEB, 0xF7)),
+        ]
+    );
+    // A theme pattern colour wins over the fixed one: accent1 (4472C4) at 80% over white.
+    assert!(near(fills[9].map(TextColor::Rgb), Rgb(0x69, 0x8E, 0xD0)), "{:?}", fills[9]);
+    let p = paras(&d);
+    assert_eq!(p[0].props.shading, Some(Rgb(0xBF, 0xBF, 0xBF)));
+    assert_eq!(p[0].props_of_char(0).shading, Some(Rgb(0x7F, 0x7F, 0x7F)));
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.
