@@ -389,8 +389,10 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        // Start in the open file's folder (#4143); a document never saved has none.
-        let dir = self.session.path.as_deref().and_then(std::path::Path::parent).map(|d| d.to_string_lossy().into_owned());
+        // Start in the open file's folder (#4143); a document never saved has none. A path opened
+        // as `one.docx` has an empty parent, so it's made absolute first.
+        let dir =
+            self.session.path.as_deref().and_then(|p| std::path::absolute(p).ok()).and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()));
         self.ask_file(FileDialogRequest::Save { name, dir }, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 

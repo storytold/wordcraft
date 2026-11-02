@@ -710,3 +710,16 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// A file opened by a relative path (`wordcraft one.docx`) has an empty parent: Save As starts
+/// in the working folder, not with an empty folder the dialog would drop.
+#[test]
+fn save_as_starts_in_the_working_folder_for_a_relative_path() {
+    let (mut a, shown) = async_app();
+    a.run("text.insert", json!({"text": "Draft"})).unwrap();
+    a.session.path = Some(std::path::PathBuf::from("one.docx"));
+    a.save_as_dialog();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(cwd) });
+    answer(&shown, None);
+}
