@@ -333,9 +333,13 @@ pub fn configure(ctx: &Context, on: bool, canvas: Option<Rect>, anchored: &[(Id,
         let mut m = handle.lock();
         let view = m.views.entry(ctx.viewport_id()).or_default();
         // What this frame drew before now (icons that keep their direction) asked the old
-        // direction: draw the frame again rather than show it.
+        // direction: draw the frame again rather than show it, or, when egui has no pass left to
+        // draw it again, draw the next frame straight away.
         if view.on != on {
             ctx.request_discard("the interface changed direction");
+            if !ctx.will_discard() {
+                ctx.request_repaint();
+            }
         }
         view.on = on;
         view.canvas = canvas;
@@ -988,6 +992,24 @@ mod tests {
         let switched = frame(true);
         let after = frame(true);
         assert_eq!(switched, after, "the icon drawn on the frame of the switch points as it does after");
+    }
+
+    /// When egui has no pass left to draw the frame of a switch again, the next frame is drawn
+    /// straight away, so a wrong-way icon shows for one frame at most.
+    #[test]
+    fn a_switch_egui_cannot_draw_again_asks_for_the_next_frame() {
+        let ctx = Context::default();
+        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
+        let frame = |on: bool| {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| configure(ui.ctx(), on, None, &[], &[]));
+            out.textures_delta.clear();
+            out.viewport_output[&ViewportId::ROOT].repaint_delay
+        };
+        frame(false);
+        frame(false);
+        assert!(frame(false) > std::time::Duration::ZERO, "a steady frame asks for no other");
+        assert_eq!(frame(true), std::time::Duration::ZERO, "the frame of the switch asks for the next");
     }
 
     /// A check box's tick only moves: flipped, it would point the wrong way.
