@@ -28,6 +28,11 @@ fn main() {
     };
     let mut app = WordApp::new(Session::new(doc), Services::default()).with_control(rx);
     app.integrated_titlebar = true;
+    // `{"frameless": true}` in any line: the window runs without its native title bar (Linux),
+    // so the app's caption buttons and resize edges show.
+    if lines.iter().any(|l| l.get("frameless").is_some_and(|v| v.as_bool() == Some(true))) {
+        app.frameless = true;
+    }
     if lines.first().is_some_and(|l| l.get("startScreen").is_some()) {
         app.start_screen();
     }
