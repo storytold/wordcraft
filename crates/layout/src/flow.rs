@@ -888,17 +888,18 @@ fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
 
 /// Whether the page a page break in `block` ends its page for is left for the next section to
 /// start: all that follows the break in its section is the empty mark closing it before a
-/// continuous section (a quiet mark). Word keeps that mark on the break's page, so the next
-/// section starts at the top of the new page, which is its first page and takes its first-page
-/// header (#2109). One column only: a section with columns lays its last page out again to
-/// balance them.
+/// continuous section (a quiet mark), with nothing in it to draw. Word keeps that mark on the
+/// break's page, so the next section starts at the top of the new page, which is its first page
+/// and takes its first-page header (#2109). A hidden mark's paragraph holding only a picture is
+/// quiet too (it has no text), but it goes on the new page. One column only: a section with
+/// columns lays its last page out again to balance them.
 fn next_section_takes_break_page(ctx: &Ctx, pb: &PageBuilder, block: usize) -> bool {
     let Some(next) = block.checked_add(1) else { return false };
     !pb.web
         && !pb.next_starts_page
         && pb.cols.len() <= 1
         && ctx.quiet_marks.binary_search(&next).is_ok()
-        && matches!(ctx.doc.body.get(next).map(|b| &**b), Some(Block::Para(mark)) if mark.section.is_some())
+        && matches!(ctx.doc.body.get(next).map(|b| &**b), Some(Block::Para(mark)) if mark.section.is_some() && only_markers(mark, 0..mark.text.len()))
 }
 
 /// The outline of the body for an Outline view pass.
