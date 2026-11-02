@@ -161,7 +161,9 @@ fn field(value: &JsValue, name: &str) -> Result<String, JsValue> {
 }
 
 fn frame(app: &mut WordApp, ctx: &egui::Context) {
-    let _ = ctx.run_pass(egui::RawInput::default(), |ctx| app.logic(ctx));
+    let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| app.logic(ctx));
+    // This logic-only fixture has no renderer; explicitly discard its generated texture uploads.
+    output.textures_delta.clear();
 }
 
 #[wasm_bindgen_test]
