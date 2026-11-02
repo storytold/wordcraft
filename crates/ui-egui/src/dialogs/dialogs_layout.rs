@@ -2,12 +2,13 @@
 //! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
 //! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
 //! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Convert Text to Table
-//! (Insert › Table, #2592), Size (Picture Format › Size, #2573) and Format Page Numbers (Insert ›
+//! (Insert › Table, #2592), Size (Picture Format › Size, #2573), Layout's Position tab (Layout ›
+//! Arrange › Position › More Layout Options…) and Format Page Numbers (Insert ›
 //! Header & Footer › Page Number ▸ Format Page Numbers…, #1113). Each ends by running a
 //! command (`layout.lineNumbers`, `layout.hyphenation`, `layout.manualHyphenation` with
 //! `caret.set` and `text.optionalHyphen`, `review.language`, `mailings.envelopes`,
 //! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.fromText`,
-//! `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same result without
+//! `picture.size`, `arrange.positionOptions`, `layout.pageNumberFormat`), so scripts and agents get the same result without
 //! the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
 
 use egui::{Ui, vec2};
@@ -23,15 +24,12 @@ use crate::options::MeasureExt;
 use crate::theme::semibold;
 
 mod page;
-mod position;
 mod print;
 mod table;
 mod text;
 
-pub use page::{PageNumbersForm, SizeForm};
-use page::{page_numbers_ui, size_ui};
-use position::position_ui;
-pub use position::{AxisForm, PositionForm};
+pub use page::{PageNumbersForm, PositionForm, SizeForm};
+use page::{page_numbers_ui, position_ui, size_ui};
 #[cfg(test)]
 pub(crate) use print::envelope_label;
 #[cfg(test)]

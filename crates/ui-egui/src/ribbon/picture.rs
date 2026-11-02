@@ -1,7 +1,7 @@
-use super::arrange::{align_menu, group_menu, rotate_menu, rotation_field, wrap_menu};
+use super::arrange::{align_menu, group_menu, position_menu, rotate_menu, rotation_field, wrap_menu};
 use super::common::{esc_cancelled, mi, stack};
 use super::shape::alt_text_group;
-use super::{MeasureExt, Target, Ui, WordApp, big, group, json, menu_button, small};
+use super::{MeasureExt, Target, Ui, WordApp, group, json, menu_button, small};
 
 /// Draws the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and
 /// Size groups.
@@ -115,7 +115,7 @@ pub(super) fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     });
     alt_text_group(ui, app);
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        position_menu(ui, app);
         wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
