@@ -4,8 +4,9 @@ use wordcraft_doc::{CharProps, Document, Paragraph, Revision, RevisionKind, para
 
 #[test]
 fn convert_colours_tracked_changes_from_flags() {
-    let dir = std::env::temp_dir().join(format!("wc-convert-colours-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // Starts empty (no file of an earlier run counts as written) and goes even if an assertion fails.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let mut doc = Document::new();
     // Saving stamps an empty creation date with the time, which the PDF carries: a fixed one
     // keeps runs a second apart byte-identical.
@@ -42,5 +43,4 @@ fn convert_colours_tracked_changes_from_flags() {
         let (ok, err, wrote) = convert("bad.pdf", flags);
         assert!(!ok && wrote.is_none(), "{flags:?} was accepted: {err}");
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
