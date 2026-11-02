@@ -1054,13 +1054,15 @@ fn paint_read_aloud_highlight(
     }
 }
 
-fn canvas_response(ui: &mut Ui, content: Rect, scroll_target: Option<Rect>) -> egui::Response {
+fn canvas_response(ui: &mut Ui, content: Rect, scroll_target: Option<Rect>, id: egui::Id) -> egui::Response {
     // A fixed id: an automatic one follows how many widgets came before, which Read Mode's
     // chrome changes, and a new id dropped the keyboard focus, so the arrows, Page Up/Down
     // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
     // It also keeps the focus when Focus hides the rulers (#1678).
+    // The id carries the window: the viewports share egui's memory, so one id in every window
+    // made them fight over one focus-lock (#5263).
     ui.advance_cursor_after_rect(content);
-    let response = ui.interact(content, egui::Id::unique("wordcraft_canvas"), Sense::click_and_drag());
+    let response = ui.interact(content, id, Sense::click_and_drag());
     if let Some(target) = scroll_target {
         ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + target.min.to_vec2(), target.size()), None);
     }
@@ -1325,7 +1327,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
-        let resp = canvas_response(ui, content, scroll_target);
+        let resp = canvas_response(ui, content, scroll_target, app.window_id("wordcraft_canvas"));
         // Read Mode's neighbouring columns end right at the viewport's edges: keep their
         // shadows from showing there as hairlines.
         let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
