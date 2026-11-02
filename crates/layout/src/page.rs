@@ -155,13 +155,15 @@ impl PageBuilder<'_> {
         }
         let total = self.notes_h();
         let x = self.sect.margin_left + self.sect.gutter;
-        // The note area starts below the text (a page of continued notes alone: at its top).
-        let area = self.bottom.max(mark_floor.unwrap_or_else(|| self.body_floor()));
+        // The note area starts below the text (a page of continued notes alone: at its top). An
+        // empty section mark kept without room doesn't count as text here (#3974).
+        let floor = mark_floor.unwrap_or_else(|| self.body_floor());
+        let area = self.bottom.max(floor);
         let fits = total <= self.orig_bottom - area + 0.01;
         let top = match (fits, self.beneath) {
             (false, _) => area,
             // Below the page's last line of text.
-            (true, true) => self.body_floor().min(self.orig_bottom - total),
+            (true, true) => floor.min(self.orig_bottom - total),
             (true, false) => self.orig_bottom - total,
         };
         let notes = std::mem::take(&mut self.notes);

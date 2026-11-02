@@ -1449,6 +1449,35 @@ fn footnotes_stay_put_below_an_empty_section_mark_after_list_items() {
 }
 
 #[test]
+fn footnotes_below_text_stay_put_below_an_empty_section_mark_without_room() {
+    // #3974 with the footnotes set below the text: on the steps of the sweep where the mark stays
+    // on the page without room above the note, the note still goes below "Fill", where it goes
+    // without the mark, not down to the page bottom.
+    use wordcraft_doc::section::{NotePos, NoteProps};
+    let beneath = |(mut d, id, at): (Document, u32, usize)| {
+        d.settings.footnote_pr = NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() };
+        (d, id, at)
+    };
+    let mut without_room = 0;
+    for before in (400..=700).map(|b| b as f32) {
+        // the steps without room for the mark, as the notes at the page bottom find them
+        let (d, id, at) = section_mark_note_doc(before, &["AAA"], false, true);
+        let l = lay(&d);
+        let (mark, _) = para_pieces(&l, at);
+        let note = note_pieces(&l, id);
+        let Some((&(0, _, _, mark_bottom), &(0, _, _, note_top))) = mark.first().zip(note.first()) else { continue };
+        if mark_bottom <= note_top - NOTE_SEP + 0.01 {
+            continue;
+        }
+        without_room += 1;
+        let (d, id, _) = beneath(section_mark_note_doc(before, &["AAA"], false, true));
+        let (plain, plain_id, _) = beneath(section_mark_note_doc(before, &["AAA"], false, false));
+        assert_eq!(note_pieces(&lay(&d), id), note_pieces(&lay(&plain), plain_id), "space before {before}: the mark moved the note");
+    }
+    assert!(without_room > 0, "the sweep leaves the mark no room above the note");
+}
+
+#[test]
 fn a_bookmark_after_a_page_break_takes_no_line() {
     // "Before", a page break, then a bookmark start (Word writes the next heading's TOC bookmark
     // there): the bookmark takes no room, so "After" starts at the top of page 2, as in Word.
