@@ -39,6 +39,7 @@ fn values_a_file_states_are_kept_under_every_preset() {
     let bytes = z.finish().unwrap().into_inner();
     let odd = OdfProfile {
         preset: OdfPreset::Custom,
+        page_margin: 99.0,
         header_min_height: 99.0,
         dynamic_spacing: true,
         tabs_from_indent: true,
@@ -54,6 +55,7 @@ fn values_a_file_states_are_kept_under_every_preset() {
         let s = &d.last_section;
         assert!(near(s.header_gap, cm(0.5)), "{:?}: the stated spacing, kept: {}", profile.preset, s.header_gap);
         assert!(s.margin_top >= cm(3.0) - 0.05, "{:?}: at least the stated height under the margin: {}", profile.preset, s.margin_top);
+        assert!(near(s.margin_left, cm(2.0)) && near(s.margin_bottom, cm(2.0)), "{:?}: the stated margins", profile.preset);
         assert_eq!(s.columns.count, 2);
         assert!(near(s.columns.space, cm(1.0)), "{:?}: {}", profile.preset, s.columns.space);
         let p = d.body[0].as_para().unwrap();

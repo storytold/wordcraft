@@ -51,6 +51,10 @@ pub const MAX_LENGTH: f32 = 1584.0;
 #[serde(default, rename_all = "camelCase")]
 pub struct OdfProfile {
     pub preset: OdfPreset,
+    /// A page margin a page layout doesn't state, points. §20.206–20.209 refer to XSL's margins
+    /// (§7.10), whose initial value is 0; whether that initial value comes with the reference
+    /// the standard doesn't say (LibreOffice uses 2 cm).
+    pub page_margin: f32,
     /// The height of a header or footer whose style states none (§20.212.2 `fo:min-height`
     /// has no default), points.
     pub header_min_height: f32,
@@ -100,6 +104,7 @@ impl OdfProfile {
     pub fn wordcraft() -> OdfProfile {
         OdfProfile {
             preset: OdfPreset::WordCraft,
+            page_margin: 0.0,
             header_min_height: 0.0,
             header_height_includes_spacing: false,
             dynamic_spacing: false,
@@ -118,6 +123,7 @@ impl OdfProfile {
     pub fn libreoffice() -> OdfProfile {
         OdfProfile {
             preset: OdfPreset::LibreOffice,
+            page_margin: 2.0 * 72.0 / 2.54,
             header_min_height: 0.5 * 72.0 / 2.54,
             header_height_includes_spacing: true,
             dynamic_spacing: false,
@@ -146,6 +152,7 @@ impl OdfProfile {
         let length = |v: f32, least: f32| if v.is_finite() { v.clamp(least, MAX_LENGTH) } else { least };
         match self.preset {
             OdfPreset::Custom => OdfProfile {
+                page_margin: length(self.page_margin, 0.0),
                 header_min_height: length(self.header_min_height, 0.0),
                 column_gap: length(self.column_gap, 0.0),
                 hairline: length(self.hairline, 0.05),

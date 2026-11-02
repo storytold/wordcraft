@@ -143,10 +143,10 @@ fn a_page_layout_without_a_size_is_the_default_pages_size() {
 }
 
 #[test]
-fn a_document_without_a_page_layout_has_the_default_paper_and_xsl_margins() {
+fn a_document_without_a_page_layout_has_the_default_paper_and_the_profiles_margins() {
     // No styles.xml at all: the region's paper (the standard leaves the size to the
-    // application), and XSL's margins, 0: the standard's (LibreOffice's own pages have 2 cm, but
-    // always say so). It is laid out as an ODF document.
+    // application), and the profile's margins (the standard leaves them open too): WordCraft's
+    // 0, XSL's initial value; LibreOffice's 2 cm. It is laid out as an ODF document.
     let content = format!(
         "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
         crate::odt::tests::NS_T
@@ -157,12 +157,17 @@ fn a_document_without_a_page_layout_has_the_default_paper_and_xsl_margins() {
     assert_eq!((s.page_w, s.page_h), (595.3, 841.9));
     assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [0.0; 4], "{s:?}");
     assert!(d.settings.odf.is_some());
+    let lo = crate::import_with("odt", &crate::odt::tests::package(&content, None), &a4, &wordcraft_doc::odf_profile::OdfProfile::libreoffice())
+        .unwrap()
+        .unwrap();
+    let cm2 = 2.0 * 72.0 / 2.54;
+    assert_eq!([lo.last_section.margin_top, lo.last_section.margin_left], [cm2; 2]);
 }
 
 #[test]
-fn a_page_layout_stating_nothing_has_xsl_margins() {
-    // LibreOffice's CV template: a page layout with no properties at all. Its margins are XSL's
-    // initial value, 0 (the standard's, whatever the profile; LibreOffice draws 2 cm).
+fn a_page_layout_stating_nothing_has_the_profiles_margins() {
+    // LibreOffice's CV template: a page layout with no properties at all. Its margins are the
+    // profile's: WordCraft's 0 (XSL's initial value), LibreOffice's 2 cm.
     let ns = crate::odt::tests::NS_T;
     let styles = format!(
         r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="Mpm1"><style:header-style/><style:footer-style/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="Mpm1"/></office:master-styles></office:document-styles>"#
@@ -176,6 +181,15 @@ fn a_page_layout_stating_nothing_has_xsl_margins() {
     let one = styles.replace("<style:header-style/>", r#"<style:page-layout-properties fo:margin-left="1in"/><style:header-style/>"#);
     let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&one))).unwrap().unwrap();
     assert_eq!((d.last_section.margin_left, d.last_section.margin_top), (72.0, 0.0));
+    let lo = |styles: &str| {
+        crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(styles)), &wordcraft_doc::odf_profile::OdfProfile::libreoffice())
+            .last_section
+    };
+    let cm2 = 2.0 * 72.0 / 2.54;
+    let s = lo(&styles);
+    assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [cm2; 4]);
+    let s = lo(&one);
+    assert_eq!((s.margin_left, s.margin_top), (72.0, cm2), "the stated one is the file's under every preset");
 }
 
 #[test]

@@ -474,10 +474,6 @@ fn hyphenation(blocks: &mut [FBlock]) -> bool {
 /// The content of a package that has none: an empty text.
 const EMPTY_CONTENT: &str = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:p/></office:text></office:body></office:document-content>"#;
 
-/// The margin a page layout leaves unsaid: XSL's initial value, 0 (ODF 1.3 §20.206–20.209 are
-/// XSL's §7.10 margins; LibreOffice's own pages have 2 cm, but always say so).
-const DEFAULT_MARGIN: f32 = 0.0;
-
 /// The page size of a page layout that states none: WordCraft's default page's.
 fn default_paper() -> (f32, f32) {
     let d = SectionProps::default();
@@ -508,16 +504,16 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         styles.read(s, false);
         pages = read_pages(s, paper, &profile);
     }
-    // No page layout at all (no styles.xml, or no master page): the default paper, with XSL's
-    // margins (0).
+    // No page layout at all (no styles.xml, or no master page): the default paper, with the
+    // profile's margins.
     if pages.first.is_none() {
         pages.first = Some(SectionProps {
             page_w: paper.0,
             page_h: paper.1,
-            margin_top: DEFAULT_MARGIN,
-            margin_bottom: DEFAULT_MARGIN,
-            margin_left: DEFAULT_MARGIN,
-            margin_right: DEFAULT_MARGIN,
+            margin_top: profile.page_margin,
+            margin_bottom: profile.page_margin,
+            margin_left: profile.page_margin,
+            margin_right: profile.page_margin,
             ..SectionProps::default()
         });
     }
@@ -923,14 +919,15 @@ fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
         let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
-        // What a layout leaves unsaid: the default paper, and XSL's margins (0).
+        // What a layout leaves unsaid: the default paper, and the profile's margins (§20.206–20.209
+        // refer to XSL's margins; whether XSL's initial 0 comes with them the standard doesn't say).
         let mut sec = SectionProps {
             page_w: paper.0,
             page_h: paper.1,
-            margin_top: DEFAULT_MARGIN,
-            margin_bottom: DEFAULT_MARGIN,
-            margin_left: DEFAULT_MARGIN,
-            margin_right: DEFAULT_MARGIN,
+            margin_top: profile.page_margin,
+            margin_bottom: profile.page_margin,
+            margin_left: profile.page_margin,
+            margin_right: profile.page_margin,
             ..SectionProps::default()
         };
         apply_layout(a, &mut sec);

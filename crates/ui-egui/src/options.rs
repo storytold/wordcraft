@@ -652,9 +652,11 @@ fn odf_files(app: &mut WordApp, ui: &mut Ui) {
     let u = unit();
     let k = u.pt_per_unit();
     egui::Grid::new("options_odf").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for (key, label, pt) in
-            [("headerMinHeight", "Header and footer height:", e.header_min_height), ("columnGap", "Gap between columns:", e.column_gap)]
-        {
+        for (key, label, pt) in [
+            ("pageMargin", "Page margins:", e.page_margin),
+            ("headerMinHeight", "Header and footer height:", e.header_min_height),
+            ("columnGap", "Gap between columns:", e.column_gap),
+        ] {
             let id = ui.label(tl!(label)).id;
             let mut v = pt / k;
             if ui.add(egui::DragValue::new(&mut v).speed(0.5 / k).range(0.0..=MAX_LENGTH / k).measure(u).max_decimals(2)).labelled_by(id).changed() {

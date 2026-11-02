@@ -11,8 +11,10 @@ knows of, so none gets lost.
 ## The rule
 
 1. **What the standard defines is law.** WordCraft follows it whatever the settings say. That
-   includes `fo:` properties, which the standard defines by referring to XSL 1.0. Where it does,
-   XSL's initial value is the default.
+   includes `fo:` properties, which the standard defines by referring to XSL 1.0, for their
+   meaning. Whether such a reference also brings XSL's initial value as the default the standard
+   doesn't say; where an application's choice differs from XSL's (page margins), the case is a
+   setting, with XSL's value as WordCraft's.
 2. **What the standard leaves open is a setting.** Each such case is one value of the ODF
    interpretation profile (`OdfProfile`, `crates/doc/src/odf_profile.rs`):
    - **WordCraft**, the default: what WordCraft does for its own and Word documents.
@@ -41,6 +43,7 @@ Where to set it:
 
 | Case | Standard | Setting (`file.options` `odf.*`) | WordCraft | LibreOffice |
 |---|---|---|---|---|
+| Page margins a page layout doesn't state | §20.206–20.209 refer to XSL §7.10 (initial value 0); whether that default comes with the reference is not said | `pageMargin` | 0 (XSL's initial value) | 2 cm (its own files always state theirs; some of its templates don't) |
 | Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | `headerMinHeight` | 0 (as tall as its text) | 0.5 cm |
 | *(meaning)* Whether a header's stated minimum height includes its stated spacing from the body | §20.212.2, §20.207: not said | `headerHeightIncludesSpacing` | no: spacing comes after the height | yes |
 | A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | `dynamicSpacing` | off: the spacing is kept (on, with no height stated, would always drop the spacing the file states) | off |
@@ -57,7 +60,6 @@ Where to set it:
 
 | Case | Rule | Note |
 |---|---|---|
-| Page margins a page layout doesn't state | `fo:margin-*` (§20.207 et seq.) refer to XSL §7.10.1: initial value 0 | LibreOffice draws 2 cm, but its own files always state their margins. A file without them (some templates) opens with 0 margins. |
 | Paragraph padding on a side without a border | `fo:padding` (§20.217) is XSL's box model: padding takes room whether or not there is a border | Word ignores padding without a border. ODF documents don't. |
 | A frame's `style:run-through` when unstated | §20.351: `foreground` | |
 | `style:dynamic-spacing="true"/"false"` when stated | §20.264 | WordCraft writes `false` when a header or footer has spacing, so every reader keeps it. |
@@ -109,4 +111,5 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
-| 2026-11-02 | First version: the profile, the eleven open cases, law cases, writer choices, Google Docs and ONLYOFFICE findings. Stated values are never replaced by a preset; the cases about the meaning of stated values are marked. |
+| 2026-11-02 | Unstated page margins are a setting (`pageMargin`: WordCraft 0, XSL's initial value; LibreOffice 2 cm), not law: the standard refers to XSL's margins without saying whether XSL's default comes too. |
+| 2026-11-02 | First version: the profile, the open cases, law cases, writer choices, Google Docs and ONLYOFFICE findings. Stated values are never replaced by a preset; the cases about the meaning of stated values are marked. |
