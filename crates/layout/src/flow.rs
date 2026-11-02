@@ -303,10 +303,13 @@ impl<'a> Flow<'a> {
     /// next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     /// that doesn't breaks as usual, its last lines going over with the next paragraph. Returns
     /// the space before applied (`before`, or what is left of it at the top of the next column).
+    /// A paragraph that opens with a page or column break is moved by its break, once: kept here
+    /// too, it went to the next column and the break then took it one further, skipping a column
+    /// or leaving a blank page (#3009; Word, observed with synthetic documents).
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        if !((rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) && (pb.web || !self.pl.opens_with_break())) {
             return before;
         }
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
@@ -398,7 +401,7 @@ impl<'a> Flow<'a> {
             if over && fit.l1 > l0 && !split {
                 break;
             }
-            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, l) {
+            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, fit.l1) {
                 break;
             }
             fit.notes.extend(line_notes);
@@ -414,14 +417,10 @@ impl<'a> Flow<'a> {
     /// at the bottom of the page even when it doesn't fit (it only ends the page, and moving it
     /// would leave a blank page behind it, as in Word), and so does an empty paragraph closing a
     /// section before a new page (measured in Word: it stays on a full page instead of starting
-    /// one of its own).
-    fn stays_at_bottom(&self, pb: &PageBuilder, l: &para::Line) -> bool {
+    /// one of its own). Markers such as a bookmark may stand next to the break (#3009).
+    fn stays_at_bottom(&self, pb: &PageBuilder, li: usize) -> bool {
         let p = self.p;
-        let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
-            && p.text
-                .get(l.start..l.stop)
-                .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
-        only_break || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
+        self.pl.only_break(li) || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
     }
 
     /// Whether the line (just taken, `fit.l1` is after it) forces a break, noted in `fit`.
@@ -908,6 +907,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     Arc::new(para::layout_para(p, &env))
                 }
             };
+            // One that opens with a page or column break needs no room here: its break line stays
+            // at the bottom of the column and the rest goes on past the break (#3009).
+            if pl.opens_with_break() && !matches!(ctx.opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+                return 0.0;
+            }
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };

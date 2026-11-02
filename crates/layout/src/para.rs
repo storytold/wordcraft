@@ -127,12 +127,26 @@ impl ParaLayout {
     /// The line the list label is drawn on: the first, unless the paragraph opens with a page
     /// break, when Word draws it with the text on the next page.
     pub fn label_line(&self) -> usize {
-        let opens_with_break = self.lines.len() > 1
-            && self.lines.first().is_some_and(|l| {
-                l.end == LineEnd::PageBreak
-                    && self.clusters.get(l.c0..l.c1).is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
-            });
-        usize::from(opens_with_break)
+        usize::from(self.lines.len() > 1 && self.opens_with(&[LineEnd::PageBreak]))
+    }
+    /// Whether the paragraph opens with a page or column break: its first line holds the break and
+    /// nothing visible before it (a bookmark or other marker may stand next to it, as Word writes
+    /// for a heading in a table of contents).
+    pub fn opens_with_break(&self) -> bool {
+        self.opens_with(&[LineEnd::PageBreak, LineEnd::ColumnBreak])
+    }
+    fn opens_with(&self, ends: &[LineEnd]) -> bool {
+        self.lines.first().is_some_and(|l| ends.contains(&l.end)) && self.only_break(0)
+    }
+    /// Whether line `li` holds nothing but its page or column break (and markers such as bookmarks).
+    pub fn only_break(&self, li: usize) -> bool {
+        self.lines.get(li).is_some_and(|l| {
+            matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+                && self
+                    .clusters
+                    .get(l.c0..l.c1)
+                    .is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::ColumnBreak | ClKind::Marker)))
+        })
     }
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {
