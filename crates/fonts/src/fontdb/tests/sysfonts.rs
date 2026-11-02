@@ -706,3 +706,72 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The installed DejaVu Sans and Liberation Sans files copied into a fresh folder named for
+/// `tag`, with only the files `pick` keeps; `None` where they aren't installed.
+fn rtl_fonts(tag: &str, pick: impl Fn(&str) -> bool) -> Option<PathBuf> {
+    let src = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"];
+    if src.iter().any(|p| !Path::new(p).exists()) {
+        eprintln!("skipped: DejaVu Sans and Liberation Sans are not installed");
+        return None;
+    }
+    let dir = std::env::temp_dir().join(format!("dc-sysfonts-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for p in src.iter().filter(|p| pick(p)) {
+        std::fs::copy(p, dir.join(Path::new(p).file_name().unwrap())).unwrap();
+    }
+    Some(dir)
+}
+
+/// Hebrew falls back to the same font whatever loaded before it (#4300): the ranked right-to-left
+/// family, not Liberation Sans because a document had asked for Arial first. Which family that is
+/// depends on the build (DejaVu Sans from the folder, or Noto Sans Hebrew when built with
+/// craft-fonts), so the test compares the two cases. Skipped where DejaVu Sans and Liberation Sans
+/// aren't installed.
+#[test]
+fn rtl_fallback_does_not_depend_on_what_loaded_before() {
+    let Some(dir) = rtl_fonts("rtl", |_| true) else { return };
+    let fallback = |liberation_first: bool| {
+        let db = FontDb::with_font_dirs(vec![dir.clone()]);
+        let latin = db.face(FALLBACK_FAMILY, "Regular");
+        if liberation_first {
+            assert_eq!(db.face("Liberation Sans", "Regular").family, "Liberation Sans");
+        }
+        db.fallback_for('ש', latin.id()).map(|f| f.family.clone())
+    };
+    let fresh = fallback(false);
+    assert!(fresh.as_deref().is_some_and(|f| f != "Liberation Sans"), "{fresh:?}");
+    assert_eq!(fallback(true), fresh, "the same font after Liberation Sans loaded first");
+}
+
+/// The right-to-left families load once, at the first right-to-left character that needs a
+/// fallback: later characters (each a new search, missing the cache) load nothing more.
+#[test]
+fn rtl_fallback_families_load_once() {
+    let Some(dir) = rtl_fonts("rtl-once", |_| true) else { return };
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    assert!(db.fallback_for('ש', latin.id()).is_some());
+    assert!(db.is_loaded("DejaVu Sans"));
+    let n = db.read_faces().len();
+    for c in ['א', 'ב', 'ע', 'ب', 'ت'] {
+        assert!(db.fallback_for(c, latin.id()).is_some(), "{c}");
+    }
+    assert_eq!(db.read_faces().len(), n, "no family loaded again");
+}
+
+/// A right-to-left family installed after the first search is not left out as tried: after a
+/// rescan, the next right-to-left search loads it.
+#[test]
+fn an_rtl_family_installed_later_loads_after_a_rescan() {
+    let Some(dir) = rtl_fonts("rtl-later", |p| p.contains("Liberation")) else { return };
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    assert!(db.fallback_for('ש', latin.id()).is_some());
+    assert!(!db.is_loaded("DejaVu Sans"), "not installed yet");
+    std::fs::copy("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", dir.join("DejaVuSans.ttf")).unwrap();
+    db.load_system_fonts();
+    assert!(db.fallback_for('א', latin.id()).is_some());
+    assert!(db.is_loaded("DejaVu Sans"), "installed since and cataloged by the rescan");
+}
