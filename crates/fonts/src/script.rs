@@ -5,8 +5,6 @@
 //! Engine reordering, e.g. U+1031 ေ drawn before its consonant) from the run's script, so text
 //! mixing scripts in one face must be shaped one script at a time.
 
-#![allow(clippy::single_range_in_vec_init)] // one run is a list of runs
-
 use unicode_script::{Script, UnicodeScript};
 
 /// The script of `c` for itemisation: `None` for characters that take the script of the text
@@ -24,7 +22,7 @@ fn real_script(c: char) -> Option<Script> {
 /// before them (or, at the start, the first run), so the ranges cover `text` exactly.
 pub(crate) fn script_runs(text: &str) -> Vec<std::ops::Range<usize>> {
     if text.is_ascii() {
-        return vec![0..text.len()];
+        return std::iter::once(0..text.len()).collect();
     }
     let mut runs = Vec::new();
     let mut cur: Option<Script> = None;
