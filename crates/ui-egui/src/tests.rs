@@ -5698,6 +5698,39 @@ fn system_theme_pins_the_title_bar_to_the_desktop_answer() {
     }
 }
 
+/// Native theme feedback must not reset the portal's title-bar appearance.
+#[test]
+fn system_theme_portal_answer_stays_stable_when_native_theme_is_reported() {
+    use egui::{SystemTheme, Theme, ThemePreference, ViewportCommand};
+    for dark in [false, true] {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.ui.theme = theme::Appearance::System;
+        a.desktop_dark = Some(dark);
+        let os_theme = if dark { Theme::Dark } else { Theme::Light };
+        let pinned = if dark { SystemTheme::Dark } else { SystemTheme::Light };
+        // First pin the native decorations to the portal's answer.
+        assert!(theme_frame(&ctx, &mut a, None).contains(&ViewportCommand::SetTheme(pinned)));
+        // A native response to that pin is not a new user preference. Subsequent frames must not
+        // reset the window to SystemDefault.
+        for os in [Some(os_theme), None, Some(os_theme), None] {
+            let sent = theme_frame(&ctx, &mut a, os);
+            assert!(!sent.iter().any(|c| matches!(c, ViewportCommand::SetTheme(_))), "stable portal {dark}, native {os:?}: {sent:?}");
+            assert_eq!(ctx.options(|o| o.theme_preference), if dark { ThemePreference::Dark } else { ThemePreference::Light });
+            assert_eq!(a.ui_is_dark(), dark);
+        }
+        // A real portal change wins even while the native report is still stale.
+        a.desktop_dark = Some(!dark);
+        let changed = theme_frame(&ctx, &mut a, Some(os_theme));
+        let next = if dark { SystemTheme::Light } else { SystemTheme::Dark };
+        assert!(changed.contains(&ViewportCommand::SetTheme(next)), "{changed:?}");
+        assert_eq!(a.ui_is_dark(), !dark);
+        assert_eq!(theme::Tokens::get(&ctx).dark, !dark);
+        let unchanged = theme_frame(&ctx, &mut a, Some(os_theme));
+        assert!(!unchanged.iter().any(|c| matches!(c, ViewportCommand::SetTheme(_))), "{unchanged:?}");
+    }
+}
+
 /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
 #[test]
 fn dark_page_leaves_the_interface_theme_alone() {
