@@ -4,7 +4,10 @@ use super::{Document, Session, StoryRef, next_document_id};
 
 impl Session {
     /// Replace the document (open/new).
-    pub fn set_document(&mut self, doc: Document) {
+    pub fn set_document(&mut self, mut doc: Document) {
+        if let Err(e) = self.detect_document_language(&mut doc) {
+            log::warn!("proofing language on open: {e}");
+        }
         self.autocap = None;
         let replaced = self.document_id;
         self.document_id = next_document_id();

@@ -455,7 +455,11 @@ impl Session {
         self.add(doc, 0)
     }
 
+    /// Make `doc` the active document, detecting its proofing language first when that's on.
     fn add(&mut self, mut doc: Document, untitled: u32) -> u64 {
+        if let Err(e) = self.detect_document_language(&mut doc) {
+            log::warn!("proofing language on open: {e}");
+        }
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();

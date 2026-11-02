@@ -30,6 +30,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }
+unicode-script = { workspace = true }
 regex = { workspace = true }
 regex-automata = { workspace = true }
 image = { workspace = true }

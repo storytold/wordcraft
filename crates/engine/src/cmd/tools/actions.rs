@@ -31,6 +31,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
         (None, None, None) => Some("en-US".to_string()),
         (l, ..) => l,
     };
+    if detect == Some(true) && lang.is_none() && no_proof.is_none() {
+        s.detect_current_language()?;
+    }
     if lang.is_none() && no_proof.is_none() {
         return Ok(json!({"detect": s.prefs.detect_language}));
     }
@@ -44,6 +47,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     })?;
     if p::bool(v, "default") == Some(true) {
         s.prefs.default_language = lang;
+    }
+    if detect == Some(true) {
+        s.detect_current_language()?;
     }
     Ok(result)
 }
