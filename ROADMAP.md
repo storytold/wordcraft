@@ -140,7 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-01: Text boxes: with Wrap text in shape off, each line runs as long as its text, so a label in a box saved too narrow for it, such as a classification mark in a header, stays on one line instead of wrapping letter by letter, and a floating box is drawn as wide as its lines, as in Word. The setting is kept on save.
+- 2026-11-01: Text boxes: with Wrap text in shape off, each line runs as long as its text, so a label in a box saved too narrow for it, such as a classification mark in a header, stays on one line instead of wrapping letter by letter, and a floating box is drawn as wide as its lines, as in Word. Linked boxes and boxes with turned text still wrap at their saved width. The setting is kept on save, and a VML box's is saved as DrawingML.
 - 2026-11-01: DOCX tables keep rows and cells wrapped in `mc:AlternateContent`, selecting one supported Choice or Fallback with the existing reader policy (#5219). Original synthetic checks cover namespace aliases, unsupported requirements, nested row/cell content controls and two save/reopen cycles; broader corpus and native Word qualification remain open.
 
 - 2026-11-01: Shapes: a line's arrowheads are as long and as wide as Word draws them: 2, 3 or 5 times the line's width for small, medium and large (a line under 2 points as a 2-point one). Their kind, width and length are read from DOCX (DrawingML and VML) and saved back; before, every arrowhead was one size and saved as a medium triangle.

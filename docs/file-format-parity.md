@@ -281,7 +281,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | trivial | Text boxes: `wps:bodyPr` `wrap="none"` read and written, VML `mso-wrap-style:none` read |
+| 2026-11-01 | trivial | Text boxes: `wps:bodyPr` `wrap="none"` read and written, VML `mso-wrap-style:none` read and saved as DrawingML |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle |
 | 2026-10-31 | trivial | .doc import: text naming no font takes the stylesheet's standard fonts (rgftcStandardChpStsh, ftcBi), not the font table's first entry; runs' East Asian and complex-script fonts are read (#5066) |
