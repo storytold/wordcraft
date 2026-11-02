@@ -453,10 +453,16 @@ impl<'a> BreakText<'a> {
 }
 
 /// Mark the clusters a line may break after.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
+fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara, ref_breaks: &[(usize, bool)]) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
+    for c in clusters.iter_mut() {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    // Expanded REF pieces share one object offset, so use their own space boundaries.
+    for &(i, allowed) in ref_breaks {
+        if let Some(c) = clusters.get_mut(i) {
+            c.break_after = allowed;
+        }
     }
 }
 
@@ -576,13 +582,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
-    // Expanded REF pieces share one object offset, so use their own space boundaries.
-    for (i, allowed) in &sh.ref_breaks {
-        if let Some(c) = sh.b.clusters.get_mut(*i) {
-            c.break_after = *allowed;
-        }
-    }
+    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp, &sh.ref_breaks);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;

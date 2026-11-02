@@ -4879,6 +4879,56 @@ fn ref_visual_app() -> WordApp {
 }
 
 #[test]
+fn ref_pointer_canvas_typing() {
+    let mut app = ref_visual_app();
+    app.session.doc.body.insert(0, wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()));
+    app.session.touch();
+    app.run("text.insert", json!({"text": "draft"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 650.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(8);
+    let before = h.state_mut().session.layout();
+    let rev = h.state().session.rev();
+    let (x, y) = before.pages[0]
+        .items
+        .iter()
+        .find_map(|it| {
+            let Placed::Lines { path, para, l0, l1, x, y, .. } = it else { return None };
+            if *path != Pos::body(1, 0).path || l1 - l0 < 4 {
+                return None;
+            }
+            Some((x + para.lines[l0 + 2].left + 1.0, y + para.lines[l0 + 2].top - para.lines[*l0].top + 6.0))
+        })
+        .unwrap();
+    let screen = page_to_screen(h.state_mut(), 0, x, y).unwrap();
+    h.event(egui::Event::PointerMoved(screen));
+    h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    let after = h.state_mut().session.layout();
+    assert!(!std::sync::Arc::ptr_eq(&before, &after), "ending typing changes the snapshot owner");
+    assert_eq!(h.state().session.rev(), rev);
+    assert_eq!(h.state().session.sel.focus, Pos::body(1, 0));
+    let target = after.hit_visual(0, x, y, StoryRef::Body).unwrap();
+    let expected = after.caret_visual(target.position(), Some(&target), 0).unwrap();
+    let actual = h.state().session.caret_geometry(&after, &h.state().session.sel.focus).unwrap();
+    assert_eq!(actual, expected, "the real pointer path retains the continuation after typing ends");
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    let expected_screen = page_to_screen(h.state_mut(), 0, expected.x, expected.top).unwrap();
+    assert!((caret.y - expected_screen.y).abs() < 0.1);
+    h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    let ime = h.output().platform_output.ime.as_ref().unwrap().cursor_rect;
+    let caret = caret_screen(h.state_mut()).unwrap().0;
+    assert!((ime.min.y - caret.y).abs() < 0.1);
+}
+
+#[test]
 fn ref_visual_canvas() {
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 650.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -4910,11 +4960,13 @@ fn ref_visual_canvas() {
     h.event(button(from, true));
     h.step();
     let pressed = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "canvas preparation and pointer press retain the owner");
     assert_eq!(h.state().session.sel.focus, Pos::body(0, 0));
     assert!(pressed.y > screen(h.state_mut(), point(0, 0)).y + 10.0, "click must retain its continuation line");
     h.event(egui::Event::PointerMoved(to));
     h.step();
     let dragged = caret_screen(h.state_mut()).unwrap().0;
+    assert!(std::sync::Arc::ptr_eq(&layout, &h.state_mut().session.layout()), "pointer drag retains the same snapshot");
     assert!(dragged.y > pressed.y + 5.0, "same-Pos drag must update visual affinity");
     h.event(button(to, false));
     h.run_steps(3);
@@ -4929,6 +4981,21 @@ fn ref_visual_canvas() {
     let caret = caret_screen(h.state_mut()).unwrap().0;
     let ime = h.output().platform_output.ime.as_ref().expect("the canvas supplies IME geometry").cursor_rect;
     assert!((ime.min.x - caret.x).abs() < 0.1 && (ime.min.y - caret.y).abs() < 0.1, "IME and caret must share the visual line");
+
+    // A right-click at the same source position replaces the earlier visual line.
+    let secondary_point = screen(h.state_mut(), point(0, 2));
+    let secondary =
+        |pressed| egui::Event::PointerButton { pos: secondary_point, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    h.event(egui::Event::PointerMoved(secondary_point));
+    h.event(secondary(true));
+    h.step();
+    h.event(secondary(false));
+    h.run_steps(3);
+    let right_clicked = caret_screen(h.state_mut()).unwrap().0;
+    assert!((right_clicked.y - pressed.y).abs() < 0.1, "right-click must replace the earlier continuation affinity");
+    assert_eq!(h.state().session.sel.focus, Pos::body(0, 0));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
 
     let before = h.state().canvas.scroll_offset;
     let last = layout.pages.len() - 1;

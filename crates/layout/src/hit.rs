@@ -36,8 +36,16 @@ pub enum VisualEdge {
 pub struct VisualPos {
     pos: Pos,
     owner: Weak<DocLayout>,
-    line: Option<(usize, usize)>,
+    line: Option<PhysicalLine>,
     edge: Option<VisualEdge>,
+}
+
+// Item ordinals distinguish repeated placements of the same paragraph line in one snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PhysicalLine {
+    page: usize,
+    item: usize,
+    line: usize,
 }
 
 impl VisualPos {
@@ -431,10 +439,10 @@ impl DocLayout {
     /// Hit a source position while retaining the selected line in this snapshot.
     pub fn hit_visual(self: &Arc<Self>, page: usize, x: f32, y: f32, story: StoryRef) -> Option<VisualPos> {
         let (pos, line) = self.hit_target(page, x, y, story)?;
-        Some(self.visual_pos(pos, line.map(|li| (page, li)), None))
+        Some(self.visual_pos(pos, line, None))
     }
 
-    fn hit_target(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, Option<usize>)> {
+    fn hit_target(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, Option<PhysicalLine>)> {
         let p = self.pages.get(page)?;
         if let Some(pos) = turned_hit(p, story, x, y) {
             return Some((pos, None));
@@ -451,7 +459,7 @@ impl DocLayout {
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
         let off = best.para.off_at_x(best.li, x - best.x);
-        Some((Pos { story: best.story, path: best.path.clone(), off }, Some(best.li)))
+        Some((Pos { story: best.story, path: best.path.clone(), off }, Some(self.physical_line(page, best)?)))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
@@ -666,7 +674,14 @@ impl DocLayout {
         self.caret_on(pos, page_hint)
     }
 
-    fn visual_pos(self: &Arc<Self>, pos: Pos, line: Option<(usize, usize)>, edge: Option<VisualEdge>) -> VisualPos {
+    fn physical_line(&self, page: usize, hit: &LineHit<'_>) -> Option<PhysicalLine> {
+        // LineHit borrows this exact placed item's path, even when copies share source offsets.
+        let item =
+            items_of(self.pages.get(page)?, hit.story).position(|item| matches!(item, Placed::Lines { path, .. } if std::ptr::eq(path, hit.path)))?;
+        Some(PhysicalLine { page, item, line: hit.li })
+    }
+
+    fn visual_pos(self: &Arc<Self>, pos: Pos, line: Option<PhysicalLine>, edge: Option<VisualEdge>) -> VisualPos {
         VisualPos { pos, owner: Arc::downgrade(self), line, edge }
     }
 
@@ -675,24 +690,20 @@ impl DocLayout {
         if hint.pos != *pos || !Weak::ptr_eq(&hint.owner, &Arc::downgrade(self)) {
             return None;
         }
-        let (page, li) = hint.line?;
-        for (pi, item) in self.pieces(pos.story, &pos.path, page) {
-            let Placed::Lines { para, l0, l1, turn: TextDirection::Horizontal, .. } = item else { continue };
-            if pi != page || li < *l0 || li >= *l1 {
-                continue;
-            }
-            let line = para.lines.get(li)?;
-            if pos.off >= line.start && pos.off <= line.stop {
-                return Some((page, item, li, hint.edge));
-            }
+        let PhysicalLine { page, item, line: li } = hint.line?;
+        let item = items_of(self.pages.get(page)?, pos.story).nth(item)?;
+        let Placed::Lines { story, path, para, l0, l1, turn: TextDirection::Horizontal, .. } = item else { return None };
+        if *story != pos.story || *path != pos.path || li < *l0 || li >= *l1 {
+            return None;
         }
-        None
+        let line = para.lines.get(li)?;
+        (pos.off >= line.start && pos.off <= line.stop).then_some((page, item, li, hint.edge))
     }
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
         let c = self.caret_on(pos, page_hint)?;
-        self.vertical_target(pos, c, goal_x, dir).map(|(pos, _, _, gx)| (pos, gx))
+        self.vertical_target(pos, c, goal_x, dir).map(|(pos, _, gx)| (pos, gx))
     }
 
     /// Move from the selected visual line, retaining the target line and horizontal goal.
@@ -705,11 +716,11 @@ impl DocLayout {
         page_hint: usize,
     ) -> Option<(VisualPos, f32)> {
         let c = self.caret_visual(pos, hint, page_hint)?;
-        let (pos, page, li, gx) = self.vertical_target(pos, c, goal_x, dir)?;
-        Some((self.visual_pos(pos, Some((page, li)), None), gx))
+        let (pos, line, gx) = self.vertical_target(pos, c, goal_x, dir)?;
+        Some((self.visual_pos(pos, Some(line), None), gx))
     }
 
-    fn vertical_target(&self, pos: &Pos, c: Caret, goal_x: Option<f32>, dir: i32) -> Option<(Pos, usize, usize, f32)> {
+    fn vertical_target(&self, pos: &Pos, c: Caret, goal_x: Option<f32>, dir: i32) -> Option<(Pos, PhysicalLine, f32)> {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
@@ -743,7 +754,7 @@ impl DocLayout {
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, c.page, l.li, gx));
+            return Some((Pos { story: l.story, path: l.path.clone(), off }, self.physical_line(c.page, l)?, gx));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
@@ -751,7 +762,7 @@ impl DocLayout {
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, np, l.li, gx))
+        Some((Pos { story: l.story, path: l.path.clone(), off }, self.physical_line(np, l)?, gx))
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).
@@ -771,7 +782,7 @@ impl DocLayout {
 
     /// Home/End on the selected line. Atomic results keep legal source boundaries.
     pub fn line_edge_visual(self: &Arc<Self>, pos: &Pos, hint: Option<&VisualPos>, page_hint: usize, edge: VisualEdge) -> Option<VisualPos> {
-        if let Some((page, Placed::Lines { para, .. }, li, _)) = self.visual_line(pos, hint) {
+        if let Some((_, Placed::Lines { para, .. }, li, _)) = self.visual_line(pos, hint) {
             let (start, end) = atomic_line(para, li).or_else(|| line_bounds_at(para, li))?;
             let off = match edge {
                 VisualEdge::Leading => start,
@@ -779,7 +790,7 @@ impl DocLayout {
             };
             let pos = Pos { off, ..pos.clone() };
             let edge = atomic_line(para, li).map(|_| edge);
-            return Some(self.visual_pos(pos, Some((page, li)), edge));
+            return Some(self.visual_pos(pos, hint.and_then(|hint| hint.line), edge));
         }
         let (start, end) = self.line_bounds(pos, page_hint)?;
         Some(self.visual_pos(

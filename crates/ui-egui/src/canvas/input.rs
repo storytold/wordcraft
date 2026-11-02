@@ -1,4 +1,5 @@
 use super::balloons::over_balloon;
+use super::cursor::{retain_pointer_hit, set_visual_caret};
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
@@ -325,11 +326,12 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return;
     }
+    let layout = app.session.layout();
     let Some(target) = layout.hit_visual(page, x, y, story) else { return };
     let pos = target.position().clone();
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
-        && let Some(link) = link_under(app, layout, page, x, y, &pos)
+        && let Some(link) = link_under(app, &layout, page, x, y, &pos)
     {
         if let Some(name) = link.strip_prefix('#') {
             // The caret goes to the bookmark's start, as in Word (Go To selects its text).
@@ -497,21 +499,5 @@ fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
-    }
-}
-
-fn set_visual_caret(app: &mut WordApp, target: wordcraft_layout::VisualPos, mode: SelectionMode, point: (usize, f32, f32)) {
-    let story = target.position().story;
-    let pos = serde_json::to_value(target.position()).unwrap_or_default();
-    if app.run("caret.set", json!({"pos": pos, "extend": mode == SelectionMode::Extend})).is_ok() {
-        retain_pointer_hit(app, point, story);
-    }
-}
-
-fn retain_pointer_hit(app: &mut WordApp, (page, x, y): (usize, f32, f32), story: StoryRef) {
-    // The command may end typing. Hit the final layout without reusing an old owner.
-    let layout = app.session.layout();
-    if let Some(target) = layout.hit_visual(page, x, y, story) {
-        app.session.retain_visual(target);
     }
 }
