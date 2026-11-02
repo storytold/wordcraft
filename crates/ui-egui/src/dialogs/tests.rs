@@ -358,15 +358,19 @@ fn typed_in_box(d: Option<&Dialog>) -> Option<&str> {
 /// The dialogs that open with the keyboard in a box.
 const BOX_DIALOGS: [&str; 7] = ["commands", "icons", "goto", "newLabel", "fieldCode", "password", "encryptPassword"];
 
+/// The dialog `name` of [`BOX_DIALOGS`] as it opens over `app`.
+fn new_box_dialog(name: &str, app: &mut WordApp) -> Dialog {
+    match name {
+        "newLabel" => Dialog::Refs(Box::new(crate::dialogs_refs::RefsDialog::NewLabel(crate::dialogs_refs::CaptionForm::read(app)))),
+        "password" => Dialog::Password { name: "Locked.docx".into(), params: json!({}), password: Default::default(), message: String::new() },
+        _ => Dialog::open(name, app).unwrap(),
+    }
+}
+
 /// The dialog `name` open over a document, after the frames in which its box takes the keyboard.
 fn box_dialog(name: &str) -> egui_kittest::Harness<'static, WordApp> {
     let mut app = app_with("Unchanged document");
-    let dialog = match name {
-        "newLabel" => Dialog::Refs(Box::new(crate::dialogs_refs::RefsDialog::NewLabel(crate::dialogs_refs::CaptionForm::read(&app)))),
-        "password" => Dialog::Password { name: "Locked.docx".into(), params: json!({}), password: Default::default(), message: String::new() },
-        _ => Dialog::open(name, &mut app).unwrap(),
-    };
-    app.dialog = Some(dialog);
+    app.dialog = Some(new_box_dialog(name, &mut app));
     let mut h = app_harness(app);
     h.run_steps(4);
     h
@@ -446,6 +450,70 @@ fn tab_leaves_a_dialog_box_and_shift_tab_comes_back() {
         assert!((1..=2).contains(&resets), "{name}: Tab and back reset the input method {resets} times");
         type_letter(&mut h, egui::Key::C, "c");
         assert_eq!(typed_in_box(h.state().dialog.as_ref()), Some("ac"), "{name}: typing lands in the box again");
+    }
+}
+
+/// What a screen reader follows through a dialog that opens in a box, and where the keyboard is
+/// when the dialog opens again. The box has the keyboard; Tab goes on through the dialog's other
+/// boxes, then its buttons as they are drawn (Go To: Previous, Next, Close), and Shift+Tab walks
+/// back the same way to the box. Closed with the keyboard on another control (Tab, then Escape)
+/// and opened again, the dialog gives its box the keyboard again, as Word's do: the box asks for
+/// it in the first frame it is drawn, and a closed dialog is not drawn in the frame before.
+#[test]
+fn tab_walks_from_a_dialog_box_to_its_buttons_and_a_reopened_dialog_starts_in_its_box() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let focused =
+        |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label()).unwrap_or_default();
+    let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    // The boxes in order, then the buttons: in order in Go To; OK and Cancel in either order here,
+    // as their Tab order is the platform's (#5106 makes it the order they read).
+    let walks: [(&str, &[&str], &[&str], bool); 5] = [
+        ("goto", &["Enter page number:"], &["Previous", "Next", "Close"], true),
+        ("newLabel", &["Label:"], &["OK", "Cancel"], false),
+        ("fieldCode", &["Field codes:"], &["OK", "Cancel"], false),
+        ("password", &["Password:"], &["OK", "Cancel"], false),
+        ("encryptPassword", &["Password:", "Confirm password:"], &["OK", "Cancel"], false),
+    ];
+    for name in BOX_DIALOGS {
+        let mut h = box_dialog(name);
+        let in_box = h.ctx.memory(|m| m.focused());
+        assert!(in_box.is_some(), "{name}: the box has the keyboard");
+        if let Some((_, boxes, buttons, ordered)) = walks.iter().find(|w| w.0 == name) {
+            let mut seen = vec![focused(&h)];
+            for _ in 1..boxes.len() + buttons.len() {
+                h.key_press(egui::Key::Tab);
+                h.run_steps(2);
+                seen.push(focused(&h));
+            }
+            let (got_boxes, got_buttons) = seen.split_at(boxes.len().min(seen.len()));
+            assert_eq!(got_boxes.to_vec(), strings(boxes), "{name}: Tab goes through the boxes: {seen:?}");
+            let (mut got_buttons, mut want) = (got_buttons.to_vec(), strings(buttons));
+            if !ordered {
+                got_buttons.sort();
+                want.sort();
+            }
+            assert_eq!(got_buttons, want, "{name}: then through the buttons: {seen:?}");
+            for back in seen.iter().rev().skip(1) {
+                h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+                h.run_steps(2);
+                assert_eq!(&focused(&h), back, "{name}: Shift+Tab walks back: {seen:?}");
+            }
+            assert_eq!(h.ctx.memory(|m| m.focused()), in_box, "{name}: back in the box");
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_ne!(h.ctx.memory(|m| m.focused()), in_box, "{name}: the keyboard left the box");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        // New Label goes back to the Caption dialog it opens from.
+        let back = |d: &Dialog| matches!(d, Dialog::Refs(r) if matches!(**r, crate::dialogs_refs::RefsDialog::Caption(_)));
+        assert!(h.state().dialog.as_ref().is_none_or(|d| name == "newLabel" && back(d)), "{name}: Escape closes the dialog");
+        let dialog = new_box_dialog(name, h.state_mut());
+        h.state_mut().dialog = Some(dialog);
+        h.run_steps(4);
+        assert_eq!(h.ctx.memory(|m| m.focused()), in_box, "{name}: opened again, the box has the keyboard");
+        type_letter(&mut h, egui::Key::Z, "z");
+        assert_eq!(typed_in_box(h.state().dialog.as_ref()), Some("z"), "{name}: and typing lands in it");
     }
 }
 
