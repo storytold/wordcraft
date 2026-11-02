@@ -571,12 +571,21 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
+        let resp = resp.on_hover_text(p);
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
+        let text_w = (r.width() - 48.0).max(0.0);
+        let fit = |text: &str, font: egui::FontId, color: egui::Color32| {
+            let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+            job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
+            ui.painter().layout_job(job)
+        };
+        let name_g = fit(name, medium(13.0), t.text);
+        ui.painter().galley(pos2(r.min.x + 40.0, r.min.y + 13.0 - name_g.size().y / 2.0), name_g, t.text);
+        let path_g = fit(p, regular(11.0), t.text_dim);
+        ui.painter().galley(pos2(r.min.x + 40.0, r.min.y + 29.0 - path_g.size().y / 2.0), path_g, t.text_dim);
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));

@@ -75,6 +75,56 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
+/// #5212: long names and paths in File > Home > Recent shorten to fit their row and show on hover.
+#[test]
+fn recent_shortens_a_long_name_and_path_to_its_row() {
+    let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
+    let path = format!("C:/Users/Someone/{}/{name}", "LongFolderName".repeat(20));
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent.push(path.clone());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let row = h.get_by_label(&name).rect();
+    fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match s {
+            egui::Shape::Text(ts) => out.push(ts),
+            egui::Shape::Vec(v) => {
+                for child in v {
+                    collect_text(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut texts = Vec::new();
+    for cs in &h.output().shapes {
+        collect_text(&cs.shape, &mut texts);
+    }
+    let mut matched = 0;
+    for ts in texts {
+        let text = ts.galley.text();
+        if text.starts_with("C:/Users/Someone") || text.starts_with("C:\\Users\\Someone") || text.starts_with("AVeryLongDocumentName") {
+            matched += 1;
+            let bounds = ts.visual_bounding_rect();
+            assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
+        }
+    }
+    assert_eq!(matched, 2, "both file name and path shapes must be found");
+
+    h.event(egui::Event::PointerMoved(row.center()));
+    h.run_steps(4);
+    h.get_by_label(&path);
+}
+
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
 /// control inset in full screen.
 #[test]
