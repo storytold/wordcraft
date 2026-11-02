@@ -137,8 +137,8 @@ web build has no packs.
 A click or key sent with `click`/`key` on Install, Show available languages or Refresh never turns
 downloading on either: only the person's own click does; the app shows why instead.
 
-Installing works once language-packs-1 is published and its index pinned. Until then, for testing
-packs before they are published, set `CRAFT_LANGUAGE_PACK_INDEX` to another index (a URL or a path
+Installing reads the pinned index of craft-i18n's language-packs-1 release (61 languages). For
+testing packs before they are released, set `CRAFT_LANGUAGE_PACK_INDEX` to another index (a URL or a path
 to an `index.json`) when starting WordCraft or `wordcraft-cli`. That index isn't pinned, so the
 sha256 of each archive only matches what that index says: it catches a broken download, not a
 changed pack. `proof.packs` then returns `"index_override": "<url or path>"`, and the app shows the
