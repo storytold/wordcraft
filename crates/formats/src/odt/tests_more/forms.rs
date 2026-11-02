@@ -171,3 +171,28 @@ fn hostile_kept_controls_are_bounded() {
     assert_eq!(c.matches("<form:button ").count(), 1, "{c}");
     assert!(c.contains("<script:event-listener "), "{c}");
 }
+
+#[test]
+fn hidden_controls_are_kept() {
+    // A hidden control (a value the form sends, not shown) has no place in the text.
+    let hidden = r#"<form:hidden form:name="Source" xml:id="control1" form:id="control1" form:value="web &amp; mail"><form:properties><form:property form:property-name="Tag" office:value-type="string" office:string-value="t"/></form:properties></form:hidden>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form form:name="Form">{hidden}<form:text form:name="Name" form:id="control2"/></form:form></office:forms><text:p>Name <draw:control draw:control="control2"/></text:p></office:text></office:body></office:document-content>"#
+    );
+    let saved = export(&import(&package(&content, None)).unwrap()).unwrap();
+    let c = entry(&saved, "content.xml");
+    assert!(
+        c.contains(r#"<form:hidden xml:id="hidden0" form:id="hidden0" form:name="Source" form:value="web &amp; mail"><form:properties><form:property form:property-name="Tag""#),
+        "{c}"
+    );
+    // Its id doesn't clash with the text control's, and it survives another save.
+    assert_eq!(c.matches(r#"form:id="control1""#).count(), 1, "{c}");
+    let again = entry(&export(&import(&saved).unwrap()).unwrap(), "content.xml");
+    assert_eq!(again.matches("<form:hidden ").count(), 1, "{again}");
+    // Only hidden controls: still written.
+    let only = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form>{hidden}</form:form></office:forms><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let c = entry(&export(&import(&package(&only, None)).unwrap()).unwrap(), "content.xml");
+    assert!(c.contains("<office:forms ") && c.contains("<form:hidden "), "{c}");
+}

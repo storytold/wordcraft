@@ -69,7 +69,7 @@ use import::{Pictures, apply_page_layout, read_entry, read_meta};
 pub use import::{import, parse};
 #[cfg(test)]
 use limits::MAX_XML_DEPTH;
-pub use package::export;
+pub use package::{TEMPLATE_MIME, TEXT_MIME, export, export_template};
 use styles::Styles;
 #[cfg(test)]
 use writer::x;

@@ -410,6 +410,8 @@ struct Parsed {
     sources: Vec<wordcraft_doc::Source>,
     /// The package's parts WordCraft doesn't read itself (macros…), kept for the next save.
     kept: super::parts::Kept,
+    /// Hidden form controls, kept for the next save.
+    hidden_controls: Vec<String>,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -473,6 +475,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
+    let hidden_controls = body.take_hidden_controls();
     let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());
     for b in parts.blocks_mut() {
         let (o, n) = custom_styles(b, &styles, named_odt);
@@ -524,6 +527,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
         custom,
         sources,
         kept,
+        hidden_controls,
     })
 }
 
@@ -553,9 +557,14 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         custom,
         sources,
         kept,
+        hidden_controls,
     } = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
+    // Elements can't hold a NUL: it parts them.
+    if !hidden_controls.is_empty() {
+        doc.passthrough.insert(super::forms::HIDDEN_PART.into(), std::sync::Arc::new(hidden_controls.join("\0").into_bytes()));
+    }
     doc.custom_props = custom;
     doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;

@@ -124,3 +124,22 @@ fn an_inline_sub_document_does_not_end_the_body() {
     let deep = format!("<office:document><office:body>{}", "<office:body>".repeat(5000));
     let _ = import_flat(deep.as_bytes());
 }
+
+#[test]
+fn a_template_is_saved_and_opened_as_one() {
+    // An OpenDocument text template (`.ott`): the package with the template's media type, in
+    // `mimetype` and as the manifest's root entry (ODF 1.3 Part 2 §3.3).
+    let d = crate::import("ott", &crate::odt::tests::package(&format!("<office:document-content {}><office:body><office:text><text:p>Template text.</text:p></office:text></office:body></office:document-content>", crate::odt::tests::NS_T), None))
+        .unwrap()
+        .unwrap();
+    let bytes = crate::export("ott", &d).unwrap().unwrap();
+    assert_eq!(crate::odt::tests::entry(&bytes, "mimetype"), crate::odt::TEMPLATE_MIME);
+    assert!(
+        crate::odt::tests::entry(&bytes, "META-INF/manifest.xml")
+            .contains(r#"manifest:full-path="/" manifest:version="1.3" manifest:media-type="application/vnd.oasis.opendocument.text-template""#)
+    );
+    let back = crate::import("ott", &bytes).unwrap().unwrap();
+    assert_eq!(back.body[0].as_para().map(|p| p.text.as_str()), Some("Template text."));
+    // A document is still a document.
+    assert_eq!(crate::odt::tests::entry(&crate::export("odt", &d).unwrap().unwrap(), "mimetype"), crate::odt::TEXT_MIME);
+}

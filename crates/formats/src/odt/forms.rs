@@ -48,6 +48,9 @@ pub(in crate::odt) struct FormsReader {
     open: Option<(String, ContentControl, Vec<String>)>,
     /// The controls read, by `form:id` (or `xml:id`).
     pub(in crate::odt) controls: HashMap<String, Read>,
+    /// Hidden controls (§13.5.15 `form:hidden`: a name and a value the form sends, not shown),
+    /// kept verbatim without their ids.
+    pub(in crate::odt) hidden: Vec<String>,
     /// A control WordCraft has no kind for being kept: its id, name, label, its XML so far (its
     /// id left out) and how many of its elements are open.
     kept: Option<Kept>,
@@ -103,6 +106,18 @@ impl FormsReader {
             return true;
         }
         let id = get(a, "form:id").or_else(|| get(a, "xml:id")).unwrap_or_default().to_string();
+        // A hidden control: kept as it is, its properties with it (its id is given anew).
+        if q == "form:hidden" && self.hidden.len() < MAX_CONTROLS {
+            self.kept = Some(Kept {
+                id: String::new(),
+                name: String::new(),
+                label: String::new(),
+                xml: element_xml(q, a),
+                open: 1,
+                foreign: !declared(q, a),
+            });
+            return true;
+        }
         if KEPT.contains(&q) && !id.is_empty() && self.controls.len() < MAX_CONTROLS {
             let name = get(a, "form:name").map(capped).unwrap_or_default();
             let label = get(a, "form:label").map(capped).filter(|l| !l.is_empty()).unwrap_or_else(|| name.clone());
@@ -187,7 +202,9 @@ impl FormsReader {
                 && let Some(k) = self.kept.take()
             {
                 // Too long to keep whole, or naming what WordCraft can't write: not kept.
-                if k.xml.len() <= MAX_KEPT && !k.foreign {
+                if k.xml.len() <= MAX_KEPT && !k.foreign && k.id.is_empty() {
+                    self.hidden.push(k.xml);
+                } else if k.xml.len() <= MAX_KEPT && !k.foreign {
                     let mut c = ContentControl::new(ControlKind::Text { multi_line: false });
                     c.tag = k.name;
                     c.lock = wordcraft_doc::control::ControlLock::ContentLocked;
@@ -321,12 +338,25 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
 }
 
 /// The `office:forms` holding the controls `xml` (empty when there are none).
-pub(in crate::odt) fn forms_xml(xml: &[String]) -> String {
-    if xml.is_empty() {
+pub(in crate::odt) fn forms_xml(xml: &[String], hidden: &[String]) -> String {
+    if xml.is_empty() && hidden.is_empty() {
         return String::new();
     }
+    // Hidden controls, each with an id of its own.
+    let hidden: String = hidden
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            let end = h.find(|ch: char| ch.is_whitespace() || ch == '>')?;
+            Some(format!("{} xml:id=\"hidden{i}\" form:id=\"hidden{i}\"{}", h.get(..end)?, h.get(end..)?))
+        })
+        .collect();
     format!(
-        "<office:forms form:automatic-focus=\"false\" form:apply-design-mode=\"false\"><form:form form:name=\"Form\">{}</form:form></office:forms>",
+        "<office:forms form:automatic-focus=\"false\" form:apply-design-mode=\"false\"><form:form form:name=\"Form\">{}{hidden}</form:form></office:forms>",
         xml.concat()
     )
 }
+
+/// `Document::passthrough` key of a document's hidden form controls (their XML, one after
+/// another), kept for the next save.
+pub(in crate::odt) const HIDDEN_PART: &str = "odf-hidden-controls";

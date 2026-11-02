@@ -23,7 +23,7 @@ pub mod txt;
 use wordcraft_doc::Document;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "fodt", "tex", "latex", "ltx"];
+pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -33,7 +33,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "md" | "markdown" => Ok(markdown::import(&txt::decode(bytes))),
         "html" | "htm" | "xhtml" => Ok(html::import(&html::decode(bytes))),
         "rtf" => rtf::import(bytes),
-        "odt" => odt::import(bytes),
+        "odt" | "ott" => odt::import(bytes),
         "fodt" => odt::import_flat(bytes),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
         _ => return None,
@@ -68,6 +68,7 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
+        "ott" => odt::export_template(doc),
         "fodt" => odt::export_flat(doc),
         "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
         _ => return None,

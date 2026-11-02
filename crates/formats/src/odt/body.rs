@@ -308,6 +308,11 @@ impl<'a> Body<'a> {
     }
 
     /// The blocks read, with anything still open closed.
+    /// The hidden form controls read (see [`super::forms::FormsReader::hidden`]).
+    pub(super) fn take_hidden_controls(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.forms.hidden)
+    }
+
     pub(super) fn take_blocks(&mut self) -> Vec<FBlock> {
         // What truncated XML left open: a field, a note or comment (its paragraph goes on).
         self.end_field();

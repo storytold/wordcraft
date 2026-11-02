@@ -542,7 +542,22 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::Sha
     out
 }
 
+/// An OpenDocument text document's media type, and a template's (ODF 1.3 Part 2 §3.3, Appendix C).
+pub const TEXT_MIME: &str = "application/vnd.oasis.opendocument.text";
+pub const TEMPLATE_MIME: &str = "application/vnd.oasis.opendocument.text-template";
+
+/// `doc` as an `.odt` package.
 pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
+    export_as(doc, TEXT_MIME)
+}
+
+/// `doc` as an OpenDocument text template (`.ott`): the same package with the template's
+/// media type.
+pub fn export_template(doc: &Document) -> Result<Vec<u8>, String> {
+    export_as(doc, TEMPLATE_MIME)
+}
+
+fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let flow = model::from_doc_with(
         doc,
         model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true, boxes: true },
@@ -615,7 +630,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let content = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
-        super::forms::forms_xml(&w.forms)
+        super::forms::forms_xml(&w.forms, &hidden_controls(doc))
     );
     let mut hw = Writer::with_prefix("M");
     hw.accents = accents;
@@ -643,8 +658,8 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     w.objects.append(&mut hw.objects);
     w.object_dirs.append(&mut hw.object_dirs);
     let meta = meta_xml(&flow.meta, &doc.custom_props);
-    let mut manifest = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
+    let mut manifest = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"{mime}\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
     for (dir, mime) in &w.object_dirs {
         manifest.push_str(&format!(
@@ -681,7 +696,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
     let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     z.start_file("mimetype", stored).map_err(err)?;
-    z.write_all(b"application/vnd.oasis.opendocument.text").map_err(ioerr)?;
+    z.write_all(mime.as_bytes()).map_err(ioerr)?;
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
         ("content.xml", content.as_bytes()),
@@ -782,4 +797,13 @@ fn line_numbering_xml(l: &wordcraft_doc::section::LineNumbering) -> String {
         l.count_by.clamp(1, 100),
         pt(if l.distance.is_finite() { l.distance.clamp(0.0, 1584.0) } else { 0.0 })
     )
+}
+
+/// The hidden form controls kept in `doc` (see [`super::forms::HIDDEN_PART`]).
+fn hidden_controls(doc: &Document) -> Vec<String> {
+    doc.passthrough
+        .get(super::forms::HIDDEN_PART)
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .map(|s| s.split('\0').filter(|h| h.starts_with("<form:hidden")).take(10_000).map(str::to_owned).collect())
+        .unwrap_or_default()
 }

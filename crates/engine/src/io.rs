@@ -20,6 +20,7 @@ pub const OPEN_EXTS: &[&str] = &[
     "htm",
     "rtf",
     "odt",
+    "ott",
     "fodt",
     "tex",
     "latex",
@@ -29,7 +30,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "json",
 ];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "fodt", "tex", "png", "json", "xml"];
+pub const SAVE_EXTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "ott", "fodt", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -131,7 +133,7 @@ pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
 /// Can files with this extension be saved with a password (Word's packages, ODT)?
 pub fn can_encrypt(name: &str) -> bool {
     let ext = ext_of(name);
-    is_word_package(&ext) || ext == "odt"
+    is_word_package(&ext) || ext == "odt" || ext == "ott"
 }
 
 /// Open a password-protected ODT package (ODF 1.3 Part 2 §3.4). The errors for a missing or
@@ -222,7 +224,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
         opened(&mut doc);
         return Ok((doc, true));
     }
-    if ext == "odt" && wordcraft_formats::odt::is_encrypted(bytes) {
+    if (ext == "odt" || ext == "ott") && wordcraft_formats::odt::is_encrypted(bytes) {
         let mut doc = open_encrypted_odt(bytes, password, page)?;
         opened(&mut doc);
         return Ok((doc, true));
@@ -419,7 +421,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
-        Some(pw) if ext_of(name) == "odt" => wordcraft_formats::odt::encrypt(&bytes, pw),
+        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw),
         Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         _ => Ok(bytes),
     }
