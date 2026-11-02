@@ -1598,6 +1598,30 @@ fn typing_after_undo_or_redo_in_a_lead_in_goes_on_with_the_lead_in() {
 }
 
 #[test]
+fn a_command_that_fails_puts_the_lead_in_back() {
+    // A command that types a whole lead-in and then fails: the document, the selection and the
+    // lead-in are all as they were.
+    fn type_then_fail(s: &mut Session, _: &serde_json::Value) -> crate::CmdResult {
+        s.run("text.insert", &json!({"text": "Next: "}))?;
+        Err(crate::CmdError::Failed("refused".into()))
+    }
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let mut spec = s.registry.get("text.insert").cloned().unwrap();
+    spec.id = "test.typeThenFail";
+    spec.run = type_then_fail;
+    let mut specs = s.registry.all().to_vec();
+    specs.push(spec);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    assert!(s.run("test.typeThenFail", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some(""));
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+}
+
+#[test]
 fn backspace_in_a_lead_in_keeps_the_lead_in() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");

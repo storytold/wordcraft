@@ -109,6 +109,8 @@ impl Session {
         // Commands may leave an equation (a whole-body replacement) even after they fail; put
         // the editing session back with the document.
         let math_before = spec.mutates.then(|| self.math.clone());
+        // A list item lead-in and the formatting typing uses with it go back with the document.
+        let lead_in_before = spec.mutates.then(|| (self.lead_in.clone(), self.pending.clone()));
         let before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
@@ -234,6 +236,7 @@ impl Session {
                 if let Some(math) = math_before {
                     self.math = math;
                 }
+                self.put_back_lead_in(lead_in_before);
                 if let Some(versions) = versions_before {
                     self.versions = versions;
                 }
@@ -273,6 +276,17 @@ impl Session {
             }
         }
         result
+    }
+
+    /// After a command failed: a list item lead-in it started, moved or ended goes back to how it
+    /// was, together with the formatting typing used with it.
+    fn put_back_lead_in(&mut self, before: Option<(Option<crate::cmd::text::LeadIn>, Option<CharProps>)>) {
+        if let Some((lead_in, pending)) = before
+            && (lead_in.is_some() || self.lead_in.is_some())
+        {
+            self.lead_in = lead_in;
+            self.pending = pending;
+        }
     }
 
     fn finish_success(&mut self, context: SuccessContext<'_>) {
