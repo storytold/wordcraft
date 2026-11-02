@@ -108,6 +108,20 @@ pub struct FindState {
     pub match_suffix: bool,
     pub ignore_punct: bool,
     pub ignore_space: bool,
+    /// Format filter for Find what (None means any formatting).
+    pub find_format: Option<wordcraft_doc::props::CharProps>,
+    /// Format to apply to Replace with (None means keep original formatting).
+    pub replace_format: Option<wordcraft_doc::props::CharProps>,
+    /// Style filter for Find what (None means any style).
+    pub find_style: Option<String>,
+    /// Style to apply on Replace with.
+    pub replace_style: Option<String>,
+    /// Paragraph alignment filter for Find what.
+    pub find_align: Option<wordcraft_doc::props::Align>,
+    /// Paragraph alignment to apply on Replace with.
+    pub replace_align: Option<wordcraft_doc::props::Align>,
+    pub find_para: Option<wordcraft_doc::props::ParaProps>,
+    pub replace_para: Option<wordcraft_doc::props::ParaProps>,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,

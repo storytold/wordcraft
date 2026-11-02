@@ -50,6 +50,16 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    let has_border_no_hdr = s.borders_do_not_surround_header
+        || doc.sections().iter().any(|(_, sec)| sec.page_border_options.as_ref().is_some_and(|o| !o.surround_header));
+    if has_border_no_hdr {
+        w.empty("w:bordersDoNotSurroundHeader", &[]);
+    }
+    let has_border_no_ftr = s.borders_do_not_surround_footer
+        || doc.sections().iter().any(|(_, sec)| sec.page_border_options.as_ref().is_some_and(|o| !o.surround_footer));
+    if has_border_no_ftr {
+        w.empty("w:bordersDoNotSurroundFooter", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }

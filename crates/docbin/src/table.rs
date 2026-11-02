@@ -451,13 +451,19 @@ fn brc80(b: &[u8]) -> Option<Border> {
     let [w, ty, ico, flags] = b else { return None };
     let style = match ty {
         0x00 => BorderStyle::None,
-        0x02 | 0x15 => BorderStyle::Thick,
+        0x02 => BorderStyle::Thick,
         0x03 => BorderStyle::Double,
         0x04 | 0x05 => BorderStyle::Dotted,
         0x06 | 0x07 => BorderStyle::Dashed,
-        0x08 | 0x09 => BorderStyle::DotDash,
-        0x0A | 0x18 => BorderStyle::Wave,
+        0x08 => BorderStyle::DotDash,
+        0x09 => BorderStyle::DotDotDash,
+        0x0A => BorderStyle::Wave,
+        0x0B => BorderStyle::ThinThick,
+        0x0C => BorderStyle::ThickThin,
+        0x0D => BorderStyle::ThinThickThin,
         0x11 => BorderStyle::Triple,
+        0x15 => BorderStyle::Thick,
+        0x18 => BorderStyle::DoubleWave,
         _ => BorderStyle::Single,
     };
     if *ty == 0 && *w == 0 {

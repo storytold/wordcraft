@@ -11599,3 +11599,279 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn find_and_replace_with_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Hello world from WordCraft"}));
+    // Make 'world' bold
+    run(&mut s, "select.text", json!({"text": "world"}));
+    run(&mut s, "format.bold", json!({}));
+
+    // Find 'world' without format filter -> finds 1
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "world"}))["count"], 1);
+
+    // Find 'world' with italic filter -> finds 0
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "world", "findFormat": {"italic": true}}))["count"], 0);
+
+    // Find 'world' with bold filter -> finds 1
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "world", "findFormat": {"bold": true}}))["count"], 1);
+
+    // Find with empty text but bold filter -> finds 'world'
+    let r = run(&mut s, "edit.find", json!({"text": "", "findFormat": {"bold": true}}));
+    assert_eq!(r["count"], 1);
+
+    // Replace bold 'world' with 'Universe' formatted as italic
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "world",
+            "with": "Universe",
+            "findFormat": {"bold": true},
+            "replaceFormat": {"italic": true, "bold": false}
+        }),
+    );
+    assert!(text(&s).contains("Hello Universe from WordCraft"));
+
+    // Check that 'Universe' now has italic and not bold
+    run(&mut s, "select.text", json!({"text": "Universe"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    let props = p.props_of_char(s.sel.ordered().0.off);
+    assert_eq!(props.italic, Some(true));
+    assert_eq!(props.bold, Some(false));
+
+    // Clear formatting
+    run(&mut s, "edit.find", json!({"clearFormatting": true}));
+    assert!(s.find.find_format.is_none());
+    assert!(s.find.replace_format.is_none());
+}
+
+#[test]
+fn page_border_options_and_styles() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Page border test"}));
+
+    // Set page border with ThickThin style, firstPage, offsetFrom text, and custom margins
+    run(
+        &mut s,
+        "design.pageBorders",
+        json!({
+            "kind": "box",
+            "style": "thickThin",
+            "applyTo": "firstPage",
+            "offsetFrom": "text",
+            "alignWithBoundary": true,
+            "margins": {"top": 15.0, "bottom": 16.0, "left": 17.0, "right": 18.0}
+        }),
+    );
+
+    let pb = s.doc.last_section.page_borders.as_ref().unwrap();
+    assert_eq!(pb.top.unwrap().style, wordcraft_doc::props::BorderStyle::ThickThin);
+    assert_eq!(pb.top.unwrap().space, 15.0);
+    assert_eq!(pb.bottom.unwrap().space, 16.0);
+    assert_eq!(pb.left.unwrap().space, 17.0);
+    assert_eq!(pb.right.unwrap().space, 18.0);
+
+    let opts = s.doc.last_section.page_border_options.as_ref().unwrap();
+    assert_eq!(opts.display, wordcraft_doc::PageBorderDisplay::FirstPage);
+    assert_eq!(opts.offset_from, wordcraft_doc::PageBorderOffset::Text);
+    assert!(opts.align_with_boundary);
+    assert_eq!(opts.margin_top, 15.0);
+    assert_eq!(opts.margin_right, 18.0);
+
+    // Test new styles
+    for style_name in ["doubleWave", "thinThick", "thinThickThin", "dotDotDash", "dashLongDash"] {
+        run(&mut s, "design.pageBorders", json!({"kind": "box", "style": style_name}));
+        assert!(s.doc.last_section.page_borders.is_some());
+    }
+}
+
+#[test]
+fn show_crop_marks_option() {
+    let mut s = s();
+    assert!(!s.prefs.show_crop_marks);
+    run(&mut s, "file.options", json!({"showCropMarks": true}));
+    assert!(s.prefs.show_crop_marks);
+    run(&mut s, "file.options", json!({"showCropMarks": false}));
+    assert!(!s.prefs.show_crop_marks);
+}
+
+#[test]
+fn replace_with_empty_text_and_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Hello Target World"}));
+
+    // Case 1: Replace 'Target' with empty text AND formatting (bold: true).
+    // Word behavior: does NOT delete 'Target'; instead applies formatting to 'Target'.
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Target",
+            "with": "",
+            "replaceFormat": {"bold": true}
+        }),
+    );
+    assert_eq!(text(&s), "Hello Target World");
+    run(&mut s, "select.text", json!({"text": "Target"}));
+    let p = s.doc.para_at(&s.sel.focus).unwrap();
+    let props = p.props_of_char(s.sel.ordered().0.off);
+    assert_eq!(props.bold, Some(true));
+
+    // Case 2: Replace 'Target' with empty text and NO formatting.
+    // Standard behavior: deletes 'Target'.
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Target",
+            "with": "",
+            "clearFormatting": true
+        }),
+    );
+    assert_eq!(text(&s), "Hello  World");
+}
+
+#[test]
+fn page_border_surround_header_footer() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Header footer surround test"}));
+
+    // Set page border with offsetFrom text, surroundHeader = false, surroundFooter = false
+    run(
+        &mut s,
+        "design.pageBorders",
+        json!({
+            "kind": "box",
+            "offsetFrom": "text",
+            "surroundHeader": false,
+            "surroundFooter": false,
+            "margins": {"top": 10.0, "bottom": 12.0, "left": 14.0, "right": 16.0}
+        }),
+    );
+
+    let opts = s.doc.last_section.page_border_options.as_ref().unwrap();
+    assert_eq!(opts.offset_from, wordcraft_doc::PageBorderOffset::Text);
+    assert!(!opts.surround_header);
+    assert!(!opts.surround_footer);
+    assert!(s.doc.settings.borders_do_not_surround_header);
+    assert!(s.doc.settings.borders_do_not_surround_footer);
+
+    // Round-trip through DOCX
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert!(back.settings.borders_do_not_surround_header);
+    assert!(back.settings.borders_do_not_surround_footer);
+    let back_opts = back.last_section.page_border_options.as_ref().unwrap();
+    assert!(!back_opts.surround_header);
+    assert!(!back_opts.surround_footer);
+
+    // Update to surroundHeader = true, surroundFooter = true
+    run(
+        &mut s,
+        "design.pageBorders",
+        json!({
+            "kind": "box",
+            "offsetFrom": "text",
+            "surroundHeader": true,
+            "surroundFooter": true,
+            "margins": {"top": 10.0, "bottom": 12.0, "left": 14.0, "right": 16.0}
+        }),
+    );
+    assert!(!s.doc.settings.borders_do_not_surround_header);
+    assert!(!s.doc.settings.borders_do_not_surround_footer);
+    let bytes2 = wordcraft_docx::write(&s.doc).unwrap();
+    let back2 = wordcraft_docx::read(&bytes2).unwrap();
+    assert!(!back2.settings.borders_do_not_surround_header);
+    assert!(!back2.settings.borders_do_not_surround_footer);
+    let back_opts2 = back2.last_section.page_border_options.as_ref().unwrap();
+    assert!(back_opts2.surround_header);
+    assert!(back_opts2.surround_footer);
+}
+
+#[test]
+fn replace_with_paragraph_props_and_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Paragraph 1\nParagraph 2\nParagraph 3"}));
+
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Paragraph 2",
+            "with": "Centered Para 2",
+            "replacePara": {
+                "align": "Center",
+                "indentLeft": 36.0
+            }
+        }),
+    );
+
+    assert!(text(&s).contains("Centered Para 2"));
+
+    let p = s.doc.para_at(&Pos::body(1, 0)).unwrap();
+    assert_eq!(p.props.align, Some(wordcraft_doc::props::Align::Center));
+    assert_eq!(p.props.indent_left, Some(36.0));
+}
+
+#[test]
+fn replace_with_paragraph_and_character_style() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro Text\nImportant Content\nConclusion"}));
+
+    // Test 1: Replace with Paragraph Style ("Heading 1")
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Intro Text",
+            "with": "Introduction",
+            "replaceStyle": "Heading 1"
+        }),
+    );
+
+    let p0 = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p0.props.style.as_deref(), Some("Heading1"));
+    assert_eq!(text(&s), "Introduction\nImportant Content\nConclusion");
+
+    // Test 2: Replace with Character Style ("Strong")
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Content",
+            "with": "Content",
+            "replaceStyle": "Strong"
+        }),
+    );
+
+    let p1 = s.doc.para_at(&Pos::body(1, 0)).unwrap();
+    let off = "Important ".len();
+    assert_eq!(p1.props_of_char(off).style.as_deref(), Some("Strong"));
+
+    // Test 3: Replace empty text with Style (apply style without deleting text)
+    run(
+        &mut s,
+        "edit.replaceAll",
+        json!({
+            "text": "Conclusion",
+            "with": "",
+            "replaceStyle": "Heading 1"
+        }),
+    );
+
+    let p2 = s.doc.para_at(&Pos::body(2, 0)).unwrap();
+    assert_eq!(p2.props.style.as_deref(), Some("Heading1"));
+    assert_eq!(p2.plain_text(), "Conclusion");
+
+    // Test 4: Find by Style ("Heading 1") matches Heading1 paragraphs
+    let res = run(
+        &mut s,
+        "edit.find",
+        json!({
+            "findStyle": "Heading 1"
+        }),
+    );
+    assert!(res["count"].as_u64().unwrap_or(0) >= 2);
+}

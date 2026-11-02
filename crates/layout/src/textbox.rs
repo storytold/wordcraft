@@ -181,6 +181,7 @@ fn extent(items: &[Placed]) -> f32 {
             | Placed::Graphic { rect, .. }
             | Placed::Clip { rect, .. }
             | Placed::Cell { rect, .. }
+            | Placed::BorderBox { rect, .. }
             | Placed::Object { rect, .. } => rect.bottom(),
         };
         if b.is_finite() {
@@ -320,6 +321,7 @@ fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
                 out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color });
             }
             Placed::Rule { y0, y1, .. } if y0.max(y1) >= lim => out.push(it),
+            Placed::BorderBox { rect, .. } if rect.bottom() >= lim => out.push(it),
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }

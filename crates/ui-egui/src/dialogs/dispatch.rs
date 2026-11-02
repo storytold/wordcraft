@@ -352,6 +352,17 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::Find { query, replace, match_case, whole_word, regex, extra, tab, goto_what, goto_target, message, focus } = d else {
         return false;
     };
+    let doc_styles: Vec<String> = app
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| !s.hidden && matches!(s.kind, wordcraft_doc::StyleKind::Paragraph | wordcraft_doc::StyleKind::Character))
+        .map(|s| s.name.clone())
+        .collect();
+    let fams = app.previews.families();
+    super::find::show_format_subdialogs(ui.ctx(), extra, &doc_styles, &fams);
     const FIND_TABS: [(FindTab, &str); 3] = [(FindTab::Find, "Find"), (FindTab::Replace, "Replace"), (FindTab::GoTo, "Go To")];
     let names = FIND_TABS.map(|(_, l)| tl!(l).to_string());
     let current = FIND_TABS.iter().position(|(t, _)| t == tab).unwrap_or(0);
@@ -374,6 +385,11 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             extra.to_replace = false;
         }
     });
+    let find_desc =
+        super::find::format_description(extra.find_format.as_ref(), extra.find_style.as_deref(), extra.find_align, extra.find_para.as_ref());
+    if !find_desc.is_empty() {
+        ui.label(egui::RichText::new(find_desc).weak().size(11.0));
+    }
     if replace_mode {
         ui.horizontal(|ui| {
             let replace_label = ui.label(tl!("Replace with:"));
@@ -381,6 +397,15 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 extra.to_replace = true;
             }
         });
+        let replace_desc = super::find::format_description(
+            extra.replace_format.as_ref(),
+            extra.replace_style.as_deref(),
+            extra.replace_align,
+            extra.replace_para.as_ref(),
+        );
+        if !replace_desc.is_empty() {
+            ui.label(egui::RichText::new(replace_desc).weak().size(11.0));
+        }
     } else {
         extra.to_replace = false;
     }
@@ -406,12 +431,44 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         });
         ui.horizontal(|ui| {
             ui.checkbox(regex, tl!("Regular expressions"));
+            ui.menu_button(format!("{} ▾", tl!("Format")), |ui| {
+                if ui.button(tl!("Font…")).clicked() {
+                    extra.open_font_subdialog();
+                    ui.close_kind(egui::UiKind::Popup);
+                }
+                if ui.button(tl!("Paragraph…")).clicked() {
+                    extra.open_para_subdialog();
+                    ui.close_kind(egui::UiKind::Popup);
+                }
+                if ui.button(tl!("Style…")).clicked() {
+                    extra.open_style_subdialog();
+                    ui.close_kind(egui::UiKind::Popup);
+                }
+            });
+            let target_has_format = if extra.to_replace {
+                extra.replace_format.is_some() || extra.replace_style.is_some() || extra.replace_align.is_some() || extra.replace_para.is_some()
+            } else {
+                extra.find_format.is_some() || extra.find_style.is_some() || extra.find_align.is_some() || extra.find_para.is_some()
+            };
+            if ui.add_enabled(target_has_format, egui::Button::new(tl!("No Formatting"))).clicked() {
+                if extra.to_replace {
+                    extra.replace_format = None;
+                    extra.replace_style = None;
+                    extra.replace_align = None;
+                    extra.replace_para = None;
+                } else {
+                    extra.find_format = None;
+                    extra.find_style = None;
+                    extra.find_align = None;
+                    extra.find_para = None;
+                }
+            }
             if let Some(code) = special_menu(ui, extra) {
                 if extra.to_replace { replace.push_str(code) } else { query.push_str(code) }
             }
         });
     }
-    let opts = json!({
+    let mut opts = json!({
         "text": query,
         "with": replace,
         "matchCase": *match_case,
@@ -423,6 +480,46 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         "ignorePunct": extra.ignore_punct,
         "ignoreSpace": extra.ignore_space,
     });
+    if let Some(f) = &extra.find_format {
+        opts["findFormat"] = json!(f);
+    } else {
+        opts["clearFindFormat"] = json!(true);
+    }
+    if let Some(f) = &extra.replace_format {
+        opts["replaceFormat"] = json!(f);
+    } else {
+        opts["clearReplaceFormat"] = json!(true);
+    }
+    if let Some(s) = &extra.find_style {
+        opts["findStyle"] = json!(s);
+    } else {
+        opts["clearFindStyle"] = json!(true);
+    }
+    if let Some(s) = &extra.replace_style {
+        opts["replaceStyle"] = json!(s);
+    } else {
+        opts["clearReplaceStyle"] = json!(true);
+    }
+    if let Some(a) = &extra.find_align {
+        opts["findAlign"] = json!(format!("{a:?}").to_ascii_lowercase());
+    } else {
+        opts["clearFindAlign"] = json!(true);
+    }
+    if let Some(a) = &extra.replace_align {
+        opts["replaceAlign"] = json!(format!("{a:?}").to_ascii_lowercase());
+    } else {
+        opts["clearReplaceAlign"] = json!(true);
+    }
+    if let Some(p) = &extra.find_para {
+        opts["findPara"] = json!(p);
+    } else {
+        opts["clearFindPara"] = json!(true);
+    }
+    if let Some(p) = &extra.replace_para {
+        opts["replacePara"] = json!(p);
+    } else {
+        opts["clearReplacePara"] = json!(true);
+    }
     if !replace_mode {
         ui.horizontal(|ui| {
             let lit = app.session.find.highlight;

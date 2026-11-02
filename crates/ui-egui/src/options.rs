@@ -578,6 +578,7 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
         let _ = app.run("ui.keytips", json!({"value": keytips}));
     }
+    flag(app, ui, "Show crop marks", "showCropMarks", pr.show_crop_marks);
     ui.add_space(8.0);
     section(ui, "Animation");
     let mut caret = app.ui.caret_animation;

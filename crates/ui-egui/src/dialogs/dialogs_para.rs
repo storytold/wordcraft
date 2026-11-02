@@ -378,15 +378,33 @@ const LEFT: usize = 2;
 const RIGHT: usize = 3;
 const BETWEEN: usize = 4;
 
-const STYLES: [(BorderStyle, &str); 8] = [
+const STYLES: [(BorderStyle, &str); 26] = [
     (BorderStyle::Single, "Single"),
+    (BorderStyle::Thick, "Thick"),
     (BorderStyle::Dotted, "Dotted"),
+    (BorderStyle::DashSmallGap, "Dash (small gap)"),
     (BorderStyle::Dashed, "Dashed"),
+    (BorderStyle::DashLongDash, "Dash (long dash)"),
     (BorderStyle::DotDash, "Dot dash"),
+    (BorderStyle::DotDotDash, "Dot dot dash"),
     (BorderStyle::Double, "Double"),
     (BorderStyle::Triple, "Triple"),
-    (BorderStyle::Thick, "Thick"),
+    (BorderStyle::ThinThickSmallGap, "Thin-thick (small gap)"),
+    (BorderStyle::ThickThinSmallGap, "Thick-thin (small gap)"),
+    (BorderStyle::ThinThickThinSmallGap, "Thin-thick-thin (small gap)"),
+    (BorderStyle::ThinThick, "Thin-thick (medium gap)"),
+    (BorderStyle::ThickThin, "Thick-thin (medium gap)"),
+    (BorderStyle::ThinThickThin, "Thin-thick-thin (medium gap)"),
+    (BorderStyle::ThinThickLargeGap, "Thin-thick (large gap)"),
+    (BorderStyle::ThickThinLargeGap, "Thick-thin (large gap)"),
+    (BorderStyle::ThinThickThinLargeGap, "Thin-thick-thin (large gap)"),
     (BorderStyle::Wave, "Wave"),
+    (BorderStyle::DoubleWave, "Double wave"),
+    (BorderStyle::DashDotStroked, "Dash dot stroked"),
+    (BorderStyle::ThreeDEmboss, "3D Emboss"),
+    (BorderStyle::ThreeDEngrave, "3D Engrave"),
+    (BorderStyle::Outset, "Outset"),
+    (BorderStyle::Inset, "Inset"),
 ];
 
 const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
@@ -483,8 +501,20 @@ pub struct BordersForm {
     /// Borders apply to the selected text (a character border) instead of the paragraphs.
     pub to_text: bool,
     pub page: LineForm,
-    /// Page borders apply to the whole document instead of this section.
-    pub whole_doc: bool,
+    /// 0: Whole document, 1: This section, 2: First page only, 3: All except first page
+    pub page_apply: u8,
+    /// 0: Edge of page, 1: Text
+    pub page_offset_from: u8,
+    pub page_margin_top: f32,
+    pub page_margin_bottom: f32,
+    pub page_margin_left: f32,
+    pub page_margin_right: f32,
+    pub page_align_with_boundary: bool,
+    pub page_display_in_front: bool,
+    pub page_surround_header: bool,
+    pub page_surround_footer: bool,
+    #[serde(skip)]
+    pub show_options: bool,
     /// Fill `RRGGBB`, empty for none.
     pub fill: String,
     pub fill_to_text: bool,
@@ -497,12 +527,45 @@ impl BordersForm {
         let s = &app.session;
         let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
         let sect = wordcraft_engine::cmd::page::sect(s);
+        let opts = sect.page_border_options.as_ref();
+        let page_apply = match opts.map(|o| o.display) {
+            Some(wordcraft_doc::PageBorderDisplay::FirstPage) => 2,
+            Some(wordcraft_doc::PageBorderDisplay::NotFirstPage) => 3,
+            _ => 0,
+        };
+        let page_offset_from = match opts.map(|o| o.offset_from) {
+            Some(wordcraft_doc::PageBorderOffset::Text) => 1,
+            _ => 0,
+        };
+        let pb = sect.page_borders.as_ref();
+        let sp_t = pb.and_then(|b| b.top.as_ref()).map(|x| x.space);
+        let sp_b = pb.and_then(|b| b.bottom.as_ref()).map(|x| x.space);
+        let sp_l = pb.and_then(|b| b.left.as_ref()).map(|x| x.space);
+        let sp_r = pb.and_then(|b| b.right.as_ref()).map(|x| x.space);
+        let page_margin_top = opts.map(|o| o.margin_top).or(sp_t).unwrap_or(24.0);
+        let page_margin_bottom = opts.map(|o| o.margin_bottom).or(sp_b).unwrap_or(24.0);
+        let page_margin_left = opts.map(|o| o.margin_left).or(sp_l).unwrap_or(24.0);
+        let page_margin_right = opts.map(|o| o.margin_right).or(sp_r).unwrap_or(24.0);
+        let page_align_with_boundary = opts.is_some_and(|o| o.align_with_boundary);
+        let page_display_in_front = opts.is_none_or(|o| o.z_order == wordcraft_doc::PageBorderZOrder::Front);
+        let page_surround_header = opts.is_none_or(|o| o.surround_header);
+        let page_surround_footer = opts.is_none_or(|o| o.surround_footer);
         let mut f = BordersForm {
             tab: tab.min(2),
             para: LineForm::read(rp.borders.as_ref()),
             to_text: false,
             page: LineForm::read(sect.page_borders.as_ref()),
-            whole_doc: true,
+            page_apply,
+            page_offset_from,
+            page_margin_top,
+            page_margin_bottom,
+            page_margin_left,
+            page_margin_right,
+            page_align_with_boundary,
+            page_display_in_front,
+            page_surround_header,
+            page_surround_footer,
+            show_options: false,
             fill: rp.shading.map(Rgb::hex).unwrap_or_default(),
             fill_to_text: false,
             basis: None,
@@ -528,9 +591,45 @@ impl BordersForm {
                 out.push(("para.borders", json!({"sides": self.para.sides_param()})));
             }
         }
-        if self.page != b.page || self.whole_doc != b.whole_doc {
-            let apply = if self.whole_doc { "document" } else { "section" };
-            out.push(("design.pageBorders", json!({"sides": self.page.sides_param(), "applyTo": apply})));
+        let page_changed = self.page != b.page
+            || self.page_apply != b.page_apply
+            || self.page_offset_from != b.page_offset_from
+            || (self.page_margin_top - b.page_margin_top).abs() > 0.01
+            || (self.page_margin_bottom - b.page_margin_bottom).abs() > 0.01
+            || (self.page_margin_left - b.page_margin_left).abs() > 0.01
+            || (self.page_margin_right - b.page_margin_right).abs() > 0.01
+            || self.page_align_with_boundary != b.page_align_with_boundary
+            || self.page_display_in_front != b.page_display_in_front
+            || self.page_surround_header != b.page_surround_header
+            || self.page_surround_footer != b.page_surround_footer;
+        if page_changed {
+            let apply = match self.page_apply {
+                0 => "document",
+                1 => "section",
+                2 => "firstPage",
+                3 => "notFirstPage",
+                _ => "document",
+            };
+            let offset_from = if self.page_offset_from == 1 { "text" } else { "page" };
+            let z_order = if self.page_display_in_front { "front" } else { "back" };
+            out.push((
+                "design.pageBorders",
+                json!({
+                    "sides": self.page.sides_param(),
+                    "applyTo": apply,
+                    "offsetFrom": offset_from,
+                    "zOrder": z_order,
+                    "alignWithBoundary": self.page_align_with_boundary,
+                    "surroundHeader": self.page_surround_header,
+                    "surroundFooter": self.page_surround_footer,
+                    "margins": {
+                        "top": self.page_margin_top,
+                        "bottom": self.page_margin_bottom,
+                        "left": self.page_margin_left,
+                        "right": self.page_margin_right,
+                    }
+                }),
+            ));
         }
         if self.fill != b.fill || self.fill_to_text != b.fill_to_text {
             let color = Rgb::parse(&self.fill).map(|c| json!(c.hex())).unwrap_or(Value::Null);
@@ -575,8 +674,16 @@ pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
             lines(ui, "page", &mut f.page, &theme, None, Target::Page);
             ui.horizontal(|ui| {
                 ui.label(tl!("Apply to:"));
-                ui.radio_value(&mut f.whole_doc, true, tl!("Whole document"));
-                ui.radio_value(&mut f.whole_doc, false, tl!("This section"));
+                let apply_labels = ["Whole document", "This section", "This section - First page only", "This section - All except first page"];
+                let current_label = apply_labels.get(f.page_apply as usize).copied().unwrap_or("Whole document");
+                craft_ui::ComboBox::from_id_salt("page_border_apply_to").selected_text(tl!(current_label)).width(220.0).show_ui(ui, |ui| {
+                    for (idx, lbl) in apply_labels.iter().enumerate() {
+                        ui.selectable_value(&mut f.page_apply, idx as u8, tl!(*lbl));
+                    }
+                });
+                if ui.button(tl!("Options…")).clicked() {
+                    f.show_options = true;
+                }
             });
         }
         _ => {
@@ -595,6 +702,54 @@ pub fn borders(app: &mut WordApp, ui: &mut Ui, f: &mut BordersForm) -> bool {
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         f.apply(app);
+    }
+    if f.show_options {
+        egui::Window::new(tl!("Border and Shading Options"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new(tl!("Margin")).font(semibold(12.5)));
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Top:"));
+                        ui.add(egui::DragValue::new(&mut f.page_margin_top).range(0.0..=72.0).suffix(" pt"));
+                        ui.add_space(8.0);
+                        ui.label(tl!("Bottom:"));
+                        ui.add(egui::DragValue::new(&mut f.page_margin_bottom).range(0.0..=72.0).suffix(" pt"));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Left:"));
+                        ui.add(egui::DragValue::new(&mut f.page_margin_left).range(0.0..=72.0).suffix(" pt"));
+                        ui.add_space(8.0);
+                        ui.label(tl!("Right:"));
+                        ui.add(egui::DragValue::new(&mut f.page_margin_right).range(0.0..=72.0).suffix(" pt"));
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Measure from:"));
+                        craft_ui::ComboBox::from_id_salt("page_border_measure_from")
+                            .selected_text(if f.page_offset_from == 1 { tl!("Text") } else { tl!("Edge of page") })
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut f.page_offset_from, 0, tl!("Edge of page"));
+                                ui.selectable_value(&mut f.page_offset_from, 1, tl!("Text"));
+                            });
+                    });
+                });
+                ui.group(|ui| {
+                    ui.label(egui::RichText::new(tl!("Options")).font(semibold(12.5)));
+                    ui.checkbox(&mut f.page_display_in_front, tl!("Always display in front"));
+                    ui.checkbox(&mut f.page_align_with_boundary, tl!("Align paragraph borders and table edges with page border"));
+                    ui.checkbox(&mut f.page_surround_header, tl!("Surround header"));
+                    ui.checkbox(&mut f.page_surround_footer, tl!("Surround footer"));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(tl!("OK")).clicked() {
+                        f.show_options = false;
+                    }
+                });
+            });
     }
     ok || cancel
 }
@@ -753,6 +908,9 @@ fn draw_line(p: &egui::Painter, [a, b]: [egui::Pos2; 2], style: BorderStyle, wid
         BorderStyle::Dashed => {
             p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px * 2.0));
         }
+        BorderStyle::DashSmallGap => {
+            p.extend(egui::Shape::dashed_line(&[a, b], stroke, px * 4.0, px * 0.8));
+        }
         BorderStyle::DotDash => {
             p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 4.0, px], &[px * 2.0, px * 2.0], 0.0));
         }
@@ -766,6 +924,64 @@ fn draw_line(p: &egui::Painter, [a, b]: [egui::Pos2; 2], style: BorderStyle, wid
         }
         BorderStyle::Single | BorderStyle::Thick => {
             p.line_segment([a, b], if style == BorderStyle::Thick { Stroke::new((px * 1.5).min(6.0), color) } else { stroke });
+        }
+        BorderStyle::ThickThin
+        | BorderStyle::ThinThick
+        | BorderStyle::ThickThinSmallGap
+        | BorderStyle::ThinThickSmallGap
+        | BorderStyle::ThickThinLargeGap
+        | BorderStyle::ThinThickLargeGap => {
+            let is_thick_thin = matches!(style, BorderStyle::ThickThin | BorderStyle::ThickThinSmallGap | BorderStyle::ThickThinLargeGap);
+            let (w1, w2) = if is_thick_thin { (px * 1.2, 1.0) } else { (1.0, px * 1.2) };
+            let gap = if matches!(style, BorderStyle::ThickThinSmallGap | BorderStyle::ThinThickSmallGap) {
+                1.2
+            } else if matches!(style, BorderStyle::ThickThinLargeGap | BorderStyle::ThinThickLargeGap) {
+                3.0
+            } else {
+                2.0
+            };
+            let off1 = normal * gap;
+            let off2 = -normal * gap;
+            p.line_segment([a + off1, b + off1], Stroke::new(w1, color));
+            p.line_segment([a + off2, b + off2], Stroke::new(w2, color));
+        }
+        BorderStyle::ThinThickThin | BorderStyle::ThinThickThinSmallGap | BorderStyle::ThinThickThinLargeGap => {
+            let gap = if style == BorderStyle::ThinThickThinSmallGap {
+                1.8
+            } else if style == BorderStyle::ThinThickThinLargeGap {
+                4.0
+            } else {
+                3.0
+            };
+            let thin = Stroke::new(1.0, color);
+            let thick = Stroke::new(px * 1.2, color);
+            p.line_segment([a + normal * gap, b + normal * gap], thin);
+            p.line_segment([a, b], thick);
+            p.line_segment([a - normal * gap, b - normal * gap], thin);
+        }
+        BorderStyle::ThreeDEmboss | BorderStyle::ThreeDEngrave | BorderStyle::Outset | BorderStyle::Inset => {
+            let light = egui::Color32::from_rgb(200, 200, 200);
+            let dark = egui::Color32::from_rgb(80, 80, 80);
+            let (c1, c2) = if matches!(style, BorderStyle::Outset | BorderStyle::ThreeDEmboss) { (light, dark) } else { (dark, light) };
+            let off = normal * 1.5;
+            p.line_segment([a + off, b + off], Stroke::new(px * 0.7, c1));
+            p.line_segment([a - off, b - off], Stroke::new(px * 0.7, c2));
+        }
+        BorderStyle::DoubleWave => {
+            let len = (b - a).length();
+            let dir = (b - a).normalized();
+            let n = (len / 4.0).ceil().max(1.0) as usize;
+            for off in [-2.0, 2.0] {
+                let pts: Vec<egui::Pos2> =
+                    (0..=n.min(400)).map(|i| a + dir * (len * i as f32 / n as f32) + normal * (off + if i % 2 == 0 { -1.5 } else { 1.5 })).collect();
+                p.add(egui::Shape::line(pts, Stroke::new(1.0, color)));
+            }
+        }
+        BorderStyle::DotDotDash => {
+            p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 4.0, px, px], &[px * 2.0, px * 2.0, px * 2.0], 0.0));
+        }
+        BorderStyle::DashDotStroked | BorderStyle::DashLongDash => {
+            p.extend(egui::Shape::dashed_line_with_offset(&[a, b], stroke, &[px * 6.0, px * 2.0], &[px * 2.0, px * 2.0], 0.0));
         }
     }
 }

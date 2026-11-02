@@ -7,6 +7,17 @@ use wordcraft_doc::{Path, Pos, StoryRef};
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+fn align_of_str(s: &str) -> Option<wordcraft_doc::props::Align> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" | "start" => Some(wordcraft_doc::props::Align::Left),
+        "center" => Some(wordcraft_doc::props::Align::Center),
+        "right" | "end" => Some(wordcraft_doc::props::Align::Right),
+        "justify" | "both" => Some(wordcraft_doc::props::Align::Justify),
+        "distribute" => Some(wordcraft_doc::props::Align::Distribute),
+        _ => None,
+    }
+}
+
 /// Undo several steps at once: the Undo button's list (#701). `count` is validated here and
 /// clamped to the undo depth, so hostile numbers never reach the stack.
 fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
@@ -481,6 +492,57 @@ fn find_opts(f: &crate::session::FindState) -> find_pattern::Opts {
     }
 }
 
+fn search_format_only(s: &Session, story: StoryRef, with_rep: bool) -> Vec<Found> {
+    let f = &s.find;
+    let paths = s.doc.para_paths(story);
+    let mut out = Vec::new();
+    for path in paths {
+        let Some(p) = s.doc.para(story, &path) else { continue };
+        if let Some(st) = &f.find_style {
+            let is_char = s.doc.styles.find(st).is_some_and(|t| t.kind == wordcraft_doc::StyleKind::Character);
+            if !is_char && !para_matches_style(&s.doc.styles, p, st) {
+                continue;
+            }
+        }
+        if let Some(al) = &f.find_align {
+            let cur_align = p.props.align.unwrap_or(wordcraft_doc::props::Align::Left);
+            if cur_align != *al {
+                continue;
+            }
+        }
+        if let Some(pp) = &f.find_para
+            && !para_props_match(p, pp)
+        {
+            continue;
+        }
+        for (r, ch) in p.run_ranges() {
+            let Some(t) = p.text.get(r.clone()).filter(|_| ch.del.is_none()) else { continue };
+            if t.is_empty() {
+                continue;
+            }
+            if let Some(target) = &f.find_format
+                && !char_props_match(ch, target)
+            {
+                continue;
+            }
+            if let Some(st) = &f.find_style {
+                let is_char = s.doc.styles.find(st).is_some_and(|t| t.kind == wordcraft_doc::StyleKind::Character);
+                if is_char && !run_matches_style(&s.doc.styles, ch, st) {
+                    continue;
+                }
+            }
+            let a = Pos { story, path: path.clone(), off: r.start };
+            let b = Pos { story, path: path.clone(), off: r.end };
+            let rep = with_rep.then(|| if f.replace.is_empty() { String::new() } else { f.replace.clone() });
+            out.push(Found { a, b, rep });
+            if out.len() >= 100_000 {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// [`search`], with the Replace with text of each match when `with_rep` (special codes, `^&`,
 /// wildcard groups). A pattern that can match a paragraph mark (`^p`) reads runs of sibling
 /// paragraphs as one text with a mark between them; otherwise each paragraph is read alone.
@@ -488,6 +550,10 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
+        let has_fmt = f.find_format.is_some() || f.find_style.is_some() || f.find_align.is_some() || f.find_para.is_some();
+        if has_fmt {
+            return Ok(search_format_only(s, story, with_rep));
+        }
         return Ok(Vec::new());
     }
     let opts = find_opts(f);
@@ -586,6 +652,39 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                     continue;
                 }
                 let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
+                if let Some(fmt) = &f.find_format
+                    && !matches_format(&s.doc, &a, &b, fmt)
+                {
+                    continue;
+                }
+                if let Some(st) = &f.find_style {
+                    let p = s.doc.para_at(&a);
+                    let is_char = s.doc.styles.find(st).is_some_and(|t| t.kind == wordcraft_doc::StyleKind::Character);
+                    if is_char {
+                        let ch_owned = p.map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
+                        if !run_matches_style(&s.doc.styles, &ch_owned, st) {
+                            continue;
+                        }
+                    } else {
+                        let Some(p) = p else { continue };
+                        if !para_matches_style(&s.doc.styles, p, st) {
+                            continue;
+                        }
+                    }
+                }
+                if let Some(al) = &f.find_align {
+                    let p = s.doc.para_at(&a);
+                    let cur_align = p.and_then(|p| p.props.align).unwrap_or(wordcraft_doc::props::Align::Left);
+                    if cur_align != *al {
+                        continue;
+                    }
+                }
+                if let Some(pp) = &f.find_para {
+                    let Some(p) = s.doc.para_at(&a) else { continue };
+                    if !para_props_match(p, pp) {
+                        continue;
+                    }
+                }
                 let rep = pieces.as_ref().map(|pc| {
                     let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
                     find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
@@ -600,11 +699,109 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
     Ok(out)
 }
 
+fn read_find_formats(f: &mut crate::doc_state::FindState, v: &Value) {
+    if let Some(val) = v.get("findFormat").or_else(|| v.get("format")) {
+        if val.is_null() {
+            f.find_format = None;
+        } else if let Ok(cp) = serde_json::from_value::<wordcraft_doc::props::CharProps>(val.clone()) {
+            f.find_format = Some(cp);
+        }
+    }
+    if let Some(val) = v.get("replaceFormat").or_else(|| v.get("withFormat")) {
+        if val.is_null() {
+            f.replace_format = None;
+        } else if let Ok(cp) = serde_json::from_value::<wordcraft_doc::props::CharProps>(val.clone()) {
+            f.replace_format = Some(cp);
+        }
+    }
+    if p::bool(v, "clearFindFormat").unwrap_or(false) {
+        f.find_format = None;
+    }
+    if p::bool(v, "clearReplaceFormat").unwrap_or(false) {
+        f.replace_format = None;
+    }
+    if p::bool(v, "clearFindStyle").unwrap_or(false) {
+        f.find_style = None;
+    }
+    if p::bool(v, "clearReplaceStyle").unwrap_or(false) {
+        f.replace_style = None;
+    }
+    if p::bool(v, "clearFindAlign").unwrap_or(false) {
+        f.find_align = None;
+    }
+    if p::bool(v, "clearReplaceAlign").unwrap_or(false) {
+        f.replace_align = None;
+    }
+    if let Some(st) = p::str(v, "findStyle").or_else(|| p::str(v, "style")) {
+        f.find_style = if st.is_empty() { None } else { Some(st.to_string()) };
+    }
+    if let Some(st) = p::str(v, "replaceStyle").or_else(|| p::str(v, "withStyle")) {
+        f.replace_style = if st.is_empty() { None } else { Some(st.to_string()) };
+    }
+    if let Some(al) = p::str(v, "findAlign").or_else(|| p::str(v, "align")).and_then(align_of_str) {
+        f.find_align = Some(al);
+    }
+    if let Some(al) = p::str(v, "replaceAlign").or_else(|| p::str(v, "withAlign")).and_then(align_of_str) {
+        f.replace_align = Some(al);
+    }
+    if let Some(mut val) = v.get("findPara").cloned() {
+        if val.is_null() {
+            f.find_para = None;
+        } else {
+            if let Some(al_str) = val.get("align").and_then(serde_json::Value::as_str)
+                && let Some(al) = align_of_str(al_str)
+                && let Ok(al_val) = serde_json::to_value(al)
+            {
+                val["align"] = al_val;
+            }
+            if let Ok(pp) = serde_json::from_value::<wordcraft_doc::props::ParaProps>(val) {
+                f.find_para = Some(pp);
+            }
+        }
+    }
+    if let Some(mut val) = v.get("replacePara").cloned() {
+        if val.is_null() {
+            f.replace_para = None;
+        } else {
+            if let Some(al_str) = val.get("align").and_then(serde_json::Value::as_str)
+                && let Some(al) = align_of_str(al_str)
+                && let Ok(al_val) = serde_json::to_value(al)
+            {
+                val["align"] = al_val;
+            }
+            if let Ok(pp) = serde_json::from_value::<wordcraft_doc::props::ParaProps>(val) {
+                f.replace_para = Some(pp);
+            }
+        }
+    }
+    if p::bool(v, "clearFindPara").unwrap_or(false) {
+        f.find_para = None;
+    }
+    if p::bool(v, "clearReplacePara").unwrap_or(false) {
+        f.replace_para = None;
+    }
+    if p::bool(v, "clearFormatting").unwrap_or(false) {
+        f.find_format = None;
+        f.replace_format = None;
+        f.find_style = None;
+        f.replace_style = None;
+        f.find_align = None;
+        f.replace_align = None;
+        f.find_para = None;
+        f.replace_para = None;
+    }
+}
+
 fn read_opts(s: &mut Session, v: &Value) {
     // A new search changes what Reading Highlight marks.
     s.find.highlights = None;
     if let Some(t) = p::str(v, "text") {
         s.find.query = t.to_string();
+    } else if v.get("text").is_some_and(serde_json::Value::is_null)
+        || ((v.get("findStyle").is_some() || v.get("findFormat").is_some() || v.get("findPara").is_some() || v.get("findAlign").is_some())
+            && v.get("text").is_none())
+    {
+        s.find.query.clear();
     }
     if let Some(b) = p::bool(v, "matchCase") {
         s.find.match_case = b;
@@ -636,11 +833,13 @@ fn read_opts(s: &mut Session, v: &Value) {
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();
     }
+    read_find_formats(&mut s.find, v);
 }
 
 fn find(s: &mut Session, v: &Value) -> CmdResult {
     read_opts(s, v);
-    if p::str(v, "text").is_none() {
+    let has_fmt = s.find.find_format.is_some() || s.find.find_style.is_some() || s.find.find_align.is_some() || s.find.find_para.is_some();
+    if p::str(v, "text").is_none() && !has_fmt {
         // Word's Ctrl+F: the Navigation pane with its search box ready to type in (#712); the
         // Find and Replace dialog is Advanced Find.
         s.view.nav_pane = true;
@@ -664,11 +863,12 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
 fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
-    if p::str(v, "text").is_none() && v.get("highlight").is_none() {
+    read_opts(s, v);
+    let has_fmt = s.find.find_format.is_some() || s.find.find_style.is_some() || s.find.find_align.is_some() || s.find.find_para.is_some();
+    if p::str(v, "text").is_none() && v.get("highlight").is_none() && !has_fmt {
         s.push_ui_request(json!({"open": "find"}));
         return Ok(json!({"count": s.find.results.len()}));
     }
-    read_opts(s, v);
     let within = match p::str(v, "in").unwrap_or("main") {
         "main" => None,
         "selection" if !s.sel.is_collapsed() => Some(s.sel.ordered()),
@@ -714,10 +914,95 @@ fn step(s: &mut Session, dir: i64) -> CmdResult {
 /// Replace needs something to look for: the `text` given, or the last search's (Find then Replace
 /// with just a `with`). Neither is a call that would silently replace nothing (a misspelt `text`).
 fn need_query(s: &Session, v: &Value) -> Result<(), CmdError> {
-    if p::str(v, "text").is_none() && s.find.query.is_empty() {
+    let has_fmt = s.find.find_format.is_some()
+        || s.find.find_para.is_some()
+        || v.get("findPara").is_some_and(|f| !f.is_null())
+        || s.find.find_style.is_some()
+        || s.find.find_align.is_some()
+        || v.get("findFormat").is_some_and(|f| !f.is_null())
+        || v.get("format").is_some_and(|f| !f.is_null())
+        || v.get("findStyle").is_some_and(|f| !f.is_null())
+        || v.get("style").is_some_and(|f| !f.is_null())
+        || v.get("findAlign").is_some_and(|f| !f.is_null())
+        || v.get("align").is_some_and(|f| !f.is_null());
+    if p::str(v, "text").is_none() && s.find.query.is_empty() && !has_fmt {
         return Err(CmdError::Params("`text` (string) is required".into()));
     }
     Ok(())
+}
+
+fn para_matches_style(styles: &wordcraft_doc::StyleSheet, p: &wordcraft_doc::Paragraph, st: &str) -> bool {
+    let target = styles.find(st);
+    let target_id = target.map(|t| t.id.as_str()).unwrap_or(st);
+    let target_name = target.map(|t| t.name.as_str()).unwrap_or(st);
+
+    let cur_id = p.props.style.as_deref().unwrap_or("Normal");
+    let cur_name = styles.get(cur_id).map(|t| t.name.as_str()).unwrap_or(cur_id);
+
+    cur_id.eq_ignore_ascii_case(target_id)
+        || cur_id.eq_ignore_ascii_case(target_name)
+        || cur_name.eq_ignore_ascii_case(target_id)
+        || cur_name.eq_ignore_ascii_case(target_name)
+        || cur_id.replace(' ', "").eq_ignore_ascii_case(&st.replace(' ', ""))
+}
+
+fn run_matches_style(styles: &wordcraft_doc::StyleSheet, ch: &wordcraft_doc::CharProps, st: &str) -> bool {
+    let Some(target) = styles.find(st) else { return false };
+    if target.kind != wordcraft_doc::StyleKind::Character {
+        return false;
+    }
+    let target_id = &target.id;
+    let target_name = &target.name;
+    let r_style = ch.style.as_deref().unwrap_or_default();
+    r_style.eq_ignore_ascii_case(target_id) || r_style.eq_ignore_ascii_case(target_name)
+}
+
+fn apply_replace_style(s: &mut Session, a: &Pos, b: &Pos) -> Result<(), CmdError> {
+    let Some(st) = s.find.replace_style.clone() else {
+        return Ok(());
+    };
+    let target = s.doc.styles.find(&st).cloned();
+    let style_id = target.as_ref().map(|t| t.id.clone()).unwrap_or_else(|| st.clone());
+    let is_char_style = target.as_ref().is_some_and(|t| t.kind == wordcraft_doc::StyleKind::Character);
+
+    if is_char_style {
+        s.doc.format_range(a, b, &|cp| cp.style = Some(style_id.clone()))?;
+        s.touch();
+    } else {
+        if let Ok(p) = s.doc.para_mut(a.story, &a.path) {
+            p.props.style = Some(style_id.clone());
+            if style_id.starts_with("Heading") || style_id == "Title" || style_id == "Normal" {
+                if p.props.numbering.is_some_and(|n| n.num != 0) {
+                    p.props.numbering = None;
+                }
+                let len = p.len();
+                let _ = p.format(0, len, &|c| {
+                    c.font = None;
+                    c.size = None;
+                    c.color = None;
+                });
+            }
+            p.touch();
+            s.touch();
+        }
+    }
+    Ok(())
+}
+
+fn apply_replace_para_props(s: &mut Session, story: StoryRef, path: &Path) {
+    if s.find.replace_align.is_none() && s.find.replace_para.is_none() {
+        return;
+    }
+    if let Ok(p) = s.doc.para_mut(story, path) {
+        if let Some(al) = &s.find.replace_align {
+            p.props.align = Some(*al);
+        }
+        if let Some(rp) = &s.find.replace_para {
+            p.props.overlay(rp);
+        }
+        p.touch();
+        s.touch();
+    }
 }
 
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
@@ -728,7 +1013,32 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // Replace the current match if selected, then move to the next.
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
-        super::paste_text(s, &f.rep.unwrap_or_default())?;
+        let rep_text = f.rep.unwrap_or_default();
+        let has_replace_fmt =
+            s.find.replace_format.is_some() || s.find.replace_style.is_some() || s.find.replace_align.is_some() || s.find.replace_para.is_some();
+        if rep_text.is_empty() && has_replace_fmt {
+            if let Some(rf) = &s.find.replace_format {
+                s.doc.format_range(&a, &b, &|cp| cp.overlay(rf))?;
+            }
+            apply_replace_style(s, &a, &b)?;
+            apply_replace_para_props(s, a.story, &a.path);
+        } else {
+            let mut props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone().without_symbol()).unwrap_or_default();
+            if let Some(rf) = &s.find.replace_format {
+                props.overlay(rf);
+            }
+            if let Some(st) = &s.find.replace_style
+                && let Some(target) = s.doc.styles.find(st)
+                && target.kind == wordcraft_doc::StyleKind::Character
+            {
+                props.style = Some(target.id.clone());
+            }
+            let at = s.doc.delete_range(&a, &b)?;
+            let end_at = s.doc.insert_text(&at, &rep_text, &props)?;
+            apply_replace_style(s, &at, &end_at)?;
+            apply_replace_para_props(s, at.story, &at.path);
+            s.sel = crate::Selection { anchor: at, focus: end_at };
+        }
     }
     let _ = step(s, 1);
     Ok(json!({"remaining": search(s, story)?.len()}))
@@ -743,17 +1053,41 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     let results = search_full(s, story, true)?;
     let n = results.len();
     super::controls::check_deletions(s, story, results.iter().map(|f| (&f.a, &f.b)))?;
+    let has_replace_fmt =
+        s.find.replace_format.is_some() || s.find.replace_style.is_some() || s.find.replace_align.is_some() || s.find.replace_para.is_some();
     for Found { a, b, rep } in results.into_iter().rev() {
         let with = rep.unwrap_or_default();
+        if with.is_empty() && has_replace_fmt {
+            if let Some(rf) = &s.find.replace_format {
+                s.doc.format_range(&a, &b, &|cp| cp.overlay(rf))?;
+            }
+            apply_replace_style(s, &a, &b)?;
+            apply_replace_para_props(s, a.story, &a.path);
+            continue;
+        }
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.
             s.sel = Selection { anchor: a, focus: b };
             super::paste_text(s, &with)?;
+            let sel_a = s.sel.anchor.clone();
+            let sel_b = s.sel.focus.clone();
+            apply_replace_style(s, &sel_a, &sel_b)?;
+            apply_replace_para_props(s, sel_a.story, &sel_a.path);
             continue;
         }
         // Replacing a symbol gives the new text the symbol's formatting, not its own font.
-        let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone().without_symbol()).unwrap_or_default();
+        let mut props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone().without_symbol()).unwrap_or_default();
+        if let Some(rf) = &s.find.replace_format {
+            props.overlay(rf);
+        }
+        if let Some(st) = &s.find.replace_style
+            && let Some(target) = s.doc.styles.find(st)
+            && target.kind == wordcraft_doc::StyleKind::Character
+        {
+            props.style = Some(target.id.clone());
+        }
         let mut at = s.doc.delete_range(&a, &b)?;
+        let start_pos = at.clone();
         for (k, part) in with.split(['\r', '\u{2029}']).enumerate() {
             if k > 0 {
                 at = s.doc.split_paragraph(&at)?;
@@ -762,6 +1096,9 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
                 at = s.doc.insert_text(&at, part, &props)?;
             }
         }
+        let end_pos = at;
+        apply_replace_style(s, &start_pos, &end_pos)?;
+        apply_replace_para_props(s, start_pos.story, &start_pos.path);
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))
@@ -860,4 +1197,184 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
         s.painter = None;
     }
     sel_result(s)
+}
+
+fn char_props_effects_match(actual: &wordcraft_doc::props::CharProps, target: &wordcraft_doc::props::CharProps) -> bool {
+    if let Some(ds) = target.double_strike
+        && actual.double_strike.unwrap_or(false) != ds
+    {
+        return false;
+    }
+    if let Some(va) = target.vert_align
+        && actual.vert_align.unwrap_or_default() != va
+    {
+        return false;
+    }
+    if let Some(sc) = target.small_caps
+        && actual.small_caps.unwrap_or(false) != sc
+    {
+        return false;
+    }
+    if let Some(c) = target.caps
+        && actual.caps.unwrap_or(false) != c
+    {
+        return false;
+    }
+    if let Some(h) = target.hidden
+        && actual.hidden.unwrap_or(false) != h
+    {
+        return false;
+    }
+    if let Some(sp) = target.spacing
+        && (actual.spacing.unwrap_or(0.0) - sp).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(pos) = target.position
+        && (actual.position.unwrap_or(0.0) - pos).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(k) = target.kern
+        && (actual.kern.unwrap_or(0.0) - k).abs() > 0.1
+    {
+        return false;
+    }
+    true
+}
+
+fn para_props_indents_match(actual: &wordcraft_doc::props::ParaProps, target: &wordcraft_doc::props::ParaProps) -> bool {
+    if let Some(l) = target.indent_left
+        && (actual.indent_left.unwrap_or(0.0) - l).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(r) = target.indent_right
+        && (actual.indent_right.unwrap_or(0.0) - r).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(f) = target.indent_first
+        && (actual.indent_first.unwrap_or(0.0) - f).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(b) = target.space_before
+        && (actual.space_before.unwrap_or(0.0) - b).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(a) = target.space_after
+        && (actual.space_after.unwrap_or(0.0) - a).abs() > 0.1
+    {
+        return false;
+    }
+    true
+}
+
+fn para_props_match(p: &wordcraft_doc::Paragraph, target: &wordcraft_doc::props::ParaProps) -> bool {
+    if let Some(st) = &target.style {
+        let cur = p.props.style.as_deref().unwrap_or("Normal");
+        if !cur.eq_ignore_ascii_case(st) {
+            return false;
+        }
+    }
+    if let Some(al) = target.align
+        && p.props.align.unwrap_or(wordcraft_doc::props::Align::Left) != al
+    {
+        return false;
+    }
+    if !para_props_indents_match(&p.props, target) {
+        return false;
+    }
+    if let Some(ls) = target.line_spacing
+        && p.props.line_spacing.unwrap_or_default() != ls
+    {
+        return false;
+    }
+    if let Some(w) = target.widow_control
+        && p.props.widow_control.unwrap_or(true) != w
+    {
+        return false;
+    }
+    if let Some(kn) = target.keep_next
+        && p.props.keep_next.unwrap_or(false) != kn
+    {
+        return false;
+    }
+    if let Some(kl) = target.keep_lines
+        && p.props.keep_lines.unwrap_or(false) != kl
+    {
+        return false;
+    }
+    if let Some(pb) = target.page_break_before
+        && p.props.page_break_before.unwrap_or(false) != pb
+    {
+        return false;
+    }
+    true
+}
+
+fn char_props_match(actual: &wordcraft_doc::props::CharProps, target: &wordcraft_doc::props::CharProps) -> bool {
+    if let Some(b) = target.bold
+        && actual.bold.unwrap_or(false) != b
+    {
+        return false;
+    }
+    if let Some(i) = target.italic
+        && actual.italic.unwrap_or(false) != i
+    {
+        return false;
+    }
+    if let Some(u) = target.underline
+        && actual.underline.unwrap_or_default() != u
+    {
+        return false;
+    }
+    if let Some(s) = target.strike
+        && actual.strike.unwrap_or(false) != s
+    {
+        return false;
+    }
+    if let Some(sz) = target.size
+        && (actual.size.unwrap_or(12.0) - sz).abs() > 0.1
+    {
+        return false;
+    }
+    if let Some(font) = &target.font
+        && actual.font.as_deref().unwrap_or("") != font.as_str()
+    {
+        return false;
+    }
+    if let Some(color) = &target.color
+        && actual.color.as_ref() != Some(color)
+    {
+        return false;
+    }
+    if let Some(hl) = &target.highlight
+        && actual.highlight.as_ref() != Some(hl)
+    {
+        return false;
+    }
+    char_props_effects_match(actual, target)
+}
+
+fn matches_format(doc: &wordcraft_doc::Document, a: &Pos, b: &Pos, target: &wordcraft_doc::props::CharProps) -> bool {
+    if a.story != b.story || a.path != b.path {
+        let Some(p) = doc.para_at(a) else { return false };
+        return char_props_match(p.props_of_char(a.off), target);
+    }
+    let Some(p) = doc.para_at(a) else { return false };
+    if a.off == b.off {
+        return char_props_match(p.props_of_char(a.off), target);
+    }
+    for (r, ch) in p.run_ranges() {
+        if r.end <= a.off || r.start >= b.off {
+            continue;
+        }
+        if !char_props_match(ch, target) {
+            return false;
+        }
+    }
+    true
 }

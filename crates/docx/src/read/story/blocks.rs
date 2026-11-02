@@ -232,7 +232,8 @@ impl Reader<'_> {
                 let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
             }
-            if let Some(s) = ppr.child("w:sectPr") {
+            let sect_el = ppr.child("w:sectPr").or_else(|| ppr.els().find(|e| e.local() == "sectPr"));
+            if let Some(s) = sect_el {
                 para.section = Some(Box::new(self.read_section(s, rels)));
             }
         }
@@ -284,6 +285,14 @@ impl Reader<'_> {
                 "first" => set.first = Some(id),
                 "even" => set.even = Some(id),
                 _ => set.default = Some(id),
+            }
+        }
+        if let Some(opts) = sp.page_border_options.as_mut() {
+            if self.doc.settings.borders_do_not_surround_header {
+                opts.surround_header = false;
+            }
+            if self.doc.settings.borders_do_not_surround_footer {
+                opts.surround_footer = false;
             }
         }
         sp

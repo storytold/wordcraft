@@ -88,7 +88,33 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             ],
         );
         if let Some(b) = &s.page_borders {
-            borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", "text")]);
+            let opts = s.page_border_options.as_ref();
+            let offset_str = match opts.map(|o| o.offset_from).unwrap_or(wordcraft_doc::section::PageBorderOffset::Page) {
+                wordcraft_doc::section::PageBorderOffset::Page => "page",
+                wordcraft_doc::section::PageBorderOffset::Text => "text",
+            };
+            let z_order_str = match opts.map(|o| o.z_order).unwrap_or(wordcraft_doc::section::PageBorderZOrder::Front) {
+                wordcraft_doc::section::PageBorderZOrder::Front => "front",
+                wordcraft_doc::section::PageBorderZOrder::Back => "back",
+            };
+            let display_str = match opts.map(|o| o.display).unwrap_or(wordcraft_doc::section::PageBorderDisplay::AllPages) {
+                wordcraft_doc::section::PageBorderDisplay::AllPages => "allPages",
+                wordcraft_doc::section::PageBorderDisplay::FirstPage => "firstPage",
+                wordcraft_doc::section::PageBorderDisplay::NotFirstPage => "notFirstPage",
+            };
+            let mut extra = vec![("w:offsetFrom", offset_str), ("w:zOrder", z_order_str), ("w:display", display_str)];
+            if opts.is_some_and(|o| o.align_with_boundary) {
+                extra.push(("w:alignWithBoundary", "1"));
+            }
+            if let Some(o) = opts {
+                if !o.surround_header {
+                    extra.push(("w:surroundHeader", "0"));
+                }
+                if !o.surround_footer {
+                    extra.push(("w:surroundFooter", "0"));
+                }
+            }
+            borders(w, "w:pgBorders", b, None, &extra);
         }
         if let Some(l) = &s.line_numbers {
             let restart = match l.restart {

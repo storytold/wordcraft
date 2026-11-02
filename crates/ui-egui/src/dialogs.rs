@@ -145,7 +145,7 @@ pub enum Dialog {
         whole_word: bool,
         regex: bool,
         /// Search options under "Search Options" (#543).
-        extra: FindExtra,
+        extra: Box<FindExtra>,
         /// Find, Replace or Go To, one dialog as in Word (#712).
         tab: FindTab,
         goto_what: GoToWhat,
@@ -657,7 +657,7 @@ impl Dialog {
                 match_case: app.session.find.match_case,
                 whole_word: app.session.find.whole_word,
                 regex: app.session.find.regex,
-                extra: FindExtra {
+                extra: Box::new(FindExtra {
                     wildcards: app.session.find.wildcards,
                     prefix: app.session.find.match_prefix,
                     suffix: app.session.find.match_suffix,
@@ -667,9 +667,22 @@ impl Dialog {
                         || app.session.find.match_prefix
                         || app.session.find.match_suffix
                         || app.session.find.ignore_punct
-                        || app.session.find.ignore_space,
+                        || app.session.find.ignore_space
+                        || app.session.find.find_format.is_some()
+                        || app.session.find.replace_format.is_some()
+                        || app.session.find.find_style.is_some()
+                        || app.session.find.replace_style.is_some()
+                        || app.session.find.find_align.is_some()
+                        || app.session.find.replace_align.is_some(),
                     to_replace: false,
-                },
+                    find_format: app.session.find.find_format.clone(),
+                    replace_format: app.session.find.replace_format.clone(),
+                    find_style: app.session.find.find_style.clone(),
+                    replace_style: app.session.find.replace_style.clone(),
+                    find_align: app.session.find.find_align,
+                    replace_align: app.session.find.replace_align,
+                    ..Default::default()
+                }),
                 tab: match name {
                     "replace" => FindTab::Replace,
                     "goto" => FindTab::GoTo,

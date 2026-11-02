@@ -342,7 +342,7 @@ pub(crate) fn mirror_even_pages(pages: &mut [Page], sections: &[(usize, &Section
         if dx.abs() < 0.001 || !dx.is_finite() {
             continue;
         }
-        let borders = page_border_rules(s).len();
+        let borders = page_border_rules(s, true).len();
         for it in page.items.iter_mut().skip(borders).chain(page.header.iter_mut()).chain(page.footer.iter_mut()) {
             it.translate(dx, 0.0);
         }

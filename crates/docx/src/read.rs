@@ -273,7 +273,8 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         unstyle_toc_links(&mut r.doc);
         toc_control_to_toc(&mut r.doc.body);
         toc_field_to_heading(&mut r.doc.body);
-        if let Some(s) = body.child("w:sectPr") {
+        let sect_el = body.child("w:sectPr").or_else(|| body.els().find(|e| e.local() == "sectPr"));
+        if let Some(s) = sect_el {
             r.doc.last_section = r.read_section(s, &rels);
         }
     }

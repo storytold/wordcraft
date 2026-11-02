@@ -118,9 +118,14 @@ fn brc_style(t: u8) -> BorderStyle {
         0x03 => BorderStyle::Double,
         0x06 => BorderStyle::Dotted,
         0x07 | 0x16 => BorderStyle::Dashed,
-        0x08 | 0x09 => BorderStyle::DotDash,
+        0x08 => BorderStyle::DotDash,
+        0x09 => BorderStyle::DotDotDash,
         0x0A => BorderStyle::Triple,
-        0x14 | 0x15 => BorderStyle::Wave,
+        0x0B | 0x0E | 0x11 => BorderStyle::ThinThick,
+        0x0C | 0x0F | 0x12 => BorderStyle::ThickThin,
+        0x0D | 0x10 | 0x13 => BorderStyle::ThinThickThin,
+        0x14 => BorderStyle::Wave,
+        0x15 => BorderStyle::DoubleWave,
         _ => BorderStyle::Single,
     }
 }
