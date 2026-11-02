@@ -1400,6 +1400,25 @@ fn a_page_break_then_a_new_page_makes_one_page() {
 }
 
 #[test]
+fn a_continuous_section_after_a_page_break_starts_the_new_page() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // #2109: "Before", a paragraph of only a page break, the empty paragraph closing section 1,
+    // then a continuous section 2 with a different first page. Word 365 keeps the empty mark on
+    // page 1 with the break, so section 2 starts page 2: its first-page header is on page 2 and
+    // its default header from page 3. The page used to be section 1's, its first page a page late.
+    let mut d = Document::from_text(&format!("Before\n\u{000C}\n\n{}", "After\n".repeat(80)));
+    d.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.title_page = true;
+    let l = lay(&d);
+    let pages: Vec<(usize, HfSlot)> = l.pages.iter().map(|p| (p.section, p.hf_slot)).collect();
+    assert!(pages.len() >= 3, "{pages:?}");
+    assert_eq!(pages[..3], [(0, HfSlot::Default), (1, HfSlot::First), (1, HfSlot::Default)], "{pages:?}");
+    assert_eq!(l.caret(&Pos::body(2, 0)).unwrap().page, 0, "the empty mark stays with the break");
+    assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 1, "section 2 starts page 2");
+}
+
+#[test]
 fn page_numbers_can_restart_at_zero() {
     // `w:pgNumType w:start="0"`: a cover page numbered 0, so the page after it reads 1.
     let mut d = Document::from_text("Cover\u{000C}Contents");
