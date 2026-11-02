@@ -3208,6 +3208,27 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// The Paste button is named "Paste": its hint adds the key as the platform writes it, so its
+/// name no longer carries macOS's "⌘V", which screen readers read on Windows as "Paste (⌘V)".
+#[test]
+fn the_paste_button_is_named_without_a_mac_key() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    assert!(h.query_by_role_and_label(Role::Button, "Paste").is_some(), "the Paste button is called \"Paste\"");
+    assert!(h.query_by_role_and_label(Role::Button, "Paste (⌘V)").is_none(), "no Mac key in its name");
+}
+
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
 /// save's explanation, so assistive technology has context for the three choices.
 #[test]

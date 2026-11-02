@@ -461,6 +461,35 @@ fn qat_digit_runs_once_and_never_types_into_the_document() {
     }
 }
 
+/// Home's Paste, a menu button, shows its keytip whatever the interface language. The keytips
+/// table holds the English tips, and `menu_button` matched it with its translated one, which no
+/// other language's "Paste" equals or begins with. Pseudo-localization stands in for one.
+#[test]
+fn a_menu_buttons_keytip_does_not_depend_on_the_language() {
+    let a = app();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    crate::i18n::pseudo::set(true);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.input_mut().events.push(key(egui::Key::F10));
+    h.step();
+    h.input_mut().events.extend([key(egui::Key::H), egui::Event::Text("h".into())]);
+    h.run_steps(3);
+    let rects = h.ctx.data(|d| d.get_temp::<Vec<(egui::Rect, String)>>(rects_id())).unwrap_or_default();
+    crate::i18n::pseudo::set(false);
+    assert_eq!((h.state().ui.tab.as_str(), h.state().ui.keytips), ("Home", Phase::Commands));
+    let paste = controls_public("Home").iter().position(|c| c.id == "edit.paste").unwrap();
+    let letter = h.ctx.data(|d| d.get_temp::<Vec<String>>(letters_id().with("Home"))).and_then(|l| l.get(paste).cloned()).unwrap();
+    assert!(rects.iter().any(|(_, l)| *l == letter), "Paste's {letter} badge is drawn: {rects:?}");
+}
+
 /// #1697 review: Alt, V, U through the whole app (the canvas has the keyboard), not only
 /// `handle_key`: Full Screen View turns on and neither letter types into the document.
 #[test]
