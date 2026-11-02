@@ -363,6 +363,21 @@ fn a_list_label_counts_in_a_right_to_left_box_that_doesnt_wrap() {
     assert_eq!(shown, 1, "label and text share one line");
 }
 
+#[test]
+fn a_list_label_counts_in_a_mixed_right_to_left_box_that_doesnt_wrap() {
+    // Lines are measured as they are laid out: mixed text can run longer than it would left to right.
+    let text = "abc (\u{645}\u{631}\u{62d}\u{628}\u{627}) [x] 123 \u{661}\u{662}\u{663} def, \u{5e9}\u{5dc}\u{5d5}\u{5dd}! ...";
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, text, 35.0, 35.0, TextBody { no_wrap: true, auto_fit: true, ..Default::default() });
+    float_box(&mut d);
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.bidi = Some(true);
+    let shown: usize = lines(&lay(&d), id).iter().map(|(.., l0, l1)| l1 - l0).sum();
+    assert_eq!(shown, 1, "label and text share one line");
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.

@@ -1456,13 +1456,19 @@ fn para_widths(pl: &ParaLayout) -> (f32, f32, f32) {
     (lo.max(word) + indents, hi.max(line) + indents, first.unwrap_or(line) + indents)
 }
 
-/// [`para_content`], with the first line as long as a list label pushes its text past its indent.
-pub(crate) fn para_content_labelled(pl: &ParaLayout) -> (f32, f32) {
-    let (lo, hi, first) = para_widths(pl);
+/// A paragraph's longest line and its first line, as [`para_widths`] gives them.
+pub(crate) fn para_lines(pl: &ParaLayout) -> (f32, f32) {
+    let (_, hi, first) = para_widths(pl);
+    (hi, first)
+}
+
+/// How far a list label pushes the first line's text past its indent, in a paragraph laid out
+/// left aligned and left to right (the rest of the pair is unused).
+pub(crate) fn label_shift(pl: &ParaLayout) -> (f32, f32) {
     let start = pl.rp.indent_left.max(0.0) + pl.rp.indent_first.max(0.0);
     // The leftmost: reordered right-to-left text runs from its far end.
-    let text = pl.label.as_ref().and_then(|_| pl.lines.first()).and_then(|l| l.xs.iter().copied().reduce(f32::min)).unwrap_or(start);
-    (lo, hi.max(first + (text - start).max(0.0)))
+    let text = pl.lines.first().and_then(|l| l.xs.iter().copied().reduce(f32::min)).unwrap_or(start);
+    ((text - start).max(0.0), 0.0)
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow

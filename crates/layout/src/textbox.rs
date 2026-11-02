@@ -88,22 +88,20 @@ fn block_width(ctx: &mut Ctx, block: &Arc<Block>, len: f32) -> f32 {
         return crate::table::blocks_content(ctx, &vec![block.clone()], None, 0).1;
     };
     let label = ctx.next_label(p);
-    // Alignment and direction move a line, not its width, and at the measuring width a label
-    // would move too.
-    let left;
-    let p = if label.is_some() {
-        let mut l = p.clone();
-        l.props.align = Some(Align::Left);
-        l.props.bidi = Some(false);
-        l.touch();
-        left = l;
-        &left
-    } else {
-        p
-    };
     let tabs = p.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { .. }));
     let width = if tabs { len } else { crate::table::UNBOUNDED };
-    ctx.para_measured(p, width, None, label, crate::table::para_content_labelled).1
+    let (widest, first) = ctx.para_measured(p, width, None, label.clone(), crate::table::para_lines);
+    if label.is_none() {
+        return widest;
+    }
+    // Alignment and direction move a line, not its length: the label's shift comes from a copy
+    // without them, as at the measuring width they would move the label too.
+    let mut plain = p.clone();
+    plain.props.align = Some(Align::Left);
+    plain.props.bidi = Some(false);
+    plain.touch();
+    let (shift, _) = ctx.para_measured(&plain, width, None, label, crate::table::label_shift);
+    widest.max(first + shift)
 }
 
 /// The width of a `w` wide box `id` as placed and drawn: as wide as its lines with Wrap text in
