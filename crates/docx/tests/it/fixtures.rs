@@ -4323,6 +4323,12 @@ fn vml_horizontal_rules_are_read_and_kept() {
     );
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(rules(&again)[..3], got[..3]);
+    // A rule's rotation and flips are kept.
+    let spin = |d: &Document| paras(d)[0].objects.iter().find_map(|o| o.frame()).map(|(_, _, f)| f.spin());
+    let d = read_body(&hr(r#"o:hrpct="500" o:hr="t""#, "width:0;height:1.5pt;rotation:45;flip:x y"));
+    assert_eq!(spin(&d), Some(wordcraft_geom::Spin::new(45.0, true, true)));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(spin(&again), spin(&d));
     // A see-through rule stays see-through.
     let fill = |d: &Document| paras(d)[0].objects.iter().find_map(|o| if let InlineObject::Shape { fill, .. } = o { fill.clone() } else { None });
     let d = read_body(

@@ -283,7 +283,7 @@ impl Writer<'_> {
     /// A horizontal rule goes back as the VML rule it was read from: DrawingML has none, and a
     /// fixed-size shape would lose its line-wide width.
     fn write_hr(&mut self, w: &mut W, o: &InlineObject, props: &CharProps) {
-        let InlineObject::Shape { w: sw, h: sh, fill, stroke, stroke_width, extra, .. } = o else { return };
+        let InlineObject::Shape { w: sw, h: sh, fill, stroke, stroke_width, extra, float, .. } = o else { return };
         let Some(hr) = extra.hr else { return };
         let align = match hr.align {
             wordcraft_doc::props::Align::Center => "center",
@@ -291,7 +291,17 @@ impl Writer<'_> {
             _ => "left",
         };
         let width = if hr.pct > 0.0 { "0".to_string() } else { format!("{:.2}pt", sw.max(0.0)) };
-        let style = format!("width:{width};height:{:.2}pt", sh.max(0.0));
+        let mut style = format!("width:{width};height:{:.2}pt", sh.max(0.0));
+        let spin = float.spin();
+        if spin.deg != 0.0 {
+            style.push_str(&format!(";rotation:{}", spin.deg));
+        }
+        match (spin.flip_h, spin.flip_v) {
+            (true, true) => style.push_str(";flip:x y"),
+            (true, false) => style.push_str(";flip:x"),
+            (false, true) => style.push_str(";flip:y"),
+            (false, false) => {}
+        }
         let pct = format!("{}", (hr.pct * 10.0).round().max(0.0) as u32);
         let fill_hex = fill.as_ref().map(|f| format!("#{}", f.main_color().hex()));
         let stroke_hex = stroke.map(|c| format!("#{}", c.hex()));
