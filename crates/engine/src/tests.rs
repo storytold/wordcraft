@@ -11761,3 +11761,33 @@ fn text_from_file_brings_the_files_pictures() {
     assert_ne!(listed[0], our_list);
     assert!(s.doc.numbering.level(listed[0], 0).is_some_and(|l| l.format == wordcraft_doc::section::NumFormat::Bullet));
 }
+
+#[test]
+fn page_down_and_up_move_by_a_page_in_the_continuous_views() {
+    // Web Layout, Draft and Outline are one long page: Page Down/Up move as far as they do
+    // between the pages of Print Layout (#5290).
+    let after_page_down = |view: &str| {
+        let mut s = s();
+        for i in 0..200 {
+            run(&mut s, "text.insert", json!({"text": format!("Paragraph {i}")}));
+            run(&mut s, "text.newParagraph", json!({}));
+        }
+        run(&mut s, view, json!({}));
+        run(&mut s, "caret.docStart", json!({}));
+        let start = s.sel.focus.clone();
+        run(&mut s, "caret.pageDown", json!({}));
+        let down = s.sel.focus.clone();
+        run(&mut s, "caret.pageUp", json!({}));
+        assert_eq!(s.sel.focus, start, "{view}: Page Up goes back");
+        run(&mut s, "caret.docEnd", json!({}));
+        let end = s.sel.focus.clone();
+        run(&mut s, "caret.pageDown", json!({}));
+        assert_eq!(s.sel.focus, end, "{view}: Page Down stops at the end");
+        down
+    };
+    let print = after_page_down("view.printLayout");
+    assert!(print.path.0[0] > 10, "Print Layout: Page Down goes to the next page: {print:?}");
+    for view in ["view.draft", "view.outline", "view.webLayout"] {
+        assert_eq!(after_page_down(view), print, "{view}");
+    }
+}

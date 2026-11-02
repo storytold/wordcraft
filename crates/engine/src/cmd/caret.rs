@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::ViewMode;
 
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -259,11 +260,30 @@ fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let l = s.layout();
     let from = s.sel.focus.clone();
     let Some(c) = l.caret_on(&from, s.page_hint) else { return sel_result(s) };
+    // Web Layout, Draft and Outline lay the document out as one long page (#5290): move by the
+    // text a printed page of the caret's section holds instead.
+    if !s.view.read_mode && matches!(s.view.mode, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+        let page_h = l.pages.get(c.page).map_or(0.0, |p| p.h);
+        let y = (c.top + 1.0 + dir as f32 * screen_step(s, &from)).clamp(0.0, page_h);
+        let to = l.hit(c.page, c.x, y, from.story).unwrap_or(from);
+        apply(s, to, ext);
+        return sel_result(s);
+    }
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
     let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
     s.page_hint = np;
     apply(s, to, ext);
     sel_result(s)
+}
+
+/// How far Page Up/Down move in the continuous views: the height of the text area of the
+/// section the caret is in (the first section outside the body), at least an inch.
+fn screen_step(s: &Session, at: &Pos) -> f32 {
+    let block = if at.story == StoryRef::Body { at.path.0.first().map_or(0, |&i| i as usize) } else { 0 };
+    let sections = s.doc.sections();
+    let sect = sections.iter().find(|(end, _)| *end >= block).or(sections.last()).map(|(_, p)| *p);
+    let body = sect.map_or(0.0, |p| p.page_h - p.margin_top.abs() - p.margin_bottom.abs());
+    if body.is_finite() { body.max(72.0) } else { 72.0 }
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
