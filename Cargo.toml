@@ -24,12 +24,13 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# craft-proof with Language packs is the head of storytold/craft-libs#485 (CP4.2, stacked on #483
-# SCOWL English and #482); the font store's `language-pack` kind is #486 (CP4.1). GitHub serves PR
-# heads from storytold/craft-libs, and merged with merge commits they stay in its main.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "8f16fe5a132054f057c57e2af424a81f5ace4203", version = "=0.1.0" }
-craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "83c2e7bf8c6e409581b099a098eb00ac423d8b6c", version = "=0.1.0" }
-craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "83c2e7bf8c6e409581b099a098eb00ac423d8b6c", version = "=0.1.0" }
+# craft-proof is the head of storytold/craft-libs#495 (review fixes), which contains #485 (CP4.2,
+# Language packs, on #483 SCOWL English and #482); the font store's `language-pack` kind is #486
+# (CP4.1). GitHub serves PR heads from storytold/craft-libs, and merged with merge commits they
+# stay in its main.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "89fa1559e94378ecef85cd7e4681400f4df053e0", version = "=0.1.0" }
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }

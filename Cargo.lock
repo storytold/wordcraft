@@ -1014,7 +1014,7 @@ dependencies = [
 [[package]]
 name = "craft-atomic"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=83c2e7bf8c6e409581b099a098eb00ac423d8b6c#83c2e7bf8c6e409581b099a098eb00ac423d8b6c"
+source = "git+https://github.com/storytold/craft-libs?rev=762a06a4c6b48b522b7d4de84a87917ef90265e6#762a06a4c6b48b522b7d4de84a87917ef90265e6"
 dependencies = [
  "rustix 1.1.5",
 ]
@@ -1022,7 +1022,7 @@ dependencies = [
 [[package]]
 name = "craft-font-catalog"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=83c2e7bf8c6e409581b099a098eb00ac423d8b6c#83c2e7bf8c6e409581b099a098eb00ac423d8b6c"
+source = "git+https://github.com/storytold/craft-libs?rev=762a06a4c6b48b522b7d4de84a87917ef90265e6#762a06a4c6b48b522b7d4de84a87917ef90265e6"
 dependencies = [
  "fontique",
  "skrifa 0.47.0",
@@ -1033,7 +1033,7 @@ dependencies = [
 [[package]]
 name = "craft-font-store"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=83c2e7bf8c6e409581b099a098eb00ac423d8b6c#83c2e7bf8c6e409581b099a098eb00ac423d8b6c"
+source = "git+https://github.com/storytold/craft-libs?rev=762a06a4c6b48b522b7d4de84a87917ef90265e6#762a06a4c6b48b522b7d4de84a87917ef90265e6"
 dependencies = [
  "craft-atomic",
  "craft-font-catalog",
@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=8f16fe5a132054f057c57e2af424a81f5ace4203#8f16fe5a132054f057c57e2af424a81f5ace4203"
+source = "git+https://github.com/storytold/craft-libs?rev=89fa1559e94378ecef85cd7e4681400f4df053e0#89fa1559e94378ecef85cd7e4681400f4df053e0"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
