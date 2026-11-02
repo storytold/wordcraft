@@ -60,7 +60,9 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
         },
     };
     let mut t = Table::new(rows, cols, width);
-    if width != column {
+    // Table::new keeps columns at least 6 pt wide; a grid that outgrows the width then needs
+    // the width set, or it runs past the column.
+    if width != column || t.grid.iter().sum::<f32>() > width + 0.01 {
         t.props.width = Some(width);
     }
     t.props.indent = indent;

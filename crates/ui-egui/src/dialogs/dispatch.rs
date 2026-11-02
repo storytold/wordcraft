@@ -581,7 +581,10 @@ fn create_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.radio_value(fit, "column", tl!("Fit to column"));
             ui.radio_value(fit, "paragraph", tl!("Fit to paragraph"));
             ui.radio_value(fit, "custom", tl!("Custom"));
-            measured(ui, *fit == "custom", width, 7.2, label.id);
+            // insert.table keeps each column at least 0.1"; the field follows the column count.
+            let min = *cols as f32 * 7.2;
+            *width = width.max(min);
+            measured(ui, *fit == "custom", width, min, label.id);
         });
         ui.end_row();
         let label = ui.label(tl!("Height:"));

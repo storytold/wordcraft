@@ -1718,3 +1718,24 @@ fn create_table_starts_at_the_caret_column_and_keeps_lengths_across_a_unit_chang
     assert_eq!(t.props.width, Some(150.0));
     assert!(t.rows.iter().all(|r| r.props.height == Some(30.0)), "{:?}", t.rows[0].props.height);
 }
+
+/// Create Table's custom width can't go below the 0.1" per column `insert.table` keeps, so the
+/// table is as wide as the field says.
+#[test]
+fn create_table_custom_width_follows_the_column_count() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = app_harness(app_with("Columns"));
+    h.state_mut().run("ui.dialog", json!({"name": "createTable"})).unwrap();
+    h.run_steps(2);
+    {
+        let Some(Dialog::CreateTable { cols, fit, width, .. }) = h.state_mut().dialog.as_mut() else { panic!("dialog") };
+        (*cols, *fit, *width) = (5, "custom", 10.0);
+    }
+    h.run_steps(2);
+    let Some(Dialog::CreateTable { width, .. }) = h.state().dialog.as_ref() else { panic!("dialog") };
+    assert_eq!(*width, 36.0);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).cloned().unwrap();
+    assert_eq!(t.props.width, Some(36.0));
+}

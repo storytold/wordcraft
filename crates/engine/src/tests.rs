@@ -2280,6 +2280,12 @@ fn hangul_style_create_table_sets_width_height_and_look() {
     let half = (crate::cmd::page::sect(&sess).text_width() - 36.0) / 2.0;
     run(&mut sess, "insert.table", json!({"rows": 1, "cols": 2, "width": "column"}));
     assert!((table(&sess).grid.iter().sum::<f32>() - half).abs() < 0.01);
+    // More columns than fit at 6 pt each: the table still keeps to the column.
+    let mut sess = s();
+    run(&mut sess, "layout.columns", json!({"count": 2, "space": 36}));
+    run(&mut sess, "insert.table", json!({"rows": 1, "cols": 40}));
+    let t = table(&sess);
+    assert!(t.grid.iter().sum::<f32>() > half && t.props.width == Some(half), "{:?} vs {half}", t.props.width);
 }
 
 #[test]
