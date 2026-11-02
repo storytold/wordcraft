@@ -76,6 +76,18 @@ fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
 }
 
 #[test]
+fn a_frames_style_gives_the_anchor_and_place_it_leaves_unsaid() {
+    // LibreOffice's business card: the Labels style holds the card in line, Graphics puts the
+    // credit at the top of the page; neither frame says so itself.
+    let f = float(&open(r#"text:anchor-type="page" svg:x="1in" svg:y="0.5in" style:wrap="run-through""#, ""));
+    assert_eq!((f.h_rel, f.v_rel, f.x, f.y), (Anchor::Page, Anchor::Page, 72.0, 36.0));
+    assert_eq!(float(&open(r#"text:anchor-type="as-char""#, "")).wrap, Wrap::Inline);
+    // The frame's own anchor and place win.
+    let f = float(&open(r#"text:anchor-type="page" svg:x="1in""#, r#"text:anchor-type="paragraph" svg:x="2in""#));
+    assert_eq!((f.h_rel, f.x), (Anchor::Paragraph, 144.0));
+}
+
+#[test]
 fn floating_pictures_round_trip() {
     for (graphic, frame) in [
         (

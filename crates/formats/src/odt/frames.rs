@@ -60,6 +60,11 @@ pub(super) struct Graphic {
     /// Which way a text box's text runs (§20.404 `style:writing-mode`; LibreOffice's upward
     /// `bt-lr` is its own `loext:writing-mode`).
     vert: Option<wordcraft_doc::props::TextVert>,
+    /// The anchor and position a style gives frames that state none (§20.299 `text:anchor-type`,
+    /// `svg:x`, `svg:y` in `style:graphic-properties`: LibreOffice's label and Graphics styles).
+    anchor: Option<String>,
+    x: Option<String>,
+    y: Option<String>,
 }
 
 /// A `fo:clip` value, `rect(top, right, bottom, left)` (commas or spaces between; `auto` is 0):
@@ -160,6 +165,9 @@ impl Graphic {
                 }
             }),
             contour_mode: s("style:wrap-contour-mode"),
+            anchor: s("text:anchor-type"),
+            x: s("svg:x"),
+            y: s("svg:y"),
         }
     }
 
@@ -193,6 +201,9 @@ impl Graphic {
         self.wrap_contour = self.wrap_contour.or(parent.wrap_contour);
         self.vert = self.vert.or(parent.vert);
         fill(&mut self.contour_mode, &parent.contour_mode);
+        fill(&mut self.anchor, &parent.anchor);
+        fill(&mut self.x, &parent.x);
+        fill(&mut self.y, &parent.y);
         self.grow = self.grow.or(parent.grow);
         fill(&mut self.dash, &parent.dash);
         fill(&mut self.gradient, &parent.gradient);
@@ -277,7 +288,9 @@ impl Graphic {
 /// `svg:y`) with graphic style placement `g`. A frame in line with the text (`as-char`, or no
 /// anchor stated) doesn't float.
 pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g: &Graphic) -> Float {
-    let anchor = anchor.map(str::trim);
+    // What the frame leaves unsaid, its style says.
+    let anchor = anchor.or(g.anchor.as_deref()).map(str::trim);
+    let (x, y) = (x.or(g.x.as_deref()), y.or(g.y.as_deref()));
     if matches!(anchor, None | Some("as-char")) {
         return Float::default();
     }
