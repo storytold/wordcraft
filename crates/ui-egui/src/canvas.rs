@@ -74,7 +74,7 @@ use rulers::rulers;
 use rulers::{RULER_LABEL_PX, RULER_MAX_MARKS, RULER_SPARSEST, RulerMark, UNIT_TICK, ruler_d, ruler_density, ruler_marks, ruler_x};
 pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
-pub(crate) use story::{edited_box, straight_box, turned};
+pub(crate) use story::straight_box;
 pub(crate) use story::{part_kind, text_box_host};
 
 /// Points on screen per document point at 100% (96 px per inch, like a word processor).
@@ -909,7 +909,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
         if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-            let mut opts = page_render_options(app, &layout, dim_body);
+            let mut opts = page_render_options(app, layout, dim_body);
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -970,7 +970,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 visible_tile_keys.insert(id);
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                 if !fresh && rendered < 4 {
-                    let mut opts = page_render_options(app, &layout, dim_body);
+                    let mut opts = page_render_options(app, layout, dim_body);
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1262,7 +1262,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         && (resp.hovered() || resp.dragged())
         && let Some(p) = ui.input(|i| i.pointer.latest_pos())
     {
-        let opts = page_render_options(app, &layout, dim_body);
+        let opts = page_render_options(app, layout, dim_body);
         let bg = if on_visible_page(&rects, &geo.bands, p) {
             opts.paper_of(&app.session.doc)
         } else {
