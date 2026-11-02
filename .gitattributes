@@ -1,1 +1,2 @@
 craft-i18n.rev text eol=lf
+vendor/spellbook/** linguist-vendored

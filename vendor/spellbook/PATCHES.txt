@@ -1,0 +1,87 @@
+WordCraft patch list against Spellbook 0.4.2
+==========================================
+
+Upstream: https://crates.io/crates/spellbook/0.4.2
+Release archive SHA-256:
+0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a
+License: MPL-2.0; see LICENSE and WORDCRAFT-NOTICE.txt.
+
+Runtime fixes (each regression uses synthetic data, without Hungarian assets):
+
+1. src/checker.rs: apply the signed compound-syllable modifier with
+   saturating_add_signed. Negative modifiers no longer become huge unsigned
+   values or overflow; subtracting from zero saturates.
+   Test: negative_compound_syllable_modifier_does_not_wrap
+
+2. src/aff.rs: upper_char_at accepts an end index or an invalid byte boundary
+   without slicing or unwrapping a missing character. Valid Unicode case
+   expansion and the remaining suffix are preserved.
+   Test: upper_char_at_accepts_end_and_invalid_boundaries
+   WordCraft's additional real-dictionary suggestion regression uses "A".
+
+3. src/checker.rs: in both suffix-prefix-suffix and prefix-suffix-prefix
+   stripping, check the inner affix condition against the intermediate stem
+   after removing that affix.
+   Test: affix_conditions_use_the_stem_after_each_removal (both orders)
+
+4. src/checker.rs: SIMPLIFIEDTRIPLE compares two distinct preceding code
+   points, rather than comparing the last code point with itself.
+   Test: simplified_triple_requires_two_equal_preceding_characters
+   (acceptance and rejection, ASCII and multibyte characters)
+
+5. src/suggester/ngram.rs: add a cross-product prefix to the suffixed stem,
+   retaining both affixes in the suggestion candidate.
+   Test: ngram_candidates_keep_both_cross_product_affixes
+
+Additional review hardening (2026-10-25):
+
+6. Safe storage and UTF-8 edits: replace the raw Umbra allocation/union/memcmp
+   implementation with Box<str>/Box<[Flag]>; remove every unsafe block/impl.
+   Affix stripping/derivation returns None on mismatch; empty case conversion
+   and flags no longer panic. Suggestion edits use checked character positions
+   and String replacements. N-gram character positions use usize, not u16.
+   Production forbids unsafe_code and denies the never-crash Clippy lints;
+   cargo xtask ci runs the vendor's own Clippy gate as well as its tests.
+   Tests: storage_preserves_unicode_and_hash_lookup_at_all_lengths,
+   empty_and_large_flag_sets_are_searchable,
+   absent_affixes_and_empty_case_inputs_are_rejected_without_panics,
+   empty_flags_return_errors; existing Unicode edit and suggestion regressions.
+   Tradeoff: short strings/flag sets now allocate instead of being stored inline.
+
+7. DictionaryBuilder exposes incremental parsing. The synchronous constructor
+   uses the same parser; no partially validated dictionary is published.
+   Each advance call budgets input rows, yielding between affix directives and
+   word entries. A complete affix directive is atomic and may exceed the budget.
+   The first parse error is terminal: all later advances return that error and
+   finish never publishes a partial dictionary.
+   Test: incremental_and_synchronous_loading_agree (including repeated calls
+   after malformed affix directives and dictionary entries).
+
+8. COMPLEXPREFIXES: suffix-plus-two-prefix stripping checks continuation flags
+   in the prefix index, so valid words do not depend on unrelated suffix flags.
+   Test: complex_prefix_continuations_do_not_require_suffix_continuations.
+
+9. Numeric flags consult AF aliases before falling back to literal flags.
+   Upstream fix: 119625e5b6fb374e818e2372c8860aa7202e16bb (#20).
+   Test: numeric_flags_consult_aliases_before_literal_fallback (synthetic
+   dictionary, valid alias, out-of-range alias, literal list and absent aliases).
+
+Packaging and test adaptation (separate from the runtime changes):
+
+- Cargo.toml: minimal library manifest; hashbrown 0.16 and foldhash 0.2 reuse
+  workspace dependency versions; Rust 1.95 matches WordCraft. Optional
+  default-hasher support remains available.
+- src/test_fixture.rs: original MPL-2.0 synthetic test dictionary. The upstream
+  English dictionary has a separate GPL license and is not redistributed.
+  This fixture tests mechanisms, not comprehensive English vocabulary.
+- src/lib.rs, src/checker.rs, src/suggester.rs and src/aff.rs: use the synthetic
+  fixture, std::sync::LazyLock and self-contained doctest dictionaries in place
+  of the upstream dev dependency and dictionary files.
+- The upstream README, LICENSE and rustfmt.toml are retained; development
+  tooling, benchmarks, examples and external dictionary data are omitted.
+- WORDCRAFT-NOTICE.txt and this patch list record provenance and local changes.
+
+Run independently from the WordCraft workspace root:
+  cargo test --manifest-path vendor/spellbook/Cargo.toml
+
+No Hungarian dictionary or WordCraft proofing crate is needed for these tests.

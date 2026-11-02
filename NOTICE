@@ -124,3 +124,15 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+- Spellbook 0.4.2 — Michael Davis and contributors; MPL-2.0.
+  https://github.com/helix-editor/spellbook
+  Source and license: vendor/spellbook/ (LICENSE, WORDCRAFT-NOTICE.txt).
+  Local runtime fixes and their regressions are listed in PATCHES.txt;
+  modified files remain MPL.
+
+Source availability for Spellbook:
+The corresponding modified source is included in vendor/spellbook/. Binary
+distributions must provide this notice and access to the exact corresponding
+MPL source revision or source archive. Separate WordCraft files retain their
+MIT OR Apache-2.0 license.

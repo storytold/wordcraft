@@ -1,0 +1,14 @@
+[package]
+name = "spellbook"
+version = "0.4.2"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/helix-editor/spellbook"
+description = "Hunspell-compatible spelling (WordCraft fixes; see WORDCRAFT-NOTICE.txt)"
+rust-version = "1.95"
+[dependencies]
+hashbrown = { version = "0.16", default-features = false }
+foldhash = { version = "0.2", default-features = false, optional = true }
+[features]
+default = ["default-hasher"]
+default-hasher = ["dep:foldhash"]
