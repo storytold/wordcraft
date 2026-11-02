@@ -522,7 +522,8 @@ impl Ctx {
                 }
                 out
             }
-            MNode::EqArr { rows } => self.eq_arr(rows, st, d),
+            // Alignment follows row layout, so exposed fraction edges are not yet known.
+            MNode::EqArr { rows } => self.eq_arr(rows, st.at_edges(FracEdges::Spaced), d),
             MNode::Matrix { rows, col_jc } => self.matrix(rows, col_jc, st, d),
             MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => {
                 let mut b = self.sub(0, e, st, d);

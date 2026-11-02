@@ -422,3 +422,48 @@ fn radical_scan_exhaustion() {
     assert!(cx.row(&body, St { frac_edges: FracEdges::Tight, ..st }, 0, 0).is_empty());
     assert_eq!(cx.nodes, spent, "an exhausted row returns before edge discovery");
 }
+
+#[test]
+fn radical_eq_array_insets() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+    let mut cx = edge_test_ctx(FaceRef::of(&font));
+    let fraction = |text| MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new(text))], den: vec![MNode::Run(MRun::new("b"))] };
+    let bars = |b: &Bx| {
+        b.items
+            .iter()
+            .filter_map(|i| match i {
+                MItem::Rect { x, w, .. } => Some((*x, *w)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for display in [false, true] {
+        let st = St { level: 0, display, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
+        let short = fraction("a");
+        let wide = fraction("abcdefgh");
+        let short_box = cx.arg(std::slice::from_ref(&short), st.cramp(), 0);
+        let wide_box = cx.arg(std::slice::from_ref(&wide), st.cramp(), 0);
+        let short_bar = bars(&short_box)[0];
+        let wide_bar = bars(&wide_box)[0];
+        assert!(short_bar.0 > 0.0, "the ordinary fraction has an inset");
+        assert!(wide_box.w > short_box.w, "the short row must be centered inside a wider array");
+        let array = MNode::EqArr { rows: vec![vec![short], vec![wide]] };
+        let plain = cx.arg(std::slice::from_ref(&array), st.cramp(), 0);
+        let radical = cx.arg(&[MNode::Rad { deg: vec![], deg_hide: true, e: vec![array] }], st, 0);
+        let plain_bars = bars(&plain);
+        let packed_bars = bars(&radical);
+        assert_eq!(plain_bars.len(), 2);
+        assert_eq!(packed_bars.len(), 3);
+        let centered = (plain.w - short_box.w) / 2.0;
+        assert!(centered > 0.0);
+        assert!((plain_bars[0].0 - centered - short_bar.0).abs() < 0.001, "the ordinary array centers the short fraction");
+        assert!((packed_bars[0].1 - plain.w).abs() < 0.001, "the radical keeps the array's ordinary frame width");
+        assert!((packed_bars[1].1 - short_bar.1).abs() < 0.001, "the inset short row retains its ordinary bar width");
+        assert!((packed_bars[2].1 - wide_bar.1).abs() < 0.001, "the wider row conservatively retains both margins");
+        let offset = packed_bars[0].0;
+        assert!((packed_bars[1].0 - offset - centered - short_bar.0).abs() < 0.001, "centering does not remove the short row's bar inset");
+        assert!((packed_bars[2].0 - offset - wide_bar.0).abs() < 0.001, "the wide row keeps its leading inset");
+    }
+}
