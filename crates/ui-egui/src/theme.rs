@@ -624,9 +624,18 @@ fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts:
         let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
         if needed.is_empty() {
             needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
-            if needed.is_empty() {
-                return None;
-            }
+        }
+        // `system_cjk` is also set for CJK text outside the interface catalogs: a Chinese file
+        // name, a Recent path or a window caption. The embedded faces cover the English menus
+        // there, so `needed` is empty, but that text still needs a CJK face (#2067 follow-up).
+        if needed.is_empty() {
+            needed = vec![if korean {
+                '한'
+            } else if hans {
+                '页'
+            } else {
+                '體'
+            }];
         }
         log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
         wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed)
@@ -941,6 +950,23 @@ mod tests {
             let r = contrast(t.markup_edge, t.markup_area);
             assert!(r >= 1.1, "dark={}: the markup area edge is invisible ({r:.2}:1)", t.dark);
         }
+    }
+
+    /// #2067 follow-up: with English menus and no CJK in the catalogs, a Chinese file name in
+    /// Recent or the caption still needs the installed CJK face; `system_cjk` is set for that
+    /// text, and the system font must be added even though the English menus need nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_chinese_name_with_english_menus_gets_the_system_cjk_face() {
+        if wordcraft_fonts::system_cjk_ui_font_for(false, false, &['體']).is_none() {
+            eprintln!("skipped: no installed CJK font");
+            return;
+        }
+        let defs = super::font_definitions_language(false, false, false, true);
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert!(prop.iter().any(|n| n.starts_with("system ")), "a system CJK face is in the chain: {prop:?}");
+        let none = super::font_definitions_language(false, false, false, false);
+        assert!(!none.families[&egui::FontFamily::Proportional].iter().any(|n| n.starts_with("system ")));
     }
 
     /// The test root declares egui's `default_fonts` and `monochrome_emoji_fonts` features
