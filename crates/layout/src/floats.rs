@@ -260,7 +260,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                 spin,
                 extra: extra.clone(),
                 object: Some(object),
-                alt: shape_figure_alt(o).unwrap_or_default().to_string(),
+                alt: shape_figure_alt(o).unwrap_or_default().into(),
             }]
         }
         InlineObject::Graphic { graphic, .. } => {
@@ -289,7 +289,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                             spin,
                             extra: Default::default(),
                             object: Some(wordcraft_doc::Pos { story, path: Path(path.to_vec()), off }),
-                            alt: String::new(),
+                            alt: Box::default(),
                         },
                         Placed::Clip { rect, spin, items: members },
                     ]
