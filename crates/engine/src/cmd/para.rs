@@ -161,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.heading3", "Heading 3", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading3"}))).key("Mod+Alt+3"),
         CommandSpec::new("para.bullets", "Bullets", "Home › Paragraph", |s, v| list(s, v, ListKind::Bullet)).params(r#"{"kind"?: "bullet" | single char, "off"?: bool}"#).key("Mod+Shift+L"),
         CommandSpec::new("para.numbering", "Numbering", "Home › Paragraph", |s, v| list(s, v, ListKind::Numbered))
-            .params(r#"{"kind"?: "numbered|numberedParen|upperLetter|lowerLetter|lowerRoman|outline", "off"?: bool}"#),
+            .params(r#"{"kind"?: "numbered|numberedParen|outline|upperLetter|lowerLetter|lowerLetterDot|lowerRoman", "off"?: bool}"#),
         CommandSpec::new("para.multilevel", "Multilevel List", "Home › Paragraph", |s, v| list(s, v, ListKind::Legal)).params(r#"{"kind"?: "legal|outline"}"#),
         CommandSpec::new("para.listLevel", "Change List Level", "Home › Paragraph › Bullets", |s, v| {
             let lvl = p::u64(v, "level").unwrap_or(0).min(8) as u8;

@@ -13,13 +13,24 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         .map(|p| s.doc.para(a.story, p).and_then(|x| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0))
         .collect();
     let same_kind = |n: &NumRef| {
-        s.doc.numbering.level(n.num, n.level).is_some_and(|l| {
-            let want = wordcraft_doc::numbering::levels_for(kind);
-            want.get(usize::from(n.level)).is_some_and(|w| {
+        let want = wordcraft_doc::numbering::levels_for(kind);
+        // Is the list's level `i` (with this list's own overrides) the preset's level `i`?
+        let level_is = |i: u8, with_text: bool| match (s.doc.numbering.level(n.num, i), want.get(usize::from(i))) {
+            (Some(l), Some(w)) => {
                 (w.format == wordcraft_doc::section::NumFormat::Bullet) == (l.format == wordcraft_doc::section::NumFormat::Bullet)
-                    && (p::str(v, "kind").is_none() || w.text == l.text)
-            })
-        })
+                    // A named preset is the same one only in its number style and text: "1." and "A." are
+                    // both `%1.`, so picking one over the other changes the list, not switches it off (#4281).
+                    && (!with_text || (w.text == l.text && w.format == l.format))
+            }
+            _ => false,
+        };
+        let named = p::str(v, "kind").is_some();
+        // A named preset is told by its first level as well as the paragraph's own, as deeper levels of
+        // two presets can look alike; unless the list starts with the other kind of marker (a bullet
+        // above numbers, or the reverse), where the paragraph's own level decides.
+        let is_bullet = |i: u8| s.doc.numbering.level(n.num, i).map(|l| l.format == wordcraft_doc::section::NumFormat::Bullet);
+        let one_kind_throughout = is_bullet(0) == is_bullet(n.level);
+        level_is(n.level, named) && (!named || !one_kind_throughout || level_is(0, true))
     };
     let remove = off || (!current.is_empty() && current.iter().all(|n| n.as_ref().is_some_and(same_kind)));
     if remove {
