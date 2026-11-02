@@ -180,6 +180,204 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     assert!(shown >= 1);
 }
 
+#[test]
+fn wrap_text_in_shape_off_keeps_a_narrow_boxs_lines_whole() {
+    // A classification label: a box saved 35 pt wide, 20 pt of it left margin, around a long line
+    // with Wrap text in shape off and Resize shape to fit text on.
+    let label = "          Internal / Confidential";
+    let body = TextBody { inset: Some([254_000, 190_500, 0, 0]), auto_fit: true, ..Default::default() };
+    let shown = |body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, label, 35.0, 35.0, body);
+        let l = lay(&d);
+        lines(&l, id).iter().map(|(.., l0, l1)| l1 - l0).sum::<usize>()
+    };
+    assert!(shown(body) > 1, "with wrapping on, the text wraps in the box");
+    assert_eq!(shown(TextBody { no_wrap: true, ..body }), 1, "with wrapping off, it stays on one line");
+    // Paragraphs keep their own lines.
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, label, 35.0, 35.0, TextBody { no_wrap: true, ..body });
+    d.parts.get_mut(&id).unwrap().blocks =
+        vec![para_block(Paragraph::with_text(label, Default::default())), para_block(Paragraph::with_text("Two", Default::default()))];
+    assert_eq!(lines(&lay(&d), id).len(), 2);
+}
+
+/// Make the box in body paragraph 0 float in front of the text.
+fn float_box(d: &mut Document) {
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut() else { panic!("no box") };
+    float.wrap = wordcraft_doc::para::Wrap::InFrontOfText;
+}
+
+/// The rightmost end of story `id`'s lines on the first page.
+fn lines_end(l: &DocLayout, id: u32) -> f32 {
+    l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), para, x, l0, l1, .. } if *s == id => {
+                para.lines.get(*l0..*l1).and_then(|ls| ls.iter().filter_map(|l| l.xs.last().map(|e| x + e)).reduce(f32::max))
+            }
+            _ => None,
+        })
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn a_floating_box_that_doesnt_wrap_is_as_wide_as_its_lines() {
+    // Word draws the outline around the lines, whether or not the box resizes to fit its text.
+    let label = "A line far longer than the box it was saved in";
+    for auto_fit in [true, false] {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, label, 60.0, 60.0, TextBody { no_wrap: true, auto_fit, ..Default::default() });
+        float_box(&mut d);
+        let l = lay(&d);
+        let r = frame_of(&l, id);
+        let end = lines_end(&l, id);
+        assert!(r.w > 100.0 && end <= r.right(), "the box {r:?} holds its line, which ends at {end}");
+    }
+    // A box that wraps keeps its width.
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, label, 60.0, 60.0, TextBody::default());
+    float_box(&mut d);
+    assert_eq!(frame_of(&lay(&d), id).w, 60.0);
+}
+
+#[test]
+fn a_positional_tab_in_a_box_that_doesnt_wrap_stays_in_it() {
+    // Measured at an unbounded width, a right positional tab reached that width and took the text
+    // after it off the page.
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "LEFTRIGHT", 60.0, 60.0, TextBody { no_wrap: true, ..Default::default() });
+    float_box(&mut d);
+    let tab = InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: Default::default() };
+    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 4 }, tab, &Default::default()).unwrap();
+    let l = lay(&d);
+    let page_w = d.last_section.page_w;
+    let end = lines_end(&l, id);
+    assert!(end > 0.0 && end < page_w, "the text ends at {end}, on a page {page_w} wide");
+    assert!(frame_of(&l, id).w < page_w, "{:?}", frame_of(&l, id));
+}
+
+#[test]
+fn a_list_label_counts_in_a_box_that_doesnt_wrap() {
+    // A label wider than its hanging indent moves the text along: the line is that much longer.
+    let mut d = Document::from_text("x");
+    let id =
+        text_box(&mut d, 0, "A list item that is quite long indeed", 35.0, 35.0, TextBody { no_wrap: true, auto_fit: true, ..Default::default() });
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].text = "Section %1 with a long label:".into();
+    let num = d.numbering.try_add_levels(None, levels).unwrap();
+    d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let shown: usize = lines(&lay(&d), id).iter().map(|(.., l0, l1)| l1 - l0).sum();
+    assert_eq!(shown, 1, "label and text share one line");
+}
+
+#[test]
+fn a_right_aligned_list_item_in_a_box_that_doesnt_wrap_stays_on_the_page() {
+    // At the measuring width alignment moved the text along, and that counted as the label's width.
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "Item", 60.0, 60.0, TextBody { no_wrap: true, ..Default::default() });
+    float_box(&mut d);
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.align = Some(wordcraft_doc::props::Align::Right);
+    let l = lay(&d);
+    assert!(frame_of(&l, id).w < 100.0, "{:?}", frame_of(&l, id));
+}
+
+#[test]
+fn a_box_that_doesnt_wrap_lines_up_at_the_width_of_its_lines() {
+    // Aligned to the right margin it grows to the left, as in Word, rather than off the page.
+    let mut d = Document::from_text("x");
+    let body = TextBody { no_wrap: true, ..Default::default() };
+    let id = text_box(&mut d, 0, "A line far longer than the box it was saved in", 60.0, 60.0, body);
+    float_box(&mut d);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut() else { panic!("no box") };
+    float.h_rel = wordcraft_doc::para::Anchor::Margin;
+    float.h_align = Some(wordcraft_doc::para::FloatAlign::End);
+    let (page_w, right) = (d.last_section.page_w, d.last_section.page_w - d.last_section.margin_right);
+    let r = frame_of(&lay(&d), id);
+    assert!(r.w > 100.0 && (r.right() - right).abs() < 0.5 && r.right() < page_w, "{r:?}, margin at {right}");
+}
+
+#[test]
+fn text_wraps_around_a_box_that_doesnt_wrap_at_the_width_of_its_lines() {
+    let mut d = Document::from_text(&"Words beside the box and never over it. ".repeat(40));
+    let body = TextBody { no_wrap: true, ..Default::default() };
+    let id = text_box(&mut d, 0, "A line far longer than the box it was saved in", 60.0, 60.0, body);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut() else { panic!("no box") };
+    float.wrap = wordcraft_doc::para::Wrap::Square;
+    let l = lay(&d);
+    let r = frame_of(&l, id);
+    assert!(r.w > 100.0, "{r:?}");
+    let clear = l.pages[0].items.iter().any(|it| match it {
+        Placed::Lines { story: StoryRef::Body, para, x, .. } => para.lines.iter().any(|ln| x + ln.left >= r.right() - 0.5),
+        _ => false,
+    });
+    assert!(clear, "a line starts past the box's right edge, {}", r.right());
+}
+
+#[test]
+fn a_list_label_counts_on_its_own_line_of_a_box_that_doesnt_wrap() {
+    // The label moves the first line along, not a longer line after a line break.
+    let text = format!("x{}A line after the break that is much longer than the label", wordcraft_doc::para::LINE_BREAK);
+    let mut d = Document::from_text("x");
+    let body = TextBody { no_wrap: true, inset: Some([0; 4]), ..Default::default() };
+    let id = text_box(&mut d, 0, &text, 60.0, 60.0, body);
+    float_box(&mut d);
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].text = "Section %1 with a label:".into();
+    let num = d.numbering.try_add_levels(None, levels).unwrap();
+    d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let l = lay(&d);
+    let (r, end) = (frame_of(&l, id), lines_end(&l, id));
+    assert!(r.right() - end < 1.0, "the box {r:?} hugs its longest line, which ends at {end}");
+}
+
+#[test]
+fn a_list_label_counts_in_a_right_to_left_box_that_doesnt_wrap() {
+    // The label starts a right-to-left line too, so the line is that much longer.
+    let mut d = Document::from_text("x");
+    let id = text_box(
+        &mut d,
+        0,
+        &"\u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{5e2}\u{5d5}\u{5dc}\u{5dd} ".repeat(6),
+        35.0,
+        35.0,
+        TextBody { no_wrap: true, auto_fit: true, ..Default::default() },
+    );
+    let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+    levels[0].text = "Section %1 with a long label:".into();
+    let num = d.numbering.try_add_levels(None, levels).unwrap();
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.bidi = Some(true);
+    float_box(&mut d);
+    let l = lay(&d);
+    let shown: usize = lines(&l, id).iter().map(|(.., l0, l1)| l1 - l0).sum();
+    assert_eq!(shown, 1, "label and text share one line");
+}
+
+#[test]
+fn a_list_label_counts_in_a_mixed_right_to_left_box_that_doesnt_wrap() {
+    // Lines are measured as they are laid out: mixed text can run longer than it would left to right.
+    let text = "abc (\u{645}\u{631}\u{62d}\u{628}\u{627}) [x] 123 \u{661}\u{662}\u{663} def, \u{5e9}\u{5dc}\u{5d5}\u{5dd}! ...";
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, text, 35.0, 35.0, TextBody { no_wrap: true, auto_fit: true, ..Default::default() });
+    float_box(&mut d);
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    p.props.bidi = Some(true);
+    let shown: usize = lines(&lay(&d), id).iter().map(|(.., l0, l1)| l1 - l0).sum();
+    assert_eq!(shown, 1, "label and text share one line");
+}
+
 /// An auto-fit inline box shrinks to its three lines and keeps the explicit page break on page
 /// one; a fixed 10 cm box keeps its saved height and pushes the break and following text to
 /// later pages.

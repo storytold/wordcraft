@@ -123,8 +123,8 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
     };
     let body = [
         shape("", r#"inset="0,0,0,0""#),
-        shape("v-text-anchor:middle", r#"inset="1mm,,2pt" style="mso-fit-shape-to-text:T""#),
-        shape("", ""),
+        shape("v-text-anchor:middle;mso-wrap-style:none", r#"inset="1mm,,2pt" style="mso-fit-shape-to-text:T""#),
+        shape("mso-wrap-style:square", ""),
         // A bare number is in EMUs; one that doesn't parse keeps the default; negative is 0;
         // too large is the most a margin may be.
         shape("v-text-anchor:bottom-baseline", r#"inset="12700,bogus,-5pt,99in""#),
@@ -143,6 +143,7 @@ fn vml_text_boxes_keep_their_inset_fit_and_anchor() {
     assert_eq!(bodies.len(), 6);
     assert_eq!(bodies[0].inset, Some([0, 0, 0, 0]));
     assert_eq!((bodies[1].inset, bodies[1].auto_fit, bodies[1].anchor), (Some([36_000, 45_720, 25_400, 45_720]), true, VAlign::Center));
+    assert!(bodies[1].no_wrap, "Wrap text in shape is off");
     assert_eq!(bodies[2], TextBody::default());
     assert_eq!((bodies[3].inset, bodies[3].anchor), (Some([12_700, 45_720, 0, wordcraft_doc::MAX_TEXT_BOX_INSET]), VAlign::Bottom));
     assert_eq!(bodies[4].inset, None);
