@@ -130,9 +130,10 @@ validation report after running the repository's checks.
 
 `apps/wordcraft-web/src/file_provider_browser_tests.rs` defines one real-window WASM fixture
 using the exported page API, production publisher and actual `WordApp::logic` consumer. It
-temporarily injects a recoverable JavaScript `RangeError` at the catch-enabled copy import and
-request dispatch errors, restores both globals in JavaScript `finally`, checks correlated
-failure/retry events, and decodes a successful retry's actual DOCX bytes. It does not simulate
+uses Rust closures to inject a recoverable JavaScript `RangeError` at the catch-enabled copy
+import and request-dispatch errors. It catches the actual publisher call with `Function::call0`,
+restores each exact own-property descriptor (or removes its temporary shadow) before propagating
+the result, checks correlated failure/retry events, and decodes a successful retry's actual DOCX bytes. It does not simulate
 real memory exhaustion, storage durability or a full editor/WebRunner session. The fixture and
 the new native recovery tests require separate execution on the published lock-bearing source.
 

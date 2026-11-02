@@ -1,12 +1,12 @@
 //! Original synthetic Word document; one page owns both temporary JS exception injections.
 //! This fixture drives the real publisher and WordApp logic consumer, without WebRunner/GPU.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use serde_json::json;
-use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use wordcraft_doc::{Document, StoryRef};
 use wordcraft_engine::Session;
@@ -16,68 +16,108 @@ use super::{API, EVENT, error, install, publish};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-// Fault injection is confined to this fixture. JS finally restores the original descriptors
-// even if the production callback throws; this is a recoverable injected error, not real OOM.
-#[wasm_bindgen(inline_js = r#"
-export function wordcraftProviderCopyFailureForTest(callback) {
-    const descriptor = Object.getOwnPropertyDescriptor(Uint8Array, 'from');
-    const original = Uint8Array.from;
-    let calls = 0;
-    try {
-        Object.defineProperty(Uint8Array, 'from', {
-            configurable: true, writable: true,
-            value() { calls += 1; throw new RangeError('injected WordCraft byte copy failure'); }
-        });
-        callback();
-    } finally {
-        if (descriptor) Object.defineProperty(Uint8Array, 'from', descriptor);
-        else Reflect.deleteProperty(Uint8Array, 'from');
+// Fault injection stays in Rust. The actual Function::call0 catches a recoverable exception;
+// restore the exact own descriptor (or remove our shadow) before propagating that Result.
+// Fatal WASM traps, true memory exhaustion and process termination are outside this fixture.
+fn with_replacement(target: &JsValue, key: &str, replacement: &JsValue, callback: &Function) -> Result<Result<JsValue, JsValue>, JsValue> {
+    let object = Reflect::get(&js_sys::global(), &"Object".into())?;
+    let key = JsValue::from_str(key);
+    let descriptor = call(&object, "getOwnPropertyDescriptor", &Array::of2(target, &key))?;
+    let original = Reflect::get(target, &key)?;
+    let outcome = match Reflect::set(target, &key, replacement) {
+        Ok(true) => callback.call0(&JsValue::UNDEFINED),
+        Ok(false) => Err(error("injected method is not writable")),
+        Err(error) => Err(error),
+    };
+    if descriptor.is_undefined() {
+        if !Reflect::delete_property(target.unchecked_ref::<Object>(), &key)? {
+            return Err(error("could not remove injected method"));
+        }
+    } else {
+        call(&object, "defineProperty", &Array::of3(target, &key, &descriptor))?;
     }
-    return { calls, restored: Uint8Array.from === original };
-}
-export function wordcraftProviderRequestFailureForTest(callback) {
-    const descriptor = Object.getOwnPropertyDescriptor(window, 'dispatchEvent');
-    const original = window.dispatchEvent;
-    let calls = 0;
-    const requests = [];
-    try {
-        Object.defineProperty(window, 'dispatchEvent', {
-            configurable: true, writable: true,
-            value(event) {
-                if (event.type === 'wordcraft-file-provider' &&
-                    (event.detail.type === 'saveDialog' || event.detail.type === 'openRequest')) {
-                    calls += 1;
-                    requests.push({ type: event.detail.type, requestId: event.detail.requestId });
-                    throw new Error('injected WordCraft request dispatch failure');
-                }
-                return original.call(this, event);
+    let restored = call(&object, "getOwnPropertyDescriptor", &Array::of2(target, &key))?;
+    if !Object::is(&Reflect::get(target, &key)?, &original) || restored.is_undefined() != descriptor.is_undefined() {
+        return Err(error("injected property was not restored exactly"));
+    }
+    if !descriptor.is_undefined() {
+        for attribute in ["value", "get", "set", "writable", "enumerable", "configurable"] {
+            if !Object::is(&Reflect::get(&restored, &attribute.into())?, &Reflect::get(&descriptor, &attribute.into())?) {
+                return Err(error("injected property descriptor changed"));
             }
-        });
-        callback();
-    } finally {
-        if (descriptor) Object.defineProperty(window, 'dispatchEvent', descriptor);
-        else Reflect.deleteProperty(window, 'dispatchEvent');
+        }
     }
-    return { calls, requests, restored: window.dispatchEvent === original };
+    Ok(outcome)
 }
-"#)]
-extern "C" {
-    #[wasm_bindgen(catch, js_name = wordcraftProviderCopyFailureForTest)]
-    fn copy_failure(callback: &Function) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(catch, js_name = wordcraftProviderRequestFailureForTest)]
-    fn request_failure(callback: &Function) -> Result<JsValue, JsValue>;
+
+fn fault_receipt(calls: u32, requests: &Array) -> Result<JsValue, JsValue> {
+    let receipt = Object::new();
+    for (key, value) in
+        [("calls", JsValue::from_f64(f64::from(calls))), ("restored", JsValue::from_bool(true)), ("requests", JsValue::from(requests.clone()))]
+    {
+        if !Reflect::set(&receipt, &key.into(), &value)? {
+            return Err(error("could not record restored fault injection"));
+        }
+    }
+    Ok(receipt.into())
+}
+
+fn copy_failure(callback: &Function) -> Result<JsValue, JsValue> {
+    let calls = Rc::new(Cell::new(0_u32));
+    let observed = calls.clone();
+    let fault = Closure::<dyn FnMut(JsValue) -> Result<JsValue, JsValue>>::new(move |_| {
+        observed.set(observed.get().saturating_add(1));
+        Err(js_sys::RangeError::new("injected WordCraft byte copy failure").into())
+    });
+    let array = Reflect::get(&js_sys::global(), &"Uint8Array".into())?;
+    with_replacement(&array, "from", fault.as_ref(), callback)??;
+    fault_receipt(calls.get(), &Array::new())
+}
+
+fn request_failure(callback: &Function) -> Result<JsValue, JsValue> {
+    let window = web_sys::window().ok_or_else(|| error("no test window"))?;
+    let original = Reflect::get(&window, &"dispatchEvent".into())?.dyn_into::<Function>()?;
+    let receiver: JsValue = window.into();
+    let target = receiver.clone();
+    let calls = Rc::new(Cell::new(0_u32));
+    let observed = calls.clone();
+    let requests = Array::new();
+    let rejected = requests.clone();
+    let fault = Closure::<dyn FnMut(JsValue) -> Result<JsValue, JsValue>>::new(move |event: JsValue| {
+        if Reflect::get(&event, &"type".into())?.as_string().as_deref() == Some(EVENT) {
+            let detail = Reflect::get(&event, &"detail".into())?;
+            let kind = Reflect::get(&detail, &"type".into())?.as_string();
+            if matches!(kind.as_deref(), Some("saveDialog" | "openRequest")) {
+                observed.set(observed.get().saturating_add(1));
+                let request = Object::new();
+                for name in ["type", "requestId"] {
+                    if !Reflect::set(&request, &name.into(), &Reflect::get(&detail, &name.into())?)? {
+                        return Err(error("could not record rejected request"));
+                    }
+                }
+                rejected.push(&request);
+                return Err(js_sys::Error::new("injected WordCraft request dispatch failure").into());
+            }
+        }
+        original.call1(&receiver, &event)
+    });
+    with_replacement(&target, "dispatchEvent", fault.as_ref(), callback)??;
+    fault_receipt(calls.get(), &requests)
 }
 
 struct Events {
     window: web_sys::Window,
     listener: Closure<dyn FnMut(web_sys::Event)>,
     details: Rc<RefCell<Vec<JsValue>>>,
-    installed: bool,
+    installed: Option<JsValue>,
 }
 
 impl Events {
     fn new() -> Result<Self, JsValue> {
         let window = web_sys::window().ok_or_else(|| error("no test window"))?;
+        if Reflect::has(&window, &API.into())? {
+            return Err(error("fixture requires its own blank page API"));
+        }
         let details = Rc::new(RefCell::new(Vec::new()));
         let received = details.clone();
         let listener = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
@@ -86,7 +126,7 @@ impl Events {
             }
         });
         window.add_event_listener_with_callback(EVENT, listener.as_ref().unchecked_ref())?;
-        Ok(Self { window, listener, details, installed: false })
+        Ok(Self { window, listener, details, installed: None })
     }
 
     fn matching(&self, kind: &str) -> Result<Vec<JsValue>, JsValue> {
@@ -103,7 +143,10 @@ impl Events {
 impl Drop for Events {
     fn drop(&mut self) {
         let _ = self.window.remove_event_listener_with_callback(EVENT, self.listener.as_ref().unchecked_ref());
-        if self.installed {
+        if let Some(owned) = &self.installed
+            && let Ok(current) = Reflect::get(&self.window, &API.into())
+            && Object::is(&current, owned)
+        {
             let _ = Reflect::delete_property(self.window.unchecked_ref::<Object>(), &API.into());
         }
     }
@@ -126,9 +169,12 @@ fn page_local_provider_delivery_failures_release_owners_and_recover() -> Result<
     let mut events = Events::new()?;
     let host = Host::default();
     let ctx = egui::Context::default();
-    install(host.clone(), ctx.clone())?;
-    events.installed = true;
+    // Capture our API even if install publishes it and the ready dispatch then fails.
+    // Events::new already established the page was blank; Drop removes only this identity.
+    let installed = install(host.clone(), ctx.clone());
     let api = Reflect::get(&events.window, &API.into())?;
+    events.installed = Some(api.clone());
+    installed?;
     let connection = call(&api, "registerProvider", &Array::of3(&"test".into(), &"Test storage".into(), &"account".into()))?;
     assert_eq!(host.snapshot()["connectionId"].as_str(), connection.as_string().as_deref());
     let services = Services { file_providers: Some(host.clone()), ..Default::default() };
