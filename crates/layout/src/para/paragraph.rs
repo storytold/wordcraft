@@ -326,6 +326,17 @@ impl<'a> Shaped<'a> {
             // the margin and the page edge clips it (see `ParaEnv::fit_objects`).
             let maxw = (env.width - cx.rp.indent_left.max(0.0) - cx.rp.indent_right.max(0.0)).max(18.0);
             let h = env.fitted.iter().find(|(i, _)| *i == k).map_or(saved_h, |(_, h)| *h);
+            // A horizontal rule takes its whole line; display draws it at its share. Measured for
+            // a table column (an unbounded line) a share of its line asks for no width, following
+            // the column rather than widening it; one of its own width asks for that.
+            let w = match o {
+                InlineObject::Shape { extra, .. } => match extra.hr {
+                    Some(_) if env.width < crate::table::MEASURE_WIDE => maxw,
+                    Some(hr) if hr.pct > 0.0 => 1.0,
+                    _ => w,
+                },
+                _ => w,
+            };
             let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
             let s = if env.fit_objects && w > maxw { maxw / w } else { 1.0 };
             // The line makes room for effects (shadows) around the picture too, and
