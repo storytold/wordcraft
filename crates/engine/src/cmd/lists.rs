@@ -145,6 +145,23 @@ pub fn caret_list(s: &Session) -> Option<u32> {
     para.props.numbering.or_else(|| s.doc.styles.resolve_para(&para.props).numbering).filter(|n| n.num != 0).map(|n| n.num)
 }
 
+/// The number the caret's paragraph shows (3 for `3.`), counting the story's lists up to it:
+/// what Set Numbering Value starts from. `None` outside a numbered list.
+pub fn caret_number(s: &Session) -> Option<u32> {
+    let f = &s.sel.focus;
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    let mut last = None;
+    for path in s.doc.para_paths(f.story).into_iter().filter(|q| *q <= f.path) {
+        let para = s.doc.para(f.story, &path)?;
+        let n = para.props.numbering.or_else(|| s.doc.styles.resolve_para(&para.props).numbering).filter(|n| n.num != 0);
+        last = n.and_then(|n| {
+            counters.next_label(&s.doc.numbering, n.num, n.level)?;
+            counters.values(&s.doc.numbering, n.num)?.get(usize::from(n.level)).copied()
+        });
+    }
+    last
+}
+
 /// The nine levels list `num` shows (its own level definitions over its abstract list's).
 pub fn levels_of(s: &Session, num: u32) -> Option<Vec<Level>> {
     s.doc.numbering.num(num)?;
@@ -535,5 +552,62 @@ mod tests {
         for n in 1..=9 {
             assert_eq!(s.doc.styles.get(&format!("Heading{n}")).and_then(|st| st.para.numbering), None, "Heading{n}");
         }
+    }
+
+    /// Paragraphs `texts`, with `kind` numbering turned on one paragraph at a time for each
+    /// index in `numbered`, as a user clicks the Numbering button on each.
+    fn numbered_at(texts: &[&str], numbered: &[(usize, &str)]) -> Session {
+        let mut s = Session::new(Document::new());
+        for (i, t) in texts.iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        }
+        for (i, kind) in numbered {
+            s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(*i, 0));
+            s.run("para.numbering", &json!({"kind": kind})).unwrap();
+        }
+        s
+    }
+
+    fn shown(s: &mut Session) -> Vec<Option<String>> {
+        numbered(s).into_iter().map(|x| x.0).collect()
+    }
+
+    fn want(labels: &[Option<&str>]) -> Vec<Option<String>> {
+        labels.iter().map(|l| l.map(str::to_string)).collect()
+    }
+
+    /// 1., a paragraph, then Numbering on the next one gives 2. (Word continues the list above
+    /// past unnumbered paragraphs); a list of another kind in between starts a new list.
+    #[test]
+    fn numbering_after_a_plain_paragraph_continues_the_list_above() {
+        let mut s = numbered_at(&["One", "Between", "Two", "Also", "Three"], &[(0, "numbered"), (2, "numbered"), (4, "numbered")]);
+        assert_eq!(shown(&mut s), want(&[Some("1."), None, Some("2."), None, Some("3.")]));
+        let mut s = numbered_at(&["One", "Letter", "Two"], &[(0, "numbered"), (1, "lowerLetter"), (2, "numbered")]);
+        assert_eq!(shown(&mut s), want(&[Some("1."), Some("a)"), Some("1.")]));
+    }
+
+    /// Set Numbering Value numbers the caret's item at any value, and the rest of the list,
+    /// past paragraphs in between, counts on from it; it survives a save to .docx and back.
+    #[test]
+    fn set_numbering_value_numbers_from_any_value_and_the_list_counts_on() {
+        let mut s = numbered_at(&["One", "Between", "Two", "Also", "Three"], &[(0, "numbered"), (2, "numbered"), (4, "numbered")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+        assert_eq!(super::caret_number(&s), Some(2), "the dialog starts from the shown number");
+        s.run("para.setNumberingValue", &json!({"value": 7})).unwrap();
+        let after = want(&[Some("1."), None, Some("7."), None, Some("8.")]);
+        assert_eq!(shown(&mut s), after);
+        assert_eq!(super::caret_number(&s), Some(7));
+        let mut b = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        assert_eq!(shown(&mut b), after);
+        // Restart at 1 also carries the rest of the list with it.
+        s.run("para.restartNumbering", &json!({})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("1."), None, Some("1."), None, Some("2.")]));
+        // Outside a list there is no number to set.
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        assert_eq!(super::caret_number(&s), None);
+        assert!(s.run("para.setNumberingValue", &json!({"value": 3})).is_err());
     }
 }

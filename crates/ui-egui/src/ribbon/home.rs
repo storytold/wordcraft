@@ -215,6 +215,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.separator();
                         mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
+                        mi(ui, app, "Set Numbering Value…", "ui.dialog", json!({"name": "numberingValue"}));
                         mi(ui, app, "None", "para.numbering", json!({"off": true}));
                     },
                 );

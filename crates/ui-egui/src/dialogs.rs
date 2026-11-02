@@ -159,6 +159,11 @@ pub enum Dialog {
         rows: u32,
         cols: u32,
     },
+    /// Home › Paragraph › Numbering › Set Numbering Value: the number the caret's list item
+    /// shows, the rest of the list counting on from it.
+    NumberingValue {
+        value: u32,
+    },
     PageSetup {
         top: f32,
         bottom: f32,
@@ -493,6 +498,7 @@ impl Dialog {
             Dialog::Find { tab: FindTab::Replace, .. } => "replace",
             Dialog::Find { tab: FindTab::GoTo, .. } => "goto",
             Dialog::InsertTable { .. } => "insertTable",
+            Dialog::NumberingValue { .. } => "numberingValue",
             Dialog::PageSetup { .. } => "pageSetup",
             Dialog::Link { .. } => "link",
             Dialog::Bookmark { .. } => "bookmark",
@@ -681,6 +687,7 @@ impl Dialog {
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
+            "numberingValue" => Dialog::NumberingValue { value: wordcraft_engine::cmd::lists::caret_number(&app.session)? },
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
                 use wordcraft_doc::section::DocGridType;

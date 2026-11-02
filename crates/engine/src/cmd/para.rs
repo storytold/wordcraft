@@ -18,6 +18,7 @@ mod tabs_borders;
 
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{fmt, indent, outdent};
+pub(crate) use lists::restart_at;
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
 pub(crate) use outline::{ensure_heading_style, set_heading};

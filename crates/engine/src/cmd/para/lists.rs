@@ -34,12 +34,15 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
             }
         });
     }
-    // Continue the list of the previous paragraph if it has the same kind; else a new list.
-    let prev_num = s
-        .doc
-        .prev_para(a.story, &a.path)
-        .and_then(|q| s.doc.para(a.story, &q).and_then(|x| x.props.numbering))
-        .filter(|n| n.num != 0 && same_kind(&NumRef { level: 0, ..*n }));
+    // Continue the nearest list above if it has the same kind, past unnumbered paragraphs in
+    // between (Word: 1., a paragraph, then Numbering gives 2.); else a new list.
+    let paths = s.doc.para_paths(a.story);
+    let prev_num = paths
+        .iter()
+        .rev()
+        .filter(|q| **q < a.path)
+        .find_map(|q| s.doc.para(a.story, q).and_then(|x| x.props.numbering).filter(|n| n.num != 0))
+        .filter(|n| same_kind(&NumRef { level: 0, ..*n }));
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {
@@ -64,25 +67,30 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
 }
 
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
+    restart_at(s, None)
+}
+
+/// Restart the caret's list here, its level at `value` (`None`: the level's own start). This
+/// paragraph and every later one of the same list move to the new instance, past paragraphs in
+/// between, so the rest of the list counts on from here.
+pub(crate) fn restart_at(s: &mut Session, value: Option<u32>) -> CmdResult {
     let f = s.sel.focus.clone();
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
     let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-    // This paragraph and the following ones of the same list use the new instance.
+    if let Some(value) = value
+        && let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new)
+    {
+        num.start_overrides.retain(|(l, _)| *l != n.level);
+        num.start_overrides.push((n.level, value));
+    }
     let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
     for path in paths {
         let para = s.doc.para_mut(f.story, &path)?;
-        match para.props.numbering {
-            Some(x) if x.num == n.num => {
-                para.props.numbering = Some(NumRef { num: new, level: x.level });
-                para.touch();
-            }
-            _ => {
-                if para.props.numbering.is_none() && !para.is_empty() {
-                    break;
-                }
-            }
+        if let Some(x) = para.props.numbering.filter(|x| x.num == n.num) {
+            para.props.numbering = Some(NumRef { num: new, level: x.level });
+            para.touch();
         }
     }
     sel_result(s)

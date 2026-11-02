@@ -1693,3 +1693,36 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// Home › Numbering › Set Numbering Value…: opens on the number the item shows, and OK numbers
+/// it from the value typed; outside a list it doesn't open.
+#[test]
+fn set_numbering_value_dialog_opens_on_the_shown_number_and_sets_it() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("One\nBetween\nTwo");
+    for i in [0, 2] {
+        app.session.sel = wordcraft_engine::Selection::caret(Pos::body(i, 0));
+        app.run("para.numbering", json!({})).unwrap();
+    }
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(1, 0));
+    assert!(Dialog::open("numberingValue", &mut app).is_none(), "not in a list");
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(2, 0));
+    app.dialog = Dialog::open("numberingValue", &mut app);
+    assert!(matches!(app.dialog, Some(Dialog::NumberingValue { value: 2 })), "{:?}", app.dialog);
+    if let Some(Dialog::NumberingValue { value }) = &mut app.dialog {
+        *value = 5;
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(wordcraft_engine::cmd::lists::caret_number(&h.state().session), Some(5));
+}

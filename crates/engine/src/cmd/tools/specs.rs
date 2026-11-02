@@ -290,27 +290,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("para.setNumberingValue", "Set Numbering Value", "Home › Paragraph › Numbering", |s, v| {
             let value = p::u64(v, "value").unwrap_or(1).clamp(0, 100_000) as u32;
-            let f = s.sel.focus.clone();
-            let n = s
-                .doc
-                .para_at(&f)
-                .and_then(|x| x.props.numbering)
-                .filter(|n| n.num != 0)
-                .ok_or_else(|| CmdError::Failed("not in a numbered list".into()))?;
-            let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-            if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new) {
-                num.start_overrides = vec![(n.level, value)];
-            }
-            let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|q| *q >= f.path).collect();
-            for path in paths {
-                let para = s.doc.para_mut(f.story, &path)?;
-                match para.props.numbering {
-                    Some(x) if x.num == n.num => para.props.numbering = Some(NumRef { num: new, level: x.level }),
-                    _ => break,
-                }
-                para.touch();
-            }
-            sel_result(s)
+            crate::cmd::para::restart_at(s, Some(value))
         })
         .params(r#"{"value": n}"#),
         CommandSpec::new("para.defineBullet", "Define New Bullet", "Home › Paragraph › Bullets", |s, v| {
