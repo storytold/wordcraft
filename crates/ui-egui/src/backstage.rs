@@ -286,23 +286,23 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             egui::StrokeKind::Inside,
         );
         let ppp = ui.ctx().pixels_per_point();
-        let key = format!("tpl:{template}:{ppp}");
-        let region = app.session.region();
-        let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(&key))).or_else(|| {
-            let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
-            // The blank tile shows the region's paper (#838).
-            s.system_region = region;
-            let _ = s.run("file.new", &json!({"template": template}));
+        // The blank tile pictures the Normal template, as stored now: saved or reset here or by
+        // another window (#4237). One texture per tile: a new one replaces (frees) the old.
+        let id = egui::Id::unique(("tpl", template));
+        let stamp = (ppp.to_bits(), tile_stamp(app, ui.ctx(), template));
+        let cached = ui.ctx().data(|d| d.get_temp::<((u32, u64), egui::TextureHandle)>(id)).filter(|(at, _)| *at == stamp).map(|(_, h)| h);
+        let tex = cached.or_else(|| {
+            let s = tile_session(app, template);
             let l = s.export_layout();
             let page = l.pages.first()?;
             let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &crate::canvas::screen_render_options());
             let px = img.to_straight();
             let h = ui.ctx().load_texture(
-                &key,
+                format!("tpl:{template}"),
                 egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px),
                 egui::TextureOptions::LINEAR,
             );
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
+            ui.ctx().data_mut(|d| d.insert_temp(id, (stamp, h.clone())));
             Some(h)
         });
         if let Some(h) = tex {
@@ -315,6 +315,52 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             app.canvas.want_focus = true;
         }
     });
+}
+
+/// What a tile's picture depends on besides the pixel scale: the region (its paper, #838) and,
+/// for the blank tile, the stored Normal template.
+fn tile_stamp(app: &WordApp, ctx: &egui::Context, template: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}{:?}", app.session.system_region, app.session.prefs.region).hash(&mut h);
+    if template == "blank" {
+        normal_stamp(app, ctx).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// A hash of the stored Normal template (0 for none), read at most once a second while the New
+/// page shows: another window may change it, so the page repaints a second later to look again.
+fn normal_stamp(app: &WordApp, ctx: &egui::Context) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(store) = &app.session.normal_store else { return 0 };
+    let id = egui::Id::unique("normal-template-stamp");
+    let now = ctx.input(|i| i.time);
+    ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    if let Some((at, stamp)) = ctx.data(|d| d.get_temp::<(f64, u64)>(id))
+        && now - at < 1.0
+        && now >= at
+    {
+        return stamp;
+    }
+    let stamp = store.load().ok().flatten().map_or(0, |b| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        b.hash(&mut h);
+        h.finish().max(1)
+    });
+    ctx.data_mut(|d| d.insert_temp(id, (now, stamp)));
+    stamp
+}
+
+/// The document File › New's tile for `template` pictures: what `file.new` makes, the blank one
+/// on the region's paper (#838) and the Normal template (#4237).
+fn tile_session(app: &WordApp, template: &str) -> wordcraft_engine::Session {
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+    s.system_region = app.session.system_region.clone();
+    s.prefs.region = app.session.prefs.region.clone();
+    s.normal_store = app.session.normal_store.clone();
+    let _ = s.run("file.new", &json!({"template": template}));
+    s
 }
 
 /// The built-in templates in gallery order: display label and the `file.new` template id.

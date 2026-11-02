@@ -54,6 +54,18 @@ pub(crate) use page_setup::paper_entry;
 use paragraph::apply_paragraph;
 use paragraph::{para_fields, paragraph_dialog};
 
+/// Modify Style's fields as the dialog opened (#4237 review).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StyleLook {
+    pub font: String,
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: String,
+    pub before: f32,
+    pub after: f32,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "dialog", rename_all = "camelCase")]
 pub enum Dialog {
@@ -254,7 +266,32 @@ pub enum Dialog {
         color: String,
         before: f32,
         after: f32,
+        /// "New documents based on this template": OK also saves the style in the Normal
+        /// template (`styles.setDefault`, #4237); off, the change is this document's only.
+        #[serde(default)]
+        new_documents: bool,
+        /// The fields as the dialog opened: OK sends only what changed since (#4237 review).
+        #[serde(skip)]
+        start: Option<Box<StyleLook>>,
     },
+    /// Set As Default's question (#4237): this document only, or all documents based on the
+    /// Normal template. OK runs `command` with `params` and the chosen `scope`.
+    SetDefault {
+        command: String,
+        #[serde(skip)]
+        params: Value,
+        /// All documents based on the Normal template (else this document only).
+        all: bool,
+        /// The dialog that asked, with its edits: Cancel goes back to it; for Page Setup, OK
+        /// applies it.
+        #[serde(skip)]
+        back: Option<Box<Dialog>>,
+    },
+    /// Design › Set as Default asks before saving the document's look for new documents.
+    DesignDefault,
+    /// File › Options › Advanced › Reset default formatting: asks before deleting the Normal
+    /// template (#4237).
+    ResetDefaults,
     /// Manage Styles: every style with its preview and description; modify, create, delete and
     /// show or hide them.
     ManageStyles {
@@ -514,6 +551,9 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
+            Dialog::SetDefault { .. } => "setDefault",
+            Dialog::ResetDefaults => "resetDefaults",
+            Dialog::DesignDefault => "designSetDefault",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
@@ -759,6 +799,9 @@ impl Dialog {
             }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
+            // Options › Advanced › Reset… (#4237).
+            "resetDefaults" => Dialog::ResetDefaults,
+            "designSetDefault" => Dialog::DesignDefault,
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
@@ -849,6 +892,14 @@ impl Dialog {
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
 
+    /// Modify Style opened from Manage Styles, which comes back when it closes.
+    fn back_to_manage_styles(mut self) -> Dialog {
+        if let Dialog::ModifyStyle { back, .. } = &mut self {
+            *back = true;
+        }
+        self
+    }
+
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
         let rc = app.session.doc.styles.resolve_char(
@@ -859,11 +910,7 @@ impl Dialog {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
-        Some(Dialog::ModifyStyle {
-            back: false,
-            resume: None,
-            id: id.into(),
-            name: st.name.clone(),
+        let look = StyleLook {
             font: rc.font,
             size: rc.size,
             bold: rc.bold,
@@ -874,6 +921,21 @@ impl Dialog {
             },
             before: rp.space_before,
             after: rp.space_after,
+        };
+        Some(Dialog::ModifyStyle {
+            back: false,
+            resume: None,
+            id: id.into(),
+            name: st.name.clone(),
+            font: look.font.clone(),
+            size: look.size,
+            bold: look.bold,
+            italic: look.italic,
+            color: look.color.clone(),
+            before: look.before,
+            after: look.after,
+            new_documents: false,
+            start: Some(Box::new(look)),
         })
     }
 }

@@ -119,3 +119,56 @@ pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
         let _ = app.run("para.set", json!({"props": props, "onPage": page}));
     }
 }
+
+/// The Paragraph dialog's Set As Default (#4237): every field the selected paragraphs share or
+/// the user set, as `para.setDefault` takes them. The alignment and indents are turned from as
+/// seen on the page into the paragraph's start and end. What the dialog can't show stays as the
+/// paragraph has it: Exactly and At Least line spacing (the dialog shows them as 1.0) unless the
+/// box was changed; the direction only when right-to-left or changed.
+pub(super) fn default_para_props(app: &WordApp, d: &Dialog) -> serde_json::Map<String, Value> {
+    let Dialog::Paragraph { rtl, mixed, start, .. } = d else { return serde_json::Map::new() };
+    let mut props = serde_json::Map::new();
+    for (k, v) in para_fields(d) {
+        if mixed.contains(&k) {
+            continue;
+        }
+        let unchanged = start.get(&k) == Some(&v);
+        let key = match k.as_str() {
+            "left" if *rtl => "indentRight",
+            "left" => "indentLeft",
+            "right" if *rtl => "indentLeft",
+            "right" => "indentRight",
+            "bidi" if unchanged && !*rtl => continue,
+            "lineSpacing" if unchanged => {
+                // The dialog shows Exactly 12 and Exactly 18 alike: send the spacing only when
+                // every selected paragraph has the same one. The paragraphs the dialog shows:
+                // the caret's only when nothing is selected.
+                let s = &app.session;
+                let story = s.sel.focus.story;
+                let mut paras: Vec<_> = wordcraft_engine::cmd::selected_paths(s).into_iter().filter_map(|path| s.doc.para(story, &path)).collect();
+                if paras.is_empty() {
+                    paras.extend(s.doc.para_at(&s.sel.focus));
+                }
+                let mut each = paras.into_iter().map(|p| s.doc.styles.resolve_para(&p.props).line_spacing);
+                let first = each.next();
+                if let Some(ls) = first.filter(|f| each.all(|o| o == *f)).and_then(|ls| serde_json::to_value(ls).ok()) {
+                    props.insert("lineSpacing".into(), ls);
+                }
+                continue;
+            }
+            "align" => {
+                let visual = match v.as_str() {
+                    Some("center") => wordcraft_doc::Align::Center,
+                    Some("right") => wordcraft_doc::Align::Right,
+                    Some("justify") => wordcraft_doc::Align::Justify,
+                    _ => wordcraft_doc::Align::Left,
+                };
+                props.insert("align".into(), json!(visual.visual(*rtl)));
+                continue;
+            }
+            other => other,
+        };
+        props.insert(key.into(), v);
+    }
+    props
+}

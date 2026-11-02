@@ -82,3 +82,18 @@ pub(super) fn apply_font(app: &mut WordApp, d: &Dialog) {
         let _ = app.run("format.set", json!({"props": changed}));
     }
 }
+
+/// The Font dialog's Set As Default (#4237): every field, as `format.setDefault` takes them,
+/// fonts by their stored names.
+pub(super) fn default_font_props(app: &mut WordApp, d: &Dialog) -> serde_json::Map<String, Value> {
+    let mut props = font_props(d);
+    if let Some(f) = props.get("font").and_then(Value::as_str).map(str::to_string) {
+        let f = app.previews.font_stored(&f);
+        props.insert("font".into(), json!(f));
+        props.insert("fontCs".into(), json!(f));
+    }
+    if let Some(f) = props.get("fontEa").and_then(Value::as_str).map(str::to_string) {
+        props.insert("fontEa".into(), json!(app.previews.font_stored(&f)));
+    }
+    props
+}
