@@ -125,6 +125,26 @@ pub(crate) fn reference_link(instr: &str) -> Option<String> {
     None
 }
 
+/// Return the single numeric literal from `{ = <lit> \* <fmt> }`, or `None` when
+/// the expression has more than one operand (e.g. `{ = 100 + 50 \* Hex }`).
+/// Prevents F9 and the display path from picking up only the first token of a
+/// multi-operand expression and discarding a Word-computed cached result.
+pub fn literal_after_eq(instr: &str) -> Option<&str> {
+    let rest = instr.trim_start().strip_prefix('=')?;
+    // Strip everything from the first switch (`\`) onwards; switches are not operands.
+    let expr = match rest.find('\\') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    let mut tokens = expr.split_whitespace();
+    let lit = tokens.next()?;
+    if tokens.next().is_some() {
+        None // multi-operand: operators or extra numbers present
+    } else {
+        Some(lit)
+    }
+}
+
 /// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal,
 /// ArabicDash, DollarText, Hex…). `{ PAGE \* ArabicDash }` shows "- 31 -".
 pub fn format_switch(instr: &str) -> Option<NumFormat> {
@@ -149,6 +169,9 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 v if v.eq_ignore_ascii_case("ChineseNum1") => NumFormat::ChineseCountingThousand,
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
                 v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
+                v if v.eq_ignore_ascii_case("BahtText") => NumFormat::BahtText,
+                v if v.eq_ignore_ascii_case("thaiNumbers") => NumFormat::ThaiNumbers,
+                v if v.eq_ignore_ascii_case("thaiCounting") => NumFormat::ThaiCounting,
                 _ => continue,
             };
             return Some(fmt);
@@ -311,11 +334,78 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         }
         // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
         "ASK" | "SET" => (String::new(), false),
+        // BAHTTEXT expr: the numeric expression (a literal for now) in Thai Baht words.
+        "BAHTTEXT" => {
+            // The second whitespace token after the field name is the numeric literal.
+            // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+            let val = instr.split_whitespace().nth(1).and_then(wordcraft_doc::section::parse_baht_token);
+            match val.and_then(wordcraft_doc::section::baht_text_f64) {
+                Some(s) => (s, false),
+                None => (result.to_string(), false),
+            }
+        }
         "STYLEREF" => match &ctx.styleref {
             Some((ix, at)) => (apply_case_switch(instr, ix.eval(instr, *at)), true),
             None => (result.to_string(), false),
         },
-        _ => (result.to_string(), false),
+        _ => {
+            // Apply a \* format switch when a numeric value is available.
+            //
+            // For BahtText the instruction literal takes precedence over the cached result
+            // because the cache may hold a stale "0" while the literal carries the true
+            // amount.  Resolution order for BahtText:
+            //   1. Field name itself  (`{ 12345 \* BahtText }` — number as field name).
+            //   2. First token after `=` (`{ = 12345 \* BahtText }` — expression field).
+            //   3. Stored result (fallback).
+            // For all other switches the stored result retains its existing first-place
+            // priority so that Word-computed values are preserved.
+            if let Some(fmt) = fmt {
+                let x = if fmt == NumFormat::BahtText {
+                    // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+                    let parse = wordcraft_doc::section::parse_baht_token;
+                    // For `= expr` fields the field name is "=" (or "=token" with no space);
+                    // do not parse it as the amount — use literal_after_eq instead so
+                    // multi-operand expressions (`{ = 100 + 50 \* BahtText }`) fall through
+                    // to the cached result.
+                    let from_name = if !instr.trim_start().starts_with('=') {
+                        parse(&name).filter(|v| v.is_finite())
+                    } else {
+                        None
+                    };
+                    from_name
+                        .or_else(|| literal_after_eq(instr).and_then(parse))
+                        .or_else(|| parse(result.trim()))
+                } else if fmt == NumFormat::Hex {
+                    // For \* Hex the stored result is already hex-formatted (e.g. "A", "1F").
+                    // Re-parsing it as decimal would give a wrong second conversion.
+                    // Use the field name or the literal instead; if neither is available,
+                    // preserve the stored result unchanged by returning None here.
+                    name.parse::<f64>().ok()
+                        .or_else(|| literal_after_eq(instr)?.parse().ok())
+                } else {
+                    result.trim().parse::<f64>().ok()
+                        .or_else(|| name.parse::<f64>().ok())
+                        .or_else(|| literal_after_eq(instr)?.parse().ok())
+                };
+                if let Some(x) = x {
+                    if fmt == NumFormat::BahtText {
+                        let text = wordcraft_doc::section::baht_text_f64(x)
+                            .unwrap_or_else(|| result.to_string());
+                        return (text, false);
+                    }
+                    // DollarText preserves cents from the f64 value; all other integer formats
+                    // go through field_number (which handles Hex, case switches, etc.).
+                    if fmt == NumFormat::DollarText {
+                        let text = dollar_text(x).unwrap_or_else(|| result.to_string());
+                        return (apply_case_switch(instr, text), false);
+                    }
+                    if x >= 0.0 && x <= f64::from(u32::MAX) && x.fract() == 0.0 {
+                        return (field_number(instr, fmt, x as u32), false);
+                    }
+                }
+            }
+            (result.to_string(), false)
+        }
     }
 }
 
@@ -514,5 +604,20 @@ mod tests {
         assert_eq!(field_text("PAGEREF \\h", "9", &ctx), ("9".into(), false));
         assert_eq!(field_text("PAGEREF", "9", &ctx), ("9".into(), false));
         assert_eq!(field_text("PAGEREF End_1", "9", &FieldCtx::default()), ("9".into(), false));
+    }
+
+    /// `\* thaiNumbers` and `\* thaiCounting` work on all field names (PAGE, NUMPAGES, SEQ, `=`, …).
+    #[test]
+    fn thai_number_format_switches() {
+        let ctx = FieldCtx { page: 22, pages: 100, ..Default::default() };
+        let text = |instr: &str| field_text(instr, "", &ctx).0;
+        assert_eq!(text(r"PAGE \* thaiNumbers"),      "๒๒");
+        assert_eq!(text(r"PAGE \* THAINUMBERS"),      "๒๒", "case-insensitive");
+        assert_eq!(text(r"NUMPAGES \* thaiCounting"), "หนึ่งร้อย");
+        assert_eq!(field_text(r"= 22 \* thaiNumbers",  "", &ctx).0, "๒๒");
+        assert_eq!(field_text(r"= 22 \* thaiCounting", "", &ctx).0, "ยี่สิบสอง");
+        assert_eq!(field_text(r"22 \* thaiNumbers",    "", &ctx).0, "๒๒");
+        assert_eq!(field_text(r"22 \* thaiCounting",   "", &ctx).0, "ยี่สิบสอง");
+        assert_eq!(field_text(r"SEQ x \* thaiNumbers", "5", &ctx).0, "๕");
     }
 }
