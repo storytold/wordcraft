@@ -607,6 +607,23 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
+                    // A shape with no picture: an invisible inline object that keeps its size on the line.
+                    Some(p) if p.empty => {
+                        pb.push('\u{FFFC}', CharProps::default());
+                        pb.objects.push(InlineObject::Shape {
+                            kind: Default::default(),
+                            w: p.w,
+                            h: p.h,
+                            fill: None,
+                            stroke: None,
+                            stroke_width: 0.0,
+                            float: Default::default(),
+                            story: None,
+                            freeform: None,
+                            effects: Default::default(),
+                            extra: Default::default(),
+                        });
+                    }
                     Some(p) => {
                         // Every anchor of a picture gets its own copy of the alt text; the
                         // copies are charged to the work budget (#3709).

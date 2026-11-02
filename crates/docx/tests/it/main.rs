@@ -12,6 +12,7 @@ mod default_size;
 mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;
+mod empty_inline_shape;
 mod fixtures;
 mod glossary;
 mod heading_levels;

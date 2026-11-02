@@ -80,9 +80,11 @@ impl Default for Pictures {
 }
 
 /// An inline picture: its media key, display size (points), crop fractions and alt text.
+/// `empty` marks a shape with no picture at all: an invisible object of its size (no key).
 #[derive(Clone, Debug)]
 pub(crate) struct Inline {
     pub(crate) key: String,
+    pub(crate) empty: bool,
     pub(crate) w: f32,
     pub(crate) h: f32,
     pub(crate) crop: [f32; 4],
@@ -121,9 +123,10 @@ impl Pictures {
             Found::Range(pic) => {
                 let bytes = data.get(pic.range.clone()).filter(|b| b.len() <= room)?.to_vec();
                 let key = self.insert(bytes, pic.ext, false)?;
-                Some(Inline { key, w: pic.w, h: pic.h, crop: [0.0; 4], alt: String::new() })
+                Some(Inline { key, empty: false, w: pic.w, h: pic.h, crop: [0.0; 4], alt: String::new() })
             }
-            Found::Shape { w, h, key, props } => Some(Inline { key: key?, w, h, crop: props.crop, alt: props.alt }),
+            Found::Shape { w, h, key, props } => Some(Inline { key: key?, empty: false, w, h, crop: props.crop, alt: props.alt }),
+            Found::Empty { w, h, props } => Some(Inline { key: String::new(), empty: true, w, h, crop: [0.0; 4], alt: props.alt }),
         }
     }
 
@@ -193,7 +196,20 @@ struct Located {
 /// `OfficeArtInlineSpContainer` (Word 97 and later) whose BLIP is decoded.
 enum Found {
     Range(Located),
-    Shape { w: f32, h: f32, key: Option<String>, props: officeart::Props },
+    Shape {
+        w: f32,
+        h: f32,
+        key: Option<String>,
+        props: officeart::Props,
+    },
+    /// A shape with no picture, not linked and not a horizontal line (some writers put one
+    /// after a text box anchored as a character): Word lays it out as an invisible object of
+    /// its size, so its line keeps the room.
+    Empty {
+        w: f32,
+        h: f32,
+        props: officeart::Props,
+    },
 }
 
 /// `PICF.mfpf.mm` values of pictures stored as a shape (`MM_SHAPE`) or a shape with a file
@@ -227,6 +243,13 @@ fn locate(data: &[u8], fc_pic: u32, pics: &mut Pictures) -> Option<Found> {
         let [cl, ct, cr, cb] = props.crop;
         let w = (dxa_goal / 20.0 * (1.0 - cl - cr).max(0.01) * scale(mx)).clamp(1.0, 1584.0);
         let h = (dya_goal / 20.0 * (1.0 - ct - cb).max(0.01) * scale(my)).clamp(1.0, 1584.0);
+        // No BLIP: a shape with no picture at all is kept at its size, drawn as nothing. A
+        // horizontal line, or a picture linked to a file ([MS-ODRAW] §2.3.23.3 `pibFlags`
+        // LinkToFile, or a file name), isn't.
+        if key.is_none() {
+            let linked = props.linked || mm == MM_SHAPEFILE;
+            return (!linked && !props.horiz_rule).then_some(Found::Empty { w, h, props });
+        }
         return Some(Found::Shape { w, h, key, props });
     }
     let w = (dxa_goal / 20.0 * scale(mx)).clamp(1.0, 1584.0);
@@ -246,8 +269,9 @@ fn inline_shape(buf: &[u8], data: &[u8], pics: &mut Pictures) -> Option<(Option<
     let recs = officeart::children(buf, &mut budget);
     let sp = recs.iter().find(|r| r.typ == officeart::rt::SP_CONTAINER).map(|r| officeart::shape(r.body, &mut budget))?;
     let fbses: Vec<&[u8]> = recs.iter().filter(|r| r.typ == officeart::rt::FBSE).map(|r| r.body).collect();
-    let fbse = sp.props.pib.and_then(|p| fbses.get((p as usize).checked_sub(1)?)).or(fbses.first())?;
-    let key = pics.decode_bse(fbse, data);
+    // No FBSE: a shape with no picture (the caller keeps it at its size, drawn as nothing).
+    let fbse = sp.props.pib.and_then(|p| fbses.get((p as usize).checked_sub(1)?)).or(fbses.first());
+    let key = fbse.and_then(|fbse| pics.decode_bse(fbse, data));
     Some((key, sp.props))
 }
 

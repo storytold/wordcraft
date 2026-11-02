@@ -10,7 +10,7 @@ use super::{StructSpec, grpprl, plc, read, struct_doc, structured_spec};
 use crate::officeart;
 
 /// One OfficeArt record: header (recVer, recInstance, recType, recLen) + body.
-fn rec(ver: u16, inst: u16, typ: u16, body: &[u8]) -> Vec<u8> {
+pub(super) fn rec(ver: u16, inst: u16, typ: u16, body: &[u8]) -> Vec<u8> {
     let vi = (inst << 4) | (ver & 0xF);
     [vi.to_le_bytes().as_slice(), &typ.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body].concat()
 }
@@ -20,12 +20,12 @@ fn container(typ: u16, kids: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// `OfficeArtFSP`: shape type, spid, flags.
-fn fsp(spt: u16, spid: u32, flags: u32) -> Vec<u8> {
+pub(super) fn fsp(spt: u16, spid: u32, flags: u32) -> Vec<u8> {
     rec(2, spt, 0xF00A, &[spid.to_le_bytes(), flags.to_le_bytes()].concat())
 }
 
 /// `OfficeArtFOPT` with simple properties and complex ones (data appended in order).
-fn fopt(simple: &[(u16, u32)], complex: &[(u16, Vec<u8>)]) -> Vec<u8> {
+pub(super) fn fopt(simple: &[(u16, u32)], complex: &[(u16, Vec<u8>)]) -> Vec<u8> {
     let mut body = Vec::new();
     for (pid, op) in simple {
         body.extend_from_slice(&pid.to_le_bytes());
@@ -42,7 +42,7 @@ fn fopt(simple: &[(u16, u32)], complex: &[(u16, Vec<u8>)]) -> Vec<u8> {
 }
 
 /// A shape container with the given records.
-fn sp(kids: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn sp(kids: &[Vec<u8>]) -> Vec<u8> {
     container(0xF004, kids)
 }
 
