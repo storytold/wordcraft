@@ -258,6 +258,7 @@ impl Session {
             read_aloud: _,
             prefs: _,
             system_region: _,
+            harper: _,
             keymap: _,
             ribbon: _,
             editing_lang: _,

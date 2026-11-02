@@ -13,6 +13,7 @@ mod bidi;
 mod documents;
 mod font_sizes;
 mod fonts;
+mod harper;
 mod ime_noop;
 mod revision_checks;
 mod typing;

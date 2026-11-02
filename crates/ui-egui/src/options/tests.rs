@@ -477,3 +477,30 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// Proofing › "Check English grammar with Harper" (#799): shown only where the app runs Harper,
+/// and it sets the saved option through `file.options`.
+#[test]
+fn harper_option_shows_where_harper_runs() {
+    let harness = |harper: bool| {
+        let mut a = app();
+        a.session.harper = harper;
+        a.run("file.options", json!({"pane": "proofing"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h
+    };
+    let mut h = harness(true);
+    assert!(h.state().session.prefs.harper_grammar);
+    h.get_by_label("Check English grammar with Harper").click();
+    h.run_steps(2);
+    assert!(!h.state().session.prefs.harper_grammar);
+    assert!(harness(false).query_by_label("Check English grammar with Harper").is_none(), "the web and headless sessions have no Harper");
+}

@@ -138,6 +138,7 @@ impl Session {
             read_aloud: _,
             prefs: _,
             system_region: _,
+            harper: _,
             keymap: _,
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.

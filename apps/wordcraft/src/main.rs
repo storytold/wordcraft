@@ -486,6 +486,8 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
+            // Harper's English grammar checks run on a background thread here (#799).
+            session.harper = wordcraft_proof::harper::BUILT;
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
