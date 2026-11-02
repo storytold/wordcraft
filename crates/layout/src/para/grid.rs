@@ -1,6 +1,6 @@
 use super::builder::Builder;
 use super::model::ClKind;
-use super::{Arc, CharProps, Document, WrapText};
+use super::{Arc, CharProps, Document, Squeeze, WrapText};
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -119,6 +119,35 @@ pub(super) fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec
         prev = Some((k, last, size));
     }
     out
+}
+
+/// Punctuation compression (`w:characterSpacingControl` other than `doNotCompress`), as WPS
+/// does it: nothing changes on a line that fits. On a line that would overflow, each compressible
+/// side of a full-width mark ([`crate::kinsoku::squeeze_side`]) may give up to a tenth of an em
+/// so the next unit fits ([`Squeeze`], used by the line breaker), and a closing mark ending a
+/// line takes no room for its blank half ([`crate::kinsoku::end_blank`]). Returns the squeeze
+/// room and the line-end room by cluster index; a mark is full-width when it is one character
+/// whose advance is at least 0.9 em, so a proportional (Latin) quote is left alone.
+pub(super) fn compress_punct(b: &Builder, text: &str) -> (Vec<Squeeze>, Vec<(usize, f32)>) {
+    let (mut squeeze, mut end) = (Vec::new(), Vec::new());
+    for (k, c) in b.clusters.iter().enumerate() {
+        if c.kind != ClKind::Text {
+            continue;
+        }
+        let mut chars = text.get(c.start..c.end).unwrap_or_default().chars();
+        let (Some(ch), None) = (chars.next(), chars.next()) else { continue };
+        let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
+        if !(size.is_finite() && size > 0.0 && c.adv >= 0.9 * size) {
+            continue;
+        }
+        if let Some(side) = crate::kinsoku::squeeze_side(ch) {
+            squeeze.push(Squeeze { k, room: (size / 10.0).min(40.0), left: side == crate::kinsoku::Side::Left });
+        }
+        if crate::kinsoku::end_blank(ch) {
+            end.push((k, (size / 2.0).min(200.0)));
+        }
+    }
+    (squeeze, end)
 }
 
 /// An area text wraps around.
