@@ -161,7 +161,6 @@ impl View {
             }
         };
         let over_page = |p: Option<Pos2>| p.is_some_and(|p| !on_floating(p, None) && canvas.is_some_and(|k| shown(k, p)));
-        let flip_wheel = !over_page(self.pointer);
         for event in &mut input.events {
             match event {
                 Event::PointerMoved(p) => {
@@ -178,7 +177,8 @@ impl View {
                 Event::Touch { pos, .. } => *pos = apply(mapping_at(*pos), *pos),
                 Event::PointerGone => self.pointer = None,
                 Event::MouseMoved(delta) => delta.x = -delta.x,
-                Event::MouseWheel { delta, .. } if flip_wheel => delta.x = -delta.x,
+                // Where the pointer is when it turns, after the moves before it in this frame.
+                Event::MouseWheel { delta, .. } if !over_page(self.pointer) => delta.x = -delta.x,
                 _ => {}
             }
         }
@@ -604,6 +604,31 @@ mod tests {
         let mut plain = RawInput { events: vec![Event::PointerMoved(pos2(90.0, 70.0))], ..Default::default() };
         m.input(&mut plain);
         assert!(matches!(plain.events[0], Event::PointerMoved(p) if p == pos2(90.0, 70.0)), "off: untouched");
+    }
+
+    /// Sideways scrolling is flipped by where the pointer is when the wheel turns, also when the
+    /// pointer crossed onto or off the page earlier in the same frame.
+    #[test]
+    fn sideways_scrolling_follows_the_pointer_across_the_page_edge_within_a_frame() {
+        let canvas = Rect::from_min_max(pos2(0.0, 0.0), pos2(60.0, 50.0));
+        let mut m = view(Some(canvas));
+        let wheel = Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(3.0, 1.0),
+            modifiers: Default::default(),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        let screen = Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 80.0)));
+        let mut off = RawInput { screen_rect: screen, events: vec![Event::PointerMoved(pos2(90.0, 70.0))], ..Default::default() };
+        m.input(&mut off);
+        // The page is drawn at 40–100.
+        let mut onto = RawInput { events: vec![Event::PointerMoved(pos2(45.0, 10.0)), wheel.clone()], ..Default::default() };
+        m.input(&mut onto);
+        assert!(matches!(onto.events[1], Event::MouseWheel { delta, .. } if delta == egui::vec2(3.0, 1.0)), "moved onto the page: as it comes");
+        let mut away = RawInput { events: vec![Event::PointerMoved(pos2(90.0, 70.0)), wheel], ..Default::default() };
+        m.input(&mut away);
+        assert!(matches!(away.events[1], Event::MouseWheel { delta, .. } if delta == egui::vec2(-3.0, 1.0)), "moved off it: flipped");
     }
 
     /// A dialog over the page is flipped like the rest of the interface: its shapes (the last of
