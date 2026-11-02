@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Math update:** 2026-11-02 · #2838 source port onto 242e850a preserves corner kerning and radical edge controls. Edge inspection shares the layout budget. Native widths, exact font revisions and ARM acceptance remain unverified.
+> **Math update:** 2026-11-02 · #2838 preserves corner kerning and radical edge controls. Edge inspection shares the layout budget. Native widths, exact font revisions and ARM acceptance remain unverified.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
@@ -694,7 +694,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | minor | Port #2838 into current math modules; retain synthetic controls and bound repeated fence inspection. No new native comparison or runtime qualification. |
+| 2026-11-02 | minor | Bound repeated fence inspection with the shared layout budget (#2838). No new native comparison. |
 | 2026-10-18 | trivial | Bound math corner kerning coverage and pack bar fractions inside radicals to their rule edges. Script glyph alternates remain incomplete. |
 | 2026-10-25 | minor | Radical edge packing follows only exposed matrix, operator, function, script and linear-fraction child edges. Matrix alignment retains interior margins; delimiter elements pass packing only to the first leading and last trailing edge. Existing nested fraction, bracket and barless controls remain. Synthetic geometry regressions; no new native comparison. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
