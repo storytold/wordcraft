@@ -3612,6 +3612,39 @@ fn ctrl_arrows_run_through_a_bookmark_inside_a_word() {
     assert_eq!(paras(&s)[0].0, "\u{FFFC}world\u{FFFC}", "the bookmark's start stays");
 }
 
+/// Ctrl+Left stops where Ctrl+Right does, as in Word (observed with `Selection.MoveLeft` by word
+/// and `DeleteBackWord`): a hyphen and a full stop are words of their own both ways, so
+/// Ctrl+Backspace after `fox.` takes the full stop alone; a link that starts inside a word
+/// doesn't split it (#3173).
+#[test]
+fn ctrl_left_stops_where_ctrl_right_does() {
+    let mut s = typed("");
+    run(&mut s, "text.insert", json!({"text": "well-known fox. foo"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.com", "text": "bar"}));
+    run(&mut s, "text.insert", json!({"text": "baz end"}));
+    assert_eq!(paras(&s)[0].0, "well-known fox. foobarbaz end");
+    run(&mut s, "caret.docStart", json!({}));
+    let mut right = vec![s.sel.focus.off];
+    for _ in 0..7 {
+        run(&mut s, "caret.wordRight", json!({}));
+        right.push(s.sel.focus.off);
+    }
+    assert_eq!(right, [0, 4, 5, 11, 14, 16, 26, 29], "Ctrl+Right: `foobarbaz` is one word");
+    let mut left = vec![s.sel.focus.off];
+    for _ in 0..7 {
+        run(&mut s, "caret.wordLeft", json!({}));
+        left.push(s.sel.focus.off);
+    }
+    right.reverse();
+    assert_eq!(left, right, "Ctrl+Left stops at the same places");
+    let mut s = typed("");
+    run(&mut s, "text.insert", json!({"text": "The fox."}));
+    run(&mut s, "text.deleteWordBack", json!({}));
+    assert_eq!(paras(&s)[0].0, "The fox", "the full stop alone");
+    run(&mut s, "text.deleteWordBack", json!({}));
+    assert_eq!(paras(&s)[0].0, "The ");
+}
+
 #[test]
 fn backspace_after_a_floating_shape_anchor_joins_paragraphs_and_keeps_the_shape() {
     let mut s = typed("Line one\nLine two");

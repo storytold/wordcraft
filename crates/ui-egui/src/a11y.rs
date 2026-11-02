@@ -733,6 +733,61 @@ mod tests {
         assert!(wrapped.iter().all(|n| n.word_starts().first() == Some(&0)), "a line's first word");
     }
 
+    /// #3173 review: a screen reader's words are Word's, as Ctrl+arrows move: a hyphen is a word
+    /// of its own, an apostrophe stays inside its word, a no-break space ends one, a word starts
+    /// after a line break (Shift+Enter), a link that starts inside a word doesn't split it, and a
+    /// field's result is a word.
+    #[test]
+    fn screen_readers_get_the_words_ctrl_arrows_move_by() {
+        // The text goes in before this paragraph, which ends with a field that shows "Ada".
+        let mut doc = Document::from_text("By  today");
+        let field =
+            InlineObject::Field { instr: "AUTHOR".into(), result: "Ada".into(), locked: false, dirty: false, code: false, form: String::new() };
+        doc.para_mut(StoryRef::Body, &Path::top(0)).expect("a paragraph").insert_object(3, field, &Default::default()).expect("a field");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        for (cmd, p) in [
+            ("text.insert", json!({"text": "well-known word"})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "It\u{2019}s l\u{2019}amico"})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "ten\u{a0}kg here"})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "abc"})),
+            ("text.lineBreak", json!({})),
+            ("text.insert", json!({"text": "def ghi"})),
+            ("text.newParagraph", json!({})),
+            ("text.insert", json!({"text": "foo"})),
+            ("insert.link", json!({"url": "https://example.com", "text": "bar"})),
+            ("text.insert", json!({"text": "baz qux"})),
+            ("text.newParagraph", json!({})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let update = described(&mut app, &egui::Context::default());
+        let runs: Vec<&Node> = update.nodes.iter().map(|(_, n)| n).filter(|n| n.role() == Role::TextRun).collect();
+        let values = || runs.iter().map(|n| n.value()).collect::<Vec<_>>();
+        let starts = |text: &str| {
+            runs.iter()
+                .find(|n| n.value() == Some(text))
+                .map(|n| n.word_starts().to_vec())
+                .unwrap_or_else(|| panic!("no run {text:?} in {:?}", values()))
+        };
+        // Character indices in each run.
+        for (run, want) in [
+            ("well-known word\n", &[0, 4, 5, 11][..]),
+            ("It\u{2019}s l\u{2019}amico\n", &[0, 5]),
+            ("ten\u{a0}kg here\n", &[0, 4, 7]),
+            ("abc\n", &[0, 3]),
+            ("def ghi\n", &[0, 4]),
+            ("foo", &[0]),
+            ("bar", &[]),
+            ("baz qux\n", &[4]),
+            ("By Ada today\n", &[0, 3, 5]),
+        ] {
+            assert_eq!(starts(run), want, "word starts in {run:?}");
+        }
+    }
+
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
     /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
     /// text runs and the caret at its paragraph and character.

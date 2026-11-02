@@ -510,28 +510,24 @@ impl Paragraph {
             _ => self.prev_boundary(off),
         }
     }
-    /// Start of the word at or before `off` (Ctrl+Left). A word runs through the markers in it
-    /// ([`InlineObject::joins_words`]).
+    /// Start of the word at or before `off` (Ctrl+Left): the last place before `off` where
+    /// Ctrl+Right stops ([`Self::word_stops`]), so both keys, like Word's, stop at the same places
+    /// (a hyphen, punctuation and a line break are words of their own both ways). A word runs
+    /// through the markers in it ([`InlineObject::joins_words`]); those just before a word stay
+    /// before the stop, out of what Ctrl+Backspace removes.
     pub fn word_start(&self, off: usize) -> usize {
         let off = self.clamp(off);
         let Some(before) = self.text.get(..off) else { return 0 };
-        let mut idx = off;
-        let mut seen_word = false;
-        for (i, c) in before.char_indices().rev() {
-            if self.joins_words_at(i, c) {
-                continue;
-            }
-            let w = crate::bidi::is_word_char(c);
-            if w {
-                seen_word = true;
-                idx = i;
-            } else if seen_word {
-                break;
-            } else {
-                idx = i;
-            }
-        }
-        idx
+        // The first character after a stop's leading markers.
+        let past_markers = |s: usize| {
+            self.text.get(s..).and_then(|t| t.char_indices().find(|&(i, c)| !self.joins_words_at(s + i, c))).map_or(self.text.len(), |(i, _)| s + i)
+        };
+        let last_before = |from: usize| self.word_stops(from..off).into_iter().rev().map(past_markers).find(|&s| s < off);
+        // Ctrl+Right stops at the first word after a space, so a walk from the last space before
+        // the word (or punctuation) that ends before `off` meets the stop wanted.
+        let unspaced = before.trim_end_matches([' ', NBSP]).len();
+        let from = before.get(..unspaced).and_then(|t| t.rfind([' ', NBSP])).unwrap_or(0);
+        last_before(from).or_else(|| if from > 0 { last_before(0) } else { None }).unwrap_or(0)
     }
     /// End of the word after `off`, including trailing spaces (Ctrl+Right, like Word). A word
     /// runs through the markers in it ([`InlineObject::joins_words`]); the ones just before the
@@ -558,7 +554,7 @@ impl Paragraph {
             let space = c == ' ' || c == NBSP;
             let w = crate::bidi::is_word_char(c);
             let Some(first_word) = first_word else {
-                first_word = Some(w && c != '\'');
+                first_word = Some(w && c != '\'' && c != '\u{2019}');
                 in_space = space;
                 continue;
             };
@@ -927,6 +923,42 @@ mod tests {
         p.insert_object(7, InlineObject::BookmarkEnd { name: "_Toc1".into() }, &CharProps::default()).unwrap();
         p.insert_object(0, InlineObject::BookmarkStart { name: "_Toc1".into() }, &CharProps::default()).unwrap();
         assert_eq!(p.word_stops(0..p.len()), [0]);
+    }
+
+    /// Ctrl+Right and Ctrl+Left stop at the same places, Word's (observed with
+    /// `Selection.MoveRight` and `MoveLeft` by word): a hyphen, punctuation and a line break are
+    /// words of their own; an apostrophe, straight or the `’` smart quotes type, stays inside its
+    /// word; a no-break space ends a word as a space does; a field's result is a word.
+    #[test]
+    fn ctrl_left_and_ctrl_right_stop_at_the_same_words_as_in_word() {
+        let field =
+            InlineObject::Field { instr: "AUTHOR".into(), result: "Ada".into(), locked: false, dirty: false, code: false, form: String::new() };
+        let mut by_ada = Paragraph::with_text("By  today", CharProps::default());
+        by_ada.insert_object(3, field, &CharProps::default()).unwrap();
+        for (p, stops) in [
+            (Paragraph::with_text("well-known word", CharProps::default()), vec![0, 4, 5, 11]),
+            (Paragraph::with_text("It\u{2019}s l\u{2019}amico, dell'anno", CharProps::default()), vec![0, 7, 16, 18]),
+            (Paragraph::with_text("say \u{2018}hi\u{2019} now", CharProps::default()), vec![0, 4, 7, 13]),
+            (Paragraph::with_text("The fox. Next", CharProps::default()), vec![0, 4, 7, 9]),
+            (Paragraph::with_text("ten\u{a0}kg here", CharProps::default()), vec![0, 5, 8]),
+            (Paragraph::with_text("abc\ndef ghi", CharProps::default()), vec![0, 3, 4, 8]),
+            (by_ada, vec![0, 3, 7]),
+        ] {
+            let right: Vec<usize> = std::iter::successors(Some(0), |&o| (o < p.len()).then(|| p.word_end(o))).collect();
+            let left: Vec<usize> = std::iter::successors(Some(p.len()), |&o| (o > 0).then(|| p.word_start(o))).collect();
+            let mut want = stops.clone();
+            want.push(p.len());
+            assert_eq!(right, want, "Ctrl+Right in {:?}", p.text);
+            want.reverse();
+            assert_eq!(left, want, "Ctrl+Left in {:?}", p.text);
+            assert_eq!(p.word_stops(0..p.len()), stops, "the words a screen reader gets in {:?}", p.text);
+        }
+        // A heading inside a table of contents' bookmark: Ctrl+Left goes to its first letter, then
+        // on; it doesn't stay there.
+        let mut p = Paragraph::with_text("Heading", CharProps::default());
+        p.insert_object(7, InlineObject::BookmarkEnd { name: "_Toc1".into() }, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::BookmarkStart { name: "_Toc1".into() }, &CharProps::default()).unwrap();
+        assert_eq!((p.word_start(p.len()), p.word_start(3)), (3, 0));
     }
 
     proptest::proptest! {
