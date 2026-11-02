@@ -477,3 +477,36 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// File › Options › Advanced › OpenDocument files: the presets are `file.options` `odf`, and
+/// Custom starts from the choices in use and shows each case.
+#[test]
+fn advanced_opendocument_presets_and_custom_cases() {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    let mut a = app();
+    a.run("file.options", json!({"pane": "advanced"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Tab stops are measured from the paragraph's indent").is_none(), "a preset shows no cases");
+    h.get_by_label("LibreOffice").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::libreoffice());
+    h.get_by_label("Custom").click();
+    h.run_steps(4);
+    let odf = &h.state().session.prefs.odf;
+    assert_eq!(odf.preset, OdfPreset::Custom);
+    assert_eq!(OdfProfile { preset: OdfPreset::LibreOffice, ..odf.effective() }, OdfProfile::libreoffice(), "starting from LibreOffice's");
+    h.get_by_label("Tab stops are measured from the paragraph's indent").click();
+    h.run_steps(4);
+    assert!(!h.state().session.prefs.odf.effective().tabs_from_indent, "a case turned off");
+    h.get_by_label("WordCraft").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::wordcraft());
+}

@@ -40,8 +40,9 @@ struct Breaker<'e> {
     rtl_para: bool,
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
-    /// A line of only pictures is as tall as they are (LibreOffice's layout, ODT documents).
-    odf_layout: bool,
+    /// A line of only pictures is as tall as they are (an ODF document opened with that choice,
+    /// [`wordcraft_doc::odf_profile::OdfProfile::picture_lines_fit_pictures`]).
+    picture_lines_fit: bool,
     bidi: bool,
     est_h: f32,
     table_h: f32,
@@ -195,7 +196,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
-            odf_layout: settings.odf_layout,
+            picture_lines_fit: settings.odf.is_some_and(|o| o.picture_lines_fit_pictures),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
@@ -409,8 +410,8 @@ impl<'e> Breaker<'e> {
         let rp = &self.rp;
         let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let mut any = false;
-        // Only pictures on the line, and the document lays such lines out as LibreOffice does.
-        let mut only_pictures = self.odf_layout;
+        // Only pictures on the line, and the document lays such lines out to fit them.
+        let mut only_pictures = self.picture_lines_fit;
         let mut pictures = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {

@@ -1,6 +1,7 @@
 //! File format dispatch by extension. Format crates plug in here.
 
 use wordcraft_doc::Document;
+use wordcraft_doc::odf_profile::OdfProfile;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
@@ -139,13 +140,13 @@ pub fn can_encrypt(name: &str) -> bool {
 /// Open a password-protected ODT package (ODF 1.3 Part 2 §3.4). The errors for a missing or
 /// wrong password are the `.docx` reader's texts, so [`needs_password`] and [`wrong_password`]
 /// recognise them.
-fn open_encrypted_odt(bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<Document, String> {
+fn open_encrypted_odt(bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps, odf: &OdfProfile) -> Result<Document, String> {
     let pw = password.ok_or_else(|| format!("ODT: {}", wordcraft_docx::PASSWORD_REQUIRED))?;
     let plain = wordcraft_formats::odt::decrypt(bytes, pw).map_err(|e| match e {
         wordcraft_formats::odt::CryptError::WrongPassword => format!("ODT: {}", wordcraft_docx::WRONG_PASSWORD),
         other => other.to_string(),
     })?;
-    match crate::io_ext::open("odt", &plain, page) {
+    match crate::io_ext::open("odt", &plain, page, odf) {
         Some(r) => r,
         None => Err("ODT: no reader".into()),
     }
@@ -185,7 +186,7 @@ fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bo
 /// whether the file was encrypted. Without the password needed the error satisfies
 /// [`needs_password`]; with a wrong one, [`wrong_password`].
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Document, bool), String> {
-    open_bytes_in(name, bytes, password, &wordcraft_geom::Region::default())
+    open_bytes_in(name, bytes, password, &wordcraft_geom::Region::default(), &OdfProfile::default())
 }
 
 /// The page a file that gives no page size (plain text, Markdown, HTML) opens on: `region`'s
@@ -196,10 +197,17 @@ pub fn region_page(region: &wordcraft_geom::Region) -> wordcraft_doc::SectionPro
 }
 
 /// [`open_bytes_with`] in `region`: a file that gives no page size opens on the region's paper
-/// (see [`region_page`]); a document with its own page size keeps it.
-pub fn open_bytes_in(name: &str, bytes: &[u8], password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
+/// (see [`region_page`]); a document with its own page size keeps it. An OpenDocument file fills
+/// in what its standard leaves open as `odf` says (the user's choice, [`crate::Prefs::odf`]).
+pub fn open_bytes_in(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    region: &wordcraft_geom::Region,
+    odf: &OdfProfile,
+) -> Result<(Document, bool), String> {
     let page = region_page(region);
-    let (doc, encrypted) = read_bytes(name, bytes, password, &page)?;
+    let (doc, encrypted) = read_bytes(name, bytes, password, &page, odf)?;
     load_embedded_fonts(&doc);
     Ok((doc, encrypted))
 }
@@ -217,7 +225,13 @@ fn load_embedded_fonts(doc: &Document) {
     }
 }
 
-fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<(Document, bool), String> {
+fn read_bytes(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    page: &wordcraft_doc::SectionProps,
+    odf: &OdfProfile,
+) -> Result<(Document, bool), String> {
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
         let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
@@ -225,7 +239,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
         return Ok((doc, true));
     }
     if (ext == "odt" || ext == "ott") && wordcraft_formats::odt::is_encrypted(bytes) {
-        let mut doc = open_encrypted_odt(bytes, password, page)?;
+        let mut doc = open_encrypted_odt(bytes, password, page, odf)?;
         opened(&mut doc);
         return Ok((doc, true));
     }
@@ -245,7 +259,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
             d.normalize_runs();
             d
         }
-        other => match crate::io_ext::open(other, bytes, page) {
+        other => match crate::io_ext::open(other, bytes, page, odf) {
             Some(r) => r?,
             None => return open_by_content(name, other, bytes, password, page),
         },
@@ -381,7 +395,7 @@ fn open_by_content(
     } else if is_word_xml(bytes) {
         (wordcraft_docx::read_xml(bytes).map_err(|e| format!("{name}: {e}"))?, false)
     } else if matches!(ext, "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") && looks_like_web_page(bytes) {
-        let opened = crate::io_ext::open("html", bytes, page).unwrap_or_else(|| Err(format!("{name}: can't open web pages")));
+        let opened = crate::io_ext::open("html", bytes, page, &OdfProfile::default()).unwrap_or_else(|| Err(format!("{name}: can't open web pages")));
         (opened?, false)
     } else if wordcraft_formats::txt::is_text(bytes) {
         (wordcraft_formats::txt::import_on(bytes, page), false)
@@ -434,12 +448,17 @@ pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
 /// [`open_path`] for a file that may be password-protected (see [`open_bytes_with`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<(Document, bool), String> {
-    open_path_in(path, password, &wordcraft_geom::Region::default())
+    open_path_in(path, password, &wordcraft_geom::Region::default(), &OdfProfile::default())
 }
 
-/// [`open_path_with`] in `region` (see [`open_bytes_in`]).
+/// [`open_path_with`] in `region`, OpenDocument files as `odf` says (see [`open_bytes_in`]).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
+pub fn open_path_in(
+    path: &std::path::Path,
+    password: Option<&str>,
+    region: &wordcraft_geom::Region,
+    odf: &OdfProfile,
+) -> Result<(Document, bool), String> {
     let bytes = read_document(path)?;
     let name = path.to_string_lossy();
     if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
@@ -451,7 +470,7 @@ pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wor
         opened(&mut doc);
         return Ok((doc, false));
     }
-    open_bytes_in(&name, &bytes, password, region)
+    open_bytes_in(&name, &bytes, password, region, odf)
 }
 
 /// Largest document file opened by path.
@@ -788,7 +807,12 @@ pub fn open_path_with(path: &std::path::Path, _password: Option<&str>) -> Result
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn open_path_in(path: &std::path::Path, password: Option<&str>, _region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
+pub fn open_path_in(
+    path: &std::path::Path,
+    password: Option<&str>,
+    _region: &wordcraft_geom::Region,
+    _odf: &OdfProfile,
+) -> Result<(Document, bool), String> {
     open_path_with(path, password)
 }
 

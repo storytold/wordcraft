@@ -11639,3 +11639,45 @@ fn emphasis_marks_are_set_and_drawn() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).emphasis, Some(EmphasisMark::None));
     assert!(s.run("format.emphasisMark", &json!({"mark": "sparkles"})).is_err());
 }
+
+/// File › Options › Advanced › OpenDocument files: a preset, or one case's value (which makes the
+/// profile custom); junk is refused; files opened afterwards follow it.
+#[test]
+fn odf_interpretation_is_an_option_files_follow() {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    let mut s = s();
+    assert_eq!(s.prefs.odf, OdfProfile::wordcraft(), "WordCraft's own is the default");
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "LibreOffice"}}));
+    assert_eq!(r["odf"]["preset"], json!("libreoffice"));
+    assert_eq!(s.prefs.odf.effective(), OdfProfile::libreoffice());
+    run(&mut s, "file.options", json!({"odf": {"columnGap": 18.0}}));
+    assert_eq!((s.prefs.odf.preset, s.prefs.odf.effective().column_gap), (OdfPreset::Custom, 18.0));
+    for junk in [
+        json!({"odf": {"nope": 1}}),
+        json!({"odf": {"columnGap": -1}}),
+        json!({"odf": {"hairline": 1e9}}),
+        json!({"odf": 3}),
+        json!({"odf": {"preset": "google"}}),
+    ] {
+        assert!(s.run("file.options", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(s.prefs.odf.effective().column_gap, 18.0, "a refused change leaves it");
+
+    // A tab stop in an indented paragraph of a file that doesn't say how tabs are measured.
+    let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in"><style:tab-stops><style:tab-stop style:position="1in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a</text:p></office:text></office:body></office:document-content>"#;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let bytes = z.finish().unwrap().into_inner();
+    let tab = |s: &Session| {
+        let (d, _) = crate::io::open_bytes_in("t.odt", &bytes, None, &s.region(), &s.prefs.odf).unwrap();
+        d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default().first().map(|t| t.pos)
+    };
+    run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
+    assert_eq!(tab(&s), Some(72.0), "WordCraft: from the margin");
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
+    assert_eq!(tab(&s), Some(108.0), "LibreOffice: from the indent");
+}

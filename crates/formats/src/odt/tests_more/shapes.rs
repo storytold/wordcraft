@@ -56,7 +56,8 @@ fn open() -> Document {
 #[test]
 fn shapes_open_with_their_kind_size_look_and_text() {
     let d = open();
-    let blue = Some((Rgb(0x34, 0x65, 0xa4), 0.5));
+    // A line width no style states is the profile's (the standard gives none): WordCraft's 0.25 pt.
+    let blue = Some((Rgb(0x34, 0x65, 0xa4), 0.25));
     assert_eq!(
         shapes(&d),
         [
@@ -64,7 +65,15 @@ fn shapes_open_with_their_kind_size_look_and_text() {
             // No line stated: the default graphic style's, a hairline.
             (ShapeKind::Ellipse, (36.0, 36.0), Some(Rgb(0, 170, 0)), blue, false, false, String::new()),
             // No fill stated: a solid fill in the style's fill colour.
-            (ShapeKind::RoundedRectangle, (144.0, 72.0), Some(Rgb(0x99, 0xcc, 0xff)), Some((Rgb(0, 0, 0x80), 0.5)), true, false, "Shape text".into()),
+            (
+                ShapeKind::RoundedRectangle,
+                (144.0, 72.0),
+                Some(Rgb(0x99, 0xcc, 0xff)),
+                Some((Rgb(0, 0, 0x80), 0.25)),
+                true,
+                false,
+                "Shape text".into()
+            ),
             // From (3in, 0) to (1in, 1in): 2in × 1in, rising from its bottom left.
             (ShapeKind::Line, (144.0, 72.0), None, Some((Rgb(0, 0, 0), 2.0)), true, true, String::new()),
             (ShapeKind::Heart, (72.0, 72.0), None, None, true, false, String::new()),

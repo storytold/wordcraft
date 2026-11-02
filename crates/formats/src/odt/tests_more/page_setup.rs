@@ -143,9 +143,10 @@ fn a_page_layout_without_a_size_is_the_default_pages_size() {
 }
 
 #[test]
-fn a_document_without_a_page_layout_has_libreoffices_default_page() {
-    // No styles.xml at all: the region's paper with LibreOffice's 2 cm margins, not Word's
-    // 1 inch ones. ODT documents lay out a line of only pictures as LibreOffice does.
+fn a_document_without_a_page_layout_has_the_default_paper_and_xsl_margins() {
+    // No styles.xml at all: the region's paper (the standard leaves the size to the
+    // application), and XSL's margins, 0: the standard's (LibreOffice's own pages have 2 cm, but
+    // always say so). It is laid out as an ODF document.
     let content = format!(
         "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
         crate::odt::tests::NS_T
@@ -154,15 +155,14 @@ fn a_document_without_a_page_layout_has_libreoffices_default_page() {
     let d = crate::import_on("odt", &crate::odt::tests::package(&content, None), &a4).unwrap().unwrap();
     let s = &d.last_section;
     assert_eq!((s.page_w, s.page_h), (595.3, 841.9));
-    let cm2 = 2.0 * 72.0 / 2.54;
-    assert!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right].iter().all(|m| (m - cm2).abs() < 0.01), "{s:?}");
-    assert!(d.settings.odf_layout);
+    assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [0.0; 4], "{s:?}");
+    assert!(d.settings.odf.is_some());
 }
 
 #[test]
-fn a_page_layout_stating_nothing_has_libreoffices_margins() {
-    // LibreOffice's CV template: a page layout with no properties at all. LibreOffice draws it
-    // on its default paper with 2 cm margins.
+fn a_page_layout_stating_nothing_has_xsl_margins() {
+    // LibreOffice's CV template: a page layout with no properties at all. Its margins are XSL's
+    // initial value, 0 (the standard's, whatever the profile; LibreOffice draws 2 cm).
     let ns = crate::odt::tests::NS_T;
     let styles = format!(
         r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="Mpm1"><style:header-style/><style:footer-style/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="Mpm1"/></office:master-styles></office:document-styles>"#
@@ -171,12 +171,11 @@ fn a_page_layout_stating_nothing_has_libreoffices_margins() {
         format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
     let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&styles))).unwrap().unwrap();
     let s = &d.last_section;
-    let cm2 = 2.0 * 72.0 / 2.54;
-    assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [cm2; 4]);
+    assert_eq!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right], [0.0; 4]);
     // One margin stated: that one is the file's.
     let one = styles.replace("<style:header-style/>", r#"<style:page-layout-properties fo:margin-left="1in"/><style:header-style/>"#);
     let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&one))).unwrap().unwrap();
-    assert_eq!((d.last_section.margin_left, d.last_section.margin_top), (72.0, cm2));
+    assert_eq!((d.last_section.margin_left, d.last_section.margin_top), (72.0, 0.0));
 }
 
 #[test]

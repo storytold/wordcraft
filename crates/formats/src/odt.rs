@@ -62,11 +62,11 @@ mod xml;
 
 use body::Body;
 pub use crypt::{CryptError, decrypt, encrypt, is_encrypted};
-pub use flat::{export_flat, import_flat};
+pub use flat::{export_flat, import_flat, import_flat_with};
 use import::Pages;
 #[cfg(test)]
 use import::{Pictures, apply_page_layout, read_entry, read_meta};
-pub use import::{import, import_on, parse};
+pub use import::{import, import_on, import_with, parse};
 #[cfg(test)]
 use limits::MAX_XML_DEPTH;
 pub use package::{TEMPLATE_MIME, TEXT_MIME, export, export_template};

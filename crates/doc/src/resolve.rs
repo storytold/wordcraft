@@ -183,7 +183,7 @@ pub struct ResolvedPara {
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
     /// Padding on the sides without a line (top, left, bottom, right), points: ODF's, which
-    /// LibreOffice's layout keeps (`Settings::odf_layout`); Word drops it.
+    /// ODF's (XSL's box model) keeps for documents opened from ODF (`Settings::odf`); Word drops it.
     pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,

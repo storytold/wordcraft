@@ -341,20 +341,24 @@ fn styles_xml(
         // The band's height takes in its spacing (see the reader), which content taller than
         // the band keeps below it.
         let gap = |g: f32, h: f32| if g.is_finite() { g.clamp(0.0, h) } else { 0.0 };
+        // Spacing kept below a taller header says so, as the standard leaves the default open.
+        let keeps = |g: f32| if g.is_finite() && g > 0.0 { " style:dynamic-spacing=\"false\"" } else { "" };
         let header = if pp.header {
             format!(
-                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"{}\"/></style:header-style>",
+                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"{}\"{}/></style:header-style>",
                 pt(header_h),
-                pt(gap(sec.header_gap, header_h))
+                pt(gap(sec.header_gap, header_h)),
+                keeps(sec.header_gap)
             )
         } else {
             String::new()
         };
         let footer = if pp.footer {
             format!(
-                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"{}\"/></style:footer-style>",
+                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"{}\"{}/></style:footer-style>",
                 pt(footer_h),
-                pt(gap(sec.footer_gap, footer_h))
+                pt(gap(sec.footer_gap, footer_h)),
+                keeps(sec.footer_gap)
             )
         } else {
             String::new()

@@ -68,6 +68,10 @@ Paper: documents created here, and HTML, Markdown and text files (which give no 
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
 LC_ALL / LC_PAPER / LANG or the platform. Set WORDCRAFT_REGION=en-US (or another tag) for the
 same output on every machine.
+
+OpenDocument (.odt, .ott, .fodt) files fill in what their standard leaves to the application with
+WordCraft's own choices; set WORDCRAFT_ODF=libreoffice for LibreOffice's (see
+docs/odf-interpretation.md).
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
@@ -89,7 +93,7 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
+    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region, &odf_profile()?)?;
     let mut s = session(doc);
     s.path = Some(path.into());
     if encrypted {
@@ -170,6 +174,19 @@ fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
     s.system_region = system_region();
     s
+}
+
+/// How OpenDocument files fill in what their standard leaves open: `WORDCRAFT_ODF` names a preset
+/// (`wordcraft`, the default, or `libreoffice`).
+fn odf_profile() -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    match std::env::var("WORDCRAFT_ODF").ok().filter(|v| !v.trim().is_empty()) {
+        None => Ok(OdfProfile::default()),
+        Some(v) => match OdfPreset::from_id(&v).filter(|p| *p != OdfPreset::Custom) {
+            Some(p) => Ok(OdfProfile::of(p)),
+            None => Err(format!("WORDCRAFT_ODF={v}: one of wordcraft, libreoffice")),
+        },
+    }
 }
 
 /// The system region, read as the app reads it (locale variables, else the platform's locale).

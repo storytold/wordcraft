@@ -4987,7 +4987,7 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
     // Word keeps the font's ascent and descent around it.
     let height = |fit: bool, h: f32| {
         let mut d = Document::from_text("");
-        d.settings.odf_layout = fit;
+        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: fit });
         if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
             p.props.space_after = Some(0.0);
             p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
@@ -5004,7 +5004,7 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
     assert!(height(false, 40.0) > 42.0);
     // Text on the line: its font counts either way.
     let mut d = Document::from_text("Text");
-    d.settings.odf_layout = true;
+    d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: true });
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
         p.insert_object(0, picture(20.0, 3.5, Default::default()), &Default::default()).unwrap();
     }
@@ -5018,7 +5018,7 @@ fn padding_without_a_border_takes_room_in_odt_documents() {
     // LibreOffice keeps a paragraph's padding on a side without a line; Word drops it.
     let place = |odf: bool| {
         let mut d = Document::from_text("Above\nPadded\nBelow");
-        d.settings.odf_layout = odf;
+        d.settings.odf = odf.then_some(wordcraft_doc::odf_profile::OdfLayout::default());
         for b in d.body.iter_mut() {
             if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
                 (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));

@@ -905,7 +905,7 @@ impl Body<'_> {
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None, None, None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
-                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size()));
+                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size(), &self.styles.defs.profile));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
@@ -976,7 +976,7 @@ impl Body<'_> {
                 control.form_size = Some([w, h]);
                 // Where it stands on the line (§20.387), as an in-line frame does.
                 let g = self.styles.shape_graphic(get(a, "draw:style-name"));
-                let raise = super::frames::place(a, w, h, &g, self.text_size()).y;
+                let raise = super::frames::place(a, w, h, &g, self.text_size(), &self.styles.defs.profile).y;
                 control.form_raise = (raise.is_finite() && raise != 0.0).then_some(raise);
             }
             let fmt = self.cur_fmt();

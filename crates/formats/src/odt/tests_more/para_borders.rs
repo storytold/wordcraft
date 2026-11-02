@@ -46,7 +46,7 @@ fn padding_without_a_border_keeps_its_room() {
     let b = p.borders.expect("the padding");
     assert!(!b.any_visible() && b.takes_room());
     assert_eq!(d.styles.resolve_para(&p).padding, [36.0; 4]);
-    assert!(d.settings.odf_layout);
+    assert!(d.settings.odf.is_some());
     // Written back as padding.
     let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
     assert!(out.contains(r#"fo:border-top="none" fo:padding-top="36pt""#), "{out}");

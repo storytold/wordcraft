@@ -597,6 +597,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "OpenDocument files");
+    odf_files(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -610,6 +613,73 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("tools.customizeRibbon", json!({}));
         }
     });
+}
+
+/// How OpenDocument files opened from now on fill in what the standard leaves to the
+/// application (docs/odf-interpretation.md): WordCraft's choices, LibreOffice's, or the user's
+/// own, one setting per case.
+fn odf_files(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::odf_profile::{MAX_LENGTH, OdfPreset};
+    let profile = app.session.prefs.odf.clone();
+    ui.horizontal(|ui| {
+        ui.label(tl!("Where the standard leaves the look open, follow:"));
+        for (preset, label) in [(OdfPreset::WordCraft, "WordCraft"), (OdfPreset::LibreOffice, "LibreOffice"), (OdfPreset::Custom, "Custom")] {
+            if ui.radio(profile.preset == preset, tl!(label)).clicked() && profile.preset != preset {
+                // Custom starts from the choices in use.
+                let mut odf = if preset == OdfPreset::Custom { serde_json::to_value(profile.effective()).unwrap_or_default() } else { json!({}) };
+                if let Some(o) = odf.as_object_mut() {
+                    o.insert("preset".into(), json!(preset.id()));
+                }
+                set(app, json!({ "odf": odf }));
+            }
+        }
+    });
+    note(ui, "Applies to OpenDocument files opened from now on. What the standard defines is always followed.");
+    if profile.preset != OdfPreset::Custom {
+        return;
+    }
+    let e = profile.effective();
+    let u = unit();
+    let k = u.pt_per_unit();
+    egui::Grid::new("options_odf").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        for (key, label, pt) in [
+            ("headerMinHeight", "Header and footer height:", e.header_min_height),
+            ("columnGap", "Gap between columns:", e.column_gap),
+            ("hairline", "Shape line width:", e.hairline),
+        ] {
+            let id = ui.label(tl!(label)).id;
+            let mut v = pt / k;
+            if ui.add(egui::DragValue::new(&mut v).speed(0.5 / k).range(0.0..=MAX_LENGTH / k).measure(u).max_decimals(2)).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: (v * k).clamp(0.0, MAX_LENGTH)}}));
+            }
+            ui.end_row();
+        }
+        for (key, label, rgb) in [("shapeFill", "Shape fill colour:", e.shape_fill), ("shapeLine", "Shape line colour:", e.shape_line)] {
+            let id = ui.label(tl!(label)).id;
+            let mut c = [rgb.0, rgb.1, rgb.2];
+            if egui::color_picker::color_edit_button_srgb(ui, &mut c).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: wordcraft_doc::props::Rgb(c[0], c[1], c[2]).hex()}}));
+            }
+            ui.end_row();
+        }
+    });
+    for (key, label, value) in [
+        ("headerHeightIncludesSpacing", "A header's height includes its spacing from the text", e.header_height_includes_spacing),
+        ("dynamicSpacing", "A tall header uses up its spacing from the text", e.dynamic_spacing),
+        ("tabsFromIndent", "Tab stops are measured from the paragraph's indent", e.tabs_from_indent),
+        ("pageFrameParagraphIsPage", "A page frame placed against a paragraph is placed against the page edge", e.page_frame_paragraph_is_page),
+        (
+            "inlineInvalidRelationIsBaseline",
+            "An in-line frame placed against a paragraph or the page is placed against the baseline",
+            e.inline_invalid_relation_is_baseline,
+        ),
+        ("pictureLinesFitPictures", "A line holding only pictures is as tall as the pictures", e.picture_lines_fit_pictures),
+    ] {
+        let mut v = value;
+        if ui.checkbox(&mut v, tl!(label)).changed() {
+            set(app, json!({"odf": {key: v}}));
+        }
+    }
 }
 
 /// The user templates folder (#2852): where File › New finds personal templates and Save as Word

@@ -162,11 +162,11 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
-    /// Lay out as LibreOffice does where it differs from Word (ODT documents open so): a line
-    /// holding only in-line pictures is as tall as they are, without its font's ascent and
-    /// descent; a paragraph's padding keeps its room on a side without a border.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub odf_layout: bool,
+    /// The document was opened from ODF: the standard's rules that differ from Word's apply as
+    /// it is laid out, with the choices it leaves open made as the user's profile made them
+    /// (see [`crate::odf_profile`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf: Option<crate::odf_profile::OdfLayout>,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -312,7 +312,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
-            odf_layout: false,
+            odf: None,
         }
     }
 }

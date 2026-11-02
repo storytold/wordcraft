@@ -32,6 +32,7 @@ mod para_borders;
 mod parts;
 mod placeholders;
 mod polygons;
+mod profile;
 mod rotation;
 mod rtl;
 mod ruby;

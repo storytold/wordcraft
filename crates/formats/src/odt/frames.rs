@@ -10,6 +10,7 @@ use super::xml::{Attrs, get, length};
 use crate::model::{BoxLook, parse_color};
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::line_dash::LineDash;
+use wordcraft_doc::odf_profile::OdfProfile;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::props::Rgb;
@@ -116,14 +117,6 @@ pub(super) fn contour_xml(p: &wordcraft_doc::wrap::WrapPolygon, w: f32, h: f32) 
         points.join(" ")
     )
 }
-
-/// The colour LibreOffice draws a shape's line in when its styles give none (#3465a4), and fills
-/// it with (#729fcf); its default graphic style states them too.
-const SHAPE_LINE: Rgb = Rgb(0x34, 0x65, 0xa4);
-const SHAPE_FILL: Rgb = Rgb(0x72, 0x9f, 0xcf);
-
-/// The width a hairline (`svg:stroke-width` 0, or none stated) is drawn at, points.
-const HAIRLINE: f32 = 0.5;
 
 impl Graphic {
     /// A `style:graphic-properties` element.
@@ -238,22 +231,25 @@ impl Graphic {
         (dash, (marked(&self.markers[0]), marked(&self.markers[1])))
     }
 
-    /// The look of drawing shape `kind` in this style: LibreOffice's solid fill and hairline in
-    /// its default colours where the styles say nothing; a line has no fill.
+    /// The look of drawing shape `kind` in this style: a solid fill and line where the styles
+    /// say nothing (the standard gives `draw:fill` and `draw:stroke` no default), in the
+    /// profile's colours and line width (nor do `draw:fill-color`, `svg:stroke-color` and
+    /// `svg:stroke-width` have defaults); a line has no fill.
     pub(super) fn shape_look(&self, kind: ShapeKind, defs: &Defs) -> BoxLook {
+        let profile = &defs.profile;
         let fill = if kind == ShapeKind::Line {
             None
         } else {
             let mut g = self.clone();
-            g.fill_color = g.fill_color.or(Some(SHAPE_FILL));
+            g.fill_color = g.fill_color.or(Some(profile.shape_fill));
             g.fill_with(Some("solid"), defs)
         };
         let line = match self.stroke.as_deref() {
             Some("none") => None,
-            _ => Some((self.stroke_color.unwrap_or(SHAPE_LINE), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE))),
+            _ => Some((self.stroke_color.unwrap_or(profile.shape_line), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(profile.hairline))),
         };
         // Only a shape that says it grows to its text does: WordCraft's fit shrinks it too.
-        let (dash, arrows) = self.stroke_extra(line.map_or(HAIRLINE, |l| l.1), defs);
+        let (dash, arrows) = self.stroke_extra(line.map_or(profile.hairline, |l| l.1), defs);
         BoxLook {
             fill,
             line,
@@ -275,8 +271,8 @@ impl Graphic {
         // (`draw:stroke`, as LibreOffice's letter logo box has), a 0 width a hairline.
         let stroke = || {
             matches!(self.stroke.as_deref(), Some("solid" | "dash")).then(|| {
-                let width = self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE);
-                (self.stroke_color.unwrap_or(Rgb::BLACK), width)
+                let width = self.stroke_width.filter(|w| *w > 0.0).unwrap_or(defs.profile.hairline);
+                (self.stroke_color.unwrap_or(defs.profile.shape_line), width)
             })
         };
         BoxLook {
@@ -300,7 +296,7 @@ impl Graphic {
 /// The [`Float`] of a frame anchored as `anchor` (`text:anchor-type`) at `x`, `y` (`svg:x`,
 /// `svg:y`) with graphic style placement `g`. A frame in line with the text (`as-char`, or no
 /// anchor stated) doesn't float.
-pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g: &Graphic) -> Float {
+pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g: &Graphic, profile: &OdfProfile) -> Float {
     // What the frame leaves unsaid, its style says.
     let anchor = anchor.or(g.anchor.as_deref()).map(str::trim);
     let (x, y) = (x.or(g.x.as_deref()), y.or(g.y.as_deref()));
@@ -331,11 +327,12 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("page-start-margin") => Anchor::LeftMargin,
         Some("page-end-margin") => Anchor::RightMargin,
         Some("page-content") => Anchor::Margin,
-        // A page has no paragraph: LibreOffice measures a page-anchored frame's paragraph
-        // relations from the page, its content relations from the page's text area.
+        // A page has no paragraph (§20.299: no such combination): its content relations are the
+        // page's text area, its own the page or the text area as the profile says.
         Some("paragraph-content") if page => Anchor::Margin,
         Some("paragraph-start-margin") if page => Anchor::LeftMargin,
         Some("paragraph-end-margin") if page => Anchor::RightMargin,
+        Some("paragraph" | "char") if page && !profile.page_frame_paragraph_is_page => Anchor::Margin,
         Some("paragraph-content") => Anchor::Column,
         Some("char") if !page => Anchor::Character,
         Some(_) | None if page => Anchor::Page,
@@ -346,6 +343,7 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("page") => Anchor::Page,
         Some("page-content") => Anchor::Margin,
         Some("paragraph-content") if page => Anchor::Margin,
+        Some("paragraph" | "char" | "text" | "line" | "baseline") if page && !profile.page_frame_paragraph_is_page => Anchor::Margin,
         Some("line") | Some("char") | Some("text") | Some("baseline") if !page => Anchor::Line,
         Some(_) | None if page => Anchor::Page,
         Some(_) => Anchor::Paragraph,
@@ -386,18 +384,18 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
 /// Where a frame or shape `w` × `h` (points) sits: anchored as its `text:anchor-type` says, at
 /// its `svg:x`/`svg:y`, or turned and moved by its `draw:transform`, in graphic style `g`, in
 /// text `size` points tall.
-pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float {
+pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32, profile: &OdfProfile) -> Float {
     let turned = get(a, "draw:transform").and_then(|t| transform(t, w, h));
     let (x, y) = match turned {
         Some((x, y, _)) => (Some(pt(x)), Some(pt(y))),
         None => (get(a, "svg:x").map(String::from), get(a, "svg:y").map(String::from)),
     };
-    let mut f = float_of(get(a, "text:anchor-type"), x.as_deref(), y.as_deref(), g);
+    let mut f = float_of(get(a, "text:anchor-type"), x.as_deref(), y.as_deref(), g, profile);
     if let Some((.., rot)) = turned {
         f.rot = rot;
     }
     if f.wrap == Wrap::Inline {
-        f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
+        f.y = inline_raise(g, y.as_deref().and_then(length), h, size, profile);
     }
     f
 }
@@ -411,7 +409,7 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float 
 /// its descent to its ascent (a serif face's, as LibreOffice's templates use): `middle` centred
 /// on it (measured in LibreOffice), `top` at its top, `bottom` at its bottom. Placement relative
 /// to the line stays on the baseline.
-fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32) -> f32 {
+fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32, profile: &OdfProfile) -> f32 {
     if !h.is_finite() || g.vrel.as_deref() == Some("line") {
         return 0.0;
     }
@@ -426,8 +424,12 @@ fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32) -> f32 {
         };
         return raise.clamp(-MAX_RAISE, MAX_RAISE);
     }
-    // Measured from the baseline; a relation an in-line frame can't have (a paragraph's, from
-    // a parent style for anchored frames) is the baseline too, as LibreOffice reads it.
+    // A relation an in-line frame can't have (§20.398 Table 23: a paragraph's or a page's, from
+    // a parent style for anchored frames): against the baseline, or standing on it, as the
+    // profile says.
+    if !matches!(g.vrel.as_deref(), None | Some("baseline")) && !profile.inline_invalid_relation_is_baseline {
+        return 0.0;
+    }
     let raise = match g.vpos.as_deref() {
         Some("middle") => -h / 2.0,
         Some("bottom") => -h,

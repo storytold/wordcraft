@@ -100,13 +100,14 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
     list_indents(&mut rp, p, env);
-    if doc.settings.odf_layout {
+    // ODF (XSL's box model): padding takes room whether or not a side has a border.
+    if doc.settings.odf.is_some() {
         odf_padding(&mut rp);
     }
     rp
 }
 
-/// LibreOffice keeps a paragraph's padding on a side without a border (Word drops it): the room
+/// ODF keeps a paragraph's padding on a side without a border (XSL's box model; Word drops it): the room
 /// it takes is added to the spacing above or below, or to the indent beside.
 fn odf_padding(rp: &mut ResolvedPara) {
     let [top, left, bottom, right] = rp.padding;

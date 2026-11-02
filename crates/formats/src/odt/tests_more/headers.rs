@@ -118,9 +118,10 @@ fn cm(v: f32) -> f32 {
 
 #[test]
 fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
-    // ODF puts the header at the page margin and the text below the header's band, whose height
-    // takes in its spacing (LibreOffice: a 2 cm header with 1 cm spacing puts the text 2 cm
-    // below the margin); Word measures both from the page edge.
+    // ODF puts the header at the page margin and the text below the header's band; Word measures
+    // both from the page edge. Whether the band's height takes in its spacing the standard
+    // doesn't say: LibreOffice's does (a 2 cm header with 1 cm spacing puts the text 2 cm below
+    // the margin), WordCraft's adds it.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
@@ -129,10 +130,13 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
         &content,
         Some(&styles_with_header("<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>")),
     );
-    let s = import(&with).unwrap().last_section;
+    let s = crate::odt::tests::import_as(&with, &wordcraft_doc::odf_profile::OdfProfile::libreoffice()).last_section;
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
     assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{} {}", s.header, s.margin_top);
     assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(2.5)), "{} {}", s.footer, s.margin_bottom);
+    let s = import(&with).unwrap().last_section;
+    assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.75)), "{} {}", s.header, s.margin_top);
+    assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(3.0)), "{} {}", s.footer, s.margin_bottom);
     // No header (or a hidden one): the page margins are the text's.
     let without =
         crate::odt::tests::package(&content, Some(&styles_with_header(r#"<style:header style:display="false"><text:p>H</text:p></style:header>"#)));
@@ -143,28 +147,37 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
 #[test]
 fn a_headers_spacing_stays_below_content_taller_than_it() {
     // LibreOffice's report templates: a header taller than its band keeps its spacing below it,
-    // unless the spacing is dynamic (taken by the content first, as in Word).
+    // unless the spacing is dynamic (taken by the content first, as in Word). A style that
+    // doesn't say is the profile's: LibreOffice keeps it, WordCraft (as Word) doesn't.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
     );
     let hf = "<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>";
-    let d = import(&crate::odt::tests::package(&content, Some(&styles_with_header(hf)))).unwrap();
+    let lo = wordcraft_doc::odf_profile::OdfProfile::libreoffice();
+    let d = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&styles_with_header(hf))), &lo);
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
     let s = &d.last_section;
     assert!(near(s.header_gap, cm(0.25)) && near(s.footer_gap, cm(0.5)), "{} {}", s.header_gap, s.footer_gap);
-    // Written back as the band's spacing.
-    let back = import(&export(&d).unwrap()).unwrap().last_section;
+    // Written back as the band's spacing, saying it is kept: the same whatever reads it.
+    let saved = export(&d).unwrap();
+    assert!(crate::odt::tests::entry(&saved, "styles.xml").contains(r#"style:dynamic-spacing="false""#));
+    let back = crate::odt::tests::import_as(&saved, &lo).last_section;
     assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)) && near(back.margin_top, s.margin_top), "{back:?}");
+    let back = import(&saved).unwrap().last_section;
+    assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)), "{back:?}");
     let dynamic = styles_with_header(hf).replace(r#"fo:margin-bottom="0.25cm""#, r#"fo:margin-bottom="0.25cm" style:dynamic-spacing="true""#);
-    let s = import(&crate::odt::tests::package(&content, Some(&dynamic))).unwrap().last_section;
+    let s = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&dynamic)), &lo).last_section;
     assert_eq!((s.header_gap, near(s.footer_gap, cm(0.5))), (0.0, true));
+    // Unstated, WordCraft's: grown into.
+    let s = import(&crate::odt::tests::package(&content, Some(&styles_with_header(hf)))).unwrap().last_section;
+    assert_eq!((s.header_gap, s.footer_gap), (0.0, 0.0));
 }
 
 #[test]
 fn a_header_without_a_stated_height_is_half_a_centimetre() {
-    // LibreOffice's letter templates: a header style stating no height, or none at all, is
-    // LibreOffice's default 0.5 cm band (measured), not nothing.
+    // LibreOffice's letter templates: a header style stating no height, or none at all (the
+    // standard gives none), is LibreOffice's default 0.5 cm band (measured); WordCraft's is none.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
@@ -176,8 +189,11 @@ fn a_header_without_a_stated_height_is_half_a_centimetre() {
             r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/>{band}</style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>H</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#,
             crate::odt::tests::NS_T
         );
-        let s = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap().last_section;
+        let pkg = crate::odt::tests::package(&content, Some(&styles));
+        let s = crate::odt::tests::import_as(&pkg, &wordcraft_doc::odf_profile::OdfProfile::libreoffice()).last_section;
         assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{band}: {} {}", s.header, s.margin_top);
+        let s = import(&pkg).unwrap().last_section;
+        assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.0)), "{band}: {} {}", s.header, s.margin_top);
     }
 }
 

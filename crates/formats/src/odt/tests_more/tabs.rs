@@ -2,8 +2,9 @@
 //! paragraph styles and written back. LibreOffice measures them from the paragraph's indent when
 //! its `TabsRelativeToIndent` setting is on (its default); WordCraft and Word from the margin.
 
-use crate::odt::tests::{NS_T, package};
+use crate::odt::tests::{NS_T, import_as, package};
 use crate::odt::{export, import};
+use wordcraft_doc::odf_profile::OdfProfile;
 use wordcraft_doc::props::{ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::{Document, Paragraph, para_block};
 
@@ -60,13 +61,18 @@ fn tab_stops_are_read() {
 
 #[test]
 fn tabs_relative_to_the_indent_move_with_it() {
-    // LibreOffice's own default: positions from the paragraph's indent.
-    for relative in [Some(true), None] {
-        let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), relative)).unwrap();
-        assert_eq!(tabs(&d).first().map(|t| t.pos), Some(108.0), "{relative:?}");
+    // The document's own setting rules; without one (the standard doesn't say) the profile's:
+    // LibreOffice's from the paragraph's indent, WordCraft's from the margin.
+    let first = |relative: Option<bool>, profile: &OdfProfile| {
+        let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), relative), profile);
+        tabs(&d).first().map(|t| t.pos)
+    };
+    for profile in [OdfProfile::libreoffice(), OdfProfile::wordcraft()] {
+        assert_eq!(first(Some(true), &profile), Some(108.0));
+        assert_eq!(first(Some(false), &profile), Some(72.0));
     }
-    let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false))).unwrap();
-    assert_eq!(tabs(&d).first().map(|t| t.pos), Some(72.0));
+    assert_eq!(first(None, &OdfProfile::libreoffice()), Some(108.0));
+    assert_eq!(first(None, &OdfProfile::wordcraft()), Some(72.0));
 }
 
 #[test]
@@ -125,7 +131,8 @@ fn tabs_are_measured_from_the_indent_a_style_gives() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Indented"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="3in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a<text:tab/>b</text:p><text:p text:style-name="Indented">c<text:tab/>d</text:p></office:text></office:body></office:document-content>"#
     );
-    let d = import(&package(&content, Some(&styles))).unwrap();
+    // LibreOffice's measure (its default when the document doesn't say).
+    let d = import_as(&package(&content, Some(&styles)), &OdfProfile::libreoffice());
     let own = d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default();
     assert_eq!(own.iter().map(|t| t.pos).collect::<Vec<_>>(), [252.0], "3in from a 0.5in indent");
     let style = d.styles.get("Indented").unwrap().para.tabs.clone().unwrap_or_default();
