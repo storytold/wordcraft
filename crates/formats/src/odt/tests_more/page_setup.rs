@@ -229,3 +229,21 @@ fn a_page_background_picture_is_read_and_written() {
         assert_eq!(again.settings.page_picture.as_ref().map(|p| p.fill_type.as_str()), Some(fill));
     }
 }
+
+#[test]
+fn a_page_borders_padding_keeps_the_text_where_it_was() {
+    // Design › Page Borders around a page with 1 inch margins: the border 24 pt from the edge,
+    // 45 pt of padding inside it (more than Word's 31 pt border spacing, which is measured
+    // differently): the text stays 72 pt from the edge, written and read back.
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+    let edge = wordcraft_doc::props::Border { style: BorderStyle::Single, width: 3.0, color: Some(Rgb(0x2f, 0x55, 0x97)), space: 24.0 };
+    d.last_section.page_borders =
+        Some(wordcraft_doc::props::Borders { top: Some(edge), bottom: Some(edge), left: Some(edge), right: Some(edge), ..Default::default() });
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    let s = &back.last_section;
+    for m in [s.margin_top, s.margin_bottom, s.margin_left, s.margin_right] {
+        assert!((m - 72.0).abs() < 0.05, "{s:?}");
+    }
+    assert_eq!(s.page_borders.and_then(|b| b.left).map(|b| (b.width, b.space)), Some((3.0, 24.0)));
+}

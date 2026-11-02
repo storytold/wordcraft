@@ -1031,7 +1031,8 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
         let b = get(a, &format!("fo:border-{s}")).or_else(|| get(a, "fo:border")).and_then(super::styles::parse_border)?;
         let pad = get(a, &format!("fo:padding-{s}")).or_else(|| get(a, "fo:padding")).and_then(length).filter(|v| v.is_finite());
         (b.style != wordcraft_doc::props::BorderStyle::None)
-            .then(|| wordcraft_doc::props::Border { space: pad.map_or(0.0, |p| p.clamp(0.0, 31.0)), ..b })
+            // Any distance on the page (Word's 31 pt limit is for its own measure, from the edge).
+            .then(|| wordcraft_doc::props::Border { space: pad.map_or(0.0, |p| p.clamp(0.0, 1584.0)), ..b })
     };
     // ODF's border is at the margin, the text inside its padding; WordCraft measures the border
     // from the page edge and the text margin from the edge too.
