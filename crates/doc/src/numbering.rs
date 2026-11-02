@@ -48,6 +48,12 @@ pub struct Level {
     pub legal: bool,
     /// Paragraph style linked to this level (e.g. Heading 1 for outline numbering).
     pub style: Option<String>,
+    /// Word 2010 custom number format (`w:numFmt` `w:val="custom" w:format="0001, 0002, …"`),
+    /// kept as read; `format` is the format the file gives as its fallback. Labels use it when
+    /// the pattern is a zero-padded sequence (see [`custom_format_label`]) — the `[0001]`
+    /// paragraph numbering of patent specifications is that case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_format: Option<String>,
 }
 
 impl Default for Level {
@@ -66,6 +72,7 @@ impl Default for Level {
             tab: None,
             legal: false,
             style: None,
+            custom_format: None,
         }
     }
 }
@@ -392,7 +399,8 @@ impl Counters {
                     _ if def.legal => NumFormat::Decimal,
                     f => f,
                 };
-                label.push_str(&fmt.format(val));
+                let custom = level_def(k).and_then(|l| l.custom_format.as_deref());
+                label.push_str(&custom_format_label(custom, fmt, val));
                 if label.len() > MAX_LABEL_BYTES {
                     break;
                 }
@@ -404,6 +412,31 @@ impl Counters {
     }
 }
 
+/// The label number for a Word 2010 custom number format (`w:format`, e.g. "0001, 0002, 0003,
+/// ..."). Word renders each number in the sample's style; a pattern whose samples are equal-length
+/// digit strings with leading zeros (a patent specification's `[0001]` paragraph numbers) renders
+/// as decimal zero-padded to that width. Any other pattern shows in the level's fallback format.
+pub fn custom_format_label(custom: Option<&str>, fallback: NumFormat, n: u32) -> String {
+    if let Some(p) = custom
+        && let Some(w) = custom_pad_width(p)
+    {
+        return format!("{n:0w$}");
+    }
+    fallback.format(n)
+}
+
+/// The zero-pad width of a Word custom format like "0001, 0002, 0003, ..." — `None` unless every
+/// sample is an equal-width digit string starting with a zero.
+fn custom_pad_width(pattern: &str) -> Option<usize> {
+    let samples: Vec<&str> = pattern.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "...").collect();
+    let first = *samples.first()?;
+    let width = first.chars().count();
+    if !matches!(width, 2..=9) || !first.starts_with('0') {
+        return None;
+    }
+    samples.iter().all(|s| s.chars().count() == width && s.chars().all(|c| c.is_ascii_digit())).then_some(width)
+}
+
 /// Longest level text (in characters) expanded into a list label.
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
@@ -412,6 +445,38 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn list_with(level: Level) -> (Numbering, u32) {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, level)];
+        }
+        (n, id)
+    }
+
+    #[test]
+    fn a_custom_number_format_pads_like_word() {
+        // A patent specification's paragraph numbers: lvlText "[%1]" with the Word 2010 custom
+        // format "0001, 0002, 0003, ..." (the file's fallback numFmt is decimal).
+        let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() });
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0001]");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0002]");
+        for _ in 2..12 {
+            c.next_label(&n, id, 0);
+        }
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0013]");
+    }
+
+    #[test]
+    fn a_custom_number_format_we_cannot_pad_falls_back_to_decimal() {
+        for pattern in ["a., b., c.", "00000000001", ", , ...", "0", "1, 2", "0a, 0b", "001, 02, 003"] {
+            let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some(pattern.into()), ..Level::default() });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[1]", "pattern {pattern:?}");
+        }
+    }
 
     #[test]
     fn a_huge_level_text_gives_a_bounded_label() {

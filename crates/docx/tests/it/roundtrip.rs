@@ -1958,6 +1958,28 @@ fn list_level_overrides_round_trip() {
     assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
 }
 
+/// A Word 2010 custom number format (the `[0001]` paragraph numbering of patent specifications)
+/// is written as the Choice/Fallback pair Word uses, read back, and rendered with its padding.
+#[test]
+fn word_custom_number_formats_round_trip() {
+    use wordcraft_doc::numbering::{Counters, Level};
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let lvl = Level { text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() };
+    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == num) {
+        n.level_overrides = vec![(0, lvl)];
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let n = back.numbering.num(num).unwrap();
+    let (_, got) = &n.level_overrides[0];
+    assert_eq!(
+        (got.format, got.text.as_str(), got.custom_format.as_deref()),
+        (wordcraft_doc::section::NumFormat::Decimal, "[%1]", Some("0001, 0002, 0003, ..."))
+    );
+    let mut c = Counters::default();
+    assert_eq!(c.next_label(&back.numbering, num, 0).unwrap().0, "[0001]");
+}
+
 /// Ink strokes and freeform shapes are written as DrawingML custom geometry (`a:custGeom`,
 /// `a:moveTo`/`a:lnTo`) in floating drawings and read back with their points, pen, opacity and
 /// drawing order.

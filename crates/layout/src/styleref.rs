@@ -187,7 +187,10 @@ impl StyleIndex {
                     }
                     let v = if *v == 0 { lv.start } else { *v };
                     let fmt = if def.legal && lv.format != NumFormat::DecimalZero { NumFormat::Decimal } else { lv.format };
-                    levels.push((fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
+                    levels.push((
+                        wordcraft_doc::numbering::custom_format_label(lv.custom_format.as_deref(), fmt, v),
+                        def.text.contains(&format!("%{}", k + 1)),
+                    ));
                 }
                 label = Some(l);
             }
