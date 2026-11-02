@@ -16,7 +16,7 @@ mod outline;
 mod styles;
 mod tabs_borders;
 
-use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
+use format::{align, asian_typography, cancel_line_spacing, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
@@ -269,25 +269,4 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
     ]
-}
-
-/// Explicit point spacing replaces automatic before/after spacing in Word. Clear the matching
-/// line-based value so it cannot keep overriding the newly entered point value.
-fn cancel_line_spacing(s: &mut Session, before: bool, after: bool) -> CmdResult {
-    let story = s.sel.focus.story;
-    for path in super::selected_paths(s) {
-        let Some(para) = s.doc.para(story, &path) else { continue };
-        let [before_lines, after_lines] = s.doc.styles.resolve_para(&para.props).space_lines;
-        let (clear_before, clear_after) = (before && before_lines != 0.0, after && after_lines != 0.0);
-        if clear_before || clear_after {
-            let props = &mut s.doc.para_mut(story, &path)?.props;
-            if clear_before {
-                props.space_before_lines = Some(0.0);
-            }
-            if clear_after {
-                props.space_after_lines = Some(0.0);
-            }
-        }
-    }
-    sel_result(s)
 }
