@@ -161,7 +161,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
         let fams = app.previews.families();
         let stored = app.previews.font_stored(font);
-        let warning = app.font_box_warning(&stored);
+        let warning = app.font_dialog_warning(&stored);
         if let Some(f) = font_box(ui, ("fontdlg_font", font.as_str()), &fams, &*prev, warning.as_deref()) {
             if f == crate::widgets::ADD_FONT {
                 let _ = app.run("font.add", json!({}));

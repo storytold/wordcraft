@@ -813,28 +813,38 @@ impl WordApp {
     /// box shows the font typing will use (an empty paragraph's, or one just picked at the end
     /// of a line), the substitute layout will draw it in is named instead.
     pub fn font_box_warning(&mut self, font: &str) -> Option<String> {
-        self.font_box_warning_or(font, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+        let ahead = self.session.sel.is_collapsed();
+        self.font_box_warning_or(font, ahead, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
     }
 
-    /// [`WordApp::font_box_warning`] for an East Asian font box (`font_ea`, the run's font being
-    /// `font`): where no letters show it yet, the face layout draws such text in when the font
-    /// is missing, the run's font or a fallback face.
+    /// The Font dialog's font box's warning for `font`, the font OK applies: from the status
+    /// bar's list, else the substitute layout will draw it in, whatever is selected, as no text
+    /// may show the font yet.
+    pub fn font_dialog_warning(&mut self, font: &str) -> Option<String> {
+        self.font_box_warning_or(font, true, |doc| wordcraft_engine::cmd::font::shown_as(doc, font))
+    }
+
+    /// The Font dialog's Asian text font box's warning for `font_ea` (the Latin text font being
+    /// `font`): from the status bar's list, else the face layout draws Chinese, Japanese and
+    /// Korean text in when `font_ea` is missing (the run's font or a fallback face). Whatever is
+    /// selected: selected Latin text shows no East Asian font, but text typed or pasted into it
+    /// would be in it.
     pub fn east_asian_font_box_warning(&mut self, font_ea: &str, font: &str) -> Option<String> {
-        self.font_box_warning_or(font_ea, |doc| wordcraft_engine::cmd::font::east_asian_shown_as(doc, font_ea, font))
+        self.font_box_warning_or(font_ea, true, |doc| wordcraft_engine::cmd::font::east_asian_shown_as(doc, font_ea, font))
     }
 
-    /// The font box's warning for `font`: from the status bar's list, else, while no letters
-    /// show it, the family `unshown` says its text will be drawn in.
-    fn font_box_warning_or(&mut self, font: &str, unshown: impl FnOnce(&wordcraft_doc::Document) -> Option<String>) -> Option<String> {
+    /// The font box's warning for `font`: from the status bar's list, else, when the box shows
+    /// a font to come (`ahead`), the family `unshown` says its text will be drawn in.
+    fn font_box_warning_or(&mut self, font: &str, ahead: bool, unshown: impl FnOnce(&wordcraft_doc::Document) -> Option<String>) -> Option<String> {
         let layout = self.session.layout();
         let key = wordcraft_engine::cmd::font::font_key(font);
         if let Some(w) = self.cached_missing_fonts(&layout).1.get(&key) {
             return Some(w.clone());
         }
-        // At a collapsed caret the box shows the font typing will use: no shown text is in it
-        // (else the list has it), so the next letter is drawn in `unshown`'s family. A selection's
-        // font is the selected text's, which the list already covers.
-        let shown = self.session.sel.is_collapsed().then(|| unshown(&self.session.doc)).flatten()?;
+        // A font to come (typing at a collapsed caret, or what the Font dialog applies) may be in
+        // no shown text yet, so the list can't have it: name the family it will be drawn in. A
+        // ribbon box over a selection shows the selected text's font, which the list covers.
+        let shown = ahead.then(|| unshown(&self.session.doc)).flatten()?;
         wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
     }
 

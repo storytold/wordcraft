@@ -7,7 +7,7 @@ pub(super) fn preview_size(size: &str) -> f32 {
 }
 
 /// One of the Font dialog's font boxes: type to find a font, with the missing-font warning
-/// `shown_as` (the families drawn instead of `current`, see [`WordApp::font_box_warning`]).
+/// `shown_as` (the families drawn instead of `current`, see [`WordApp::font_dialog_warning`]).
 pub(super) fn font_box(
     ui: &mut egui::Ui,
     (id, current): (&str, &str),

@@ -369,3 +369,18 @@ fn a_screen_reader_hears_the_font_box_warning() {
         .any(|d| d.contains("Wordcraft Nowhere Face") && d.contains("isn't installed"));
     assert!(described, "the font box describes its warning");
 }
+
+#[test]
+fn the_font_dialog_warns_for_a_missing_font_over_a_selection() {
+    // Selected Latin text: no East Asian text shows the Asian font, and none shows a font just
+    // typed into the dialog, so the list has neither; OK would apply them all the same.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    assert!(a.east_asian_font_box_warning("Wordcraft Mincho Gone", "JetBrains Mono").is_some(), "the Asian box");
+    assert!(a.font_dialog_warning("Wordcraft Dialog Gone").is_some(), "the Latin box");
+    assert!(a.font_dialog_warning("JetBrains Mono").is_none(), "an installed font");
+    // The ribbon's box over the selection shows the selected text's font: the list decides.
+    assert!(a.font_box_warning("Wordcraft Dialog Gone").is_none());
+}
