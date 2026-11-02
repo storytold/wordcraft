@@ -630,10 +630,45 @@ pub fn proofable(tag: &str) -> bool {
 pub fn missing_dictionary(tag: Option<&str>) -> Option<&'static str> {
     let name = wordcraft_proof::missing_dictionary(tag)?;
     let lang = wordcraft_proof::ProofLang::from_tag(tag);
-    if lang.pack_locale().is_some() && pack_for_tag(tag.unwrap_or(""), &available()).is_none() {
+    if lang.pack_locale().is_some() && !has_pack_for_tag(tag.unwrap_or("")) {
         return None;
     }
     Some(name)
+}
+
+/// The last answer of whether the index has a pack for a tag, for the index generation it was
+/// worked out for: the status bar asks every frame while the caret is in a pack language, and
+/// working it out copies the whole index.
+#[derive(Default)]
+struct PackLookup {
+    /// (index generation, tag, has a pack).
+    entry: Option<(u64, String, bool)>,
+}
+
+impl PackLookup {
+    /// The remembered answer for `tag` at `generation`, else `compute`'s (then remembered).
+    fn get(&mut self, generation: u64, tag: &str, compute: impl FnOnce() -> bool) -> bool {
+        if let Some((g, t, has)) = &self.entry
+            && *g == generation
+            && t == tag
+        {
+            return *has;
+        }
+        let has = compute();
+        self.entry = Some((generation, tag.to_string(), has));
+        has
+    }
+}
+
+static PACK_LOOKUP: Mutex<PackLookup> = Mutex::new(PackLookup { entry: None });
+
+/// Whether the index has a pack for `tag` ([`pack_for_tag`]), worked out again only when the
+/// index changes ([`index_generation`]) or the tag does.
+fn has_pack_for_tag(tag: &str) -> bool {
+    // Read before [`available`], which may fill the index and bump it: the answer is then worked
+    // out once more, never kept for a list it wasn't worked out from.
+    let generation = index_generation();
+    PACK_LOOKUP.lock().unwrap_or_else(PoisonError::into_inner).get(generation, tag, || pack_for_tag(tag, &available()).is_some())
 }
 
 /// The packs the document's text asks for that are available and not installed: what the
@@ -762,6 +797,29 @@ mod tests {
             }
             None => assert!(texts.iter().all(|(t, _)| t != super::SCOWL_TITLE), "no SCOWL data: no SCOWL entry"),
         }
+    }
+
+    /// FU.3: the status bar's "(no dictionary)" asks every frame whether the index has a pack
+    /// for the caret's language; the answer is reused until the index changes (a new
+    /// generation) or the tag does, so the index isn't copied every frame.
+    #[test]
+    fn the_pack_lookup_is_reused_until_the_index_changes() {
+        let mut lookup = super::PackLookup::default();
+        let mut computed = 0;
+        let mut ask = |lookup: &mut super::PackLookup, generation: u64, tag: &str, answer: bool| {
+            lookup.get(generation, tag, || {
+                computed += 1;
+                answer
+            })
+        };
+        assert!(ask(&mut lookup, 1, "ja-JP", true));
+        // Same generation and tag: the remembered answer, even where the list would now say no.
+        for _ in 0..10 {
+            assert!(ask(&mut lookup, 1, "ja-JP", false));
+        }
+        assert!(!ask(&mut lookup, 2, "ja-JP", false), "a new generation works it out again");
+        assert!(ask(&mut lookup, 2, "th-TH", true), "another tag too");
+        assert_eq!(computed, 3);
     }
 
     #[test]
