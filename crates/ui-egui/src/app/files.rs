@@ -67,6 +67,7 @@ impl WordApp {
             if !self.session.dirty && host.bound(self.session.document_id()) && !host.pending_for(self.session.document_id()) {
                 return Ok(PromptSave::Saved);
             }
+            self.status(tl!("Complete the provider save, then try your action again."));
             self.choose_provider_save(false);
             return Ok(PromptSave::NotSaved);
         }

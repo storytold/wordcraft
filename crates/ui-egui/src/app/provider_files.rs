@@ -668,4 +668,92 @@ mod tests {
         assert!(host.bound(app.session.document_id()));
         assert!(!app.session.dirty);
     }
+
+    /// The actual Save Changes answer explains why Close must be retried after provider persistence.
+    #[test]
+    fn provider_prompt_admission_explains_retry_without_running_the_held_command() {
+        let (mut app, host) = app();
+        let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let received = downloads.clone();
+        app.services.download = Some(Box::new(move |_, _| {
+            received.set(received.get() + 1);
+            Ok(())
+        }));
+        let document = app.session.document_id();
+        let revision = app.session.rev();
+        app.status("Earlier status");
+        assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
+        assert_eq!(app.status_msg.as_ref().unwrap().0, crate::tl!("Complete the provider save, then try your action again."));
+        assert_eq!((app.session.document_id(), app.session.rev(), app.session.dirty), (document, revision, true));
+        assert!(app.has_document());
+        assert!(app.dialog.is_none() && app.awaiting_save.is_none());
+        let dialogs = host.take_events();
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].metadata["type"], "saveDialog");
+        assert_eq!(dialogs[0].metadata["documentId"], document.to_string());
+        let request = dialogs[0].metadata["requestId"].as_str().unwrap().to_string();
+        host.resolve_dialog(&request, "provider", "Prompt.docx").unwrap();
+        app.provider_tick();
+        let captures = host.take_events();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].metadata["type"], "save");
+        assert!(captures[0].bytes.as_ref().is_some_and(|bytes| !bytes.is_empty()));
+        host.result(request, "saved".into(), "prompt-resource".into()).unwrap();
+        app.provider_tick();
+        assert!(app.has_document(), "a durable reply must not resume the cancelled Close");
+        assert_eq!(app.session.document_id(), document);
+        assert!(!app.session.dirty);
+        assert!(app.awaiting_save.is_none());
+        assert_eq!(app.run("file.close", json!({})).unwrap()["closed"], true);
+        assert!(!app.has_document(), "the user's explicit retry closes the saved document");
+        assert_eq!(downloads.get(), 0);
+    }
+
+    /// A real full event queue refuses the chooser without hiding its error or closing dirty work.
+    #[test]
+    fn provider_prompt_refusal_preserves_the_error_and_keeps_the_held_command_cancelled() {
+        let (mut app, host) = app();
+        let downloads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let received = downloads.clone();
+        app.services.download = Some(Box::new(move |_, _| {
+            received.set(received.get() + 1);
+            Ok(())
+        }));
+        let document = app.session.document_id();
+        let revision = app.session.rev();
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "queue-resource".into(), name: "Queued.docx".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        // Fill all 64 slots through real read/cancellation admission.
+        for _ in 0..32 {
+            let request = host.request_open("queue-resource").unwrap();
+            host.cancel_open(request, "Queue pressure".into()).unwrap();
+        }
+        assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
+        assert_eq!(app.status_msg.as_ref().unwrap().0, "file provider event queue is full; consume events before retrying");
+        assert_eq!((app.session.document_id(), app.session.rev(), app.session.dirty), (document, revision, true));
+        assert!(app.has_document());
+        assert!(app.dialog.is_none() && app.awaiting_save.is_none());
+        assert!(!host.pending_for(document), "a refused choice must not strand a document owner");
+        let queued = host.take_events();
+        assert_eq!(queued.len(), 64);
+        assert!(queued.iter().all(|event| matches!(event.metadata["type"].as_str(), Some("openRequest" | "openFailed"))));
+        assert_eq!(app.run("file.close", json!({})).unwrap()["pending"], "saveChanges");
+        assert_eq!(app.answer_save_changes(crate::SaveChoice::Save).unwrap()["done"], false);
+        assert_eq!(app.status_msg.as_ref().unwrap().0, crate::tl!("Complete the provider save, then try your action again."));
+        let dialogs = host.take_events();
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].metadata["type"], "saveDialog");
+        host.resolve_dialog(dialogs[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        app.provider_tick();
+        assert!(app.has_document() && app.session.dirty);
+        assert_eq!(app.session.document_id(), document);
+        assert!(!host.pending_for(document));
+        assert_eq!(downloads.get(), 0);
+    }
 }

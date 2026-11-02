@@ -55,6 +55,12 @@ Never reuse an account namespace for a different account.
    `download` is a terminal fallback result that does not acknowledge provider persistence.
    These outcomes keep unsaved work open. A serialization/filename rejection emits `saveFailed`.
 
+Choosing Save in a Save Changes prompt starts this provider choice and cancels the held-back
+Close, Open or New action. A localized status asks the user to complete the provider save and
+try the action again. The dirty document stays open; even a later durable acknowledgement does
+not automatically resume that cancelled action. A refused chooser keeps its specific error
+instead of the informational status. Cancellation or failure still leaves unsaved work open.
+
 A device choice uses the browser's local download service. A device copy of a provider-bound
 project does not acknowledge provider persistence or replace that binding. As with the normal
 browser fallback, accepting a download does not prove the browser wrote it to physical disk.
