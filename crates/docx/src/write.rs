@@ -56,21 +56,35 @@ fn unanchored_replies(doc: &Document) -> HashMap<u32, Vec<u32>> {
             }
         }
     }
-    let anchored_ancestor = |mut id: u32| {
-        for _ in 0..doc.comments.len() {
-            id = doc.comments.get(&id)?.parent?;
-            if anchored.contains(&id) {
-                return Some(id);
-            }
-        }
-        None
-    };
+    // Each walk up a thread caches its answer for every comment it passed, so a long thread
+    // costs one walk, not one per reply.
+    let mut known: HashMap<u32, Option<u32>> = HashMap::new();
     let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
     for (id, c) in &doc.comments {
-        if c.parent.is_some()
-            && !anchored.contains(id)
-            && let Some(root) = anchored_ancestor(*id)
-        {
+        if c.parent.is_none() || anchored.contains(id) {
+            continue;
+        }
+        let mut path = vec![*id];
+        let mut seen = std::collections::HashSet::from([*id]);
+        let mut at = *id;
+        let root = loop {
+            let Some(parent) = doc.comments.get(&at).and_then(|c| c.parent) else { break None };
+            if anchored.contains(&parent) {
+                break Some(parent);
+            }
+            if let Some(r) = known.get(&parent) {
+                break *r;
+            }
+            if !seen.insert(parent) {
+                break None;
+            }
+            path.push(parent);
+            at = parent;
+        };
+        for p in path {
+            known.insert(p, root);
+        }
+        if let Some(root) = root {
             out.entry(root).or_default().push(*id);
         }
     }
