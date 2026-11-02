@@ -629,9 +629,9 @@ impl Host {
             let Some(identity) = s.identity.as_ref().filter(|_| s.enabled) else { return };
             (identity.label.clone(), s.resources.clone())
         };
-        ui.heading(format!("Recent — {label}"));
+        ui.heading(crate::i18n::fmt(crate::tl!("Recent — {label}"), &[("label", &label)]));
         if resources.is_empty() {
-            ui.weak("No recent provider files.");
+            ui.weak(crate::tl!("No recent provider files."));
         }
         for resource in resources {
             if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked()
@@ -641,7 +641,7 @@ impl Host {
             }
         }
         ui.separator();
-        ui.weak("Recent on this device");
+        ui.weak(crate::tl!("Recent on this device"));
     }
 }
 

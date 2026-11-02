@@ -13,11 +13,32 @@ impl WordApp {
             return true;
         }
         let doc = self.session.document_id();
-        let name = host.filename(doc).unwrap_or_else(|| self.default_save_name());
+        let name = host.filename(doc).unwrap_or_else(|| self.generated_provider_save_name());
         if let Err(error) = host.choose(doc, self.session.rev(), name, save_as) {
             self.status(error);
         }
         true
+    }
+
+    /// Adapt only the app-generated suggestion to the provider's simple-name contract.
+    /// The native default supplies its Word-package extension, including macro formats.
+    /// Retain that suffix and the longest UTF-8 stem prefix within 255 bytes; do not rewrite
+    /// a validated provider binding or a filename explicitly supplied by the host/user.
+    fn generated_provider_save_name(&self) -> String {
+        let default = self.default_save_name();
+        let (stem, extension) = default.rsplit_once('.').unwrap_or((&default, ""));
+        let suffix = if extension.is_empty() { String::new() } else { format!(".{extension}") };
+        let budget = 255usize.saturating_sub(suffix.len());
+        let mut name = String::with_capacity(default.len().min(255));
+        for character in stem.chars() {
+            let character = if character.is_control() || matches!(character, '/' | '\\') { '_' } else { character };
+            if name.len().saturating_add(character.len_utf8()) > budget {
+                break;
+            }
+            name.push(character);
+        }
+        name.push_str(&suffix);
+        name
     }
 
     /// Consume provider commands on the application logic frame, then publish current document metadata.
@@ -54,34 +75,35 @@ impl WordApp {
                 return;
             }
         } else if self.has_comment_drafts_in(doc) {
-            let error = "Activate the document and finish its comment drafts before saving it";
+            let error = crate::tl!("Activate the document and finish its comment drafts before saving it");
             host.failed(&request, error);
             self.status(error);
             return;
         }
-        let encoded = self
-            .session
-            .with_document(doc, |session| {
-                let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-                if !wordcraft_engine::io::is_word_package(&ext) {
-                    return Err("Provider Save requires a Word package (.docx, .docm, .dotx, .dotm). Use Export for other formats.".to_string());
-                }
-                if destination == "provider"
-                    && matches!(ext.as_str(), "docx" | "dotx")
-                    && session.doc.passthrough.get("word/vbaProject.bin").is_some_and(|bytes| !bytes.is_empty())
-                {
-                    return Err("This document contains VBA. Choose .docm or .dotm to preserve it.".into());
-                }
-                // The same serializer as ordinary Save, including embedded pictures,
-                // comments, headers, macros and the document's existing encryption.
-                session.stamp_save();
-                let options = wordcraft_engine::cmd::file::export_options(session, &json!({}));
-                let password = session.password.as_ref().map(wordcraft_engine::Password::as_str);
-                let bytes = wordcraft_engine::io::save_bytes_with(&name, &session.doc, password, &options)?;
-                Ok((session.rev(), bytes))
-            })
-            .map_err(|e| e.to_string())
-            .and_then(|result| result);
+        let encoded =
+            self.session
+                .with_document(doc, |session| {
+                    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                    if !wordcraft_engine::io::is_word_package(&ext) {
+                        return Err(crate::tl!("Provider Save requires a Word package (.docx, .docm, .dotx, .dotm). Use Export for other formats.")
+                            .to_string());
+                    }
+                    if destination == "provider"
+                        && matches!(ext.as_str(), "docx" | "dotx")
+                        && session.doc.passthrough.get("word/vbaProject.bin").is_some_and(|bytes| !bytes.is_empty())
+                    {
+                        return Err(crate::tl!("This document contains VBA. Choose .docm or .dotm to preserve it.").into());
+                    }
+                    // The same serializer as ordinary Save, including embedded pictures,
+                    // comments, headers, macros and the document's existing encryption.
+                    session.stamp_save();
+                    let options = wordcraft_engine::cmd::file::export_options(session, &json!({}));
+                    let password = session.password.as_ref().map(wordcraft_engine::Password::as_str);
+                    let bytes = wordcraft_engine::io::save_bytes_with(&name, &session.doc, password, &options)?;
+                    Ok((session.rev(), bytes))
+                })
+                .map_err(|e| e.to_string())
+                .and_then(|result| result);
         match encoded {
             Ok((revision, bytes)) if destination == "provider" => {
                 let capture = Capture { doc, revision, name, save_as };
@@ -95,14 +117,14 @@ impl WordApp {
                     .services
                     .provider_download
                     .as_ref()
-                    .ok_or_else(|| "No device download service is available".to_string())
+                    .ok_or_else(|| crate::tl!("No device download service is available").to_string())
                     .and_then(|download| download(&name, &bytes));
                 match result {
                     Ok(()) => {
                         // The browser may still cancel or fail after accepting these bytes.
                         // Neither a provider binding nor a device checkpoint is acknowledged.
                         host.finish_device(&request);
-                        self.status(format!("Downloaded {name}"));
+                        self.status(crate::i18n::fmt(crate::tl!("Downloaded {name}"), &[("name", &name)]));
                     }
                     Err(error) => {
                         host.failed(&request, &error);
@@ -137,9 +159,9 @@ impl WordApp {
                     }
                 }
             });
-            self.status(format!("Saved {} to provider", capture.name));
+            self.status(crate::i18n::fmt(crate::tl!("Saved {name} to provider"), &[("name", &capture.name)]));
         } else if status == "failed" {
-            self.status("Provider save failed. Your changes are still open.");
+            self.status(crate::tl!("Provider save failed. Your changes are still open."));
         }
     }
     /// Import actual provider bytes through the normal file command while preserving the device Recent list.
@@ -179,6 +201,97 @@ mod tests {
     use crate::file_providers::Host;
     use crate::{Services, WordApp, json};
 
+    /// A generated title must create a real chooser while retaining safe punctuation and source metadata.
+    #[test]
+    fn generated_provider_chooser_sanitizes_title_separators_and_controls_only() {
+        let (mut app, host) = app();
+        let title = "Résumé /\\\n\t {draft}: final";
+        app.session.doc.core.title = title.into();
+        let before = (app.session.document_id(), app.session.rev(), app.session.dirty);
+        assert_eq!(app.run("file.save", json!({})).unwrap()["pending"], "fileProvider");
+        let events = host.take_events();
+        assert_eq!(events.len(), 1, "pending must mean a real destination chooser was emitted");
+        assert_eq!(events[0].metadata["type"], "saveDialog");
+        assert_eq!(events[0].metadata["name"], "Résumé ____ {draft}: final.docx");
+        assert_eq!(app.session.doc.core.title, title, "the generated fallback must not rename document metadata");
+        assert_eq!((app.session.document_id(), app.session.rev(), app.session.dirty), before);
+        assert!(app.session.path.is_none() && app.session.file_name.is_none());
+        assert!(!host.bound(app.session.document_id()));
+        host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        assert!(!host.busy());
+    }
+
+    /// Multibyte titles retain a valid prefix and the complete extension within the total byte limit.
+    #[test]
+    fn generated_provider_chooser_truncates_long_unicode_stems_at_utf8_boundaries() {
+        for (unit, retained, total) in [("界", 83, 254), ("é", 125, 255), ("📝", 62, 253)] {
+            let (mut app, host) = app();
+            let title = unit.repeat(10_000);
+            app.session.doc.core.title = title.clone();
+            assert_eq!(app.run("file.saveAs", json!({})).unwrap()["pending"], "fileProvider");
+            let events = host.take_events();
+            assert_eq!(events.len(), 1);
+            let name = events[0].metadata["name"].as_str().unwrap();
+            assert_eq!(name, format!("{}.docx", unit.repeat(retained)));
+            assert_eq!(name.len(), total);
+            assert!(crate::file_providers::valid_name(name));
+            assert_eq!(app.session.doc.core.title, title);
+            assert!(app.session.dirty && !host.bound(app.session.document_id()));
+            host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+        }
+    }
+
+    /// A truncated generated name keeps DOCM/DOTM and round-trips the original opaque macro part.
+    #[test]
+    fn generated_provider_chooser_keeps_macro_package_suffix_and_native_vba() {
+        for extension in ["docm", "dotm"] {
+            let (mut app, host) = app();
+            app.session.path = Some(std::path::PathBuf::from(format!("/device/{}.{extension}", "字".repeat(200))));
+            let path = app.session.path.clone();
+            let vba = std::sync::Arc::new(vec![0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+            app.session.doc.passthrough.insert("word/vbaProject.bin".into(), vba.clone());
+            assert_eq!(app.run("file.saveAs", json!({})).unwrap()["pending"], "fileProvider");
+            let events = host.take_events();
+            assert_eq!(events.len(), 1);
+            let name = events[0].metadata["name"].as_str().unwrap();
+            assert_eq!(name, format!("{}.{extension}", "字".repeat(83)));
+            assert!(name.len() <= 255);
+            host.resolve_dialog(events[0].metadata["requestId"].as_str().unwrap(), "provider", "").unwrap();
+            app.provider_tick();
+            let saves = host.take_events();
+            let save = saves.iter().find(|event| event.metadata["type"] == "save").unwrap();
+            assert_eq!(save.metadata["name"], name);
+            let restored = wordcraft_engine::io::open_bytes(name, save.bytes.as_ref().unwrap()).unwrap();
+            assert_eq!(restored.passthrough.get("word/vbaProject.bin"), Some(&vba));
+            assert_eq!(app.session.doc.passthrough.get("word/vbaProject.bin"), Some(&vba));
+            assert_eq!(app.session.path, path);
+            assert!(app.session.dirty, "serialization still cannot acknowledge provider persistence");
+        }
+    }
+
+    /// Bound suggestions remain exact, while invalid explicit host input is rejected rather than rewritten.
+    #[test]
+    fn provider_chooser_keeps_valid_bound_names_and_host_filename_validation() {
+        let (mut app, host) = app();
+        let doc = app.session.document_id();
+        let name = "Résumé {name}: cloud.docm";
+        host.bind(&crate::file_providers::Capture { doc, revision: app.session.rev(), name: name.into(), save_as: false }, "bound-resource".into());
+        app.session.doc.core.title = "ignored /\\\n title".into();
+        assert_eq!(app.run("file.saveAs", json!({})).unwrap()["pending"], "fileProvider");
+        let events = host.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].metadata["name"], name);
+        let request = events[0].metadata["requestId"].as_str().unwrap();
+        for invalid in ["bad/path.docm".to_string(), "bad\\path.docm".into(), "bad\nname.docm".into(), "界".repeat(100)] {
+            assert!(host.resolve_dialog(request, "provider", &invalid).is_err());
+            assert!(host.pending_for(doc), "invalid host input must leave its original chooser pending");
+        }
+        host.resolve_dialog(request, "cancel", "").unwrap();
+        assert_eq!(host.filename(doc).as_deref(), Some(name));
+        assert!(app.session.dirty);
+    }
+
+    /// Build a dirty native document and one explicit account for app-level provider scenarios.
     fn app() -> (WordApp, Host) {
         let host = Host::default();
         host.set_session("0123456789abcdef0123456789abcdef".into()).unwrap();
@@ -189,6 +302,7 @@ mod tests {
         (app, host)
     }
 
+    /// Capture real DOCX bytes through the application frame without acknowledging persistence.
     fn save(app: &mut WordApp, host: &Host) -> (String, Vec<u8>) {
         assert!(app.choose_provider_save(false));
         let dialog = host.take_events().into_iter().find(|event| event.metadata["type"] == "saveDialog").unwrap();
@@ -199,6 +313,7 @@ mod tests {
         (request, event.bytes.unwrap())
     }
 
+    /// Explicit exports and templates retain their picked local writer and create no provider choice.
     #[test]
     fn provider_enabled_export_and_template_dialogs_write_the_picked_local_file() {
         for (extension, template) in [("docx", false), ("dotx", true)] {
@@ -224,6 +339,7 @@ mod tests {
         }
     }
 
+    /// A provider-bound local copy cannot clear the remote checkpoint before its correlated ACK.
     #[test]
     fn bound_explicit_export_and_template_copies_keep_provider_changes_dirty_until_ack() {
         for (extension, template) in [("docx", false), ("dotx", true)] {
@@ -270,6 +386,7 @@ mod tests {
         }
     }
 
+    /// An accepted browser-download callback preserves the provider's unsaved revision and binding.
     #[test]
     fn bound_explicit_browser_copy_does_not_acknowledge_provider_persistence() {
         let (mut app, host) = app();
@@ -302,6 +419,7 @@ mod tests {
         assert!(!app.session.dirty);
     }
 
+    /// Keep provider ownership across every simulated asynchronous device-save outcome while disabled.
     #[test]
     fn disabled_provider_owned_browser_copies_and_async_outcomes_keep_the_provider_checkpoint_dirty() {
         use crate::async_saves::{AsyncSaves, SaveOutcome};
@@ -369,6 +487,7 @@ mod tests {
         }
     }
 
+    /// Device acceptance and chooser cancellation leave content dirty and Close asking for a save.
     #[test]
     fn device_download_acceptance_and_cancel_do_not_clear_unsaved_document_state() {
         for destination in ["device", "cancel"] {
@@ -400,6 +519,7 @@ mod tests {
         }
     }
 
+    /// A durable ACK and normal DOCX import preserve provider/device Recent separation.
     #[test]
     fn durable_save_and_reopen_use_native_docx_and_separate_recents() {
         let (mut app, host) = app();
@@ -421,6 +541,7 @@ mod tests {
         assert_eq!(app.ui.recent, device_recents);
     }
 
+    /// Neither a late captured revision nor a failed provider result can clean newer document text.
     #[test]
     fn later_edit_or_failed_provider_result_cannot_clear_dirty_state() {
         let (mut app, host) = app();
@@ -435,6 +556,7 @@ mod tests {
         assert!(app.session.dirty);
     }
 
+    /// Overwriting a shared resource invalidates an alias before its older ACK reaches the app.
     #[test]
     fn resource_overwrite_invalidates_the_alias_revision_before_its_old_ack() {
         let (mut app, host) = app();
@@ -459,6 +581,7 @@ mod tests {
         app.provider_tick();
         assert!(app.session.with_document(first, |session| session.dirty).unwrap(), "a late ACK cannot undo alias invalidation");
     }
+    /// Reject a macro-losing package name, then preserve the opaque VBA part through real DOCM I/O.
     #[test]
     fn provider_macro_free_name_is_rejected_without_dropping_opaque_vba() {
         let (mut app, host) = app();
@@ -486,6 +609,7 @@ mod tests {
         assert_eq!(restored.passthrough.get("word/vbaProject.bin"), Some(&vba));
     }
 
+    /// Malformed provider bytes cannot replace the active document or contaminate device history.
     #[test]
     fn malformed_provider_import_keeps_the_device_history_and_current_document() {
         let (mut app, host) = app();
@@ -504,6 +628,7 @@ mod tests {
         assert!(!host.busy());
     }
 
+    /// Retire a failed delivery through the real app consumer and retry with the newer native content.
     #[test]
     fn failed_provider_delivery_is_consumed_by_the_app_without_cleaning_newer_edits_and_can_retry() {
         let (mut app, host) = app();
