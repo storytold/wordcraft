@@ -94,6 +94,7 @@ fn recent_shortens_a_long_name_and_path_to_its_row() {
     h.run_steps(4);
 
     let row = h.get_by_label(&name).rect();
+    /// Collects every text shape, including those nested in shape lists.
     fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
         match s {
             egui::Shape::Text(ts) => out.push(ts),
@@ -112,7 +113,7 @@ fn recent_shortens_a_long_name_and_path_to_its_row() {
     let mut matched = 0;
     for ts in texts {
         let text = ts.galley.text();
-        if text.starts_with("C:/Users/Someone") || text.starts_with("C:\\Users\\Someone") || text.starts_with("AVeryLongDocumentName") {
+        if text.starts_with("C:/Users/Someone") || text.starts_with("AVeryLongDocumentName") {
             matched += 1;
             let bounds = ts.visual_bounding_rect();
             assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
