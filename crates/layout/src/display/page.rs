@@ -48,13 +48,31 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    warps: Vec<PageWarp<'a>>,
+}
+
+/// A warped text box on a page, for [`ItemDisplay`]: its story, frame and warp, and its story's
+/// lines in the same item list (the header, footer or body), in page order.
+struct PageWarp<'a> {
+    id: u32,
+    rect: Rect,
+    warp: wordcraft_doc::wordart::TextWarp,
+    lines: Vec<&'a Placed>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        // Warped boxes, found in each list on its own as `page_display` does: a box's lines are
+        // drawn bent together, so the item-by-item path needs the whole box, not one line (#3866).
+        let warps = [&page.header[..], &page.footer[..], &page.items[..]]
+            .into_iter()
+            .flat_map(|items| {
+                warped_boxes(doc, items).into_iter().map(move |(id, rect, warp)| PageWarp { id, rect, warp, lines: story_lines(items, id) })
+            })
+            .collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), warps }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -63,10 +81,34 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        if let Some(w) = self.warp_of(it) {
+            // The box's text is drawn bent, once, where its first line is; its other lines draw nothing.
+            let hidden = opts.hide_object.as_ref().is_some_and(|p| Hidden::new(self.doc, p).hides(it));
+            if !hidden && w.lines.first().is_some_and(|f| std::ptr::eq(*f, it)) {
+                let input = WarpedText { doc: self.doc, lines: &w.lines, rect: w.rect, warp: &w.warp, opts, authors: &self.authors, alpha: ba };
+                warped_text(input, &mut out);
+            }
+        } else {
+            stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        }
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
     }
+
+    /// The warped box whose text `it` is a line of, unless the line is cut off by a clipped cell
+    /// (which `stories_display` draws flat, in its clip, before looking for warps).
+    fn warp_of(&self, it: &Placed) -> Option<&PageWarp<'a>> {
+        let Placed::Lines { story: StoryRef::Part(id), path, .. } = it else { return None };
+        if self.warps.is_empty() || cell_clip(&self.clips, StoryRef::Part(*id), &path.0).is_some() {
+            return None;
+        }
+        self.warps.iter().find(|w| w.id == *id && w.lines.iter().any(|l| std::ptr::eq(*l, it)))
+    }
+}
+
+/// The lines of text box story `id` among `items`, in order.
+fn story_lines(items: &[Placed], id: u32) -> Vec<&Placed> {
+    items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect()
 }
 
 /// A page's draw items as two layers, its headers and footers then its body, each at full
@@ -138,8 +180,7 @@ fn stories_display(
                     }
                     done.push(*id);
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
-                        let lines: Vec<&Placed> =
-                            items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
+                        let lines = story_lines(items, *id);
                         warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
                     }
                 }
@@ -158,7 +199,7 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     let Some(id) = text_box else { return out };
     let authors = Authors::new(doc);
     for items in [&page.items, &page.header, &page.footer] {
-        let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
+        let lines = story_lines(items, id);
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
             Some((_, rect, warp)) if !lines.is_empty() => {
                 warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
