@@ -66,6 +66,7 @@ pub use export::{export, export_layout};
 use exporter::Exporter;
 #[cfg(test)]
 use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
+pub use metadata::reads_as_date;
 #[cfg(test)]
 use metadata::{civil, parse_iso};
 pub use options::{PdfError, PdfOptions};
