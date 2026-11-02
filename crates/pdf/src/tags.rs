@@ -173,6 +173,8 @@ pub(crate) enum Role {
     Para(usize),
     /// The number or bullet of the list item at this index.
     Label(usize),
+    /// Link text in the structure entry at this index, in the `Link` element at this child index.
+    Link(usize, usize),
     /// Header/footer, decorations: not part of the structure.
     Artifact(ArtifactType),
     /// A floating picture (its own Figure).

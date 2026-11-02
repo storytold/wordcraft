@@ -1,6 +1,6 @@
 use super::{
-    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
-    left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
+    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, LinkArea, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id,
+    glyph_outlines, left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
 };
 
 /// How a run of glyphs is painted: its colour, opacity and synthetic bold and italic.
@@ -166,17 +166,19 @@ impl Exporter<'_> {
         if ![x0, x1, y0, y1].iter().all(|v| ok(*v)) {
             return;
         }
+        let owner = self.link_owner;
         if let Some(prev) = self.links.last_mut()
-            && prev.4 == link
-            && (prev.1 - y0).abs() < 0.5
-            && x0 - prev.2 < size
+            && prev.target == link
+            && prev.owner == owner
+            && (prev.rect.1 - y0).abs() < 0.5
+            && x0 - prev.rect.2 < size
         {
-            prev.0 = prev.0.min(x0);
-            prev.2 = prev.2.max(x1);
+            prev.rect.0 = prev.rect.0.min(x0);
+            prev.rect.2 = prev.rect.2.max(x1);
             return;
         }
         if self.links.len() < 10_000 {
-            self.links.push((x0, y0, x1, y1, link.to_string()));
+            self.links.push(LinkArea { rect: (x0, y0, x1, y1), target: link.to_string(), owner });
         }
     }
 

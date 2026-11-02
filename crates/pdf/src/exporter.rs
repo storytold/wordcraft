@@ -18,6 +18,14 @@ mod draw;
 mod nav;
 mod text;
 
+/// A link's clickable area on the current page: (x0, y0, x1, y1), its target, and the `Link`
+/// structure element its text is in, if tagged.
+pub(crate) struct LinkArea {
+    pub(crate) rect: (f32, f32, f32, f32),
+    pub(crate) target: String,
+    pub(crate) owner: Option<(usize, usize)>,
+}
+
 pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
@@ -45,7 +53,16 @@ pub(crate) struct Exporter<'a> {
     /// row repeated at the top of a later page.
     pub(crate) drawn_lines: HashSet<(StoryRef, DocPath, usize)>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
-    pub(crate) links: Vec<(f32, f32, f32, f32, String)>,
+    pub(crate) links: Vec<LinkArea>,
+    /// The `Link` structure element the link text being drawn goes in: (entry, child index).
+    pub(crate) link_owner: Option<(usize, usize)>,
+    /// The `Link` element last opened, with its target: the next run of the same link in the
+    /// same paragraph continues it (a link across formatting changes or lines is one link).
+    pub(crate) open_link: Option<(usize, usize, String)>,
+    /// The `Link` element of each link run, in drawing order, by (structure entry, first line):
+    /// a header row repeated on a later page draws the same runs again, and the k-th run's
+    /// annotation joins the k-th run's `Link` of the first time.
+    pub(crate) link_runs: HashMap<(usize, usize), Vec<usize>>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
     /// link up by walking the whole document made a long document with a linked table of contents
     /// take seconds to export.
@@ -143,6 +160,17 @@ impl Exporter<'_> {
                 s.end_tagged();
                 if let Some(e) = self.tags.get_mut(i) {
                     e.children.push(Node::Leaf(id));
+                }
+            }
+            Role::Link(i, c) => {
+                let id = s.start_tagged(ContentTag::Span(SpanTag::empty()));
+                f(self, s);
+                s.end_tagged();
+                if let Some(e) = self.tags.get_mut(i) {
+                    match e.children.get_mut(c) {
+                        Some(Node::Group(g)) => g.push(Node::Leaf(id)),
+                        _ => e.children.push(Node::Group(TagGroup::with_children(Tag::Link, vec![Node::Leaf(id)]))),
+                    }
                 }
             }
             Role::Label(i) => {
@@ -276,14 +304,28 @@ impl Exporter<'_> {
             match it {
                 // A table's header row repeated at the top of a later page: read once, where the
                 // table starts, and an artifact on the pages after (as Word exports it).
+                // Its links stay links: their annotations join the `Link` elements of the first time.
                 Placed::Lines { story, path, l0, .. } if path.cell().is_some() && !self.drawn_lines.insert((*story, path.clone(), *l0)) => {
+                    let runs = self.tag_index.get(&(*story, path.clone())).and_then(|i| self.link_runs.get(&(*i, *l0)).map(|r| (*i, r.clone())));
                     self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                        let mut k = 0;
                         for d in &draws {
+                            // The same runs as the first time, so the k-th link run is the k-th there.
+                            me.link_owner = match (&runs, d) {
+                                (Some((i, slots)), Draw::Glyphs { link: Some(t), list_label: false, .. })
+                                    if me.opts.tagged && me.opts.links && me.link_target(t).is_some() =>
+                                {
+                                    k += 1;
+                                    slots.get(k - 1).map(|c| (*i, *c))
+                                }
+                                _ => None,
+                            };
                             me.draw(s, d);
                         }
+                        me.link_owner = None;
                     });
                 }
-                Placed::Lines { story, path, para, .. } => {
+                Placed::Lines { story, path, para, l0, .. } => {
                     let idx = self.entry(*story, path, para);
                     self.inline_owner = Some(idx);
                     self.anchor = Some((*story, path.0.clone()));
@@ -291,6 +333,15 @@ impl Exporter<'_> {
                         match d {
                             // A list item's number or bullet: its label, apart from its text.
                             Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, d)),
+                            // Link text: in a `Link` element with its annotation (see `link_slot`). Without
+                            // annotations (a print job), it stays plain text: a `Link` with nothing to follow.
+                            Draw::Glyphs { link: Some(target), .. } if self.opts.tagged && self.opts.links && self.link_target(target).is_some() => {
+                                let c = self.link_slot(idx, target);
+                                self.link_runs.entry((idx, *l0)).or_default().push(c);
+                                self.link_owner = Some((idx, c));
+                                self.tagged(s, Role::Link(idx, c), None, |me, s| me.draw(s, d));
+                                self.link_owner = None;
+                            }
                             Draw::Glyphs { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             // Turned text (a table cell's text direction): turned as a whole, its
                             // label, text and pictures tagged as in straight lines (see `turned_lines`).
@@ -465,6 +516,20 @@ impl Exporter<'_> {
         }
         flush(&mut run, &mut out);
         out
+    }
+
+    /// The child index of the `Link` element for a run of link text to `target` in structure
+    /// entry `i`: the one the previous run opened when nothing came between them in the entry,
+    /// otherwise a new one at the end.
+    fn link_slot(&mut self, i: usize, target: &str) -> usize {
+        let len = self.tags.get(i).map_or(0, |e| e.children.len());
+        match &self.open_link {
+            Some((e, c, t)) if *e == i && c.checked_add(1) == Some(len) && t == target => *c,
+            _ => {
+                self.open_link = Some((i, len, target.to_string()));
+                len
+            }
+        }
     }
 
     /// A table's structure, as Word exports it: its leading header rows ("Repeat as header row at
