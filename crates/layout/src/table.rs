@@ -952,6 +952,10 @@ fn aligned_rule_top(rule: &AnchoredRule, before: Option<f32>, after: Option<f32>
     rule.top + delta
 }
 
+fn loses_split_cell(kept_cells: &[bool], cut_through: &[bool]) -> bool {
+    kept_cells.iter().zip(cut_through).any(|(&kept, &through)| !kept && through)
+}
+
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
@@ -1058,7 +1062,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         return None;
     }
     // A cell left with nothing here because its first line or picture runs below the cut.
-    if whole_cells && kept_cells.iter().zip(&cut_through).any(|(&kept, &through)| !kept && through) {
+    if whole_cells && loses_split_cell(&kept_cells, &cut_through) {
         return None;
     }
     // Each cell resumes below its own top margin and border band.
