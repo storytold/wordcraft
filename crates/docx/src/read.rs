@@ -109,7 +109,7 @@ pub(crate) struct Reader<'p> {
     /// The theme's fill styles, which shapes' style references point to.
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
-    pub group_fill: Option<wordcraft_doc::fill::Fill>,
+    group_fill: Option<shape_style::ShapeFill>,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`

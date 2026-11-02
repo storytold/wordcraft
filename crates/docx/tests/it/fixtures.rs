@@ -4213,6 +4213,67 @@ fn theme_pattern_direct_wins() {
     }
 }
 
+#[test]
+fn group_pattern_roundtrips() {
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+
+    let pattern = r#"<a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="204060"><a:alpha val="40000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="A0B0C0"><a:alpha val="30000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let other = r#"<a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="123456"><a:alpha val="50000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="654321"><a:alpha val="20000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let solid = r#"<a:solidFill><a:srgbClr val="ABCDEF"><a:alpha val="25000"/></a:srgbClr></a:solidFill>"#;
+    let foreground = Fill::Solid { color: Rgb(0x20, 0x40, 0x60), transparency: 60.0 };
+    let solid_fill = Fill::Solid { color: Rgb(0xAB, 0xCD, 0xEF), transparency: 75.0 };
+    let other_pattern = PatternFill {
+        kind: PatternKind::LightVertical,
+        foreground: PatternColor { color: Rgb(0x12, 0x34, 0x56), alpha: 50_000 },
+        background: PatternColor { color: Rgb(0x65, 0x43, 0x21), alpha: 20_000 },
+    };
+    let frame = r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/></a:xfrm>"#;
+    let member = |paint: &str| {
+        format!(
+            r#"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{paint}</wps:spPr><wps:bodyPr/></wps:wsp>"#
+        )
+    };
+    let nested = |paint: &str, children: &str| format!("<wpg:grpSp><wpg:grpSpPr>{frame}{paint}</wpg:grpSpPr>{children}</wpg:grpSp>");
+    let inherited = (Some(foreground), Some(expected_theme_pattern()));
+    let explicit = (Some(solid_fill), None);
+    let empty = (None, None);
+    for (paint, nested_fill, nested_pattern) in [
+        ("", inherited.0.clone(), inherited.1),
+        ("<a:grpFill/>", inherited.0.clone(), inherited.1),
+        (solid, explicit.0.clone(), None),
+        ("<a:noFill/>", None, None),
+        (other, Some(Fill::Solid { color: Rgb(0x12, 0x34, 0x56), transparency: 50.0 }), Some(other_pattern)),
+    ] {
+        // A second nested group inherits the selected context; the following sibling restores the outer one.
+        let members = format!("{}{}{}{}", member("<a:grpFill/>"), member(solid), member("<a:noFill/>"), nested("", &member("<a:grpFill/>")));
+        let members =
+            format!("{}{}{}{}{}", member("<a:grpFill/>"), member(solid), member("<a:noFill/>"), nested(paint, &members), member("<a:grpFill/>"));
+        let group = format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Original pattern group"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr>{frame}{pattern}</wpg:grpSpPr>{members}</wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        );
+        let mut doc = read_body(&format!("<w:p>{group}</w:p>"));
+        let selected = (nested_fill, nested_pattern);
+        let expected =
+            [inherited.clone(), explicit.clone(), empty.clone(), selected.clone(), explicit.clone(), empty.clone(), selected, inherited.clone()];
+        for cycle in 0..=2 {
+            let InlineObject::Group { children, .. } = &paras(&doc)[0].objects[0] else { panic!() };
+            assert_eq!(children.len(), expected.len(), "{paint}; cycle {cycle}");
+            for (child, (fill, pattern)) in children.iter().zip(&expected) {
+                let InlineObject::Shape { fill: actual, extra, .. } = child else { panic!() };
+                assert_eq!(actual, fill, "{paint}; cycle {cycle}");
+                assert_eq!(extra.pattern.as_deref(), pattern.as_ref(), "{paint}; cycle {cycle}");
+            }
+            if cycle < 2 {
+                let saved = wordcraft_docx::write(&doc).unwrap();
+                let xml = text(&unzip(&saved), "word/document.xml");
+                assert!(xml.contains("<a:pattFill prst=\"ltVert\">"), "{xml}");
+                assert!(xml.contains("<a:alpha val=\"40000\"/>") && xml.contains("<a:alpha val=\"30000\"/>"), "{xml}");
+                doc = wordcraft_docx::read(&saved).unwrap();
+            }
+        }
+    }
+}
+
 /// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
 /// hid the picture.
 #[test]

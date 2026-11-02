@@ -147,13 +147,20 @@ impl ThemeFills {
 /// more, so a hostile theme with millions of entries keeps a bounded list.
 const MAX_THEME_FILLS: usize = 999;
 
+/// Keep a group's pattern beside its foreground fallback until a member selects its fill.
+#[derive(Clone)]
+pub(super) struct ShapeFill {
+    pub(super) fill: Fill,
+    pattern: Option<wordcraft_doc::pattern::PatternFill>,
+}
+
 /// The fill a `…spPr` element states itself: `Some(None)` for none (`a:noFill`, picture fills),
 /// `group` for `a:grpFill`, `None` when it leaves the fill to the shape's style.
-pub(crate) fn own_fill(sppr: Option<&El>, theme: &[Rgb], group: Option<&Fill>) -> Option<Option<Fill>> {
+pub(super) fn own_fill(sppr: Option<&El>, theme: &[Rgb], group: Option<&ShapeFill>) -> Option<Option<ShapeFill>> {
     let f = sppr?.els().find(|c| matches!(c.name.as_str(), "a:noFill" | "a:blipFill" | "a:grpFill" | "a:solidFill" | "a:gradFill" | "a:pattFill"))?;
     Some(match f.name.as_str() {
         "a:grpFill" => group.cloned(),
-        _ => read_fill(f, theme, None),
+        _ => read_fill(f, theme, None).map(|fill| ShapeFill { fill, pattern: sppr.and_then(|s| super::drawing_color::pattern_fill(s, theme)) }),
     })
 }
 
@@ -161,13 +168,14 @@ pub(crate) fn own_fill(sppr: Option<&El>, theme: &[Rgb], group: Option<&Fill>) -
 /// colours `theme`, fill styles `styles`) for what they leave out: an explicit `a:noFill` is no
 /// fill or outline, an explicit colour wins, `a:grpFill` is the enclosing group's fill `group`,
 /// and a style reference with index 0 is none.
-pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], styles: &ThemeFills, group: Option<&Fill>) -> ShapePaint {
+pub(super) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], styles: &ThemeFills, group: Option<&ShapeFill>) -> ShapePaint {
     let style_ref = |name: &str| -> Option<(i64, &El)> {
         let r = style?.child(name)?;
         Some((r.attr("idx").and_then(int).unwrap_or(0), r))
     };
-    let mut pattern = sppr.and_then(|s| super::drawing_color::pattern_fill(s, theme));
-    let fill = own_fill(sppr, theme, group).unwrap_or_else(|| {
+    let own = own_fill(sppr, theme, group);
+    let mut pattern = own.as_ref().and_then(Option::as_ref).and_then(|paint| paint.pattern);
+    let fill = own.map(|paint| paint.map(|paint| paint.fill)).unwrap_or_else(|| {
         let (idx, r) = style_ref("a:fillRef").filter(|(idx, _)| *idx > 0)?;
         // The theme style in the reference's colour (`phClr`), else that colour: also for a style
         // the model can't hold (a picture fill), so the shape doesn't vanish.
