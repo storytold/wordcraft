@@ -1,6 +1,6 @@
-// Reuse our hand-written Czech proof fixture; its install helper resolves this parent import.
+// A copy of craft-proof's hand-written Czech fixture (`crates/proof/src/cs/test_dict.rs` in
+// craft-libs, which a dependency's tests can't share); its install helper resolves this parent import.
 use wordcraft_proof::cs::install_dictionary;
-#[path = "../../proof/src/cs/test_dict.rs"]
 mod czech_test_dict;
 
 use serde_json::json;
@@ -17,6 +17,22 @@ mod ime_noop;
 mod revision_checks;
 mod typing;
 mod wordart;
+
+/// True, after saying so on stderr, when this build lacks the Language data the proofing tests
+/// need (craft-proof built without `CRAFT_I18N_DIR`). The probes are craft-proof's public
+/// `english_source` (the embedded English dictionary) and its American/British variant table
+/// (`colour` → `color`): a craft-i18n checkout without some of the files embeds only the rest,
+/// so both are asked. Without them English still spells from craft-proof's built-in word list,
+/// but there are no hyphenation patterns and no variant table, so the tests that check those
+/// return early, as craft-proof's own do; with the data (CI, releases) they all run.
+pub(crate) fn no_language_data(test: &str) -> bool {
+    let missing = wordcraft_proof::english_source(wordcraft_proof::ProofLang::En) != Some(wordcraft_proof::EnglishSource::Embedded)
+        || wordcraft_proof::en_variants::preferred("colour", wordcraft_proof::ProofLang::En).as_deref() != Some("color");
+    if missing {
+        eprintln!("{test}: skipped, needs the Language data (set CRAFT_I18N_DIR to a craft-i18n checkout)");
+    }
+    missing
+}
 
 fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
@@ -8665,6 +8681,9 @@ fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
 /// it and Change fixes it.
 #[test]
 fn english_dialects_through_the_review_commands() {
+    if no_language_data("english_dialects_through_the_review_commands") {
+        return;
+    }
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "The colour of the center."}));
     // US English by default: the British spelling is flagged, the American one isn't.
@@ -8698,6 +8717,9 @@ fn english_dialects_through_the_review_commands() {
 /// and is proofed the same way when it comes back.
 #[test]
 fn english_dialects_survive_a_docx_round_trip() {
+    if no_language_data("english_dialects_survive_a_docx_round_trip") {
+        return;
+    }
     use std::io::Read;
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "Colour and color. Centre and center."}));
@@ -8726,6 +8748,9 @@ fn english_dialects_survive_a_docx_round_trip() {
 /// system, #1045); another region's language leaves US English.
 #[test]
 fn new_documents_follow_the_regions_english() {
+    if no_language_data("new_documents_follow_the_regions_english") {
+        return;
+    }
     let mut s = s();
     s.system_region = wordcraft_geom::Region::from_tag("en_GB.UTF-8");
     assert_eq!(s.region_english().as_deref(), Some("en-GB"));
