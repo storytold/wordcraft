@@ -182,7 +182,8 @@ fn char_prop(w: &mut W, name: &str, c: Option<char>) {
 
 fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
     let MNode::Matrix { rows, col_jc } = n else { return };
-    // Bound rows and columns to the same limits accepted by the reader (#3643).
+    // Every row is padded to the widest one, so a ragged matrix is clamped to the reader's
+    // caps rather than written as rows × widest cells (#3643).
     let rows = rows.get(..rows.len().min(MAX_MATRIX_ROWS)).unwrap_or_default();
     let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).clamp(1, MAX_MATRIX_COLS);
     w.open("m:m", &[]);
