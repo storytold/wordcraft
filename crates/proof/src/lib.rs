@@ -439,12 +439,20 @@ const EXTRA_EN: &str = include_str!("../../../assets/spelling/en-extra.txt");
 
 fn extra_words() -> &'static HashSet<&'static str> {
     static E: OnceLock<HashSet<&str>> = OnceLock::new();
-    E.get_or_init(|| EXTRA_EN.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect())
+    E.get_or_init(|| {
+        EXTRA_EN
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .chain(["macos", "ios", "ipados", "watchos", "tvos", "api", "sdk", "cli", "gui"])
+            .collect()
+    })
 }
 
-/// A base form in the dictionary or the supplement.
+/// A base form in the dictionary or the supplement (`teh` in the 1990s Moby list is an archaic
+/// headword that modern spellcheckers treat as a typo unless added to the user dictionary).
 fn base_known(d: &dict::Dictionary, w: &str) -> bool {
-    d.get(w).is_some() || extra_words().contains(w)
+    w != "teh" && (d.get(w).is_some() || extra_words().contains(w))
 }
 
 fn known_core(w: &str) -> bool {
@@ -569,12 +577,78 @@ fn accepted_by_options(word: &str, opts: &Options) -> bool {
         || in_user_dictionary(&w.to_lowercase())
 }
 
+/// Whether `c` is a Hangul or CJK ideograph/kana character (not proofed by European dictionaries).
+fn is_cjk_or_hangul(c: char) -> bool {
+    matches!(
+        c,
+        '\u{1100}'..='\u{11FF}'
+            | '\u{2E80}'..='\u{2FDF}'
+            | '\u{3040}'..='\u{318F}'
+            | '\u{3190}'..='\u{31FF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{A960}'..='\u{A97F}'
+            | '\u{AC00}'..='\u{D7FF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF66}'..='\u{FFDC}'
+            | '\u{20000}'..='\u{3FFFF}'
+    )
+}
+
+/// Byte span `(start, end)` inside `w` after stripping leading/trailing Hangul or CJK characters
+/// (such as Korean particles in `macOS에서` or `Word를`), any combining marks attached to them, and
+/// any exposed apostrophe/hyphen, or `None` when no non-CJK stem remains or CJK characters sit
+/// inside the stem.
+fn non_cjk_stem_span(w: &str) -> Option<(usize, usize)> {
+    use unicode_normalization::char::is_combining_mark;
+    let is_punct_edge = |c: char| matches!(c, '\'' | '’' | '-');
+    let mut rest = w;
+    loop {
+        let first = rest.chars().next()?;
+        if is_punct_edge(first) || is_combining_mark(first) {
+            rest = rest.get(first.len_utf8()..)?;
+        } else if is_cjk_or_hangul(first) {
+            rest = rest.get(first.len_utf8()..)?.trim_start_matches(is_combining_mark);
+        } else {
+            break;
+        }
+    }
+    let lead = w.len().checked_sub(rest.len())?;
+    loop {
+        let last = rest.chars().next_back()?;
+        if is_punct_edge(last) || is_cjk_or_hangul(last) {
+            rest = rest.get(..rest.len().checked_sub(last.len_utf8())?)?;
+        } else if is_combining_mark(last) {
+            let without_marks = rest.trim_end_matches(is_combining_mark);
+            if let Some(base) = without_marks.chars().next_back()
+                && is_cjk_or_hangul(base)
+            {
+                rest = without_marks.get(..without_marks.len().checked_sub(base.len_utf8())?)?;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    if rest.is_empty() || rest.chars().any(is_cjk_or_hangul) {
+        return None;
+    }
+    Some((lead, lead.checked_add(rest.len())?))
+}
+
 /// [`is_correct`] with the File › Options › Proofing choices.
 pub fn is_correct_with(word: &str, opts: &Options) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
     let w = w.trim_matches('\'');
     if accepted_by_options(w, opts) {
         return true;
+    }
+    if w.chars().any(is_cjk_or_hangul) {
+        return match non_cjk_stem_span(w).and_then(|(s, e)| w.get(s..e)) {
+            Some(stem) => is_correct_with(stem, opts),
+            None => true,
+        };
     }
     if !w.is_ascii() && !w.chars().any(|c| c.is_ascii_alphabetic()) {
         return true; // other scripts: no dictionary
@@ -600,7 +674,7 @@ pub fn suggest(word: &str, max: usize) -> Vec<String> {
     let d = dict::Dictionary::en_us();
     let mut scored: Vec<(usize, i64, String)> = Vec::new();
     let target: Vec<char> = lower.chars().collect();
-    for w in d.iter().map(|(w, _)| w).chain(extra_words().iter().copied()) {
+    for w in d.iter().map(|(w, _)| w).filter(|&w| w != "teh").chain(extra_words().iter().copied()) {
         let wn = w.chars().count();
         if wn + 2 < n || wn > n + 2 {
             continue;
@@ -807,7 +881,17 @@ pub(crate) fn is_address(token: &str) -> bool {
 /// web and e-mail addresses are skipped (unless `opts` says otherwise); `internet` is the
 /// classification of the word's enclosing token, from [`enclosing_token`].
 fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
-    let w = text.get(a..b)?;
+    let raw = text.get(a..b)?;
+    if in_user_dictionary(&raw.to_lowercase()) {
+        return None;
+    }
+    let (a, b, w) = if raw.chars().any(is_cjk_or_hangul) {
+        let (sa, sb) = non_cjk_stem_span(raw)?;
+        let (na, nb) = (a.checked_add(sa)?, a.checked_add(sb)?);
+        (na, nb, text.get(na..nb)?)
+    } else {
+        (a, b, raw)
+    };
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
     if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
         return None;
@@ -836,6 +920,12 @@ fn composed(word: &str) -> std::borrow::Cow<'_, str> {
 /// checked as its composed form ([`composed`]).
 pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
     let word = &*composed(word);
+    if word.chars().any(is_cjk_or_hangul) {
+        return match non_cjk_stem_span(word).and_then(|(s, e)| word.get(s..e)) {
+            Some(stem) => is_correct_in_with(stem, lang, opts),
+            None => true,
+        };
+    }
     if lang.is_english() {
         return is_correct_english(word, lang, opts);
     }
@@ -953,6 +1043,7 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
         if gap.trim().is_empty()
             && w0.eq_ignore_ascii_case(w1)
             && w0.chars().all(char::is_alphabetic)
+            && !w0.chars().any(is_cjk_or_hangul)
             && !matches!(w0.to_lowercase().as_str(), "had" | "that" | "bye" | "so")
         {
             v.push(Issue {
@@ -964,7 +1055,11 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 lang: ProofLang::En,
             });
         }
-        if gap == " " && (w0 == "a" || w0 == "A") && w1.chars().next().is_some_and(|c| "aeiouAEIOU".contains(c)) && !starts_consonant_sound(w1) {
+        if gap == " "
+            && (w0 == "a" || w0 == "A")
+            && w1.chars().next().is_some_and(|c| c.is_ascii_alphabetic() && "aeiouAEIOU".contains(c))
+            && !starts_consonant_sound(w1)
+        {
             v.push(Issue {
                 start: *a0,
                 end: *b0,
@@ -974,10 +1069,11 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
                 lang: ProofLang::En,
             });
         }
+        let w1_stem = w1.trim_end_matches(is_cjk_or_hangul);
         if gap == " "
             && (w0 == "an" || w0 == "An")
-            && w1.chars().next().is_some_and(|c| c.is_alphabetic() && !"aeiouAEIOUhH".contains(c))
-            && !w1.chars().all(char::is_uppercase)
+            && w1_stem.chars().next().is_some_and(|c| c.is_ascii_alphabetic() && !"aeiouAEIOUhH".contains(c))
+            && !w1_stem.chars().all(char::is_uppercase)
         {
             v.push(Issue {
                 start: *a0,
@@ -1020,7 +1116,12 @@ fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
     let mut after_end = capital_first;
     for (a, b) in &ws {
         let Some(w) = text.get(*a..*b) else { continue };
-        if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
+        if after_end
+            && w.chars().next().is_some_and(char::is_lowercase)
+            && w.chars().all(char::is_alphabetic)
+            && !w.chars().any(is_cjk_or_hangul)
+            && !w.chars().skip(1).any(char::is_uppercase)
+        {
             let fixed: String = w.chars().next().map(|f| f.to_uppercase().chain(w.chars().skip(1)).collect()).unwrap_or_default();
             v.push(Issue {
                 start: *a,
@@ -1911,6 +2012,74 @@ mod tests {
         let v = check_text(t, &[(0..t.len(), ProofLang::It)]);
         assert_eq!(flagged(t, &v), ["lbiro", "caffe"], "{v:?}");
         assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
+    }
+
+    #[test]
+    fn mixed_english_korean_tokens_and_korean_reduplications_proof_cleanly() {
+        for ok in ["macOS에서", "Word를", "API가", "iPhone은", "UTF-8을", "macOS\u{110B}\u{1166}\u{1109}\u{1165}", "한국어", "서울-부산"]
+        {
+            assert!(is_correct(ok), "{ok}");
+            assert!(is_correct_in(ok, ProofLang::En), "{ok}");
+        }
+        for bad in ["maccOS에서", "teh를", "recieve가"] {
+            assert!(!is_correct(bad), "{bad}");
+            assert!(!is_correct_in(bad, ProofLang::En), "{bad}");
+        }
+
+        // Valid mixed paragraph produces zero spelling and zero grammar issues.
+        let clean = "macOS에서 Word를 열어 API가 동작하는지 iPhone은 확인합니다.";
+        assert!(check_spelling(clean).is_empty(), "{:?}", check_spelling(clean));
+        assert!(check_grammar(clean).is_empty(), "{:?}", check_grammar(clean));
+        assert!(check_text(clean, &[]).is_empty(), "{:?}", check_text(clean, &[]));
+
+        // Misspelled English stems with Korean particles underline ONLY the English stem, never the particle.
+        let typos = "오늘은 maccOS에서 teh를 입력했다.";
+        let issues = check_spelling(typos);
+        let spans: Vec<&str> = issues.iter().map(|i| &typos[i.start..i.end]).collect();
+        assert_eq!(spans, ["maccOS", "teh"], "{issues:?}");
+
+        // Decomposed NFD Korean particles also leave exact byte spans on the misspelled English stem.
+        let typos_nfd = "오늘은 maccOS\u{110B}\u{1166}\u{1109}\u{1165} teh\u{1105}\u{1173}\u{11AF} 입력했다.";
+        let spans_nfd: Vec<&str> = check_spelling(typos_nfd).iter().map(|i| &typos_nfd[i.start..i.end]).collect();
+        assert_eq!(spans_nfd, ["maccOS", "teh"]);
+
+        // Korean reduplications (첩어) never trigger English "Repeated word", while English duplicates still do.
+        for ko_rep in [
+            "하루 하루 열심히 살자.",
+            "하나 하나 확인합니다.",
+            "조금 조금 나아진다.",
+            "\u{1112}\u{1161}\u{1102}\u{1161} \u{1112}\u{1161}\u{1102}\u{1161}",
+        ] {
+            assert!(check_grammar(ko_rep).is_empty(), "{ko_rep}: {:?}", check_grammar(ko_rep));
+        }
+        let en_rep = "We saw the the sign.";
+        let g = check_grammar(en_rep);
+        assert_eq!(g.len(), 1);
+        assert_eq!(&en_rep[g[0].start..g[0].end], "the the");
+    }
+
+    #[test]
+    fn mixed_english_korean_articles_and_combining_marks_proof_cleanly() {
+        // F-CHAL-5A: English articles `a` / `an` before Korean words (or ALL-CAPS acronym + Korean particle) never misfire.
+        for clean in ["We sent an 이메일을 yesterday.", "We sent a 이메일을 yesterday.", "We called an SDK를 yesterday.", "An 한국어 문서를 읽었다."]
+        {
+            assert!(check_grammar(clean).is_empty(), "{clean}: {:?}", check_grammar(clean));
+        }
+        // Genuine English article errors still fire, including before English+Korean mixed stems.
+        assert_eq!(check_grammar("We sent an car를 yesterday.").len(), 1);
+        assert_eq!(check_grammar("We sent a email을 yesterday.").len(), 1);
+
+        // F-CHAL-5B: Leading Hangul + combining mark (`"한\u{0301}teh"`) trims past `\u{0301}` so the spelling span never starts on a combining mark.
+        let mixed_mark = "한\u{0301}teh";
+        let issues = check_spelling(mixed_mark);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!((issues[0].start, issues[0].end), (5, 8));
+        assert_eq!(&mixed_mark[issues[0].start..issues[0].end], "teh");
+        assert!(is_correct("한\u{0301}the"));
+        assert!(check_spelling("한\u{0301}the").is_empty());
+        // Decomposed Latin combining marks before trailing Korean particles remain intact (`cafe\u{0301}를` -> `café`).
+        assert!(is_correct_in("cafe\u{0301}를", ProofLang::En));
+        assert!(check_spelling("cafe\u{0301}를").is_empty());
     }
 
     proptest::proptest! {
