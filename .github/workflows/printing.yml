@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - 'Cargo*'
+      - 'craft-i18n.rev'
       - 'apps/wordcraft/**'
       - 'apps/wordcraft-web/**'
       - 'crates/ui-egui/**'
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - 'Cargo*'
+      - 'craft-i18n.rev'
       - 'apps/wordcraft/**'
       - 'apps/wordcraft-web/**'
       - 'crates/ui-egui/**'
@@ -41,6 +43,26 @@ jobs:
       CARGO_INCREMENTAL: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The interface catalogs and craft-proof's Language data come from craft-i18n at the commit in
+      # craft-i18n.rev, so these tests build with the same data as the gate (ci.yml).
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+
+      # The catalogs include CJK interface languages, so the UI tests need the suite's fonts, as in
+      # the gate (same commit as ci.yml and release.yml).
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+
+      - name: Build with craft-fonts
+        shell: bash
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
 
       - name: Install Linux build and software-rendering dependencies
         if: runner.os == 'Linux'

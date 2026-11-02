@@ -20,13 +20,17 @@ list (author, source, license) is in ATTRIBUTION.md.
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
   Shippori Mincho), under the SIL Open Font License 1.1. Their licence texts ship with the
   packages as OFL-<family>.txt. Builds without CRAFT_FONTS_DIR do not include them.
-- English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
+- Language data (craft-i18n): the word list and hyphenation patterns below are embedded at build
+  time from https://github.com/storytold/craft-i18n (language-data/, CRAFT_I18N_DIR at the commit
+  in craft-i18n.rev; all official releases) by craft-proof (storytold/craft-libs). Builds without
+  CRAFT_I18N_DIR do not include them.
+- English word list (craft-i18n language-data/en-us/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
-  (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.
-- Polish hyphenation patterns (assets/hyphenation/pl.pat) — hyph-pl.tex from the hyph-utf8
+  (craft-i18n language-data/en-us/hyphenation.pat) were trained from it and are released as CC0-1.0.
+- Polish hyphenation patterns (craft-i18n language-data/pl/hyphenation.pat) — hyph-pl.tex from the hyph-utf8
   package, Copyright (C) 1987-1995 Hanna Kołodziejska, Bogusław Jackowski, Marek Ryćko, bundled
   unmodified and used under the MIT License; the copyright and permission notice is in the file.
-- Portuguese hyphenation patterns (assets/hyphenation/pt.pat) — hyph-pt.tex from the hyph-utf8
+- Portuguese hyphenation patterns (craft-i18n language-data/pt/hyphenation.pat) — hyph-pt.tex from the hyph-utf8
   package, bundled unmodified and used under the BSD 3-Clause License:
 
     Copyright (C) 1987, 1994, 1996, 2015 Pedro J. de Rezende, 1996, 2015 J. Joao Dias Almeida,
@@ -52,7 +56,7 @@ list (author, source, license) is in ATTRIBUTION.md.
     ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
     NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
     OF THE POSSIBILITY OF SUCH DAMAGE.
-- German hyphenation patterns (assets/hyphenation/de.pat) — hyph-de-1996.tex (reformed spelling)
+- German hyphenation patterns (craft-i18n language-data/de/hyphenation.pat) — hyph-de-1996.tex (reformed spelling)
   from the hyph-utf8 package, bundled unmodified and used under the MIT License; the copyright
   and permission notice is in the file:
 
@@ -74,7 +78,7 @@ list (author, source, license) is in ATTRIBUTION.md.
     FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
     OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
-- Italian hyphenation patterns (assets/hyphenation/it.pat) — hyph-it.tex from the hyph-utf8
+- Italian hyphenation patterns (craft-i18n language-data/it/hyphenation.pat) — hyph-it.tex from the hyph-utf8
   package, Copyright (C) 2008-2011 Claudio Beccari, bundled unmodified and used under the MIT
   License (offered under LPPL 1.3+ or MIT); the copyright and permission notice is in the file:
 
