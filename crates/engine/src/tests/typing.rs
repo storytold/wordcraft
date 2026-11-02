@@ -3680,6 +3680,29 @@ fn shift_end_on_a_paragraphs_last_line_selects_its_mark() {
     run(&mut s, "caret.set", json!({"pos": Pos::body(2, 3)}));
     run(&mut s, "caret.end", json!({"extend": true}));
     assert_eq!(s.sel.focus, Pos::body(2, 10), "last paragraph");
+    // Nor can the mark before a table, or a cell's last one. A cell's other marks can.
+    let mut s = typed("Intro line\n");
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let (table, _, _) = s.sel.focus.path.cell().unwrap();
+    assert_eq!(table, Pos::body(1, 0).path, "the table comes right after the paragraph");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(0, 10), "before a table");
+    let in_cell = |block: u32, off: usize| {
+        let mut path = table.0.clone();
+        path.extend([0, 0, block]);
+        Pos { story: StoryRef::Body, path: wordcraft_doc::Path(path), off }
+    };
+    run(&mut s, "caret.set", json!({"pos": in_cell(0, 0)}));
+    run(&mut s, "text.insert", json!({"text": "Uno corto."}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Due corto."}));
+    run(&mut s, "caret.set", json!({"pos": in_cell(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, in_cell(1, 0), "a cell's first paragraph");
+    run(&mut s, "caret.set", json!({"pos": in_cell(1, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, in_cell(1, 10), "a cell's last paragraph");
 }
 
 #[test]
@@ -3741,6 +3764,8 @@ fn typing_or_deleting_over_a_selection_that_ends_with_a_mark_keeps_the_paragraph
     run(&mut s, "caret.end", json!({"extend": true}));
     run(&mut s, "text.delete", json!({}));
     let first = s.doc.body.first().and_then(|b| b.as_para());
+    assert!(first.is_some_and(|p| p.run_ranges().any(|(r, c)| c.del.is_some() && p.text.get(r) == Some(" corto."))), "the text is marked deleted");
+    assert_eq!(first.map(|p| p.text.as_str()), Some("Uno corto."), "and stays until accepted");
     assert_eq!(first.map(|p| p.mark.del), Some(None), "the mark isn't deleted");
     assert_eq!(para_texts(&s).len(), 3);
 }
