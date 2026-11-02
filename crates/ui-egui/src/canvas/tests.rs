@@ -2773,22 +2773,29 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
     assert!(!h.state().canvas.context_menu_open, "and closed the menu");
     assert!(h.state().canvas.focused, "the page has the keyboard again");
+}
 
-    // The keys themselves: Shift+F10 and the Menu key open the menu with its first item focused.
-    // In the second line: the cut left two spaces, whose suggestion would come first.
-    h.state_mut().run("caret.set", json!({"pos": Pos::body(0, 19)})).unwrap();
-    run(&mut h);
+/// #4977: the keys themselves, not `ui.contextMenu`: Shift+F10 and the Menu key open the menu with
+/// its first item focused, Down goes to the next one, and Escape gives the page the keyboard back
+/// at the same caret.
+#[test]
+fn shift_f10_and_the_menu_key_open_the_menu_on_its_first_item() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = page_with_keyboard("The quick brown fox\nA second line");
+    let focused = |h: &H| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default());
     for (name, modifiers, key) in [("Shift+F10", egui::Modifiers::SHIFT, egui::Key::F10), ("the Menu key", egui::Modifiers::NONE, egui::Key::Menu)] {
         let caret = h.state().session.sel.clone();
         h.key_press_modifiers(modifiers, key);
-        run(&mut h);
+        h.run_steps(4);
         assert!(h.state().canvas.context_menu_open, "{name} opens the menu");
         assert!(focused(&h).is_some_and(|l| l.starts_with("Cut")), "{name}: the first item has the keyboard: {:?}", focused(&h));
+        let items: Vec<String> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().label().unwrap_or_default()).collect();
         h.key_press(egui::Key::ArrowDown);
-        run(&mut h);
+        h.run_steps(4);
         assert_eq!(focused(&h).as_ref(), items.get(1), "{name}: Down goes to the next item");
         h.key_press(egui::Key::Escape);
-        run(&mut h);
+        h.run_steps(4);
         assert!(!h.state().canvas.context_menu_open, "{name}: Escape closes the menu");
         assert!(h.state().canvas.focused, "{name}: the page has the keyboard again");
         assert_eq!(h.state().session.sel, caret, "{name}: at the caret where it was");

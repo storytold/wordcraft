@@ -150,7 +150,7 @@ fn first_arrow(app: &WordApp, ui: &Ui, head: egui::Id, items: &[(egui::LayerId, 
     let to = if down {
         here.next()
     } else if up {
-        here.last()
+        here.next_back()
     } else {
         None
     };
