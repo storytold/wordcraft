@@ -3631,3 +3631,233 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+#[test]
+fn hangul_canonical_nfc_nfd_find_replace_and_select_text() {
+    let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
+    let nfc = "한글";
+    assert_eq!((nfd.len(), nfc.len()), (18, 6));
+
+    // (a) Document holds NFD Hangul (18 bytes) and query is NFC (6 bytes).
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": format!("앞 {nfd} 뒤 {nfd}")}));
+    run(&mut s, "caret.docStart", json!({}));
+    let found = s.run("edit.find", &json!({"text": nfc})).unwrap();
+    assert_eq!(found["count"], 2);
+    assert_eq!(found["matches"][0]["start"]["off"], 4);
+    assert_eq!(found["matches"][0]["end"]["off"], 22);
+    assert_eq!(s.selected_text(), nfd);
+
+    run(&mut s, "select.text", json!({"text": nfc, "occurrence": 2}));
+    assert_eq!(s.sel.ordered(), (Pos::body(0, 27), Pos::body(0, 45)));
+    assert_eq!(s.selected_text(), nfd);
+
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "edit.find", json!({"text": nfc}));
+    let rep1 = s.run("edit.replace", &json!({"text": nfc, "with": "워드"})).unwrap();
+    assert_eq!(rep1["remaining"], 1);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("앞 워드 뒤 {nfd}"));
+    let rep_all = s.run("edit.replaceAll", &json!({"text": nfc, "with": "문서"})).unwrap();
+    assert_eq!(rep_all["replaced"], 1);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "앞 워드 뒤 문서");
+
+    // Vice versa: document holds NFC Hangul (6 bytes) and query is NFD (18 bytes).
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "MACOS 한글 테스트 한글"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let found = s.run("edit.find", &json!({"text": nfd})).unwrap();
+    assert_eq!(found["count"], 2);
+    assert_eq!(found["matches"][0]["start"]["off"], 6);
+    assert_eq!(found["matches"][0]["end"]["off"], 12);
+    assert_eq!(s.selected_text(), nfc);
+
+    // Case-insensitive Latin combined with canonical Hangul.
+    let mixed_q = format!("macos {nfd}");
+    assert_eq!(s.run("edit.find", &json!({"text": mixed_q})).unwrap()["count"], 1);
+
+    run(&mut s, "select.text", json!({"text": nfd, "occurrence": 2}));
+    assert_eq!(s.selected_text(), nfc);
+    let rep_all = s.run("edit.replaceAll", &json!({"text": nfd, "with": "워드"})).unwrap();
+    assert_eq!(rep_all["replaced"], 2);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "MACOS 워드 테스트 워드");
+}
+
+#[test]
+fn hangul_mixed_nfc_nfd_replace_all_preserves_offsets_and_runs() {
+    use wordcraft_doc::{CharProps, Paragraph, Run};
+    let mixed = "한\u{1100}\u{1173}\u{11AF}";
+    assert_eq!(mixed.len(), 12);
+
+    // Single-run and multi-occurrence mixed NFC+NFD replacement.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": format!("{mixed} 편집기와 \u{1112}\u{1161}\u{11AB}글 문서")}));
+    let r = s.run("edit.replaceAll", &json!({"text": "한글", "with": "워드"})).unwrap();
+    assert_eq!(r["replaced"], 2);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "워드 편집기와 워드 문서");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("{mixed} 편집기와 \u{1112}\u{1161}\u{11AB}글 문서"));
+
+    // Split across two styled runs mid-syllable (`"한ᄀ"` bold + `"ᅳᆯ 문서"` italic).
+    let mut doc = wordcraft_doc::Document::new();
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    *p = Paragraph {
+        text: "한\u{1100}\u{1173}\u{11AF} 문서".into(),
+        runs: vec![
+            Run { len: "한\u{1100}".len(), props: CharProps { bold: Some(true), ..Default::default() } },
+            Run { len: "\u{1173}\u{11AF} 문서".len(), props: CharProps { italic: Some(true), ..Default::default() } },
+        ],
+        ..Paragraph::default()
+    };
+    let mut s = Session::new(doc);
+    let r = s.run("edit.replaceAll", &json!({"text": "한글", "with": "워드"})).unwrap();
+    assert_eq!(r["replaced"], 1);
+    let after = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(after.text, "워드 문서");
+    assert_eq!(after.runs.iter().map(|r| r.len).sum::<usize>(), after.text.len());
+    assert_eq!(after.props_of_char(0).bold, Some(true));
+    assert_eq!(after.props_of_char("워드 ".len()).italic, Some(true));
+}
+
+#[test]
+fn hangul_lv_query_never_matches_lvt_syllable_prefix() {
+    let nfd_han = "\u{1112}\u{1161}\u{11AB}";
+    let partial_han = "\u{D558}\u{11AB}";
+    let nfd_ha = "\u{1112}\u{1161}";
+
+    for body in ["한", nfd_han, partial_han, &format!("한 {nfd_han} {partial_han}")] {
+        for q in ["하", nfd_ha] {
+            let mut s = self::s();
+            run(&mut s, "document.setText", json!({"text": body}));
+            assert_eq!(s.run("edit.find", &json!({"text": q})).unwrap()["count"], 0, "find body={body:?} q={q:?}");
+            assert!(s.run("select.text", &json!({"text": q})).is_err(), "select.text body={body:?} q={q:?}");
+            let r = s.run("edit.replaceAll", &json!({"text": q, "with": "나"})).unwrap();
+            assert_eq!(r["replaced"], 0, "replaceAll body={body:?} q={q:?}");
+            assert_eq!(s.doc.plain_text(StoryRef::Body), body);
+        }
+    }
+
+    // When both `한`/`한` and genuine `하`/`하` appear, only `하`/`하` match.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": format!("{nfd_han}하 한 {nfd_ha}")}));
+    for q in ["하", nfd_ha] {
+        assert_eq!(s.run("edit.find", &json!({"text": q})).unwrap()["count"], 2, "q={q:?}");
+    }
+    run(&mut s, "select.text", json!({"text": "하", "occurrence": 1}));
+    assert_eq!(s.selected_text(), "하");
+    run(&mut s, "select.text", json!({"text": "하", "occurrence": 2}));
+    assert_eq!(s.selected_text(), nfd_ha);
+    let r = s.run("edit.replaceAll", &json!({"text": nfd_ha, "with": "호"})).unwrap();
+    assert_eq!(r["replaced"], 2);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("{nfd_han}호 한 호"));
+}
+
+#[test]
+fn hangul_wildcard_search_respects_decomposed_syllables() {
+    let nfd_gan = "\u{1100}\u{1161}\u{11AB}";
+    let mixed_ganada = "\u{1100}\u{1161}나다";
+    let nfd_ganada = "\u{1100}\u{1161}\u{1102}\u{1161}\u{1103}\u{1161}";
+
+    // `가*` and `가?` must NOT match `간` (`간`).
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": nfd_gan}));
+    for q in ["가*", "가?", "가*다"] {
+        assert_eq!(s.run("edit.find", &json!({"text": q, "wildcards": true})).unwrap()["count"], 0, "q={q}");
+    }
+
+    // `가*`, `가?`, and `가*다` DO match `가나다` and all-NFD `가나다`.
+    for body in [mixed_ganada, nfd_ganada] {
+        let mut s = self::s();
+        run(&mut s, "document.setText", json!({"text": body}));
+        for q in ["가*", "가?", "가*다"] {
+            let found = s.run("edit.find", &json!({"text": q, "wildcards": true})).unwrap();
+            assert_eq!(found["count"], 1, "body={body:?} q={q}");
+        }
+    }
+
+    // Special codes `^$` (any letter) and `^?` (any character) treat an NFD Hangul syllable as one unit.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": nfd_gan}));
+    let letter = s.run("edit.find", &json!({"text": "^$"})).unwrap();
+    assert_eq!(letter["count"], 1);
+    assert_eq!((letter["matches"][0]["start"]["off"].clone(), letter["matches"][0]["end"]["off"].clone()), (json!(0), json!(9)));
+    let any = s.run("edit.find", &json!({"text": "^?"})).unwrap();
+    assert_eq!(any["count"], 1);
+    assert_eq!((any["matches"][0]["start"]["off"].clone(), any["matches"][0]["end"]["off"].clone()), (json!(0), json!(9)));
+}
+
+#[test]
+fn hangul_nfd_wildcards_quantifiers_classes_specials_and_replace_tokens() {
+    use crate::cmd::find_pattern::{self, Opts};
+
+    // `compile("하", &Opts::default())` emits `"하"` and does not match raw NFD `"한"`.
+    let compiled = find_pattern::compile("하", &Opts::default()).unwrap();
+    assert_eq!(compiled.pattern, "하");
+    assert!(!regex::Regex::new(&compiled.pattern).unwrap().is_match("\u{1112}\u{1161}\u{11AB}"));
+
+    // Wildcard `"가*하"` matches NFD `"가한하"` (`0..21`).
+    let nfd_gahanha = "\u{1100}\u{1161}\u{1112}\u{1161}\u{11AB}\u{1112}\u{1161}";
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": nfd_gahanha}));
+    let found = s.run("edit.find", &json!({"text": "가*하", "wildcards": true})).unwrap();
+    assert_eq!(found["count"], 1);
+    assert_eq!((found["matches"][0]["start"]["off"].clone(), found["matches"][0]["end"]["off"].clone()), (json!(0), json!(21)));
+
+    // Wildcard quantifiers `"하@"` and `"하{1,2}"` on NFD `"하한"` match `"하"` (`0..6`).
+    let nfd_hahan = "\u{1112}\u{1161}\u{1112}\u{1161}\u{11AB}";
+    run(&mut s, "document.setText", json!({"text": nfd_hahan}));
+    for q in ["하@", "하{1,2}"] {
+        let found = s.run("edit.find", &json!({"text": q, "wildcards": true})).unwrap();
+        assert_eq!(found["count"], 1, "q={q}");
+        assert_eq!((found["matches"][0]["start"]["off"].clone(), found["matches"][0]["end"]["off"].clone()), (json!(0), json!(6)), "q={q}");
+    }
+
+    // `^?^?^?`, `^$^$^$` (`wildcards: false`) and `???` (`wildcards: true`) do not match 1-syllable NFD `"한"`.
+    let nfd_han = "\u{1112}\u{1161}\u{11AB}";
+    run(&mut s, "document.setText", json!({"text": nfd_han}));
+    for q in ["^?^?^?", "^$^$^$"] {
+        assert_eq!(s.run("edit.find", &json!({"text": q, "wildcards": false})).unwrap()["count"], 0, "q={q}");
+    }
+    assert_eq!(s.run("edit.find", &json!({"text": "???", "wildcards": true})).unwrap()["count"], 0);
+
+    // Wildcard character classes `[하]`, `[\u{1112}\u{1161}]`, `[가-나]`, and `[!하]` on NFD.
+    let nfd_ha = "\u{1112}\u{1161}";
+    let nfd_ga = "\u{1100}\u{1161}";
+    run(&mut s, "document.setText", json!({"text": nfd_ha}));
+    for q in ["[하]", "[\u{1112}\u{1161}]"] {
+        let found = s.run("edit.find", &json!({"text": q, "wildcards": true})).unwrap();
+        assert_eq!(found["count"], 1, "q={q:?}");
+        assert_eq!((found["matches"][0]["start"]["off"].clone(), found["matches"][0]["end"]["off"].clone()), (json!(0), json!(6)));
+    }
+    assert_eq!(s.run("edit.find", &json!({"text": "[!하]", "wildcards": true})).unwrap()["count"], 0);
+    run(&mut s, "document.setText", json!({"text": nfd_ga}));
+    let found = s.run("edit.find", &json!({"text": "[가-나]", "wildcards": true})).unwrap();
+    assert_eq!(found["count"], 1);
+    assert_eq!((found["matches"][0]["start"]["off"].clone(), found["matches"][0]["end"]["off"].clone()), (json!(0), json!(6)));
+    run(&mut s, "document.setText", json!({"text": nfd_han}));
+    let found = s.run("edit.find", &json!({"text": "[!하]", "wildcards": true})).unwrap();
+    assert_eq!(found["count"], 1);
+    assert_eq!((found["matches"][0]["start"]["off"].clone(), found["matches"][0]["end"]["off"].clone()), (json!(0), json!(9)));
+
+    // `edit.replaceAll` with `[^&]` and `\1` preserves exact original NFD/NFC bytes across mixed emoji + NFD + NFC.
+    let nfd_hangul = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
+    let mixed_doc = format!("😀 {nfd_hangul}과 한\u{1100}\u{1173}\u{11AF}과 한글 🚀");
+    run(&mut s, "document.setText", json!({"text": mixed_doc}));
+    let rep = s.run("edit.replaceAll", &json!({"text": "한글", "with": "[^&]"})).unwrap();
+    assert_eq!(rep["replaced"], 3);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("😀 [{nfd_hangul}]과 [한\u{1100}\u{1173}\u{11AF}]과 [한글] 🚀"));
+
+    run(&mut s, "document.setText", json!({"text": format!("🎯 {nfd_hangul}")}));
+    let rep_grp = s.run("edit.replaceAll", &json!({"text": "(한)(글)", "with": "<\\2:\\1>", "wildcards": true})).unwrap();
+    assert_eq!(rep_grp["replaced"], 1);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "🎯 <\u{1100}\u{1173}\u{11AF}:\u{1112}\u{1161}\u{11AB}>");
+
+    // `regex: true` matches canonically equivalent NFC and NFD Hangul and preserves exact group spans.
+    run(&mut s, "document.setText", json!({"text": format!("버전 {nfd_hangul}2026 및 한글2027")}));
+    assert_eq!(s.run("edit.find", &json!({"text": "하+", "regex": true})).unwrap()["count"], 0);
+    let rx = s.run("edit.find", &json!({"text": "\u{1112}\u{1161}\u{11AB}글\\d+", "regex": true})).unwrap();
+    assert_eq!(rx["count"], 2);
+    assert_eq!((rx["matches"][0]["start"]["off"].clone(), rx["matches"][0]["end"]["off"].clone()), (json!(7), json!(29)));
+    let rep_rx = s.run("edit.replaceAll", &json!({"text": "(한글)(\\d+)", "with": "[\\2:\\1]", "regex": true})).unwrap();
+    assert_eq!(rep_rx["replaced"], 2);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("버전 [2026:{nfd_hangul}] 및 [2027:한글]"));
+}

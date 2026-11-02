@@ -562,19 +562,19 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
             Some(Pos { story, path: paths.get(sg.para)?.clone(), off: sg.raw + (x - sg.hay) })
         };
         cuts.push(hay.len());
-        let mut from = 0;
-        for cut in cuts {
-            if cut <= from {
-                continue;
-            }
-            let mut input = Input::new(&hay).range(from..cut);
-            from = cut;
+        let (canon, spans) = find_pattern::CanonicalHay::with_cuts(&hay, &cuts);
+        let canon_str = canon.as_str();
+        for (canon_from, canon_cut) in spans {
+            let mut input = Input::new(canon_str).range(canon_from..canon_cut);
             loop {
                 re.search_captures(&input, &mut caps);
                 let Some(m) = caps.get_match() else { break };
                 // Step past an empty match so the search moves on.
                 let next = if m.is_empty() {
-                    hay.get(m.end()..).and_then(|t| t.chars().next()).map_or(m.end() + 1, |c| m.end() + c.len_utf8())
+                    canon_str
+                        .get(m.end()..)
+                        .and_then(|t| t.chars().next())
+                        .map_or(m.end().saturating_add(1), |ch| m.end().saturating_add(ch.len_utf8()))
                 } else {
                     m.end()
                 };
@@ -585,10 +585,17 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 if m.is_empty() {
                     continue;
                 }
-                let (Some(a), Some(b)) = (pos_of(m.start(), false), pos_of(m.end(), true)) else { continue };
+                let (Some(orig_start), Some(orig_end)) = (canon.to_hay_offset(m.start()), canon.to_hay_offset(m.end())) else {
+                    continue;
+                };
+                let (Some(a), Some(b)) = (pos_of(orig_start, false), pos_of(orig_end, true)) else { continue };
                 let rep = pieces.as_ref().map(|pc| {
-                    let group = |n: usize| caps.get_group(n).and_then(|g| hay.get(g.range())).map(str::to_string);
-                    find_pattern::expand(pc, hay.get(m.range()).unwrap_or(""), &group, &s.clipboard_text)
+                    let group = |n: usize| {
+                        let g = caps.get_group(n)?;
+                        let (gs, ge) = (canon.to_hay_offset(g.start)?, canon.to_hay_offset(g.end)?);
+                        hay.get(gs..ge).map(str::to_string)
+                    };
+                    find_pattern::expand(pc, hay.get(orig_start..orig_end).unwrap_or(""), &group, &s.clipboard_text)
                 });
                 out.push(Found { a, b, rep });
                 if out.len() >= 100_000 {

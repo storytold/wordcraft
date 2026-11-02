@@ -336,20 +336,47 @@ const COMPOSE: &[(char, char, char)] = &[
     ('и', '\u{306}', 'й'),
 ];
 
-/// `s` lowercased, with each letter + combining mark that has a single-letter form composed.
-fn lower_composed(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.to_lowercase().chars() {
-        if let Some(prev) = out.chars().next_back()
-            && let Some((_, _, composed)) = COMPOSE.iter().find(|(b, m, _)| *b == prev && *m == c)
-        {
-            out.pop();
-            out.push(*composed);
-        } else {
-            out.push(c);
-        }
+/// Canonical Hangul Jamo composition (`L + V → LV`, `LV + T → LVT`, Unicode §3.12).
+fn compose_hangul(prev: char, c: char) -> Option<char> {
+    const S_BASE: u32 = 0xAC00;
+    const L_BASE: u32 = 0x1100;
+    const V_BASE: u32 = 0x1161;
+    const T_BASE: u32 = 0x11A7;
+    const L_COUNT: u32 = 19;
+    const V_COUNT: u32 = 21;
+    const T_COUNT: u32 = 28;
+    const S_COUNT: u32 = L_COUNT * V_COUNT * T_COUNT;
+
+    let (p, u) = (u32::from(prev), u32::from(c));
+    if (L_BASE..L_BASE + L_COUNT).contains(&p) && (V_BASE..V_BASE + V_COUNT).contains(&u) {
+        let l_idx = p - L_BASE;
+        let v_idx = u - V_BASE;
+        return char::from_u32(S_BASE + (l_idx * V_COUNT + v_idx) * T_COUNT);
     }
-    out
+    if (S_BASE..S_BASE + S_COUNT).contains(&p) && (p - S_BASE).is_multiple_of(T_COUNT) && (T_BASE + 1..T_BASE + T_COUNT).contains(&u) {
+        return char::from_u32(p + (u - T_BASE));
+    }
+    None
+}
+
+/// `s` lowercased, with each letter + combining mark that has a single-letter form and each
+/// canonical Hangul Jamo sequence composed.
+fn lower_composed(s: &str) -> String {
+    let mut out: Vec<char> = Vec::with_capacity(s.len());
+    for c in s.to_lowercase().chars() {
+        if let Some(last) = out.last_mut() {
+            if let Some(composed) = compose_hangul(*last, c) {
+                *last = composed;
+                continue;
+            }
+            if let Some((_, _, composed)) = COMPOSE.iter().find(|(b, m, _)| *b == *last && *m == c) {
+                *last = *composed;
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out.into_iter().collect()
 }
 
 fn weight(c: char, rank: u32) -> u32 {
@@ -533,9 +560,28 @@ mod tests {
     }
 
     #[test]
+    fn nfd_hangul_jamo_collates_and_files_like_precomposed_syllables() {
+        for (nfc, nfd) in [
+            ("한글", "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}"),
+            ("가나다", "\u{1100}\u{1161}\u{1102}\u{1161}\u{1103}\u{1161}"),
+            ("힣", "\u{1112}\u{1175}\u{11C2}"),
+            ("한글 문서", "하\u{11AB}그\u{11AF} 문서"),
+            ("macOS 한글", "macos \u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}"),
+        ] {
+            assert_eq!(collate(nfc, nfd, None), Ordering::Equal, "{nfc}");
+            assert_eq!(collate(nfc, nfd, Some("ko-KR")), Ordering::Equal, "{nfc}");
+            assert_eq!(sort_key(nfc, Some("ko-KR")), sort_key(nfd, Some("ko-KR")), "{nfc}");
+            assert_eq!(heading_letter(nfc, Some("ko-KR")), heading_letter(nfd, Some("ko-KR")), "{nfc}");
+        }
+        assert_eq!(heading_letter("\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}", None).as_deref(), Some("한"));
+        assert_eq!(sorted(&["다", "\u{1100}\u{1161}", "나"], "ko-KR"), ["\u{1100}\u{1161}", "나", "다"]);
+    }
+
+    #[test]
     fn hostile_input_never_panics() {
-        for s in ["", "\u{301}", "a\u{301}\u{301}\u{301}", "dzs", "\u{10FFFF}", "ẞ", "İstanbul"] {
-            for l in [None, Some("hu"), Some(""), Some("-"), Some("tr-TR")] {
+        for s in ["", "\u{301}", "a\u{301}\u{301}\u{301}", "dzs", "\u{10FFFF}", "ẞ", "İstanbul", "\u{1100}", "\u{1161}", "\u{11AB}", "한\u{11AB}"]
+        {
+            for l in [None, Some("hu"), Some(""), Some("-"), Some("tr-TR"), Some("ko-KR")] {
                 let _ = sort_key(s, l);
                 let _ = heading_letter(s, l);
             }
