@@ -43,7 +43,7 @@ Where to set it:
 |---|---|---|---|---|
 | Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | `headerMinHeight` | 0 (as tall as its text) | 0.5 cm |
 | *(meaning)* Whether a header's stated minimum height includes its stated spacing from the body | §20.212.2, §20.207: not said | `headerHeightIncludesSpacing` | no: spacing comes after the height | yes |
-| A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | `dynamicSpacing` | on: the spacing is used up (Word's header pushes the text without a gap) | off: the spacing is kept |
+| A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | `dynamicSpacing` | off: the spacing is kept (on, with no height stated, would always drop the spacing the file states) | off |
 | Where paragraph tab stops are measured from when `settings.xml` doesn't say | §19.512.3 `style:position` doesn't say; §19.861 covers only indexes | `tabsFromIndent` | the margin (as Word; ONLYOFFICE's files mean this too) | the paragraph's indent (its `TabsRelativeToIndent` default) |
 | Gap between columns when `style:columns` states none | §19.233 `fo:column-gap`: no default (and explicitly not XSL's) | `columnGap` | 0.5 in (Word's) | 0 |
 | A drawing shape's fill colour when no style gives one | §20.119 `draw:fill-color`: no default | `shapeFill` | `#156082` (WordCraft's shape blue) | `#729FCF` |

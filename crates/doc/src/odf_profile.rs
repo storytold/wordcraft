@@ -60,7 +60,8 @@ pub struct OdfProfile {
     pub header_height_includes_spacing: bool,
     /// What a header or footer whose style doesn't say does with its spacing when its content
     /// is taller than its height (§20.264 `style:dynamic-spacing` has no default): grows into it
-    /// (`true`, as Word's header pushes the text with no gap), or keeps it (`false`).
+    /// (`true`), or keeps it (`false`, both presets: with no height stated, growing into it would
+    /// drop the spacing the file states).
     pub dynamic_spacing: bool,
     /// Paragraph tab stops are measured from the paragraph's indent rather than the margin when
     /// the document doesn't say (§19.512.3 `style:position` doesn't say from where; §19.861 `text:relative-tab-stop-position` says so only for indexes; LibreOffice's own
@@ -101,7 +102,7 @@ impl OdfProfile {
             preset: OdfPreset::WordCraft,
             header_min_height: 0.0,
             header_height_includes_spacing: false,
-            dynamic_spacing: true,
+            dynamic_spacing: false,
             tabs_from_indent: false,
             column_gap: 36.0,
             shape_fill: Rgb(0x15, 0x60, 0x82),

@@ -621,19 +621,29 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
 fn odf_files(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_doc::odf_profile::{MAX_LENGTH, OdfPreset};
     let profile = app.session.prefs.odf.clone();
+    // The preset as a drop-down, like the units and region above.
+    let presets = [(OdfPreset::WordCraft, "WordCraft"), (OdfPreset::LibreOffice, "LibreOffice"), (OdfPreset::Custom, "Custom")];
+    let shown = presets.iter().find(|(p, _)| *p == profile.preset).map_or("WordCraft", |(_, l)| l);
+    let mut chosen = None;
     ui.horizontal(|ui| {
-        ui.label(tl!("Where the standard leaves the look open, follow:"));
-        for (preset, label) in [(OdfPreset::WordCraft, "WordCraft"), (OdfPreset::LibreOffice, "LibreOffice"), (OdfPreset::Custom, "Custom")] {
-            if ui.radio(profile.preset == preset, tl!(label)).clicked() && profile.preset != preset {
-                // Custom starts from the choices in use.
-                let mut odf = if preset == OdfPreset::Custom { serde_json::to_value(profile.effective()).unwrap_or_default() } else { json!({}) };
-                if let Some(o) = odf.as_object_mut() {
-                    o.insert("preset".into(), json!(preset.id()));
+        let label = ui.label(tl!("Where the standard leaves the look open, follow:"));
+        let combo = craft_ui::ComboBox::from_id_salt("options_odf_preset").selected_text(tl!(shown)).width(160.0).show_ui(ui, |ui| {
+            for (preset, name) in presets {
+                if ui.selectable_label(profile.preset == preset, tl!(name)).clicked() && profile.preset != preset {
+                    chosen = Some(preset);
                 }
-                set(app, json!({ "odf": odf }));
             }
-        }
+        });
+        combo.response.labelled_by(label.id);
     });
+    if let Some(preset) = chosen {
+        // Custom starts from the choices in use.
+        let mut odf = if preset == OdfPreset::Custom { serde_json::to_value(profile.effective()).unwrap_or_default() } else { json!({}) };
+        if let Some(o) = odf.as_object_mut() {
+            o.insert("preset".into(), json!(preset.id()));
+        }
+        set(app, json!({ "odf": odf }));
+    }
     note(ui, "Applies to OpenDocument files opened from now on. What the standard defines is always followed.");
     if profile.preset != OdfPreset::Custom {
         return;
@@ -642,11 +652,9 @@ fn odf_files(app: &mut WordApp, ui: &mut Ui) {
     let u = unit();
     let k = u.pt_per_unit();
     egui::Grid::new("options_odf").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        for (key, label, pt) in [
-            ("headerMinHeight", "Header and footer height:", e.header_min_height),
-            ("columnGap", "Gap between columns:", e.column_gap),
-            ("hairline", "Shape line width:", e.hairline),
-        ] {
+        for (key, label, pt) in
+            [("headerMinHeight", "Header and footer height:", e.header_min_height), ("columnGap", "Gap between columns:", e.column_gap)]
+        {
             let id = ui.label(tl!(label)).id;
             let mut v = pt / k;
             if ui.add(egui::DragValue::new(&mut v).speed(0.5 / k).range(0.0..=MAX_LENGTH / k).measure(u).max_decimals(2)).labelled_by(id).changed() {
@@ -654,6 +662,17 @@ fn odf_files(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.end_row();
         }
+        // Line widths in points, as the ribbon shows them: a hairline is a fraction of a point.
+        let id = ui.label(tl!("Shape line width:")).id;
+        let mut w = e.hairline;
+        if ui
+            .add(egui::DragValue::new(&mut w).speed(0.05).range(0.05..=24.0).max_decimals(2).suffix(format!(" {}", tl!("pt"))))
+            .labelled_by(id)
+            .changed()
+        {
+            set(app, json!({"odf": {"hairline": w}}));
+        }
+        ui.end_row();
         for (key, label, rgb) in [("shapeFill", "Shape fill colour:", e.shape_fill), ("shapeLine", "Shape line colour:", e.shape_line)] {
             let id = ui.label(tl!(label)).id;
             let mut c = [rgb.0, rgb.1, rgb.2];
