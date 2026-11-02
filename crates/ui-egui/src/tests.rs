@@ -274,6 +274,9 @@ fn a_japanese_file_name_is_drawn_in_the_caption() {
     } else {
         wordcraft_fonts::ui_uncovered_cjk(&["日本語"], &embedded).is_empty()
     };
+    // macOS and Windows always have one (Hiragino, Yu Gothic), and CI runs these tests on both (the
+    // Print job), so there a missing font fails instead of hiding a regression.
+    assert!(drawable || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font, but none draws 日本語");
     if !drawable {
         eprintln!("skipped: no CJK font draws 日本語");
         return;

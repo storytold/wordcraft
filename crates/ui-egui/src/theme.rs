@@ -1035,9 +1035,14 @@ mod tests {
         let embedded = wordcraft_fonts::ui_cjk_fonts_for(false, false);
         if !embedded.is_empty() {
             assert_eq!(super::system_cjk_needed(&[], "English", &embedded), None, "the embedded faces draw CJK");
-        } else if wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some() {
-            let defs = super::font_definitions_language(false, false, false, true);
-            assert!(defs.font_data.keys().any(|n| n.starts_with("system ")), "the installed CJK font follows the interface fonts");
+        } else {
+            // macOS and Windows always have one, and CI runs these tests on both (the Print job).
+            let installed = wordcraft_fonts::system_cjk_ui_font_for(false, false, &[]).is_some();
+            assert!(installed || cfg!(not(any(target_os = "macos", windows))), "macOS and Windows have a CJK font");
+            if installed {
+                let defs = super::font_definitions_language(false, false, false, true);
+                assert!(defs.font_data.keys().any(|n| n.starts_with("system ")), "the installed CJK font follows the interface fonts");
+            }
         }
     }
 
