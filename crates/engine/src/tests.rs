@@ -55,6 +55,25 @@ fn doc_extension_dispatches_to_docbin() {
     }
 }
 
+/// Save As Word 97-2003 writes a .doc that opens again with the same text: the built-in
+/// sample (styles, tables, lists, headers, pictures) and every template.
+#[test]
+fn documents_save_as_doc_and_reopen() {
+    for (name, doc) in [
+        ("sample", crate::sample::sample_document()),
+        ("letter", crate::sample::letter()),
+        ("resume", crate::sample::resume()),
+        ("report", crate::sample::report()),
+    ] {
+        let bytes = crate::io::save_bytes("out.doc", &doc).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]), "{name}: a compound file");
+        let back = crate::io::open_bytes("out.doc", &bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let words = |d: &wordcraft_doc::Document| d.plain_text(StoryRef::Body).split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(words(&back), words(&doc), "{name}");
+    }
+    assert!(crate::io::SAVE_EXTS.contains(&"doc"));
+}
+
 #[test]
 fn encrypted_doc_asks_for_a_password_and_rejects_a_wrong_one() {
     // #1079: a Word 97-2003 file with the encryption flag and an RC4 header whose verifier does

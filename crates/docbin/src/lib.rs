@@ -1,7 +1,8 @@
 //! WordCraft reader for the Word 97-2003 binary file format (`.doc`, [MS-DOC]).
 //!
-//! [`read`] turns the bytes of a `.doc` file into a [`wordcraft_doc::Document`]. There is no
-//! writer: saving always goes through the other formats. The reader is written from the public
+//! [`read`] turns the bytes of a `.doc` file into a [`wordcraft_doc::Document`] and [`write`]
+//! turns a document into a `.doc` file (see the `write` module for what it keeps). The reader is
+//! written from the public
 //! specification ([MS-DOC], Word (.doc) Binary File Format, Microsoft Open Specifications) and,
 //! like every WordCraft parser, is lenient by design (unknown structures are skipped, bad numbers
 //! fall back to defaults) and bounded (stream sizes, piece counts and property counts are
@@ -19,10 +20,14 @@ mod metadata;
 mod notes;
 mod officeart;
 mod piece;
+mod rmark;
 mod sections;
 mod sprm;
 mod stsh;
 mod table;
+mod write;
+
+pub use write::write;
 
 use std::io::{Read, Seek};
 
@@ -268,6 +273,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // tight against aliasing — and never past the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
+    let revs = rmark::Revisions::new(&table, &fib);
 
     let ctx = WalkCtx {
         word: &word,
@@ -284,6 +290,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         sect_ends: &[],
         budget: &budget,
         work: &work,
+        revs: &revs,
     };
 
     // Drawings: text box stories become parts first, then the floating shapes and pictures
@@ -392,6 +399,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     }
 
     doc.media.extend(pics.media);
+    doc.revisions = revs.take();
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
@@ -433,6 +441,8 @@ struct WalkCtx<'a> {
     budget: &'a std::cell::Cell<u64>,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
     work: &'a Work,
+    /// Tracked insertions and deletions met so far.
+    revs: &'a rmark::Revisions,
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -861,6 +871,7 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             };
             let mut props = char_props(grpprl, ctx.fonts, base);
             apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+            ctx.revs.mark(&mut props, grpprl);
             *memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props: props.clone() });
             props
         }

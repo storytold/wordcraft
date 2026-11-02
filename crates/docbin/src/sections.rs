@@ -1,8 +1,7 @@
 //! Sections and headers/footers: `PlcfSed` → `Sed` → `Sepx` (grpprls of section sprms) and
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
-use wordcraft_doc::section::NumFormat;
-use wordcraft_doc::section::{Columns, SectionProps, SectionStart};
+use wordcraft_doc::section::{SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};
@@ -14,7 +13,10 @@ const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
-const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
+const S_PGN_START: u16 = 0x501C; // sprmSPgnStart97
+const S_NFC_PGN: u16 = 0x300E;
+const S_DXA_COLUMNS: u16 = 0x900C;
+const S_VJC: u16 = 0x301A;
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
 const S_HDR_TOP: u16 = 0xB017;
 const S_HDR_BOTTOM: u16 = 0xB018;
@@ -103,14 +105,31 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         S_TITLE_PAGE => s.title_page = prl.operand.first().is_some_and(|&v| v != 0),
         S_CCOLUMNS => {
             if let Some(c) = s16(prl) {
-                s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
+                s.columns.count = (c as u32).saturating_add(1).min(44);
             }
         }
         S_PGN_START => {
             if let Some(v) = s16(prl) {
                 s.page_num_start = Some(v.max(0) as u32);
-                s.page_num_format = NumFormat::Decimal;
             }
+        }
+        S_NFC_PGN => {
+            if let Some(&nfc) = prl.operand.first() {
+                s.page_num_format = crate::list::num_format(nfc);
+            }
+        }
+        S_DXA_COLUMNS => {
+            if let Some(v) = s16(prl) {
+                s.columns.space = tw(v as i32);
+            }
+        }
+        S_VJC => {
+            s.valign = match prl.operand.first() {
+                Some(1) => wordcraft_doc::section::PageVAlign::Center,
+                Some(2) => wordcraft_doc::section::PageVAlign::Justify,
+                Some(3) => wordcraft_doc::section::PageVAlign::Bottom,
+                _ => wordcraft_doc::section::PageVAlign::Top,
+            };
         }
         // SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.
         S_ORIENTATION => match prl.operand.first() {

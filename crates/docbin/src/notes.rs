@@ -66,14 +66,31 @@ pub(crate) enum Mark {
 
 /// Parse `SttbfBkmk` + `Plcfbkf` + `Plcfbkl` into (cp, event) pairs sorted for a sequential
 /// walk. Hidden bookmarks (leading `_`) are kept: the engine can decide.
+///
+/// A `Plcfbkl` holds only CPs ([MS-DOC] §2.8.12), so its count comes from the `Plcfbkf`; each
+/// start's `FBKF.ibkl` names its end there (ends are sorted on their own, so overlapping
+/// bookmarks end in another order than they start). An `ibkl` out of range, or repeated, falls
+/// back to the start's own index, as files whose writers paired them by index expect.
 pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, Mark)> {
     let names = fib.pair(crate::fib::pair::STTBF_BKMK).and_then(|(fc, lcb)| sttb_strings(table, fc, lcb)).unwrap_or_default();
-    let starts = fib.pair(crate::fib::pair::PLCF_BKF).and_then(|(fc, lcb)| plc_of(table, fc, lcb, 4)).unwrap_or_default();
-    let ends = fib.pair(crate::fib::pair::PLCF_BKL).and_then(|(fc, lcb)| plc_of(table, fc, lcb, 2)).unwrap_or_default();
-    let n = starts.len().saturating_sub(1).min(ends.len().saturating_sub(1)).min(names.len()).min(MAX);
+    let bkf = fib.pair(crate::fib::pair::PLCF_BKF);
+    let starts = bkf.and_then(|(fc, lcb)| plc_of(table, fc, lcb, 4)).unwrap_or_default();
+    let count = starts.len().saturating_sub(1);
+    let u32_at = |b: &[u8], i: usize| b.get(i * 4..i * 4 + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
+    let bkl =
+        fib.pair(crate::fib::pair::PLCF_BKL).and_then(|(fc, lcb)| table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))).unwrap_or(&[]);
+    let ends: Vec<u32> = (0..count.min(bkl.len() / 4)).map_while(|i| u32_at(bkl, i)).collect();
+    let fbkf = bkf.and_then(|(fc, _)| table.get((fc as usize).saturating_add(starts.len() * 4)..)).unwrap_or(&[]);
+    let ibkl: Vec<usize> = (0..count).map(|i| fbkf.get(i * 4..i * 4 + 2).map_or(i, |b| u16::from_le_bytes([b[0], b[1]]) as usize)).collect();
+    let paired = {
+        let mut seen = vec![false; ends.len()];
+        ibkl.iter().all(|&k| seen.get_mut(k).is_some_and(|s| !std::mem::replace(s, true)))
+    };
+    let n = count.min(ends.len()).min(names.len()).min(MAX);
     let mut out = Vec::with_capacity(n * 2);
     for i in 0..n {
-        let (Some(&a), Some(&b)) = (starts.get(i), ends.get(i)) else { break };
+        let k = if paired { ibkl.get(i).copied().unwrap_or(i) } else { i };
+        let (Some(&a), Some(&b)) = (starts.get(i), ends.get(k)) else { break };
         if b < a {
             continue;
         }
@@ -93,6 +110,11 @@ pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, 
 /// (1-byte length and Windows-1252 chars). `cbExtra` bytes after each string are skipped.
 /// Names are kept to 40 characters, but the reader always advances by the stored length.
 fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
+    sttb_strings_max(table, fc, lcb, 40)
+}
+
+/// [`sttb_strings`] keeping up to `max` characters of each string.
+pub(crate) fn sttb_strings_max(table: &[u8], fc: u32, lcb: u32, max: usize) -> Option<Vec<String>> {
     let b = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))?;
     let extended = b.get(0..2)? == [0xFF, 0xFF];
     let head = if extended { 2 } else { 0 };
@@ -125,9 +147,9 @@ fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
         }
         at += cb_extra;
         let s: String = if extended {
-            chars.as_chunks::<2>().0.iter().take(40).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
+            chars.as_chunks::<2>().0.iter().take(max).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
         } else {
-            chars.iter().take(40).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
+            chars.iter().take(max).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
         };
         out.push(s);
     }

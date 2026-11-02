@@ -654,6 +654,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("pdf") => "application/pdf",
         Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("doc") => "application/msword",
         Some("odt") => "application/vnd.oasis.opendocument.text",
         Some("rtf") => "application/rtf",
         Some("html") => "text/html",
