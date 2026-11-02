@@ -384,3 +384,18 @@ fn the_font_dialog_warns_for_a_missing_font_over_a_selection() {
     // The ribbon's box over the selection shows the selected text's font: the list decides.
     assert!(a.font_box_warning("Wordcraft Dialog Gone").is_none());
 }
+
+#[test]
+fn the_asian_box_names_the_face_cjk_text_gets_even_for_a_font_latin_text_uses() {
+    // The status bar lists the font with the face its Latin text is drawn in; Chinese, Japanese
+    // and Korean text in it would go to the Latin text font or a fallback face instead.
+    let gone = "Wordcraft Both Ways Gone";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": gone})).unwrap();
+    assert!(a.font_box_warning(gone).is_some(), "listed for its Latin text");
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, gone, "JetBrains Mono");
+    assert!(want.is_some());
+    assert_eq!(a.east_asian_font_box_warning(gone, "JetBrains Mono"), want);
+}

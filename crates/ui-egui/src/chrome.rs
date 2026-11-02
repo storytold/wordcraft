@@ -825,12 +825,14 @@ impl WordApp {
     }
 
     /// The Font dialog's Asian text font box's warning for `font_ea` (the Latin text font being
-    /// `font`): from the status bar's list, else the face layout draws Chinese, Japanese and
-    /// Korean text in when `font_ea` is missing (the run's font or a fallback face). Whatever is
-    /// selected: selected Latin text shows no East Asian font, but text typed or pasted into it
-    /// would be in it.
+    /// `font`): the face layout draws Chinese, Japanese and Korean text in when `font_ea` is
+    /// missing (the run's font or a fallback face). Not from the status bar's list, which is by
+    /// font name: a font also used for Latin text is listed with the faces that text is drawn
+    /// in. Whatever is selected: selected Latin text shows no East Asian font, but text typed or
+    /// pasted into it would be in it.
     pub fn east_asian_font_box_warning(&mut self, font_ea: &str, font: &str) -> Option<String> {
-        self.font_box_warning_or(font_ea, true, |doc| wordcraft_engine::cmd::font::east_asian_shown_as(doc, font_ea, font))
+        let shown = wordcraft_engine::cmd::font::east_asian_shown_as(&self.session.doc, font_ea, font)?;
+        wordcraft_engine::cmd::font::warns(font_ea, &shown).then_some(shown)
     }
 
     /// The font box's warning for `font`: from the status bar's list, else, when the box shows
