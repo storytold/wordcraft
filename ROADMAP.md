@@ -233,6 +233,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
+| 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-01 | Markdown export: a list inside a block quote stays in the quote (`> - item`), its continuation lines included; it was read as quoted list paragraphs but written without `>`, so the list moved out of the quote on every save |
@@ -355,6 +357,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-10-26 | Spelling & Grammar opens a right-side Proofing task pane observed in Word for Windows: sentence context, directly clickable suggestion cards and ignore/dictionary actions. Current-story traversal and stale-target checks are retained. Right-click keeps its compact menu. |
+| 2026-10-22 | Documents that keep content in another format (`w:altChunk`: a web page, RTF, text or another Word document, as generators and mail-merge tools write them) show it where it stands, as Word does, instead of leaving it out; one such file in the docxide-pdf corpus opened as an empty page and now matches Word's 8 pages. `.mht` web archives open, and web pages open the way Word opens them (style sheets, paragraph margins, Times New Roman, single lines, automatic spacing). Insert › Text from File keeps the inserted file's pictures |
 | 2026-10-18 | Explicit New/Open keeps the requested document visible when startup recovery discovery finishes; older copies stay available. Recover uses the regular theme. See docs/recovery.md. |
 | 2026-10-15 | A floating picture or shape in a table cell set to align centre or bottom no longer lands half its height above its line (#1887); it starts at the anchor line |
 | 2026-10-18 | Picture Format › Size (#2573): width and height in the interface unit, and a size typed in any unit works, pixels too (`300 px` keeps the picture's proportions, #1901), applied once typed (Enter, Tab or a click elsewhere; Esc cancels) in one undo step. The group's launcher opens a Size dialog: height and width, scale of the original size (or of the size it opened with), Lock aspect ratio, the original size with its pixels, and Reset. `picture.size {"original": true, "scale"?}` sizes from the original; sizes past 4000 pt that keep the proportions shrink as a whole. |
@@ -686,13 +690,18 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 ## Revision history
 
+> 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
+>
 > 2026-10-28 · Markdown import bounds reference-label scans and normalization within the existing link-work allowance. Nested undefined labels preserve literal text instead of causing quadratic work (#4658).
+>
+> 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
 >
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
+| 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
+| 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) || 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
 | 2026-10-31 | trivial | Progress log: a table row doesn't split off a picture that doesn't fit (#4272) |
@@ -700,11 +709,14 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-01 | trivial | Progress log: tab leader dots spaced and placed as in Word |
 | 2026-10-31 | trivial | Progress log: a list level above counts its first number at the first deeper item |
 | 2026-11-01 | trivial | Progress log: paragraph side borders lie outside the text (#5036) |
+| 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
+| 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
+| 2026-10-30 | trivial | Synchronize the existing Proofing pane and navigation/selection/undo regressions with main `3b7f7ed`; new-SHA validation pending, readiness unchanged |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
@@ -720,6 +732,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
