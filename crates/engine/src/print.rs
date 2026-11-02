@@ -150,8 +150,8 @@ impl Session {
     /// The pages the caret (or selection) is on, in the output layout: (first, last).
     pub fn current_pages(&self, lay: &DocLayout) -> (usize, usize) {
         let (a, b) = self.sel.ordered();
-        let first = lay.caret_on(&a, self.page_hint).map_or(0, |c| c.page);
-        let last = lay.caret_on(&b, self.page_hint).map_or(first, |c| c.page);
+        let first = lay.caret_at(&a, self.page_hint, self.at_line_end(&a)).map_or(0, |c| c.page);
+        let last = lay.caret_at(&b, self.page_hint, self.at_line_end(&b)).map_or(first, |c| c.page);
         (first, last.max(first))
     }
 

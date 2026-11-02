@@ -239,7 +239,7 @@ fn tab_indents(s: &mut Session, f: &Pos) -> bool {
         return s.doc.styles.resolve_para(&para.props).numbering.is_none_or(|n| n.num == 0);
     }
     let l = s.layout();
-    l.line_bounds(f, s.page_hint).is_some_and(|(a, _)| a == *f)
+    l.line_bounds(f, s.page_hint, s.at_line_end(f)).is_some_and(|(a, ..)| a == *f)
 }
 
 /// Tab before the first line indents the first line by one default tab stop; before any other

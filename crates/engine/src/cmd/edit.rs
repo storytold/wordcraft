@@ -771,7 +771,8 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
     // Relative pages, Go To's "+2" / "-1": from the page the caret is on.
     let by = v.get("pageBy").and_then(Value::as_i64);
     let rel = by.map(|by| {
-        let here = s.layout().caret_on(&s.sel.focus, s.page_hint).map_or(0, |c| c.page) as i64;
+        let focus = s.sel.focus.clone();
+        let here = s.layout().caret_at(&focus, s.page_hint, s.at_line_end(&focus)).map_or(0, |c| c.page) as i64;
         (here + 1).saturating_add(by).max(1) as u64
     });
     if let Some(pg) = rel.or_else(|| p::u64(v, "page")) {
