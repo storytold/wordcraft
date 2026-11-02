@@ -93,7 +93,11 @@ Resource identity comes from the outstanding read, not a filename sent by the ho
 
 ## Identity, limits and lifecycle
 
-Every event carries `providerId`, `namespace` and `connectionId`. Request IDs contain a random
+Provider operation events carry `providerId`, `namespace` and `connectionId`.
+The initial `ready` event contains only `type: "ready"` and `protocolVersion: 1`.
+It does not carry provider identity or a connection ID.
+
+Request IDs contain a random
 per-WASM-instance nonce plus a checked monotonic counter. Late replies from a previous page,
 connection, account, read or completed save cannot address a newer request. Metadata never
 contains credentials. `snapshot()` reports connection state, current provider resources,
