@@ -7257,6 +7257,28 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
+/// #5232: a PDF with markup (file.exportPdf, file.printPdf) marks tracked changes in the Track
+/// Changes Options colours, not always by author.
+#[test]
+fn markup_pdf_takes_the_track_changes_option_colours() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Governed by Kansas law."));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.text", &json!({"text": "Kansas"})).unwrap();
+    s.run("text.insert", &json!({"text": "Missouri"})).unwrap();
+    let markup = json!({"markup": true});
+    let pdf = |s: &Session| crate::io::save_bytes_opts("x.pdf", &s.doc, &cmd::file::export_options(s, &markup)).unwrap();
+    let print = |s: &Session| s.print_pdf(&markup).unwrap().0;
+    let (by_author, printed_by_author) = (pdf(&s), print(&s));
+    // Exports are deterministic, so a difference is the colours.
+    assert_eq!(pdf(&s), by_author);
+    s.run("review.trackingOptions", &json!({"insertColor": "0000FF", "deleteColor": "FF0000"})).unwrap();
+    let opts = cmd::file::export_options(&s, &markup);
+    assert_eq!(opts.revisions.insert_color, Some(wordcraft_doc::props::Rgb(0, 0, 255)));
+    assert_eq!(opts.revisions.delete_color, Some(wordcraft_doc::props::Rgb(255, 0, 0)));
+    assert_ne!(pdf(&s), by_author, "file.exportPdf ignores the tracking colours");
+    assert_ne!(print(&s), printed_by_author, "file.printPdf ignores the tracking colours");
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]

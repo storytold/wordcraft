@@ -197,6 +197,7 @@ impl Exporter<'_> {
             dim_body: false,
             markup: self.opts.include_markup,
             placeholders: false,
+            revisions: self.opts.revisions.clone(),
             ..Default::default()
         };
         // What the items share (the authors' colours, the clipped cells) is worked out once per page.
