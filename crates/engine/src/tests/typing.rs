@@ -1248,6 +1248,18 @@ fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
 
 #[test]
 fn a_tracked_heading_autoformat_can_be_rejected() {
+    // Enter in the empty paragraph turns a zero-tab line into Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("Title".to_string(), None)));
+
     // With Track Changes on, the tab is marked deleted and the style change is a formatting
     // revision, so Reject All brings the line back as it was.
     let mut s = with_heading_styles("\tMethods\n");
@@ -1284,6 +1296,24 @@ fn a_tracked_heading_autoformat_can_be_rejected() {
 #[test]
 fn a_tracked_heading_autoformat_supersedes_another_authors_formatting() {
     use wordcraft_doc::props::Align;
+    // Ana centers a zero-tab line; Ben's Enter makes it Heading 1.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading1")));
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ben"));
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+
     // Ana centers the line; Ben types a tab before it and makes it Heading 2. Ben's tab is
     // removed, and the heading's formatting change is Ben's, holding Ana's centered Normal line.
     let mut s = with_heading_styles("Title\n");

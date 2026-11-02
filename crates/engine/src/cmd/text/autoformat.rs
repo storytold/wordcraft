@@ -315,10 +315,11 @@ pub(super) fn heading_line(s: &Session, at: &Pos) -> Option<u8> {
         return None;
     }
     let Some(Block::Para(prev)) = s.doc.block(at.story, &at.path.with_last(i - 1)) else { return None };
-    // Normal and outside a list, also one the style sheet gives (a numbered Normal style).
+    // Normal and outside a list, also one the style sheet gives (a numbered Normal style), with
+    // no outline level: resolving drops the body-text level 9 and above.
     let plain = |p: &wordcraft_doc::Paragraph| {
         let r = s.doc.styles.resolve_para(&p.props);
-        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none_or(|l| l >= 9)
+        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none()
     };
     let text = prev.text.trim_start_matches('\t');
     let tabs = prev.text.len() - text.len();
@@ -355,8 +356,11 @@ pub(super) fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result
     s.sel = Selection { anchor: start.clone(), focus: Pos { off: tabs, ..start } };
     delete_selection(s)?;
     crate::cmd::para::set_heading(s, at.story, &prev, Some(level))?;
-    // Removed tabs change the text, so the usual formatting comparison skips this paragraph.
-    crate::cmd::fmt_revisions::record_para_props(s, at.story, &prev, &before.props)?;
+    // Removed tabs change the text, and the formatting comparison after the command only looks
+    // at paragraphs that keep theirs, so the style change is recorded here.
+    if s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text) {
+        crate::cmd::fmt_revisions::record_para_props(s, at.story, &prev, &before.props)?;
+    }
     s.sel = Selection::caret(at.clone());
     Ok(())
 }
@@ -394,6 +398,11 @@ pub(super) fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Resu
             let p = s.doc.para_mut(new.story, &new.path)?;
             p.props.borders = None;
             p.touch();
+            // The split changes the block count, and the formatting comparison after the command
+            // skips a container whose block count changed, so the border is recorded here.
+            if let Some(before) = before {
+                crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, &before)?;
+            }
             s.sel = Selection::caret(new);
         }
     }
