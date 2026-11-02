@@ -145,7 +145,7 @@ pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: 
 /// rows only, so AutoFit stays quick.
 const MEASURE_BUDGET: usize = 4000;
 /// The line length paragraphs are measured at: wide enough that nothing real wraps.
-const MEASURE_WIDE: f32 = 15_840.0;
+pub(crate) const MEASURE_WIDE: f32 = 15_840.0;
 /// What an empty cell's text needs (about a paragraph mark), points.
 const EMPTY_TEXT: f32 = 12.0;
 
@@ -1414,7 +1414,7 @@ fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Leve
 }
 
 /// A width to lay a paragraph out in so that only its own line breaks end lines.
-pub(crate) const UNBOUNDED: f32 = 100_000.0;
+const UNBOUNDED: f32 = 100_000.0;
 
 /// A paragraph's longest word and longest line (between line breaks), indents included.
 fn para_content(pl: &ParaLayout) -> (f32, f32) {

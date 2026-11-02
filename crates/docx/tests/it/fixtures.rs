@@ -4323,6 +4323,15 @@ fn vml_horizontal_rules_are_read_and_kept() {
     );
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(rules(&again)[..3], got[..3]);
+    // A see-through rule stays see-through.
+    let fill = |d: &Document| paras(d)[0].objects.iter().find_map(|o| if let InlineObject::Shape { fill, .. } = o { fill.clone() } else { None });
+    let d = read_body(
+        r##"<w:p><w:r><w:pict><v:rect style="width:0;height:1.5pt" o:hr="t" fillcolor="#ff0000"><v:fill opacity="0.25"/></v:rect></w:pict></w:r></w:p>"##,
+    );
+    let Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) = fill(&d) else { panic!("{:?}", fill(&d)) };
+    assert!((transparency - 75.0).abs() < 0.01, "{transparency}");
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(fill(&again), fill(&d));
     // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
     let body = [
         hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),

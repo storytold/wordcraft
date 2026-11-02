@@ -323,7 +323,16 @@ impl Writer<'_> {
         w.open("w:r", &[]);
         self.rpr(w, props);
         w.open("w:pict", &[]);
-        w.empty("v:rect", &attrs);
+        // A see-through fill keeps its opacity, which `fillcolor` can't say.
+        match fill.as_ref() {
+            Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) if *transparency > 0.0 => {
+                let opacity = format!("{:.4}", (1.0 - transparency / 100.0).clamp(0.0, 1.0));
+                w.open("v:rect", &attrs);
+                w.empty("v:fill", &[("opacity", &opacity)]);
+                w.close("v:rect");
+            }
+            _ => w.empty("v:rect", &attrs),
+        }
         w.close("w:pict");
         w.close("w:r");
         self.rev_close(w, props);

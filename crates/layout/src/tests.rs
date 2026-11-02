@@ -12363,6 +12363,20 @@ fn horizontal_rules_take_their_line() {
     d.body = vec![Arc::new(Block::Table(cell))];
     let s = drawn(&d);
     assert!(s.first().is_some_and(|r| r.w > 150.0 && r.w < 200.0), "the cell's width, not the page's: {s:?}");
+    // Measuring a table column: a rule of its own width asks for it, a share of the line for none.
+    let measured = |pct: f32| {
+        let mut o = rect_shape(150.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align: Align::Left, standard: false });
+        }
+        let mut t = Table::new(1, 1, 200.0);
+        let mut p = Paragraph::default();
+        p.insert_object(0, o, &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        crate::autofit_widths(&crate::measure_table_columns(&d, &t), 451.0)[0]
+    };
+    assert!(measured(0.0) >= 150.0, "{}", measured(0.0));
+    assert!(measured(100.0) < 150.0, "{}", measured(100.0));
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
