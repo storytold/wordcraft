@@ -300,7 +300,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-25 | trivial | Field results take the `\* DollarText`, `\* Hex` and `\* ArabicDash` switches in table formulas and in the page-number, SEQ, PAGEREF and count fields (#4226); readiness estimates unchanged |
 | 2026-10-25 | trivial | Header-cell pins and header-table obstacles share the rendered body-top override (#2485); model positioning and overlap controls, no new native comparison. |
 | 2026-10-19 | trivial | Header body-boundary adjustment applies only to the Margin anchor. TopMargin and InsideMargin keep their declared extent; synthetic alignment countercontrols are prepared, not yet executed. |
-| 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. |
+| 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. PNG export excludes tracked deletions from pagination and ink when Print Markup is off, includes them when on, and preserves the live document. |
 | 2026-10-29 | trivial | Port existing transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
 | 2026-10-19 | trivial | Keep Thai-containing cached REF results atomic when their requested Thai font is missing; ordinary-space Thai wrapping remains unqualified. No new Word comparison. |
 | 2026-10-19 | trivial | Preserve atomic REF bidi shaping for direction-sensitive results and host levels; ordinary-space reflow remains limited to simple left-to-right results. |
