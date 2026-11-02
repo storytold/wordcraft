@@ -20,6 +20,7 @@ mod legacy_forms;
 mod ligatures;
 mod malformed;
 mod note_comments;
+mod para_ids;
 mod passthrough;
 mod positional_tabs;
 mod privacy;

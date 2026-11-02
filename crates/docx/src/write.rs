@@ -110,6 +110,15 @@ pub(crate) struct Writer<'d> {
     pending_watermark: Option<String>,
     /// Paragraphs that need a `w14:paraId` (last paragraph of each comment), by address.
     para_ids: HashMap<usize, String>,
+    /// The paragraph ids the document's paragraphs carry (never given out fresh).
+    para_ids_read: std::collections::HashSet<u32>,
+    /// Whether paragraphs outside the comments carry ids. Then every paragraph is written with
+    /// one: its own the first time it is met, a fresh one otherwise.
+    every_para_id: bool,
+    /// Paragraph ids written so far (and the comments' ones, given out first).
+    para_ids_written: std::collections::HashSet<u32>,
+    /// Where the search for a fresh paragraph id goes on from.
+    next_para_id: u32,
     /// A note reference mark to put at the start of the next paragraph.
     pending_mark: Option<&'static str>,
     /// The note being written (is footnote, part id): its reference to itself is the mark above.
@@ -219,8 +228,31 @@ impl Writer<'_> {
         Some(rels.add(if footer { rt::FOOTER } else { rt::HEADER }, &file, false))
     }
 
-    fn take_para_id(&self, p: &wordcraft_doc::Paragraph) -> Option<String> {
-        self.para_ids.get(&(p as *const _ as usize)).cloned()
+    fn take_para_id(&mut self, p: &wordcraft_doc::Paragraph) -> Option<String> {
+        if let Some(id) = self.para_ids.get(&(p as *const _ as usize)) {
+            return Some(id.clone());
+        }
+        if !self.every_para_id {
+            return None;
+        }
+        // An id already written (the paragraph was copied) gets a fresh one, so ids stay unique.
+        let id = match p.para_id {
+            Some(id) if self.para_ids_written.insert(id) => Some(id),
+            _ => {
+                let id = self.fresh_para_id(self.next_para_id);
+                self.next_para_id = id.map_or(self.next_para_id, |id| id.saturating_add(1));
+                id
+            }
+        };
+        id.map(|id| format!("{id:08X}"))
+    }
+
+    /// The first paragraph id from `from` on that no paragraph carries and none was written with,
+    /// taken; `None` past the last valid id (0x7FFFFFFF).
+    fn fresh_para_id(&mut self, from: u32) -> Option<u32> {
+        let id = (from.max(1)..0x8000_0000).find(|id| !self.para_ids_read.contains(id) && !self.para_ids_written.contains(id))?;
+        self.para_ids_written.insert(id);
+        Some(id)
     }
 
     /// Whether `p` holds a reference to the note being written.

@@ -38,6 +38,11 @@ pub struct Paragraph {
     /// Set when this paragraph ends a section (OOXML keeps `w:sectPr` on the last paragraph).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<Box<SectionProps>>,
+    /// The file's paragraph id (`w14:paraId`), written back as read. A new paragraph has none and
+    /// gets a fresh one when saved; so does a later copy of an id already written (not part of
+    /// equality).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_id: Option<u32>,
     /// Change counter for caches (not part of equality).
     #[serde(skip, default = "next_rev")]
     pub rev: u64,
@@ -69,6 +74,7 @@ impl Paragraph {
             mark: CharProps::default(),
             objects: Vec::new(),
             section: None,
+            para_id: None,
             rev: next_rev(),
         }
     }
@@ -437,9 +443,11 @@ impl Paragraph {
     }
 
     /// Split at `off`: `self` keeps `..off`, the returned paragraph gets `off..` with the same
-    /// paragraph properties (the section break, if any, moves to the second half).
+    /// paragraph properties (the section break, if any, moves to the second half). The paragraph
+    /// id stays with the first half, or moves with all the text when splitting at the start.
     pub fn split_off(&mut self, off: usize) -> Result<Paragraph> {
         self.check(off)?;
+        let para_id = if off == 0 && !self.text.is_empty() { self.para_id.take() } else { None };
         let k = self.objects_before(off);
         let tail_text = self.text.split_off(off);
         let tail_objs = if k <= self.objects.len() { self.objects.split_off(k) } else { Vec::new() };
@@ -468,6 +476,7 @@ impl Paragraph {
             mark: if self.text.is_empty() && off == 0 { self.mark.clone() } else { carry },
             objects: tail_objs,
             section: self.section.take(),
+            para_id,
             rev: next_rev(),
         };
         if tail.text.is_empty() {
@@ -479,7 +488,7 @@ impl Paragraph {
         Ok(tail)
     }
 
-    /// Append `other`'s content (its paragraph properties are dropped; its section break kept).
+    /// Append `other`'s content (its paragraph properties and id are dropped; its section break kept).
     pub fn append(&mut self, other: Paragraph) {
         let Paragraph { text, runs, objects, section, .. } = other;
         self.text.push_str(&text);

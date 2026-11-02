@@ -21,6 +21,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     } else {
         doc
     };
+    let (para_ids_read, every_para_id) = doc.para_ids();
     let mut wr = Writer {
         eq_number: 0,
         doc,
@@ -39,6 +40,10 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         wm_header: (0..=u32::MAX).rev().find(|id| !doc.parts.contains_key(id)).unwrap_or(u32::MAX),
         pending_watermark: None,
         para_ids: HashMap::new(),
+        para_ids_read,
+        every_para_id,
+        para_ids_written: std::collections::HashSet::new(),
+        next_para_id: 1,
         pending_mark: None,
         current_note: None,
         toc_hold_end: false,
@@ -66,13 +71,22 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     let ns = xml::body_ns();
     let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-    // Comments get paragraph ids before any story is written.
+    // Comments get paragraph ids before any story is written: their own, or fresh ones.
     let mut comment_paras: Vec<(u32, String)> = Vec::new();
+    // Fresh ones from 0x10000001 + the comment's index; the search goes on past the last one given.
+    let mut comment_next = 0u32;
     for (i, (cid, c)) in doc.comments.iter().enumerate() {
         if let Some(part) = doc.parts.get(&c.part)
             && let Some(last) = part.blocks.iter().rev().find_map(|b| b.as_para())
         {
-            let pid = format!("{:08X}", 0x1000_0000u32 + i as u32 + 1);
+            let own = last.para_id.filter(|id| wr.para_ids_written.insert(*id));
+            let pid = own.or_else(|| {
+                let id = wr.fresh_para_id(0x1000_0000u32.saturating_add(i as u32).saturating_add(1).max(comment_next))?;
+                comment_next = id.saturating_add(1);
+                Some(id)
+            });
+            let Some(pid) = pid else { continue };
+            let pid = format!("{pid:08X}");
             wr.para_ids.insert(last as *const _ as usize, pid.clone());
             comment_paras.push((*cid, pid));
         }
