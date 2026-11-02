@@ -1,5 +1,6 @@
 use super::state::{Dest, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
+use std::sync::Arc;
 
 /// The encoding of an East Asian multibyte code page (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5),
 /// which [`Reader::finish_multibyte`] decodes a run with; `None` for the single-byte code pages.
@@ -155,7 +156,28 @@ impl Reader {
         let sy = if self.pict_sy > 0.0 { self.pict_sy / 100.0 } else { 1.0 };
         let w = self.pict_w.map(|v| v * sx);
         let h = self.pict_h.map(|v| v * sy);
-        if let Some(img) = make_img(data, w, h, "") {
+        // The control word only says "a metafile": the bytes decide what it is (#4259).
+        let img = if matches!(self.pict_kind, 3 | 4) && wordcraft_metafile::is_metafile(&data) {
+            // An EMF starts with its header record, type 1.
+            let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
+            // `\picw`/`\pich` are in the units of the `\wmetafileN` mapping mode; 0.01 mm for the
+            // isotropic and anisotropic modes and for EMF.
+            let unit = match (self.pict_kind, self.pict_mm) {
+                (3, 1) => 0.75,         // MM_TEXT: pixels
+                (3, 2) => 72.0 / 254.0, // MM_LOMETRIC: 0.1 mm
+                (3, 4) => 0.72,         // MM_LOENGLISH: 0.01 in
+                (3, 5) => 0.072,        // MM_HIENGLISH: 0.001 in
+                (3, 6) => 0.05,         // MM_TWIPS
+                _ => 72.0 / 2540.0,     // MM_HIMETRIC, MM_ISOTROPIC, MM_ANISOTROPIC
+            };
+            let pt = |v: i32| (v > 0).then(|| v.min(1_000_000) as f32 * unit);
+            // `\picscalex`/`\picscaley` scale the natural size too, when no goal size is given.
+            let natural = pt(self.pict_nat.0).zip(pt(self.pict_nat.1)).map(|(a, b)| (a * sx, b * sy));
+            Some(model::sized_img(Arc::new(data), ext, natural, w, h, ""))
+        } else {
+            make_img(data, w, h, "")
+        };
+        if let Some(img) = img {
             self.para.inlines.push(Inline::Image(img));
             self.para_has = true;
         }

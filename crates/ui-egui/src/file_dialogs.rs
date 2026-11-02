@@ -356,7 +356,7 @@ impl WordApp {
                         if !self.safely_saved(saved) || document != self.session.document_id() {
                             return Ok(json!({"done": false}));
                         }
-                        self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+                        self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
                     }
                 }
             }
