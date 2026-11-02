@@ -180,7 +180,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. PNG export excludes tracked deletions from pagination and ink when Print Markup is off, includes them when on, and preserves the live document. |
-| 2026-10-29 | trivial | Port existing transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
+| 2026-10-29 | trivial | Transient REF/PAGEREF print evaluation uses temporary copies; unsupported targets retain cache or refuse strict preparation. |
 | 2026-10-17 | trivial | Print PAGEREF range anchors follow native controls; ambiguous caches remain preserved. |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |

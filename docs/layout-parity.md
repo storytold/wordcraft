@@ -292,7 +292,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-11-01 | trivial | Tab leader dots are spaced by their advance in whole 600-dpi pixels and sit on the page's grid of that pitch between the text before and after the tab, as measured in Word |
 | 2026-10-31 | trivial | A list level above that hasn't counted yet takes its first number at the first deeper item, as measured in Word (1.1, 1.2, then 2.; 10.1–10.4, then 11.), whether or not the deeper level's text shows it |
 | 2026-11-01 | trivial | #5088: paragraph side borders lie outside the text; top and bottom reach the corners; shading fills to the outer edges (#5036) |
-| 2026-11-01 | trivial | #2485: Port header Margin body-boundary placement to current modules; use the existing text-height floor for inline Margin extents and correct historical control labels. Source checks only; primary qualification pending. |
+| 2026-11-01 | trivial | #2485: Port header Margin body-boundary placement to current modules; use the existing text-height floor for inline Margin extents and correct historical control labels. |
 | 2026-10-30 | trivial | Keep with next: a kept heading before a three-line paragraph under widow/orphan control needs room for all three lines, since that paragraph can only move over whole; with room for two, the heading goes to the next page with it instead of staying alone at the bottom, as in Word for Mac 16.93. `layout::tests::keep_with_next_carries_the_heading_when_a_three_line_paragraph_moves_whole` |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
 | 2026-10-27 | trivial | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
@@ -301,7 +301,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-25 | trivial | Header-cell pins and header-table obstacles share the rendered body-top override (#2485); model positioning and overlap controls, no new native comparison. |
 | 2026-10-19 | trivial | Header body-boundary adjustment applies only to the Margin anchor. TopMargin and InsideMargin keep their declared extent; synthetic alignment countercontrols are prepared, not yet executed. |
 | 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. PNG export excludes tracked deletions from pagination and ink when Print Markup is off, includes them when on, and preserves the live document. |
-| 2026-10-29 | trivial | Port existing transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
+| 2026-10-29 | trivial | Transient REF/PAGEREF print evaluation uses temporary copies; unsupported targets retain cache or refuse strict preparation. |
 | 2026-10-19 | trivial | Keep Thai-containing cached REF results atomic when their requested Thai font is missing; ordinary-space Thai wrapping remains unqualified. No new Word comparison. |
 | 2026-10-19 | trivial | Preserve atomic REF bidi shaping for direction-sensitive results and host levels; ordinary-space reflow remains limited to simple left-to-right results. |
 | 2026-10-16 | trivial | Cached REF result wrapping, formatting and caret positions |
