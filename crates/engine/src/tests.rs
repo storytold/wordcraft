@@ -5731,6 +5731,83 @@ fn undo_steps_share_the_style_sheet_and_lists_until_a_command_changes_them() {
     assert!(Arc::ptr_eq(&lists, &s.doc.numbering));
 }
 
+/// The same at scale: 1,000 edits of a document with 600 styles and 60 lists of nine levels. The
+/// history keeps the newest `MAX_UNDO` steps and drops the oldest. Its steps hold one style sheet
+/// for each style change they span, however many steps there are, and one set of lists. A sheet
+/// that only dropped steps held is freed.
+#[test]
+fn a_thousand_edits_of_a_large_document_keep_the_newest_steps_and_share_its_styles() {
+    use crate::doc_state::MAX_UNDO;
+    use std::collections::HashSet;
+    use std::sync::Weak;
+
+    let body: Vec<String> = (0..200).map(|i| format!("Paragraph {i} of the body, with a few words in it.")).collect();
+    let mut doc = wordcraft_doc::Document::from_text(&body.join("\n"));
+    let sheet = Arc::make_mut(&mut doc.styles);
+    let normal = sheet.get("Normal").cloned().unwrap();
+    for i in 0..600 {
+        let (id, name) = (format!("Custom{i}"), format!("Custom {i}"));
+        sheet.upsert(wordcraft_doc::Style {
+            id,
+            name,
+            based_on: Some("Normal".into()),
+            builtin: false,
+            default: false,
+            quick: false,
+            ..normal.clone()
+        });
+    }
+    for _ in 0..60 {
+        Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Legal);
+    }
+    let mut s = Session::new(doc);
+
+    // An edit types a word, except every hundredth, which changes a style: one undo step each.
+    // After each edit: the text, and the sheet and lists the document then had.
+    let edits = 1000;
+    let mut after = Vec::with_capacity(edits);
+    let mut probe = Weak::new();
+    for i in 0..edits {
+        if i % 100 == 50 {
+            run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"size": 10 + i / 100}}));
+        } else {
+            run(&mut s, "text.insert", json!({"text": format!("w{i} ")}));
+            run(&mut s, "caret.left", json!({}));
+        }
+        after.push((text(&s), Arc::downgrade(&s.doc.styles), Arc::downgrade(&s.doc.numbering)));
+        // Edit 50's sheet is replaced at edit 150, so the step taken before edit 150 is the last
+        // to hold it. That step is the oldest one kept until edit 650 pushes it out.
+        match i {
+            50 => probe = Arc::downgrade(&s.doc.styles),
+            649 => assert!(probe.upgrade().is_some(), "a kept step still holds edit 50's sheet"),
+            650 => assert!(probe.upgrade().is_none(), "dropping the last step that held edit 50's sheet frees it"),
+            _ => {}
+        }
+    }
+    assert_eq!(s.undo_steps_so_far(), edits as u64, "one undo step an edit");
+    assert_eq!(s.undo_depth(), MAX_UNDO);
+
+    // Undo goes back through the newest steps, newest first. Each restores the text and the very
+    // sheet and lists the document had after that edit: the steps share them, not copies.
+    let (mut sheets, mut lists) = (HashSet::new(), HashSet::new());
+    for k in 0..=MAX_UNDO {
+        let (txt, sheet, numbering) = &after[edits - 1 - k];
+        assert_eq!(&text(&s), txt, "after {k} undos");
+        assert!(Arc::ptr_eq(&s.doc.styles, &sheet.upgrade().unwrap()), "the sheet after {k} undos");
+        assert!(Arc::ptr_eq(&s.doc.numbering, &numbering.upgrade().unwrap()), "the lists after {k} undos");
+        sheets.insert(Arc::as_ptr(&s.doc.styles));
+        lists.insert(Arc::as_ptr(&s.doc.numbering));
+        if k < MAX_UNDO {
+            assert!(s.undo(), "undo {}", k + 1);
+        }
+    }
+    assert!(!s.undo(), "the oldest 500 steps were dropped: edits 0 to 499 can't be undone");
+    // The 501 states, the document's and the kept steps', hold six sheets (edit 450's, and those
+    // of the changes at 550 to 950) and one set of lists.
+    assert_eq!(sheets.len(), 6);
+    assert_eq!(lists.len(), 1);
+}
+
 /// #865: the other colours in CharProps and ParaProps (`underlineColor`, `shading`, a border's
 /// `color`) take `RRGGBB` / `#RRGGBB` like `para.borders` and `table.shading`, and still `[r, g, b]`.
 #[test]
