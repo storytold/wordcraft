@@ -202,6 +202,7 @@ fn new_page_builder<'p>(
         orig_bottom: 0.0,
         prev: None,
         after_break_mark: false,
+        break_pending: false,
         next_starts_page: false,
         restart_at: None,
         excl: Vec::new(),
@@ -554,7 +555,7 @@ pub(crate) fn layout_pass(
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
         if mode.web && si > 0 {
             // one long page
-        } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
+        } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn || pb.break_pending {
             start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
         } else {
             continue_page(&mut pb, sect, block);
