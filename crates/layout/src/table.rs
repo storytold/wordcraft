@@ -931,6 +931,27 @@ pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, 
     split_row_with(row, cut, true)
 }
 
+fn empty_cell_mark(item: &Placed, start: usize, para_count: usize) -> bool {
+    let Placed::Lines { para, l1, .. } = item else { return false };
+    if para_count > 1 || para.text_len != 0 || para.label.is_some() && (start..*l1).contains(&para.label_line()) {
+        return false;
+    }
+    if para.lines.get(start..*l1).is_some_and(|lines| {
+        lines.iter().any(|line| {
+            para.clusters
+                .get(line.c0..line.c1)
+                .is_some_and(|clusters| clusters.iter().any(|c| matches!(c.kind, crate::para::ClKind::Object(_)) && (c.adv > 0.0 || c.obj_h > 0.0)))
+        })
+    }) {
+        return false;
+    }
+    para.rp.borders.is_none_or(|b| {
+        !(start == 0 && b.top.is_some_and(|b| b.is_visible())
+            || *l1 == para.lines.len() && b.bottom.is_some_and(|b| b.is_visible())
+            || [b.left, b.right].into_iter().flatten().any(|b| b.is_visible()))
+    })
+}
+
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
@@ -987,7 +1008,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let mut kept_cells = vec![false; cells.len()];
     let mut cut_through = vec![false; cells.len()];
     for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
-        let multiple_paras = items.iter().filter(|it| text_lines(it).is_some()).take(2).count() > 1;
+        let para_count = items.iter().filter(|it| text_lines(it).is_some()).take(2).count();
         for (it, &split) in items.iter().zip(splits) {
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let turned = it.turned_bounds();
@@ -1035,20 +1056,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     Placed::Lines { l0, .. } if turned.is_some() => *l0,
                     _ => split,
                 };
-                let empty_mark = matches!(it, Placed::Lines { para, l1, .. }
-                if !multiple_paras && para.text_len == 0
-                && !(para.label.is_some() && (start..*l1).contains(&para.label_line()))
-                && !para.lines.get(start..*l1).is_some_and(|lines| lines.iter().any(|line| {
-                    para.clusters.get(line.c0..line.c1).is_some_and(|clusters| clusters.iter().any(|c| {
-                        matches!(c.kind, crate::para::ClKind::Object(_)) && (c.adv > 0.0 || c.obj_h > 0.0)
-                    }))
-                }))
-                && para.rp.borders.is_none_or(|b| {
-                    !(start == 0 && b.top.is_some_and(|b| b.is_visible()))
-                    && !(*l1 == para.lines.len() && b.bottom.is_some_and(|b| b.is_visible()))
-                    && ![b.left, b.right].into_iter().flatten().any(|b| b.is_visible())
-                }));
-                moved_content |= !empty_mark;
+                moved_content |= !empty_cell_mark(it, start, para_count);
                 *m = m.min(top);
             }
         }
