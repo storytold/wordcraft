@@ -55,6 +55,8 @@ pub enum Draw {
         /// Horizontal scale of the letters (`w:w`, 1 = 100 %): each glyph is stretched across
         /// from its pen position. The positions already have the scaled advances.
         x_scale: f32,
+        /// A list item's number or bullet, not its text (tagged `Lbl` in PDF).
+        list_label: bool,
     },
     Fill {
         rect: Rect,
