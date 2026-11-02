@@ -3631,3 +3631,230 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+/// The body's paragraphs as plain text, as typed (not lowercased).
+fn para_texts(s: &Session) -> Vec<String> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()
+}
+
+#[test]
+fn shift_end_on_a_paragraphs_last_line_selects_its_mark() {
+    // Measured in Word for Windows (Microsoft 365), with and without smart paragraph selection.
+    let long = ["A long paragraph that wraps onto several lines of the page."; 6].join(" ");
+    let mut s = typed(&format!("Uno corto.\n{long}\nTre corto."));
+    // A one-line paragraph: from the middle, the selection runs past the mark to the next
+    // paragraph's start; a second Shift+End leaves it there; Shift+Home then goes to the line's
+    // start (the anchor stays).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!((s.sel.anchor.clone(), s.sel.focus.clone()), (Pos::body(0, 3), Pos::body(1, 0)));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(1, 0), "a second Shift+End");
+    run(&mut s, "caret.home", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(0, 0), "Shift+Home after Shift+End");
+    // Just before the mark, Shift+End selects the mark alone. End without Shift stays before it.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 10)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(1, 0), "just before the mark");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "caret.end", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 10), "End");
+    // A wrapped paragraph: Shift+End on its first line stops at that line's end, on its last
+    // line it takes the mark.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(1, 0)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert!(s.sel.focus.path == Pos::body(1, 0).path && s.sel.focus.off < long.len(), "first line: {:?}", s.sel.focus);
+    run(&mut s, "caret.set", json!({"pos": Pos::body(1, long.len() - 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(2, 0), "last line");
+    // Shift+Down from a line start ends after the mark too: Shift+End leaves it, Shift+Home
+    // goes back to the start.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "caret.down", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(1, 0));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(1, 0), "Shift+End after Shift+Down");
+    run(&mut s, "caret.home", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(0, 0), "Shift+Home after Shift+Down");
+    // The story's last mark can't be selected: Shift+End stops at the end of the text.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(2, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(2, 10), "last paragraph");
+    // Nor can the mark before a table, or a cell's last one. A cell's other marks can.
+    let mut s = typed("Intro line\n");
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let (table, _, _) = s.sel.focus.path.cell().unwrap();
+    assert_eq!(table, Pos::body(1, 0).path, "the table comes right after the paragraph");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(0, 10), "before a table");
+    let in_cell = |block: u32, off: usize| {
+        let mut path = table.0.clone();
+        path.extend([0, 0, block]);
+        Pos { story: StoryRef::Body, path: wordcraft_doc::Path(path), off }
+    };
+    run(&mut s, "caret.set", json!({"pos": in_cell(0, 0)}));
+    run(&mut s, "text.insert", json!({"text": "Uno corto."}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Due corto."}));
+    run(&mut s, "caret.set", json!({"pos": in_cell(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, in_cell(1, 0), "a cell's first paragraph");
+    run(&mut s, "caret.set", json!({"pos": in_cell(1, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, in_cell(1, 10), "a cell's last paragraph");
+}
+
+#[test]
+fn typing_or_deleting_over_a_selection_that_ends_with_a_mark_keeps_the_paragraph() {
+    // Measured in Word for Windows (Microsoft 365) with its default options, as keys sent to the
+    // document window: typing keeps the mark the selection ends with; Delete and Backspace keep
+    // it when the selection starts after its paragraph's start and holds more than the mark.
+    let three = ["Uno corto.", "Due corto.", "Tre corto."];
+    let cases: [((usize, usize), (usize, usize), &[&str], &[&str]); 10] = [
+        // Shift+End from the middle of a line.
+        ((0, 3), (1, 0), &["Uno", "Due corto.", "Tre corto."], &["Unox", "Due corto.", "Tre corto."]),
+        // Shift+End (or Shift+Down) from a paragraph's start: the whole paragraph.
+        ((0, 0), (1, 0), &["Due corto.", "Tre corto."], &["x", "Due corto.", "Tre corto."]),
+        // The mark alone.
+        ((0, 10), (1, 0), &["Uno corto.Due corto.", "Tre corto."], &["Uno corto.x", "Due corto.", "Tre corto."]),
+        // From the middle of a paragraph to the start of the one after the next.
+        ((0, 3), (2, 0), &["Uno", "Tre corto."], &["Unox", "Tre corto."]),
+        // Two whole paragraphs.
+        ((0, 0), (2, 0), &["Tre corto."], &["x", "Tre corto."]),
+        // From a mark to the start of the one after the next.
+        ((0, 10), (2, 0), &["Uno corto.", "Tre corto."], &["Uno corto.x", "Tre corto."]),
+        // The same rules before the last paragraph, which stays a paragraph of its own: Shift+End
+        // from the middle, the whole paragraph, the mark alone.
+        ((1, 3), (2, 0), &["Uno corto.", "Due", "Tre corto."], &["Uno corto.", "Duex", "Tre corto."]),
+        ((1, 0), (2, 0), &["Uno corto.", "Tre corto."], &["Uno corto.", "x", "Tre corto."]),
+        ((1, 10), (2, 0), &["Uno corto.", "Due corto.Tre corto."], &["Uno corto.", "Due corto.x", "Tre corto."]),
+        // The last paragraph's mark can't be selected (Shift+End stops at the end of its text):
+        // nothing is kept or joined.
+        ((2, 3), (2, 10), &["Uno corto.", "Due corto.", "Tre"], &["Uno corto.", "Due corto.", "Trex"]),
+    ];
+    for ((pa, oa), (pb, ob), deleted, typed_over) in cases {
+        for key in ["text.delete", "text.backspace", "x"] {
+            let mut s = typed(&three.join("\n"));
+            run(&mut s, "select.range", json!({"anchor": Pos::body(pa, oa), "focus": Pos::body(pb, ob)}));
+            if key == "x" {
+                typ(&mut s, "x");
+            } else {
+                run(&mut s, key, json!({}));
+            }
+            let want = if key == "x" { typed_over } else { deleted };
+            assert_eq!(para_texts(&s), want, "{key} over ({pa}, {oa})..({pb}, {ob})");
+            // One Undo brings the paragraphs back, with the selection as it was, mark included.
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(para_texts(&s), three, "Undo after {key} over ({pa}, {oa})..({pb}, {ob})");
+            assert_eq!((s.sel.anchor.clone(), s.sel.focus.clone()), (Pos::body(pa, oa), Pos::body(pb, ob)), "the selection after Undo of {key}");
+        }
+    }
+    // Enter still replaces the whole selection, mark included, then splits: the mark alone
+    // becomes a new one.
+    let mut s = typed(&three.join("\n"));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 10), "focus": Pos::body(1, 0)}));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(para_texts(&s), three);
+    // A paragraph break that `text.insert` starts with is that Enter: the mark goes too.
+    for (anchor, focus) in [(Pos::body(0, 10), Pos::body(1, 0)), (Pos::body(0, 3), Pos::body(1, 0))] {
+        let mut enter = typed(&three.join("\n"));
+        run(&mut enter, "select.range", json!({"anchor": anchor, "focus": focus}));
+        run(&mut enter, "text.newParagraph", json!({}));
+        for brk in ["\r", "\u{2029}"] {
+            let mut s = typed(&three.join("\n"));
+            run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+            run(&mut s, "text.insert", json!({"text": brk}));
+            assert_eq!(para_texts(&s), para_texts(&enter), "{brk:?} over {anchor:?}..{focus:?}");
+            assert_eq!(s.sel, enter.sel, "{brk:?} over {anchor:?}..{focus:?}");
+        }
+    }
+    // With Track Changes on, Shift+End and Delete mark only the text deleted.
+    let mut s = typed(&three.join("\n"));
+    s.doc.settings.track_changes = true;
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    run(&mut s, "text.delete", json!({}));
+    let first = s.doc.body.first().and_then(|b| b.as_para());
+    assert!(first.is_some_and(|p| p.run_ranges().any(|(r, c)| c.del.is_some() && p.text.get(r) == Some(" corto."))), "the text is marked deleted");
+    assert_eq!(first.map(|p| p.text.as_str()), Some("Uno corto."), "and stays until accepted");
+    assert_eq!(first.map(|p| p.mark.del), Some(None), "the mark isn't deleted");
+    assert_eq!(para_texts(&s).len(), 3);
+}
+
+#[test]
+fn home_and_end_collapse_a_selection_as_in_word() {
+    // Measured in Word for Windows (Microsoft 365): Home goes to the start of the line where the
+    // selection starts, End to the end of the line where it ends, whichever way it was made. An
+    // end after a paragraph mark counts as the end of the line before it.
+    let three = ["Uno corto.", "Due corto.", "Tre corto."].join("\n");
+    let cases =
+        [((0, 3), (1, 0), (0, 10)), ((0, 0), (1, 0), (0, 10)), ((0, 3), (2, 0), (1, 10)), ((2, 0), (0, 3), (1, 10)), ((0, 3), (1, 3), (1, 10))];
+    for ((pa, oa), (pf, of), (pe, oe)) in cases {
+        for (key, want) in [("caret.home", Pos::body(0, 0)), ("caret.end", Pos::body(pe, oe))] {
+            let mut s = typed(&three);
+            run(&mut s, "select.range", json!({"anchor": Pos::body(pa, oa), "focus": Pos::body(pf, of)}));
+            run(&mut s, key, json!({}));
+            assert!(s.sel.is_collapsed(), "{key} from ({pa}, {oa})..({pf}, {of})");
+            assert_eq!(s.sel.focus, want, "{key} from ({pa}, {oa})..({pf}, {of})");
+        }
+    }
+}
+
+/// In a table cell the marks between the cell's paragraphs follow the same rules: Shift+End on
+/// the cell's first paragraph runs to the start of the next one, and Delete or typing over it
+/// keeps both. The cell's end mark isn't taken: in the cell's last paragraph, as before a table,
+/// Shift+End stops at the end of the text (Word selects the cell there, a gap noted in
+/// `docs/typing-parity.md`), so Delete removes only the text and the cell stays. Undo brings each
+/// back.
+#[test]
+fn a_selection_ending_with_a_mark_in_a_table_cell_stays_in_the_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let (table, _, _) = s.sel.focus.path.cell().unwrap();
+    typ(&mut s, "Uno corto.\nDue corto.");
+    let at = |para: u32, off: usize| {
+        let mut path = table.0.clone();
+        path.extend([0, 0, para]);
+        Pos { story: StoryRef::Body, path: wordcraft_doc::Path(path), off }
+    };
+    let cell = |s: &Session| -> Vec<String> { (0..).map_while(|i| s.doc.para(StoryRef::Body, &at(i, 0).path).map(|p| p.text.clone())).collect() };
+    assert_eq!(cell(&s), ["Uno corto.", "Due corto."]);
+    let cells = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).map(|t| (t.rows.len(), t.cols()));
+
+    run(&mut s, "caret.set", json!({"pos": at(0, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, at(1, 0), "Shift+End on the cell's first paragraph takes its mark");
+    for key in ["text.delete", "x"] {
+        run(&mut s, "select.range", json!({"anchor": at(0, 3), "focus": at(1, 0)}));
+        if key == "x" {
+            typ(&mut s, "x");
+        } else {
+            run(&mut s, key, json!({}));
+        }
+        let want = if key == "x" { ["Unox", "Due corto."] } else { ["Uno", "Due corto."] };
+        assert_eq!(cell(&s), want, "{key}: both paragraphs stay in the cell");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(cell(&s), ["Uno corto.", "Due corto."], "Undo after {key}");
+    }
+
+    run(&mut s, "caret.set", json!({"pos": at(1, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, at(1, 10), "in the cell's last paragraph Shift+End stops at the end of the text");
+    assert_eq!(s.cell_range().map(|r| (r.rows, r.cols)), None, "no cell is selected");
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(cell(&s), ["Uno corto.", "Due"], "Delete removes the text only");
+    assert_eq!(cells(&s), Some((1, 2)), "the table keeps its cells");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(cell(&s), ["Uno corto.", "Due corto."], "Undo");
+
+    // A paragraph before a table: Shift+End stops at the end of its text, before the table.
+    let mut s = typed("Uno corto.");
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let first = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "Uno corto."));
+    let first = first.expect("the paragraph");
+    assert!(s.doc.body.get(first + 1).is_some_and(|b| b.as_table().is_some()), "a table follows: {:?}", s.doc.body.len());
+    run(&mut s, "caret.set", json!({"pos": Pos::body(first, 3)}));
+    run(&mut s, "caret.end", json!({"extend": true}));
+    assert_eq!(s.sel.focus, Pos::body(first, 10), "before a table Shift+End stops at the end of the text");
+}
