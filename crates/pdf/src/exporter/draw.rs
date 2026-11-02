@@ -286,6 +286,12 @@ impl Exporter<'_> {
             .media
             .get(&pic.media)
             .and_then(|b| image::ImageReader::new(std::io::Cursor::new(b.as_slice())).with_guessed_format().ok()?.into_dimensions().ok());
+        // Centred once at its natural size (an ODT page background that doesn't repeat).
+        if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("center")) {
+            let (iw, ih) = ((pw as f32 * 0.75).min(w * 4.0), (ph as f32 * 0.75).min(h * 4.0));
+            self.picture(s, &Rect::new((w - iw) / 2.0, (h - ih) / 2.0, iw, ih), &pic.media, &[0.0; 4], 1.0);
+            return;
+        }
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("tile")) {
             let (tw, th) = (pw as f32 * 0.75, ph as f32 * 0.75);
             if tw >= 1.0 && th >= 1.0 && (w / tw).ceil() * (h / th).ceil() <= MAX_TILES {

@@ -161,3 +161,41 @@ fn a_page_layout_stating_nothing_has_libreoffices_margins() {
     let d = crate::import("odt", &crate::odt::tests::package(&content, Some(&one))).unwrap().unwrap();
     assert_eq!((d.last_section.margin_left, d.last_section.margin_top), (72.0, cm2));
 }
+
+#[test]
+fn a_page_background_picture_is_read_and_written() {
+    // LibreOffice's report templates: a picture centred on the page, not repeated.
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let layout = |repeat: &str| {
+        format!(
+            r#"<office:document-styles {ns} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"><style:background-image xlink:href="Pictures/map.png" style:position="center center" {repeat}/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+        )
+    };
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    for (repeat, fill) in [(r#"style:repeat="no-repeat""#, "center"), (r#"style:repeat="stretch""#, "frame"), ("", "tile")] {
+        let styles = layout(repeat);
+        let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/map.png", &png)]);
+        let d = crate::odt::import(&pkg).unwrap();
+        let pic = d.settings.page_picture.as_ref().expect("a page picture");
+        assert_eq!(pic.fill_type, fill);
+        assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+        // Written back in the page layout, the picture in the package.
+        let saved = crate::odt::export(&d).unwrap();
+        let s = crate::odt::tests::entry(&saved, "styles.xml");
+        let want_repeat = match fill {
+            "center" => "no-repeat",
+            "frame" => "stretch",
+            _ => "repeat",
+        };
+        assert!(s.contains(&format!(r#"style:repeat="{want_repeat}""#)) && s.contains("Pictures/page-background.png"), "{s}");
+        let again = crate::odt::import(&saved).unwrap();
+        assert_eq!(again.settings.page_picture.as_ref().map(|p| p.fill_type.as_str()), Some(fill));
+    }
+}

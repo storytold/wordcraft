@@ -657,7 +657,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     if w.indexes + hw.indexes > 0 {
         draw_xml.push_str("<style:style style:name=\"Index_20_Link\" style:display-name=\"Index Link\" style:family=\"text\"/>");
     }
-    let styles = styles_xml(doc, &pages, &parts, &hw.style_defs(), &named).replacen(
+    let styles = page_background(doc, &mut w, styles_xml(doc, &pages, &parts, &hw.style_defs(), &named));
+    let styles = styles.replacen(
         "</office:styles>",
         // The Frame style text boxes derive from (it states nothing: their own styles do).
         &format!("{draw_xml}{named_text_xml}<style:style style:name=\"Frame\" style:family=\"graphic\"/><style:style style:name=\"Graphics\" style:family=\"graphic\"/></office:styles>"),
@@ -835,5 +836,47 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
             }
         }
     }
+    out
+}
+
+/// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) in
+/// each page layout (§17.3 `style:background-image`, first in `style:page-layout-properties`),
+/// the picture written into the package by `w`: tiled, stretched, or centred at its own size
+/// (§20.249 `style:repeat`).
+fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
+    let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
+    let Some(data) = doc.media.get(&pic.media) else { return styles };
+    let Some(ext) = model::sniff_image(data) else { return styles };
+    let name = format!("Pictures/page-background.{ext}");
+    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
+        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
+    }
+    let repeat = match pic.fill_type.to_ascii_lowercase().as_str() {
+        "tile" => "repeat",
+        "center" => "no-repeat",
+        _ => "stretch",
+    };
+    let el = format!(
+        "<style:background-image xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\" style:position=\"center center\" style:repeat=\"{repeat}\"/>",
+        x(&name)
+    );
+    // After each layout's properties' opening tag.
+    let mut out = String::with_capacity(styles.len() + el.len() * 4);
+    let mut rest = styles.as_str();
+    while let Some(at) = rest.find("<style:page-layout-properties") {
+        let Some(end) = rest.get(at..).and_then(|r| r.find('>')).map(|e| at + e) else { break };
+        let self_closing = rest.get(end.saturating_sub(1)..end) == Some("/");
+        if self_closing {
+            out.push_str(rest.get(..end.saturating_sub(1)).unwrap_or_default());
+            out.push('>');
+            out.push_str(&el);
+            out.push_str("</style:page-layout-properties>");
+        } else {
+            out.push_str(rest.get(..=end).unwrap_or_default());
+            out.push_str(&el);
+        }
+        rest = rest.get(end + 1..).unwrap_or_default();
+    }
+    out.push_str(rest);
     out
 }

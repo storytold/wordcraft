@@ -432,6 +432,8 @@ struct Parsed {
     kept: super::parts::Kept,
     /// Hidden form controls, kept for the next save.
     hidden_controls: Vec<String>,
+    /// The page background picture's bytes and fill.
+    page_image: Option<(Vec<u8>, &'static str)>,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -507,6 +509,8 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
+    // The page background picture's bytes.
+    let page_image = pages.doc.page_image.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill)));
     let objects = (entries.as_slice(), &manifest);
     let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects)).unwrap_or_default();
     first_pages(&mut pages);
@@ -567,6 +571,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         sources,
         kept,
         hidden_controls,
+        page_image,
     })
 }
 
@@ -603,6 +608,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         sources,
         kept,
         hidden_controls,
+        page_image,
     } = parse_tracked(bytes, (page.page_w, page.page_h))?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
@@ -622,6 +628,13 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         doc.settings.default_tab = t;
     }
     doc.settings.page_color = page_doc.page_color;
+    // The page background picture (Design › Page Color › Fill Effects › Picture).
+    if let Some((bytes, fill)) = page_image
+        && let Some(ext) = model::sniff_image(&bytes)
+    {
+        let media = doc.add_media(bytes, ext);
+        doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: fill.to_string(), title: String::new() });
+    }
     if let Some((fmt, props)) = page_doc.notes[0] {
         (doc.settings.footnote_format, doc.settings.footnote_pr) = (fmt, props);
     }
@@ -670,6 +683,9 @@ pub(super) struct Pages {
 #[derive(Clone, Default)]
 pub(super) struct PageDoc {
     pub(super) page_color: Option<wordcraft_doc::props::Rgb>,
+    /// The first page style's background picture (§17.3 `style:background-image`): its package
+    /// path and WordCraft's fill for its repeat (tiled, stretched, or centred at its size).
+    pub(super) page_image: Option<(String, &'static str)>,
     /// Footnotes', then endnotes', number format and options.
     pub(super) notes: [Option<(wordcraft_doc::section::NumFormat, wordcraft_doc::section::NoteProps)>; 2],
 }
@@ -723,6 +739,8 @@ struct Band {
 #[derive(Default)]
 struct Layout {
     attrs: Attrs,
+    /// Its background picture: package path and fill (see [`PageDoc::page_image`]).
+    image: Option<(String, &'static str)>,
     columns: Option<Columns>,
     header: Band,
     footer: Band,
@@ -755,6 +773,20 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                     && layouts.len() < MAX_SECTIONS
                 {
                     layouts.entry(n.clone()).or_default();
+                }
+            }
+            // A page background picture (§17.3, in `style:page-layout-properties`): §20.249
+            // `style:repeat` (repeat is the default) as WordCraft's tile, stretch, or centre.
+            "background-image" if q.starts_with("style:") => {
+                if let (Some(l), Some(href)) =
+                    (cur.as_ref().and_then(|n| layouts.get_mut(n)), get(&a, "xlink:href").map(str::trim).filter(|h| !h.is_empty() && h.len() <= 1024))
+                {
+                    let fill = match get(&a, "style:repeat").map(str::trim) {
+                        Some("no-repeat") => "center",
+                        Some("stretch") => "frame",
+                        _ => "tile",
+                    };
+                    l.image = Some((href.trim_start_matches("./").to_string(), fill));
                 }
             }
             "header-style" => in_footer = false,
@@ -812,7 +844,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     });
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
-        let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
+        let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
         // What a layout leaves unsaid: the default paper, and LibreOffice's 2 cm margins.
         let mut sec = SectionProps {
             page_w: paper.0,
@@ -827,6 +859,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
         sec.line_numbers.clone_from(&lines);
         if pages.first.is_none() {
             pages.doc.page_color = get(a, "fo:background-color").and_then(model::parse_color);
+            pages.doc.page_image.clone_from(image);
         }
         // ODF starts a header at the page margin and the text after the header's band; Word
         // measures the header's distance and the text's margin from the edge. The band's height
