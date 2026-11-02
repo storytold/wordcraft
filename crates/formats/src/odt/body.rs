@@ -925,7 +925,7 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
-        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space };
+        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space, header_rows: 0 };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
     }
 

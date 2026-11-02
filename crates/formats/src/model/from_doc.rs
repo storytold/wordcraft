@@ -758,10 +758,11 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             heights,
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
+            header_rows: t.rows.iter().take_while(|r| r.props.header).count(),
         }
     });
-    let extra =
-        extra.filter(|x| x.align.is_some() || x.width.is_some() || x.width_pct.is_some() || x.heights.iter().any(Option::is_some)).map(Box::new);
+    // Kept whole for formats that ask for it: its header rows count even without the rest.
+    let extra = extra.map(Box::new);
     FTable { rows, widths: t.grid.clone(), borderless, extra }
 }
 

@@ -107,7 +107,11 @@ impl Writer {
         for c in 0..cols {
             out.push_str(&format!("<table:table-column table:style-name=\"Table{tn}.C{}\"/>", c + 1));
         }
-        let header_rows = t.rows.iter().take_while(|r| !r.is_empty() && r.iter().all(|c| c.header)).count();
+        // The rows repeated on each page (a table style's header row alone repeats nothing).
+        let header_rows = match &t.extra {
+            Some(x) => x.header_rows.min(t.rows.len()),
+            None => t.rows.iter().take_while(|r| !r.is_empty() && r.iter().all(|c| c.header)).count(),
+        };
         for (ri, row) in t.rows.iter().enumerate() {
             if ri == 0 && header_rows > 0 {
                 out.push_str("<table:table-header-rows>");

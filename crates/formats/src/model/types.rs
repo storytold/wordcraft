@@ -862,6 +862,10 @@ pub struct TableExtra {
     pub fixed: bool,
     /// Its own space above and below, points (ODT's table margins).
     pub space: [Option<f32>; 2],
+    /// How many rows at its top repeat at the top of each page (Word's Repeat as header row;
+    /// ODT's `table:table-header-rows`). Its header cells ([`FCell::header`]) may be more: a
+    /// table style's header row is one too.
+    pub header_rows: usize,
 }
 
 impl FTable {

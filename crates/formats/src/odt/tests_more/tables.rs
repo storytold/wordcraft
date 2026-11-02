@@ -90,3 +90,25 @@ fn hostile_borders_do_not_panic() {
     }
     let _ = export(&d).unwrap();
 }
+
+#[test]
+fn only_rows_set_to_repeat_are_written_as_header_rows() {
+    // LibreOffice's agendas: a table without repeated rows came back with its first row
+    // repeating on the next page, because a table style's header row (on by default in Word's
+    // table look) was taken for Repeat as header row.
+    let mut d = wordcraft_doc::Document::from_text("");
+    let mut t = wordcraft_doc::Table::new(3, 2, 400.0);
+    assert!(t.props.look.header_row);
+    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t.clone())));
+    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    assert!(!out.contains("table-header-rows"), "{out}");
+    // A row set to repeat is one.
+    t.rows[0].props.header = true;
+    d.body.pop();
+    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    assert_eq!(out.matches("<table:table-header-rows>").count(), 1, "{out}");
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows.iter().map(|r| r.props.header).collect::<Vec<_>>(), [true, false, false]);
+}
