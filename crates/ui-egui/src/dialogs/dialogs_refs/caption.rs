@@ -192,9 +192,7 @@ pub(super) fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) 
 pub(super) fn new_label_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
     let label = ui.label(tl!("Label:"));
     let r = ui.add(egui::TextEdit::singleline(&mut f.new_label).desired_width(260.0)).labelled_by(label.id);
-    if !r.has_focus() {
-        r.request_focus();
-    }
+    crate::dialogs::focus_when_shown(ui, &r);
     let (ok, cancel) = buttons(ui, tl!("OK"));
     let name: String = f.new_label.chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect::<String>().trim().to_string();
     if ok && !name.is_empty() {

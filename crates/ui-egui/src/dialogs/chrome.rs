@@ -202,12 +202,23 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
     r
 }
 
-/// A dialog's single Close button (Escape too).
+/// A dialog's single Close button (Escape too, and Command+Period on macOS, as Cancel takes).
 pub(super) fn close_button(ui: &mut Ui) -> bool {
     ui.add_space(8.0);
-    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut close = cancel_key_pressed(ui);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
     });
     close
+}
+
+/// Gives a dialog's box (`r`) the keyboard in the first frame it is drawn, as Word's boxes take
+/// it when their dialog opens. Asking in every frame it lacked focus held the keyboard there: Tab
+/// never left the box for the dialog's buttons, and screen readers said nothing (#3172). Asking
+/// in every frame would be worse: `request_focus` always interrupts IME, and on X11 that recreates
+/// the XIM context, which left fcitx taking no keys (#2986).
+pub(crate) fn focus_when_shown(ui: &Ui, r: &egui::Response) {
+    if ui.ctx().viewport(|v| v.prev_pass.widgets.get(r.id).is_none()) {
+        r.request_focus();
+    }
 }
