@@ -194,8 +194,6 @@ impl Exporter<'_> {
         }
     }
 
-    /// A line's leaf roles stay separate inside a text box's rotation wrappers.
-
     fn line(&mut self, s: &mut Surface, (x0, y0, x1, y1): (f32, f32, f32, f32), width: f32, c: Rgb, style: LineStyle, alpha: f32) {
         if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
             return;
