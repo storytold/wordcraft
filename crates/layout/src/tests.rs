@@ -21,6 +21,112 @@ mod vertical;
 
 const WRAP_TEST_FONT: &str = "Source Sans 3";
 
+/// A compact multi-page table with identifiable cells and zero, one or two header rows.
+fn navigation_table_doc(headers: usize) -> Document {
+    let mut doc = Document::from_text("before\nafter");
+    doc.last_section.page_h = 300.0;
+    doc.last_section.margin_top = 30.0;
+    doc.last_section.margin_bottom = 30.0;
+    let mut table = Table::new(48, 3, 468.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        row.props.header = r < headers;
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {r} Col {c}"), Default::default()))];
+        }
+    }
+    doc.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(table)).unwrap();
+    doc
+}
+
+/// Down/Up cross every table page boundary in the same column, past repeated headings.
+#[test]
+fn vertical_table_page_break_skips_repeated_header() {
+    for headers in 0..=2 {
+        let layout = lay(&navigation_table_doc(headers));
+        assert!(layout.pages.len() >= 3);
+        for col in 0..3 {
+            let mut crossings = 0;
+            for page in 0..layout.pages.len() - 1 {
+                let lines = crate::hit::page_lines(&layout.pages[page], StoryRef::Body);
+                let next = crate::hit::page_lines(&layout.pages[page + 1], StoryRef::Body);
+                let body_cell = |line: &&crate::hit::LineHit<'_>| line.path.0.len() == 4 && line.path.0[1] >= headers as u32 && line.path.0[2] == col;
+                let Some(last) = lines.iter().filter(body_cell).max_by(|a, b| a.top.total_cmp(&b.top)) else { continue };
+                let Some(first) = next.iter().filter(body_cell).min_by(|a, b| a.top.total_cmp(&b.top)) else { continue };
+                let from = Pos { story: StoryRef::Body, path: last.path.clone(), off: last.para.lines[last.li].start };
+                let (to, gx) = layout.vertical(&from, None, 1, page).unwrap();
+                assert_eq!(to.path, *first.path, "headers {headers}, column {col}, page {page}: Down must continue in the same column");
+                assert_eq!(layout.caret_on(&to, page + 1).unwrap().page, page + 1);
+                let (back, _) = layout.vertical(&to, Some(gx), -1, page + 1).unwrap();
+                assert_eq!(back, from, "Up must skip the repeated header and return to the previous page");
+                crossings += 1;
+            }
+            assert!(crossings >= 2, "headers {headers}, column {col}: exercise multiple page boundaries");
+        }
+    }
+}
+
+/// #3591: short destination text must not pull a cross-page caret into an adjacent cell.
+#[test]
+fn vertical_table_page_break_keeps_short_destination_column() {
+    for dir in [-1, 1] {
+        for col in 0..3 {
+            let mut doc = navigation_table_doc(1);
+            doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+            doc.styles.default_chr.size = Some(12.0);
+            for row in &mut doc.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows {
+                for cell in &mut row.cells {
+                    cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("MMMMMMMMMMMM", Default::default()))];
+                }
+            }
+            let original = lay(&doc);
+            let lines = crate::hit::page_lines(&original.pages[0], StoryRef::Body);
+            let row = lines.iter().filter_map(|l| l.path.cell().map(|(_, r, _)| r)).max().unwrap();
+            let (source_row, target_row, source_page, target_page) = if dir > 0 { (row, row + 1, 0, 1) } else { (row + 1, row, 1, 0) };
+            doc.table_mut(StoryRef::Body, &Path::top(1)).unwrap().rows[target_row].cells[col].blocks =
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            let layout = lay(&doc);
+            let from = Pos::new(StoryRef::Body, Path(vec![1, source_row as u32, col as u32, 0]), 12);
+            let expected = Path(vec![1, target_row as u32, col as u32, 0]);
+            assert_eq!(layout.caret_on(&from, source_page).unwrap().page, source_page);
+            let (to, gx) = layout.vertical(&from, None, dir, source_page).unwrap();
+            assert_eq!(to.path, expected, "direction {dir}, column {col}");
+            assert_eq!(to.off, 1);
+            assert_eq!(layout.caret_on(&to, target_page).unwrap().page, target_page);
+            let (back, _) = layout.vertical(&to, Some(gx), -dir, target_page).unwrap();
+            assert_eq!(back, from);
+        }
+    }
+}
+
+/// Continuing lines of one tall cell are not mistaken for copies of its heading.
+#[test]
+fn vertical_table_page_break_keeps_split_cell_lines() {
+    let mut doc = navigation_table_doc(1);
+    let wordcraft_doc::Block::Table(table) = std::sync::Arc::make_mut(&mut doc.body[1]) else { panic!("table") };
+    table.rows.truncate(2);
+    let text = "A long cell continues through the page break without repeating its text. ".repeat(30);
+    for cell in &mut table.rows[1].cells {
+        cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+    }
+    let layout = lay(&doc);
+    assert!(layout.pages.len() >= 3);
+    let path = Path(vec![1, 1, 1, 0]);
+    for page in 0..layout.pages.len() - 1 {
+        let lines = crate::hit::page_lines(&layout.pages[page], StoryRef::Body);
+        let next = crate::hit::page_lines(&layout.pages[page + 1], StoryRef::Body);
+        let Some(last) = lines.iter().filter(|l| *l.path == path).max_by(|a, b| a.top.total_cmp(&b.top)) else { continue };
+        let Some(first) = next.iter().filter(|l| *l.path == path).min_by(|a, b| a.top.total_cmp(&b.top)) else { continue };
+        let from = Pos { story: StoryRef::Body, path: path.clone(), off: last.para.lines[last.li].start };
+        let (to, gx) = layout.vertical(&from, None, 1, page).unwrap();
+        assert_eq!(to.path, path);
+        assert_eq!(to.off, first.para.lines[first.li].start);
+        assert!(to.off > from.off);
+        let (back, _) = layout.vertical(&to, Some(gx), -1, page + 1).unwrap();
+        assert_eq!(back, from);
+    }
+}
+
+/// Lay out a synthetic document with a fresh cache and default layout options.
 fn lay(doc: &Document) -> DocLayout {
     let mut c = LayoutCache::new();
     layout(doc, &mut c, &LayoutOptions::default())
