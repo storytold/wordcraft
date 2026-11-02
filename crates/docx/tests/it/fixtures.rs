@@ -1731,7 +1731,9 @@ fn chartex_docx(requires: &str, requires_ns: &str) -> Vec<u8> {
 /// [`chartex_docx`], its drawing linked to a web address (`wp:docPr/a:hlinkClick`) when `link`.
 fn chartex_docx_linked(requires: &str, requires_ns: &str, link: bool) -> Vec<u8> {
     let click = if link { r#"<a:hlinkClick r:id="rIdWeb"/>"# } else { "" };
-    let frame = format!(r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1">{click}</wp:docPr><wp:cNvGraphicFramePr/>"#);
+    let frame = format!(
+        r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1">{click}</wp:docPr><wp:cNvGraphicFramePr/>"#
+    );
     let body = format!(
         r#"<w:p><w:r><w:t>Spread</w:t></w:r><w:r><mc:AlternateContent><mc:Choice xmlns:{requires}="{requires_ns}" Requires="{requires}"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Chart 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
     );
