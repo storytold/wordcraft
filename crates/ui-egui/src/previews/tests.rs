@@ -28,7 +28,8 @@ fn font_menu_entries_leave_installed_families_unloaded() {
 fn long_font_names_are_scaled_to_keep_their_suffix() {
     let db = wordcraft_fonts::FontDb::global();
     let face = db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular");
-    assert!(super::font_preview_size(&face, "A very long font family name with an identifying suffix") < 14.0);
+    let size = super::font_preview_size(&face, "A very long font family name with an identifying suffix");
+    assert!((8.0..14.0).contains(&size), "long names remain readable while being scaled: {size}");
 }
 
 /// A window whose Styles gallery lists `style` first: runs the gallery for a few frames and

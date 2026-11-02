@@ -228,6 +228,7 @@ impl Previews {
             let key = format!("font:{name}");
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
+            let resp = resp.on_hover_text(name);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
@@ -421,9 +422,10 @@ pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
 /// Scale a font preview down when its full name would exceed the raster width. This keeps the
 /// identifying suffix visible instead of letting `render_text_line` stop at the first overflow.
 fn font_preview_size(face: &wordcraft_fonts::FontFace, name: &str) -> f32 {
+    const MIN_PREVIEW_SIZE: f64 = 8.0;
     let upem = if face.upem.is_finite() && face.upem > 0.0 { face.upem } else { 1000.0 };
     let advance = wordcraft_fonts::shape(face, name, &[], |c| c).into_iter().map(|glyph| glyph.x_advance as f64).sum::<f64>() * 14.0 / upem;
-    if advance <= 240.0 { 14.0 } else { (14.0_f64 * 240.0 / advance).max(1.0_f64) as f32 }
+    if advance <= 240.0 { 14.0 } else { (14.0_f64 * 240.0 / advance).max(MIN_PREVIEW_SIZE) as f32 }
 }
 
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
