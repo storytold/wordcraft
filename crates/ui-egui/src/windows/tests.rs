@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Viewport builders passed to egui.
+    static BUILDERS: RefCell<HashMap<ViewportId, egui::ViewportBuilder>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -49,10 +51,12 @@ fn backend() -> egui::Context {
     EVENTS.with(|e| e.borrow_mut().clear());
     COMMANDS.with(|c| c.borrow_mut().clear());
     UPLOADS.with(|u| *u.borrow_mut() = 0);
+    BUILDERS.with(|b| b.borrow_mut().clear());
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        BUILDERS.with(|b| b.borrow_mut().insert(id, viewport.builder.clone()));
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -148,6 +152,35 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
     focus(child);
     frames(&ctx, &mut a, 2);
     assert_eq!((text(&a), a.ui.tab.as_str(), prompt(&a)), ("Second".into(), crate::DEFAULT_TAB, None));
+}
+/// When cascading a new window from a maximized parent window on Windows (which has negative
+/// outer rect coordinates, e.g. x: -8, y: -8 due to invisible resize borders), the monitor bounds
+/// are calculated from the window's visual center rather than its negative top-left corner,
+/// ensuring the new window is placed on-screen at non-negative coordinates.
+#[test]
+fn cascading_from_maximized_window_with_negative_borders_stays_on_screen() {
+    let ctx = backend();
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let root_info = map.entry(ViewportId::ROOT).or_default();
+        root_info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+        root_info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), egui::vec2(1936.0, 1096.0)));
+        root_info.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0)));
+    });
+
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+
+    let builder = BUILDERS.with(|b| b.borrow().get(&child).cloned()).expect("child viewport has builder");
+    if let Some(pos) = builder.position {
+        assert!(pos.x >= 0.0 && pos.y >= 0.0, "cascaded window position ({}, {}) must be on-screen", pos.x, pos.y);
+    }
 }
 
 fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {

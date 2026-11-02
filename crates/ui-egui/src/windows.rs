@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 
-use craft_window::{Document, Frame, Viewports, WindowEvent, WindowId, WindowList, WindowMenu};
+use craft_window::{Document, Frame, Rect, Viewports, WindowEvent, WindowId, WindowList, WindowMenu};
 use egui::{ViewportCommand, ViewportId};
 use serde_json::{Value, json};
 use wordcraft_engine::WindowView;
@@ -587,6 +587,22 @@ impl WordApp {
             return;
         }
         let Some(mut viewports) = self.windows.viewports.take() else { return };
+        if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size).filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0) {
+            let previous = self.windows.list.cascade_origin(None);
+            let bounds = previous
+                .and_then(|prev| {
+                    let center_x = prev.x + prev.width * 0.5;
+                    let center_y = prev.y + prev.height * 0.5;
+                    if center_x.is_finite() && center_y.is_finite() {
+                        let tile = |center: f32, len: f32| (center / len).floor() * len;
+                        Some(Rect::new(tile(center_x, monitor.x), tile(center_y, monitor.y), monitor.x, monitor.y))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| Rect::new(0.0, 0.0, monitor.x, monitor.y));
+            viewports.set_bounds(Some(bounds));
+        }
         let mut list = std::mem::take(&mut self.windows.list);
         self.windows.recent = list.recent().filter_map(|id| list.get(id).copied()).collect();
         let titles: HashMap<u64, String> = self.windows.open.iter().map(|w| (w.key, w.title.clone())).collect();

@@ -187,3 +187,8 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.FueryS]
+real_name = "Sayyed Zeeshan"
+display_name = "Sayyed Zeeshan"
+sync_github_name = false
