@@ -301,8 +301,8 @@ impl Writer {
             props.push('\u{1}');
             props.push_str(&children);
         }
-        // An empty paragraph's mark formatting, its size giving its height.
-        let mark = p.mark.as_deref().filter(|_| p.inlines.is_empty()).map(super::writer::props::props_text).unwrap_or_default();
+        // A paragraph without text: its mark formatting, its size giving its height.
+        let mark = p.mark.as_deref().filter(|_| p.textless()).map(super::writer::props::props_text).unwrap_or_default();
         let hyphenate = p.extra.as_ref().and_then(|x| x.suppress_hyphens) == Some(false);
         if hyphenate || !mark.is_empty() {
             props.push('\u{2}');

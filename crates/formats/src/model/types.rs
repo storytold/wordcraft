@@ -654,13 +654,34 @@ pub struct Para {
     pub extra: Option<Box<wordcraft_doc::props::ParaProps>>,
     /// The paragraph mark's direct formatting (its size sets an empty paragraph's height), for
     /// formats that keep it (ODT): only flows asked for paragraph formatting
-    /// ([`FlowOpts::paras`]) hold it, and only for paragraphs without text.
+    /// ([`FlowOpts::paras`]) hold it, and only for paragraphs without text ([`Para::textless`]),
+    /// whose drawings' runs take it too.
     pub mark: Option<Box<wordcraft_doc::props::CharProps>>,
 }
 
 impl Para {
     pub fn new(kind: Kind) -> Para {
         Para { kind, ..Default::default() }
+    }
+
+    /// It holds no text of its own: nothing, or only drawings, bookmarks and field bounds. Its
+    /// [`Para::mark`] formatting is then its own (its height, its drawings' runs).
+    pub fn textless(&self) -> bool {
+        self.inlines.iter().all(|i| {
+            matches!(
+                i,
+                Inline::Image(_)
+                    | Inline::Chart(_)
+                    | Inline::Shape { .. }
+                    | Inline::Group { .. }
+                    | Inline::Figure(_)
+                    | Inline::Anchor(_)
+                    | Inline::AnchorEnd(_)
+                    | Inline::CommentEnd(_)
+                    | Inline::FieldStart(_)
+                    | Inline::FieldEnd
+            )
+        })
     }
     /// Append text, merging with the previous span when the formatting matches.
     pub fn push_text(&mut self, s: &str, f: &Fmt) {

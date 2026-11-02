@@ -546,9 +546,10 @@ impl Body<'_> {
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.glue_connectors(&mut p);
-        // An empty paragraph's own text formatting is its mark's: its size is its height.
+        // A paragraph without text has its own text formatting as its mark's: its size is its
+        // height, and its drawings' runs have it.
         if let Some(base) = self.fmt.pop()
-            && p.inlines.is_empty()
+            && p.textless()
             && base != model::Fmt::default()
         {
             p.mark = Some(Box::new(crate::model::char_props(&base)));

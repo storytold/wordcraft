@@ -510,8 +510,14 @@ impl<'a> Builder<'a> {
                 Inline::FieldEnd => append(&mut out, "", &CharProps::default(), Some(InlineObject::FieldEnd)),
                 Inline::Image(_) | Inline::Chart(_) | Inline::Shape { .. } | Inline::Group { .. } => {
                     if let Some(mut obj) = self.drawing(i, 0) {
-                        // In line, raised or lowered: its run's position (as Word keeps it).
-                        let mut cp = CharProps::default();
+                        // In line, raised or lowered: its run's position (as Word keeps it). In
+                        // a paragraph of its own, its run has the paragraph's formatting.
+                        let mut cp = p
+                            .mark
+                            .as_deref()
+                            .filter(|_| p.textless())
+                            .map(|m| self.budget(CharProps { ins: None, del: None, fmt_change: None, ..m.clone() }))
+                            .unwrap_or_default();
                         if let Some(f) = obj.float_mut()
                             && f.wrap == wordcraft_doc::para::Wrap::Inline
                             && f.y != 0.0
@@ -597,7 +603,7 @@ impl<'a> Builder<'a> {
                 }
             }
         }
-        if let Some(m) = p.mark.as_deref().filter(|_| out.text.is_empty()) {
+        if let Some(m) = p.mark.as_deref().filter(|_| p.textless()) {
             out.mark = self.budget(CharProps { ins: None, del: None, fmt_change: None, ..m.clone() });
         }
         out.mark.ins = p.mark_ins.as_deref().map(|m| self.revision(RevisionKind::Insert, m));

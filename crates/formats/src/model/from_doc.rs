@@ -588,11 +588,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     done
 }
 
-/// The mark formatting of `out`, the last piece of `p`, when it holds no text (its height), for
+/// The mark formatting of `out`, the last piece of `p`, when it holds no text (its height, its
+/// drawings' formatting), for
 /// formats that keep it (flows asked for paragraph formatting).
 fn empty_mark(out: &Para, p: &Paragraph, opts: FlowOpts) -> Option<Box<CharProps>> {
     let m = CharProps { ins: None, del: None, fmt_change: None, ..p.mark.clone() };
-    (opts.paras && out.inlines.is_empty() && !m.is_empty()).then(|| Box::new(m))
+    (opts.paras && out.textless() && !m.is_empty()).then(|| Box::new(m))
 }
 
 /// The drawings from `from` on (just added) raised by their run's position `raise` (points): a

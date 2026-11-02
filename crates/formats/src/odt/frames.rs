@@ -395,7 +395,9 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
 /// `bottom` hangs from it, `from-top` has its top `svg:y` below it. Placement relative to the
 /// character or line stays on the baseline.
 fn inline_raise(g: &Graphic, y: Option<f32>, h: f32) -> f32 {
-    if !matches!(g.vrel.as_deref(), None | Some("baseline")) || !h.is_finite() {
+    // Measured from the baseline; a relation an in-line frame can't have (a paragraph's, from
+    // a parent style for anchored frames) is the baseline too, as LibreOffice reads it.
+    if matches!(g.vrel.as_deref(), Some("char" | "line" | "text")) || !h.is_finite() {
         return 0.0;
     }
     let raise = match g.vpos.as_deref() {

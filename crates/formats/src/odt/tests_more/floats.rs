@@ -57,6 +57,37 @@ fn wrap_modes_and_offsets() {
 }
 
 #[test]
+fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
+    // LibreOffice's elegant agenda: a rule raised 0.2 in above the baseline (its parent style's
+    // `vertical-rel="paragraph"` is no in-line frame's, so the baseline's), in a 9 pt paragraph.
+    let pic = {
+        let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    };
+    let content = format!(
+        r#"<office:document-content {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="P2" style:family="paragraph"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="g1" style:family="graphic" style:parent-style-name="G"><style:graphic-properties style:vertical-pos="from-top"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P2"><draw:frame draw:style-name="g1" text:anchor-type="as-char" svg:y="-0.2in" svg:width="6in" svg:height="0.05in"><draw:image xlink:href="Pictures/p.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#,
+        NS = crate::odt::tests::NS_T
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:styles><style:style style:name="G" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph" style:vertical-pos="top" style:vertical-rel="paragraph"/></style:style></office:styles></office:document-styles>"#,
+        NS = crate::odt::tests::NS_T
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/p.png", &pic)]);
+    let look = |doc: &Document| {
+        let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        let (off, _) = p.objects_with_offsets().next().unwrap();
+        let props = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8());
+        (props.position.map(|v| (v * 10.0).round() / 10.0), props.size, p.mark.size)
+    };
+    let doc = crate::odt::import(&pkg).unwrap();
+    assert_eq!(look(&doc), (Some(10.8), Some(9.0), Some(9.0)));
+    let again = crate::odt::import(&crate::odt::export(&doc).unwrap()).unwrap();
+    assert_eq!(look(&again), (Some(10.8), Some(9.0), Some(9.0)));
+}
+
+#[test]
 fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
     // LibreOffice's letter templates: a page-anchored frame "from the paragraph" is placed from
     // the page's edge, "from the paragraph's content" from its text area.
