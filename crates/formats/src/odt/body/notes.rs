@@ -190,6 +190,12 @@ impl Body<'_> {
 
     /// `inline` at the end of the paragraph being read (a new one if none is).
     pub(in crate::odt) fn push_inline(&mut self, inline: Inline) {
+        // A drawing in the text outside any paragraph waits for the next one.
+        let drawing = matches!(inline, Inline::Image(_) | Inline::Shape { .. } | Inline::Chart(_) | Inline::Group { .. });
+        if self.para.is_none() && drawing && self.at_body_level() && self.loose.len() < super::MAX_LOOSE {
+            self.loose.push(inline);
+            return;
+        }
         if self.para.is_none() {
             self.start_para(None, None);
         }

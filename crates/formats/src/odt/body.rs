@@ -7,6 +7,9 @@ use super::{
     model,
 };
 
+/// Most drawings waiting outside a paragraph.
+const MAX_LOOSE: usize = 10_000;
+
 pub(in crate::odt) mod drawing;
 mod indexes;
 mod notes;
@@ -57,6 +60,10 @@ pub(super) struct Body<'a> {
     forms: super::forms::FormsReader,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
+    /// Drawings anchored in the text but outside any paragraph (LibreOffice's page-anchored
+    /// frames before the first one): the next paragraph's, so they don't make a paragraph of
+    /// their own (which would start the document on another page style).
+    loose: Vec<Inline>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
@@ -170,6 +177,7 @@ impl<'a> Body<'a> {
             para_seq: 0,
             manifest: None,
             containers: vec![Vec::new()],
+            loose: Vec::new(),
             fmt: Vec::new(),
             para: None,
             xml_space_end: false,
@@ -341,6 +349,11 @@ impl<'a> Body<'a> {
         std::mem::take(&mut self.forms.hidden)
     }
 
+    /// Whether the reader is in the text itself: not in a table, note, comment or frame.
+    pub(in crate::odt) fn at_body_level(&self) -> bool {
+        self.tables.is_empty() && self.cells.is_empty() && self.note.is_none() && self.frame.is_none() && self.containers.len() == 1
+    }
+
     pub(super) fn take_blocks(&mut self) -> Vec<FBlock> {
         // What truncated XML left open: a field, a note or comment (its paragraph goes on).
         self.end_field();
@@ -348,6 +361,11 @@ impl<'a> Body<'a> {
             self.end_note();
         }
         self.end_para();
+        // Drawings after the last paragraph: a paragraph of their own.
+        if !self.loose.is_empty() {
+            self.start_para(None, None);
+            self.end_para();
+        }
         while self.containers.len() > 1 {
             let c = self.containers.pop().unwrap_or_default();
             self.container().extend(c);
@@ -513,6 +531,12 @@ impl Body<'_> {
             self.para_cont = false;
         }
         self.fmt.push(base);
+        // Drawings waiting outside a paragraph come first in it.
+        if !self.loose.is_empty() && self.note.is_none() {
+            let mut loose = std::mem::take(&mut self.loose);
+            loose.append(&mut p.inlines);
+            p.inlines = loose;
+        }
         self.para = Some(p);
     }
 
@@ -788,6 +812,10 @@ impl Body<'_> {
                 self.start_para(get(a, "text:style-name"), h);
             }
             "table" if q.starts_with("table:") => {
+                // Drawings waiting for a paragraph get their own before a table.
+                if !self.loose.is_empty() && self.tables.is_empty() {
+                    self.start_para(None, None);
+                }
                 self.end_para();
                 // A body table whose style names a master page starts that page (ODF 1.3 §19.509).
                 if let Some(next) = get(a, "table:style-name").and_then(|s| self.page_section(s)) {

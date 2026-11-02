@@ -276,7 +276,8 @@ fn page_layout_follows_the_first_master_page() {
     let mut sec = wordcraft_doc::SectionProps::default();
     apply_page_layout(xml, &mut sec);
     assert!(sec.landscape);
-    assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 72.0));
+    // A margin left unsaid is LibreOffice's 2 cm.
+    assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 2.0 * 72.0 / 2.54));
 }
 
 #[test]
@@ -296,8 +297,9 @@ fn hostile_page_layout_values_are_clamped() {
     apply_page_layout(styles("1e30pt", "1e30in", "1e30pt").as_bytes(), &mut sec);
     assert_eq!((sec.page_w, sec.page_h), (1584.0, 1584.0));
     assert_eq!((sec.margin_top, sec.margin_left), (1584.0, 1584.0));
-    // Negative, zero, tiny and non-numeric values leave the defaults alone.
-    let def = wordcraft_doc::SectionProps::default();
+    // Negative, zero, tiny and non-numeric values leave the defaults alone: the default page, and
+    // LibreOffice's 2 cm margins.
+    let def = wordcraft_doc::SectionProps { margin_top: 2.0 * 72.0 / 2.54, margin_right: 2.0 * 72.0 / 2.54, ..Default::default() };
     for (w, h, m) in [("-10in", "-5in", "-1in"), ("0pt", "0pt", "NaNpt"), ("1pt", "2pt", "infpt"), ("NaN", "inf", "x")] {
         let mut sec = wordcraft_doc::SectionProps::default();
         apply_page_layout(styles(w, h, m).as_bytes(), &mut sec);

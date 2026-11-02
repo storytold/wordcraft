@@ -435,6 +435,9 @@ fn hyphenation(blocks: &mut [FBlock]) -> bool {
 /// The content of a package that has none: an empty text.
 const EMPTY_CONTENT: &str = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:p/></office:text></office:body></office:document-content>"#;
 
+/// The margin a page layout leaves unsaid (LibreOffice's page margins: 2 cm).
+const DEFAULT_MARGIN: f32 = 2.0 * 72.0 / 2.54;
+
 /// The page size of a page layout that states none: WordCraft's default page's.
 fn default_paper() -> (f32, f32) {
     let d = SectionProps::default();
@@ -725,7 +728,15 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                 }
             }
             "linenumbering-configuration" if q.starts_with("text:") => lines = line_numbering(&a),
-            "page-layout" if q.starts_with("style:") => cur = get(&a, "style:name").map(String::from),
+            "page-layout" if q.starts_with("style:") => {
+                cur = get(&a, "style:name").map(String::from);
+                // A layout stating nothing is still one: the defaults' page.
+                if let Some(n) = &cur
+                    && layouts.len() < MAX_SECTIONS
+                {
+                    layouts.entry(n.clone()).or_default();
+                }
+            }
             "header-style" => in_footer = false,
             "footer-style" => in_footer = true,
             "header-footer-properties" => {
@@ -737,10 +748,8 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                 }
             }
             "page-layout-properties" => {
-                if let Some(n) = &cur
-                    && layouts.len() < MAX_SECTIONS
-                {
-                    layouts.insert(n.clone(), Layout { attrs: a, ..Default::default() });
+                if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
+                    l.attrs = a;
                 }
             }
             "columns" if q.starts_with("style:") => {
@@ -784,7 +793,16 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
         let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
-        let mut sec = SectionProps { page_w: paper.0, page_h: paper.1, ..SectionProps::default() };
+        // What a layout leaves unsaid: the default paper, and LibreOffice's 2 cm margins.
+        let mut sec = SectionProps {
+            page_w: paper.0,
+            page_h: paper.1,
+            margin_top: DEFAULT_MARGIN,
+            margin_bottom: DEFAULT_MARGIN,
+            margin_left: DEFAULT_MARGIN,
+            margin_right: DEFAULT_MARGIN,
+            ..SectionProps::default()
+        };
         apply_layout(a, &mut sec);
         sec.line_numbers.clone_from(&lines);
         if pages.first.is_none() {

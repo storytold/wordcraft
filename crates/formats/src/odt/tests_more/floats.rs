@@ -215,3 +215,28 @@ fn a_contour_outside_its_view_box_is_worked_out_instead() {
     let a: crate::odt::xml::Attrs = vec![("svg:viewBox".into(), "0 0 100 100".into()), ("draw:points".into(), "0,0 100,100 0,100".into())];
     assert!(crate::odt::frames::contour_polygon(&a).is_some());
 }
+
+#[test]
+fn a_drawing_outside_any_paragraph_belongs_to_the_next_one() {
+    // LibreOffice puts page-anchored frames before the first paragraph. They join it rather
+    // than making a paragraph of their own, which would start the document on the default page
+    // style instead of the one the first paragraph asks for.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:style style:name="Opening" style:family="paragraph" style:master-page-name="First"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Running head</text:p></style:header></style:master-page><style:master-page style:name="First" style:page-layout-name="pm1" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"><office:body><office:text><draw:frame text:anchor-type="page" text:anchor-page-number="1" svg:x="1in" svg:y="2in" svg:width="2in" svg:height="1in"><draw:text-box><text:p>Address</text:p></draw:text-box></draw:frame><text:p text:style-name="Opening">Dear reader,</text:p><text:p>Body.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    let paras: Vec<&wordcraft_doc::Paragraph> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paras.len(), 2, "no paragraph of the frame's own");
+    assert_eq!(paras[0].text.replace(wordcraft_doc::para::OBJ, ""), "Dear reader,");
+    assert_eq!(paras[0].objects.len(), 1);
+    // One section, starting on the first page style: a different first page without the head.
+    assert!(d.last_section.title_page && d.last_section.headers.default.is_some());
+    // Drawings with no paragraph after them still get one.
+    let tail = content.replace(r#"<text:p text:style-name="Opening">Dear reader,</text:p><text:p>Body.</text:p>"#, "");
+    let d = import(&crate::odt::tests::package(&tail, Some(&styles))).unwrap();
+    assert_eq!(d.body.iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum::<usize>(), 1);
+}
