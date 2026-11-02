@@ -35,6 +35,8 @@ const OWNED: &[&str] = &[
     "w:footnotePr",
     "w:endnotePr",
     "m:mathPr",
+    // Read into the model whole (`doc_vars`, the section page-number prefixes) and written from it.
+    "w:docVars",
 ];
 
 /// Owned children whose original, when there is one, is kept as is.
@@ -356,6 +358,20 @@ mod tests {
         assert!(merge(&[0xff, 0xfe], GEN.as_bytes()).is_none());
         // Missing declarations for a prefix the generated part uses: fall back.
         assert!(merge(br#"<w:settings xmlns:x="x"><w:rsids/></w:settings>"#, GEN.as_bytes()).is_none());
+    }
+
+    /// Document variables come from the model: a changed one replaces the original, and one the
+    /// model no longer has goes.
+    #[test]
+    fn document_variables_follow_the_model() {
+        let orig =
+            r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:rsids/><w:docVars><w:docVar w:name="old" w:val="1"/></w:docVars></w:settings>"#;
+        let generated = GEN.replace("</w:compat>", r#"</w:compat><w:docVars><w:docVar w:name="new" w:val="2"/></w:docVars>"#);
+        let out = String::from_utf8(merge(orig.as_bytes(), generated.as_bytes()).unwrap()).unwrap();
+        assert!(out.contains(r#"w:name="new""#) && !out.contains(r#"w:name="old""#), "{out}");
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(!out.contains("docVar"), "{out}");
+        assert!(out.contains("<w:rsids/>"), "{out}");
     }
 
     #[test]

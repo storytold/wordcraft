@@ -10,10 +10,12 @@ pub mod catalog;
 pub mod cmd;
 pub(crate) mod doc_state;
 pub mod file_access;
+pub mod hooks;
 pub(crate) mod ime;
 pub mod io;
 mod io_ext;
 pub mod keymap;
+pub mod lint;
 pub(crate) mod locale;
 pub mod math_gallery;
 pub(crate) mod prefs;
@@ -72,6 +74,8 @@ pub use wordcraft_layout as layout;
 pub use wordcraft_proof as proof;
 pub use wordcraft_render as render;
 
+pub use cmd::file::export_options;
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CmdError {
     #[error("unknown command `{0}`")]
@@ -104,6 +108,9 @@ pub struct CommandSpec {
     /// Parameter description for agents (`{"size": number}`).
     pub params: &'static str,
     pub mutates: bool,
+    /// Replaces the open document with another (like File › New): an interface asks to save
+    /// unsaved changes first, as it does for its own New, Open and Close.
+    pub replaces_document: bool,
     /// `None` = enabled; `Some(reason)` = disabled.
     pub enabled: fn(&Session) -> Option<&'static str>,
     pub run: fn(&mut Session, &Value) -> CmdResult,
@@ -115,7 +122,7 @@ fn always(_: &Session) -> Option<&'static str> {
 
 impl CommandSpec {
     pub const fn new(id: &'static str, label: &'static str, location: &'static str, run: fn(&mut Session, &Value) -> CmdResult) -> Self {
-        CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, enabled: always, run }
+        CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, replaces_document: false, enabled: always, run }
     }
     pub const fn key(mut self, s: &'static str) -> Self {
         self.shortcut = s;
@@ -128,6 +135,11 @@ impl CommandSpec {
     /// Doesn't change the document (navigation, view, export).
     pub const fn pure(mut self) -> Self {
         self.mutates = false;
+        self
+    }
+    /// Replaces the open document ([`CommandSpec::replaces_document`]).
+    pub const fn replaces_document(mut self) -> Self {
+        self.replaces_document = true;
         self
     }
     pub const fn when(mut self, f: fn(&Session) -> Option<&'static str>) -> Self {
