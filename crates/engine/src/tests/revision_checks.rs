@@ -521,3 +521,47 @@ fn a_deletion_of_your_own_insertion_is_not_listed() {
     assert_eq!(visible(&s), "Hello");
     assert!(change_list(&mut s).iter().all(|(kind, ..)| kind == "insert"));
 }
+
+#[test]
+fn a_deletion_inside_another_authors_move_destination_is_listed_as_its_own_change() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "First one.\nSecond one.\nThird one."}));
+    s.author = "Alice".into();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}}));
+    run(&mut s, "edit.cut", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "edit.paste", json!({}));
+    // Alice moved "Second one." to the top; Bob deletes "Second" there.
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 6) };
+    run(&mut s, "text.delete", json!({}));
+    let list = change_list(&mut s);
+    let has = |kind: &str, who: &str, text: &str| list.iter().any(|c| c == &(kind.into(), who.into(), text.into()));
+    assert!(has("moveTo", "Alice", "Second"), "Alice's move is still listed: {list:?}");
+    assert!(has("delete", "Bob", "Second"), "Bob's deletion is listed, by Bob: {list:?}");
+    assert!(!list.iter().any(|(k, w, _)| k == "delete" && w == "Alice"), "the move's source isn't listed twice: {list:?}");
+}
+
+#[test]
+fn a_deletion_of_another_authors_paragraph_mark_is_listed_as_its_own_change() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    // Bob deletes the paragraph mark Alice inserted.
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 3), focus: Pos::body(1, 0) };
+    run(&mut s, "text.delete", json!({}));
+    let mark = s.doc.para_at(&Pos::body(0, 0)).map(|p| (p.mark.ins.is_some(), p.mark.del.is_some()));
+    assert_eq!(mark, Some((true, true)), "the mark stays, inserted by Alice and deleted by Bob");
+    let ch = run(&mut s, "review.changes", json!({}));
+    let list = ch.as_array().cloned().unwrap_or_default();
+    let at_mark = |kind: &str, who: &str| {
+        list.iter().any(|c| c["kind"] == kind && c["author"] == who && c["start"]["path"] == json!([0]) && c["start"]["off"] == 3)
+    };
+    assert!(at_mark("insert", "Alice"), "Alice's paragraph mark is still listed: {list:?}");
+    assert!(at_mark("delete", "Bob"), "Bob's deletion of it is listed, by Bob: {list:?}");
+}
