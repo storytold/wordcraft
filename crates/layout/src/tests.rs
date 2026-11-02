@@ -12863,3 +12863,28 @@ fn header_margin_table_area() {
 }
 
 mod shape_alpha;
+
+#[test]
+fn an_invisible_inline_shape_reserves_its_height_on_the_line() {
+    // A `.doc` picture shape with no picture: no fill, no outline, 453.55 x 152 pt, then a line break.
+    let mut d = Document::from_text("a\u{b}After");
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 453.55,
+        h: 152.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 1), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
+    assert!(para.lines.len() >= 2, "{}", para.lines.len());
+    assert!(para.lines[0].height >= 152.0, "the shape's line is {} pt", para.lines[0].height);
+    assert!(para.lines[1].top >= para.lines[0].top + 152.0, "\"After\" starts at {}", para.lines[1].top);
+}

@@ -341,6 +341,10 @@ pub(crate) struct Props {
     pub(crate) wrap_dist: [Option<u32>; 4],
     /// `wzDescription`: the alternative text.
     pub(crate) alt: String,
+    /// The picture is linked to a file: `pibFlags` LinkToFile, or a `pibName`.
+    pub(crate) linked: bool,
+    /// `fHorizRule`: a horizontal line.
+    pub(crate) horiz_rule: bool,
 }
 
 impl Props {
@@ -356,6 +360,9 @@ impl Props {
             if opid & 0x8000 != 0 {
                 let start = complex_at;
                 complex_at = complex_at.saturating_add(op as usize);
+                if pid == 0x0105 && op > 0 {
+                    self.linked = true;
+                }
                 if pid == 0x0381 {
                     let end = complex_at.min(body.len());
                     if let Some(data) = body.get(start..end) {
@@ -376,6 +383,8 @@ impl Props {
                     self.crop[slot] = if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 };
                 }
                 0x0104 => self.pib = Some(op),
+                0x0105 if op > 0 => self.linked = true,
+                0x0106 => self.linked |= op & 0x8 != 0,
                 0x0181 => self.fill_color = color(op),
                 // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
                 0x01BF if op & (1 << 20) != 0 => self.filled = Some(op & (1 << 4) != 0),
@@ -391,6 +400,8 @@ impl Props {
                 0x0390 => self.posrelh = Some(op),
                 0x0391 => self.posv = Some(op),
                 0x0392 => self.posrelv = Some(op),
+                // fHorizRule (bit 11) is valid when fUsefHorizRule (bit 27) is set.
+                0x03BF if op & (1 << 27) != 0 => self.horiz_rule = op & (1 << 11) != 0,
                 _ => {}
             }
         }
