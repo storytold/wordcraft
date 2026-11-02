@@ -52,7 +52,7 @@ test checks dotted and dotless I under Turkish casing with fixture labels, and t
 and ASCII command ids still match. The shared checks (catalog validation and the missing-translation report, `cargo xtask i18n-report`)
 include Turkish automatically.
 
-Turkish proofing (`crates/proof/src/tr`) provides spelling against installed Hunspell `tr_TR`
+Turkish proofing (`crates/proof/src/tr` in storytold/craft-libs, the `craft-proof` crate) provides spelling against installed Hunspell `tr_TR`
 dictionaries, spelling suggestions tuned for Turkish diacritics and detached particles, rule-based grammar
 checks (reduplications, conjunction commas, capitalization), and syllable hyphenation by TDK rules.
 
