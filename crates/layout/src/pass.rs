@@ -355,8 +355,15 @@ fn place_section_blocks<'p>(
     (block, discarded)
 }
 
-/// Endnotes at the end of the section: those referenced so far.
-fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque<(u32, usize)>, (sect, si, block): (&SectionProps, usize, usize)) {
+/// Endnotes at the end of the section: those referenced so far. A page break left for the next
+/// section (#2109) is taken before them, so they start the new page and the next section
+/// continues below them; no Word sample yet shows a section's endnotes after such a break.
+fn section_endnotes(
+    ctx: &mut Ctx,
+    pb: &mut PageBuilder,
+    endnotes: &mut VecDeque<(u32, usize)>,
+    (sect, si, block, body_top): (&SectionProps, usize, usize, f32),
+) {
     if ctx.doc.note_options(sect, true).pos != wordcraft_doc::section::NotePos::SectEnd || pb.pages.is_empty() {
         return;
     }
@@ -364,6 +371,9 @@ fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque
     while let Some((id, _)) = endnotes.front().filter(|(_, s)| *s <= si).copied() {
         endnotes.pop_front();
         here.push(id);
+    }
+    if pb.break_pending && !here.is_empty() {
+        pb.new_page(block.saturating_sub(1), body_top);
     }
     place_endnotes(ctx, pb, here, block.saturating_sub(1));
 }
@@ -510,10 +520,12 @@ pub(crate) fn layout_pass(
         let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
         let sec = Sec { si, sect, start, tops };
-        if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
-            // The page the section before ends on is finished with its own margins and footnote
-            // separators, before this section's replace them: the footnotes pending on it
-            // belong to the section whose page it is (#5289).
+        let starts_page = !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn);
+        if starts_page || pb.break_pending {
+            // The page the section before ends on (or the page its break ended) is finished with
+            // that section's margins and footnote separators, before this section's replace
+            // them: the footnotes pending on it belong to the section whose page it is (#5289,
+            // #2109). Finishing it again in `new_page` finds nothing left to do.
             pb.finish_page();
         }
         begin_section_state(&mut ctx, &mut pb, &sec, totals, mode.web);
@@ -530,7 +542,7 @@ pub(crate) fn layout_pass(
         let balance = prepare_section_end(&mut pb, sections, (si, mode.web));
         let (next, discarded) = place_section_blocks(&mut ctx, &mut pb, &outline, (block, last), (balance, sec.tops.body));
         (block, boxes_discarded) = (next, boxes_discarded + discarded);
-        section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block));
+        section_endnotes(&mut ctx, &mut pb, &mut endnotes, (sect, si, block, sec.tops.body));
     }
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
