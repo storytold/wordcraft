@@ -706,7 +706,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
-| 2026-11-02 | trivial | Fully transparent HTML backgrounds add no run or cell shading; a later transparent declaration clears an earlier colour (#4946, #4954). Positive-alpha colours retain the existing opaque approximation. Native clipboard and Word untested; readiness estimates unchanged. |
+| 2026-11-02 | trivial | Transparent HTML backgrounds preserve the visible parent background. Without a parent background they add no run or cell shading. A later transparent declaration clears an earlier colour on the same element (#4946, #4954). Positive-alpha colours retain the existing opaque approximation. Native clipboard and Word untested; readiness estimates unchanged. |
 | 2026-10-30 | trivial | HTML import and paste keep spaced RGB/HSL background colours, including supported shorthand values, without reading URL/quoted/gradient contents as colours (#4946). Synthetic coverage; native editor clipboard and Word untested; readiness estimates unchanged. |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
