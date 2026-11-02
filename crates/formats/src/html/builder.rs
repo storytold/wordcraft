@@ -1004,6 +1004,7 @@ impl<'r> Builder<'r> {
     /// `css`: the element's declarations in cascade order ([`Builder::css_of`]).
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
         let mut fmt = self.fmt();
+        let parent_background = fmt.background;
         let mut align = None;
         let mut preserve = self.preserve();
         let mut page_break = false;
@@ -1049,7 +1050,7 @@ impl<'r> Builder<'r> {
             fmt.color.get_or_insert(wordcraft_doc::Rgb(0, 0, 0));
             fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
         }
-        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+        apply_style(css, &mut fmt, parent_background, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
         if kind == ElKind::Pre {
             preserve = true;
         }

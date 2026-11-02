@@ -162,6 +162,195 @@ fn styles_and_links() {
     assert!(p.text().ends_with("l\nn"));
 }
 
+#[test]
+fn background_color_functions_keep_spaces_in_their_arguments() {
+    use wordcraft_doc::Rgb;
+    for property in ["background-color", "background"] {
+        for (value, expected) in [
+            ("rgb(30, 40, 50)", Rgb(30, 40, 50)),
+            ("rgb(30 40 50)", Rgb(30, 40, 50)),
+            ("RGB(30,\t40,\n50)", Rgb(30, 40, 50)),
+            ("rgba(30, 40, 50, 1)", Rgb(30, 40, 50)),
+            ("rgb(30 40 50 / 100%)", Rgb(30, 40, 50)),
+            ("hsl(120, 100%, 25%)", Rgb(0, 128, 0)),
+            ("hsla(120 100% 25% / 1)", Rgb(0, 128, 0)),
+            ("#1e2832", Rgb(30, 40, 50)),
+            ("navy", Rgb(0, 0, 128)),
+        ] {
+            let f = parse(&format!("<pre style='{property}:{value} !IMPORTANT;color:white'><span>Code 漢</span></pre><p>Tail</p>"));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+            assert!(
+                matches!(&p.inlines[0], Inline::Text(t, f) if t == "Code 漢" && f.background == Some(expected) && f.color == Some(Rgb(255, 255, 255))),
+                "{property}:{value}: {p:?}"
+            );
+            let FBlock::Para(tail) = &f.blocks[1] else { panic!() };
+            assert!(matches!(&tail.inlines[0], Inline::Text(t, f) if t == "Tail" && f.background.is_none() && f.color.is_none()));
+        }
+    }
+}
+
+#[test]
+fn background_shorthand_does_not_read_colors_inside_other_components() {
+    use wordcraft_doc::Rgb;
+    for value in [
+        "url(red) no-repeat rgb(30, 40, 50)",
+        "url(\"a red blue\") center / cover rgb(30 40 50)",
+        "linear-gradient(red, blue) fixed rgb(30, 40, 50)",
+        "rgb(30, 40, 50) none repeat-x",
+    ] {
+        let f = parse(&format!("<p style='background:{value}'>Code</p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(30, 40, 50))), "{value}: {p:?}");
+    }
+    for value in ["url(a red blue)", "url(\"a red blue\")", "linear-gradient(red, blue)", "\"a red blue\""] {
+        let f = parse(&format!("<p style='background:{value}'>Code</p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background.is_none()), "{value}: {p:?}");
+    }
+}
+
+/// A fully transparent supported colour contributes no run or table-cell shading.
+#[test]
+fn transparent_background_functions_do_not_become_opaque() {
+    use wordcraft_doc::Rgb;
+    for value in [
+        "rgba(0, 0, 0, 0)",
+        "rgba(0, 0, 0, 0%)",
+        "rgb(0 0 0 / 0)",
+        "RGB(0 0 0 / -0.0)",
+        "rgba(0, 0, 0, -1)",
+        "rgb(0 0 0 / -20%)",
+        "hsla(120, 100%, 50%, 0)",
+        "hsl(120 100% 50% / 0%)",
+        "rgba(0, /* alpha */ 0, 0, 0)",
+        "#1230",
+        "#12345600",
+        "transparent",
+    ] {
+        for property in ["background-color", "background"] {
+            let f = parse(&format!(
+                "<p><span style='{property}:{value}'>Text</span></p><table><tr><td style='{property}:{value}'>Cell</td></tr></table>"
+            ));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+            assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background.is_none()), "{property}:{value}: {p:?}");
+            let FBlock::Table(t) = &f.blocks[1] else { panic!("table") };
+            assert_eq!(t.rows[0][0].shading, None, "{property}:{value}");
+        }
+    }
+    // Positive alpha keeps the existing opaque approximation; foreground parsing is separate.
+    let f = parse("<p style='background:rgba(30, 40, 50, 0.2);color:rgba(0, 0, 0, 0)'>Control</p>");
+    let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+    assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(30, 40, 50)) && f.color == Some(Rgb(0, 0, 0))));
+}
+
+/// Transparent is a parsed colour that clears an earlier declaration, unlike an invalid value.
+#[test]
+fn transparent_background_declarations_clear_previous_background() {
+    use wordcraft_doc::Rgb;
+    for value in ["transparent", "rgba(0, 0, 0, 0)", "rgb(0 0 0 / 0%)", "#12345600"] {
+        let f = parse(&format!("<p style='background:red;background:{value}'>Clear</p><p style='background:navy;background:bogus'>Keep</p>"));
+        let FBlock::Para(clear) = &f.blocks[0] else { panic!("paragraph") };
+        assert!(matches!(&clear.inlines[0], Inline::Text(_, f) if f.background.is_none()), "{value}: {clear:?}");
+        let FBlock::Para(keep) = &f.blocks[1] else { panic!("paragraph") };
+        assert!(matches!(&keep.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(0, 0, 128))));
+    }
+}
+
+#[test]
+fn transparent_background_preserves_the_visible_parent_colour() {
+    for property in ["background", "background-color"] {
+        for value in ["transparent", "rgba(0, 0, 0, 0)", "#12345600"] {
+            let f = parse(&format!(
+                "<p style='background:navy'>A<span style='{property}:{value}'>B</span>C<span style='background:red;{property}:{value}'>D</span>E<mark style='{property}:{value}'>F</mark>G</p>"
+            ));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+            assert_eq!(p.text(), "ABCDEFG");
+            assert!(
+                p.inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.background == Some(wordcraft_doc::Rgb(0, 0, 128)))),
+                "{property}:{value}: {p:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stylesheet_backgrounds_keep_transparency_and_page_defaults() {
+    use wordcraft_doc::Rgb;
+    for page in [false, true] {
+        let f = parse_in(
+            "<style>h1 { background: rgb(30, 40, 50) } .clear { background: red; background: rgba(0, 0, 0, 0) } .cell { background: hsl(120, 100%, 25%) }</style>\
+             <h1>A<mark class=clear>B</mark>C</h1><p class=clear>Clear</p>\
+             <table><tr><td class=cell>Cell</td></tr></table>",
+            &|_| None,
+            page,
+        );
+        let ps = paras(&f);
+        assert_eq!(ps[0].text(), "ABC");
+        assert!(ps[0].inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.background == Some(Rgb(30, 40, 50)))));
+        assert_eq!(fmt_of(ps[1]).background, None);
+        let FBlock::Table(t) = &f.blocks[2] else { panic!("table") };
+        assert_eq!(t.rows[0][0].shading, Some(Rgb(0, 128, 0)));
+        if page {
+            let heading = fmt_of(ps[0]);
+            assert!(heading.bold);
+            assert_eq!(heading.size, Some(24.0));
+        }
+    }
+}
+
+#[test]
+fn functional_backgrounds_keep_nested_runs_and_cell_shading() {
+    use wordcraft_doc::Rgb;
+    let f = parse(
+        "<p style='background:rgb(30, 40, 50)'>A<span style='background:rgb(60, 70, 80);background:bogus'>B</span>C</p><table><tr><td style='background:hsl(120, 100%, 25%)'>Cell</td></tr></table>",
+    );
+    let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+    let actual: Vec<_> = p.inlines.iter().filter_map(|i| if let Inline::Text(t, f) = i { Some((t.as_str(), f.background)) } else { None }).collect();
+    assert_eq!(actual, [("A", Some(Rgb(30, 40, 50))), ("B", Some(Rgb(60, 70, 80))), ("C", Some(Rgb(30, 40, 50)))]);
+    let FBlock::Table(t) = &f.blocks[1] else { panic!() };
+    assert_eq!(t.rows[0][0].shading, Some(Rgb(0, 128, 0)));
+    let FBlock::Para(cell) = &t.rows[0][0].blocks[0] else { panic!() };
+    assert!(matches!(&cell.inlines[0], Inline::Text(_, f) if f.background.is_none()));
+}
+
+#[test]
+fn background_comments_do_not_change_function_or_quote_boundaries() {
+    use wordcraft_doc::Rgb;
+    for (value, expected) in [
+        ("/* ( */ navy", Some(Rgb(0, 0, 128))),
+        ("/* &quot; */ navy", Some(Rgb(0, 0, 128))),
+        ("/* red */ navy", Some(Rgb(0, 0, 128))),
+        ("rgb(30, /* ( &quot; red */ 40, 50)", Some(Rgb(30, 40, 50))),
+        ("/* navy */", None),
+        ("url(&quot;a /* red */ blue&quot;)", None),
+        ("url(&quot;a \\&quot; red blue&quot;) rgb(30, 40, 50)", Some(Rgb(30, 40, 50))),
+    ] {
+        let f = parse(&format!("<p style='background:{value}'>Code</p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background == expected), "{value}: {p:?}");
+    }
+}
+
+#[test]
+fn comment_delimiters_in_background_urls_are_literal() {
+    use wordcraft_doc::Rgb;
+    for value in [
+        "u\\72l(a/*) navy",
+        "\\75 rl(a/*) navy",
+        "\\000055RL(a/*) navy",
+        "url(a/*) navy",
+        "URL(a/*) navy",
+        "url(a\\)/*) navy",
+        "url(&quot;a/*&quot;) navy",
+        "image-set(url(a/*) 1x) navy",
+        "url(a/*) /* ( */ navy",
+    ] {
+        let f = parse(&format!("<p style='background:{value}'>Code</p>"));
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(0, 0, 128))), "{value}: {p:?}");
+    }
+}
+
 /// The paragraphs of every cell of the first table, row by row.
 fn cell_paras(f: &Flow) -> Vec<Vec<Vec<Para>>> {
     let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
