@@ -317,6 +317,7 @@ pub fn installed_cyrillic_languages() -> Vec<String> {
     tags
 }
 
+/// Scan the Hunspell search directories for the Cyrillic pairs; none on the web.
 fn discover_cyrillic_languages() -> Vec<String> {
     if cfg!(target_arch = "wasm32") {
         return Vec::new();

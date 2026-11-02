@@ -3,6 +3,8 @@ use serde_json::json;
 use wordcraft_doc::{Document, StoryRef};
 use wordcraft_engine::Session;
 
+/// #3353: installed dictionaries choose the Cyrillic tag, and Russian misspellings are reported
+/// once the text is tagged Russian.
 #[test]
 fn dictionaries_choose_tags_and_russian_spelling_uses_the_detected_language() {
     let dir = std::env::temp_dir().join(format!("wordcraft-auto-language-{}", std::process::id()));

@@ -7,6 +7,7 @@ use wordcraft_doc::{Document, Paragraph, Pos, StoryRef, para::Run};
 use crate::scripts::{self, Script};
 use crate::{CmdError, Session};
 
+/// A letter or a combining mark: what extends a word to the left or right of an edit.
 fn word_char(c: char) -> bool {
     c.is_alphabetic() || c.script() == unicode_script::Script::Inherited
 }
@@ -22,6 +23,7 @@ struct Evidence {
 }
 
 impl Evidence {
+    /// Collect the Cyrillic letters in `text` that point at, or rule out, particular languages.
     fn of(text: &str) -> Self {
         let mut e = Self::default();
         for c in text.chars() {
@@ -43,6 +45,7 @@ impl Evidence {
         }
         e
     }
+    /// Whether `tag` agrees with every piece of evidence: a Ukrainian letter rules out Russian, etc.
     fn permits(&self, tag: &str) -> bool {
         let primary = scripts::primary_language(tag);
         (!self.uk || primary == "uk")
@@ -50,6 +53,7 @@ impl Evidence {
             && (!self.shared_i || matches!(primary.as_str(), "uk" | "be" | "kk"))
             && self.candidates.as_ref().is_none_or(|tags| tags.contains(&primary.as_str()))
     }
+    /// The language the letters alone identify, when only Ukrainian or only Belarusian ones occur.
     fn certain(&self) -> Option<&'static str> {
         match (self.uk, self.be, self.other) {
             (true, false, false) => Some("uk-UA"),
@@ -59,6 +63,12 @@ impl Evidence {
     }
 }
 
+/// The tag for a span of `script`, or `None` to leave it as it is.
+///
+/// Latin: a compatible existing tag, else the Latin editing language, else `en-US`. Cyrillic: a
+/// compatible existing tag, else the Cyrillic editing language, else the first installed
+/// dictionary the evidence permits, else the language the letters identify, else `ru-RU`;
+/// contradicting or unidentifiable evidence keeps the original tag.
 fn choose(e: &Evidence, script: Script, explicit: Option<&str>, editing: Option<&str>, installed: &[String]) -> Option<String> {
     let explicit = explicit.and_then(wordcraft_proof::lang::normalize_tag);
     let editing = editing.and_then(wordcraft_proof::lang::normalize_tag);
@@ -104,6 +114,7 @@ fn spans(text: &str, base: usize) -> Vec<(Range<usize>, Script)> {
     out
 }
 
+/// A table's style properties that matter for proofing, resolved once per table.
 struct TableProofing {
     style: wordcraft_doc::styles::TableStyleProps,
     // Conditional styles need the grid width and each cell's starting column, computed once.
@@ -114,6 +125,8 @@ struct TableProofing {
 type TableCache = std::collections::BTreeMap<(StoryRef, wordcraft_doc::Path), Option<TableProofing>>;
 
 impl TableProofing {
+    /// `None` when the table has no style, or its style sets neither `lang` nor `noProof`, so its
+    /// cells need no lookup.
     fn new(doc: &Document, table: &wordcraft_doc::Table) -> Option<Self> {
         let style = doc.styles.table_style(table.props.style.as_deref()?)?;
         let relevant = |c: &wordcraft_doc::CharProps| c.lang.is_some() || c.no_proof.is_some();
@@ -227,6 +240,8 @@ fn patches(
     changes
 }
 
+/// Set the language of the sorted, disjoint byte ranges in `changes`, splitting runs at their
+/// edges and keeping every other property; adjacent equal runs merge again afterwards.
 fn apply(p: &mut Paragraph, changes: &[(Range<usize>, String)]) {
     if changes.is_empty() {
         return;
@@ -260,6 +275,8 @@ fn apply(p: &mut Paragraph, changes: &[(Range<usize>, String)]) {
     p.touch();
 }
 
+/// Detect the language of `range` in the paragraph at `at`, widened to the whole words it cuts
+/// through. Returns whether any tag changed.
 fn paragraph(
     doc: &mut Document,
     at: &Pos,
@@ -284,6 +301,8 @@ fn paragraph(
 }
 
 impl Session {
+    /// `review.language {"detect": true}`: process the current document and update the caret's
+    /// pending language to match.
     pub(crate) fn detect_current_language(&mut self) -> Result<(), CmdError> {
         let mut tables = TableCache::new();
         let previous = self.actual_language(&self.sel.focus, &mut tables);
@@ -295,6 +314,7 @@ impl Session {
         Ok(())
     }
 
+    /// The effective language at `at`: direct formatting over the table and paragraph styles.
     fn actual_language(&self, at: &Pos, tables: &mut TableCache) -> Option<String> {
         let p = self.doc.para_at(at)?;
         self.doc.styles.resolve_char_in(p.props.style.as_deref(), table_char_props(&self.doc, at, tables).as_ref(), p.props_at(at.off)).lang
@@ -324,6 +344,8 @@ impl Session {
         }
     }
 
+    /// After typing or paste: detect the language of the inserted `range` of the paragraph at `at`,
+    /// as part of the same edit (and undo step).
     pub(crate) fn detect_inserted_language(&mut self, at: &Pos, range: Range<usize>) -> Result<(), CmdError> {
         if !self.prefs.detect_language || crate::cmd::protect::enforced(&self.doc) || range.is_empty() {
             return Ok(());
@@ -357,6 +379,8 @@ impl Session {
         Ok(changed)
     }
 
+    /// Detect the language of a fragment about to be pasted, with this document's styles, so the
+    /// inserted runs arrive tagged.
     pub(crate) fn detect_fragment_language(&self, frag: &mut wordcraft_doc::edit::Fragment) -> Result<(), CmdError> {
         if !self.prefs.detect_language || crate::cmd::protect::enforced(&self.doc) {
             return Ok(());

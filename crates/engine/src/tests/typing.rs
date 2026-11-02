@@ -3649,6 +3649,8 @@ fn automatic_proofing_language_follows_typed_scripts_and_undo() {
     assert_eq!(s.doc, typed);
 }
 
+/// #3353: plain paste is tagged; with detection off nothing changes; digits and punctuation
+/// don't switch the language.
 #[test]
 fn automatic_proofing_language_handles_plain_paste_disabled_and_neutral_text() {
     let mut s = s();

@@ -16,6 +16,7 @@ pub(crate) enum Script {
     Other,
 }
 
+/// The script of `c`. Non-letters (spaces, digits, punctuation) are [`Script::Other`].
 pub(crate) fn of_char(c: char) -> Script {
     if !c.is_alphabetic() {
         return Script::Other;
@@ -66,6 +67,7 @@ pub(crate) fn cyrillic_letter(c: char) -> Option<CyrillicLetter> {
     })
 }
 
+/// Read Aloud's Ukrainian hint: a Ukrainian-only letter or the shared `і`.
 pub(crate) fn ukrainian_letter(c: char) -> bool {
     matches!(cyrillic_letter(c), Some(CyrillicLetter::Ukrainian | CyrillicLetter::SharedI))
 }
@@ -91,6 +93,8 @@ pub(crate) fn primary_language(tag: &str) -> String {
     .to_string()
 }
 
+/// The script a language tag is written in: an explicit script subtag (`sr-Latn`) wins over the
+/// language's usual script. `None` for a language this table doesn't know.
 pub(crate) fn of_language(tag: &str) -> Option<Script> {
     let mut parts = tag.split(['-', '_']);
     let primary = primary_language(parts.next()?);

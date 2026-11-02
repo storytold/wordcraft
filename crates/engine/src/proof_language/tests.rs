@@ -3,6 +3,7 @@ use serde_json::json;
 use std::sync::Arc;
 use wordcraft_doc::{Block, Part, PartKind, props::CharProps};
 
+/// [`choose`] for Cyrillic `text` with the given existing tag, editing language and dictionaries.
 fn choice(text: &str, explicit: Option<&str>, editing: Option<&str>, installed: &[&str]) -> Option<String> {
     choose(&Evidence::of(text), Script::Cyrillic, explicit, editing, &installed.iter().map(|t| t.to_string()).collect::<Vec<_>>())
 }
