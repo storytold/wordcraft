@@ -414,8 +414,16 @@ pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
         .preview_face(name)
         .filter(|f| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c)))
         .unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
-    let img = wordcraft_render::render_text_line(&face, name, 14.0, 244.0, 22.0, 2.0, ppp);
+    let img = wordcraft_render::render_text_line(&face, name, font_preview_size(&face, name), 244.0, 22.0, 2.0, ppp);
     egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+}
+
+/// Scale a font preview down when its full name would exceed the raster width. This keeps the
+/// identifying suffix visible instead of letting `render_text_line` stop at the first overflow.
+fn font_preview_size(face: &wordcraft_fonts::FontFace, name: &str) -> f32 {
+    let upem = if face.upem.is_finite() && face.upem > 0.0 { face.upem } else { 1000.0 };
+    let advance = wordcraft_fonts::shape(face, name, &[], |c| c).into_iter().map(|glyph| glyph.x_advance as f64).sum::<f64>() * 14.0 / upem;
+    if advance <= 240.0 { 14.0 } else { (14.0_f64 * 240.0 / advance).max(1.0_f64) as f32 }
 }
 
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.

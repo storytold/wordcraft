@@ -209,7 +209,7 @@ pub fn split(
     // every menu's top-left corner aligned with the parent's bottom-left corner.
     let mut menu_anchor = aresp.clone();
     menu_anchor.rect = r.union(ar);
-    menu_anchor.interact_rect = menu_anchor.rect;
+    menu_anchor.interact_rect = menu_anchor.rect.intersect(ui.clip_rect());
     egui::Popup::menu(&menu_anchor).show(|ui| {
         ui.set_min_width(180.0);
         menu(ui, app);
