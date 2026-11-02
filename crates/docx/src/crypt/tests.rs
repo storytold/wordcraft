@@ -193,6 +193,25 @@ fn hostile_encryption_info_errors_without_panicking() {
     assert!(decrypt(&fake, Some("pw")).is_err());
 }
 
+/// The key a real-world Standard-encrypted package derives: Apache POI's test file
+/// `protected_passtika.xlsx` (Apache-2.0 test data), password "tika", written by Excel
+/// itself. The value was computed from [MS-OFFCRYPTO] §2.3.4.7 independently of this code —
+/// the file decrypts to a valid package under it and nothing else opens that file — so real
+/// Word 2007 documents stay pinned, not just spec-derived ones.
+#[test]
+fn standard_key_matches_a_real_world_package() {
+    let salt: [u8; 16] = [0x19, 0xd0, 0xc7, 0xf3, 0x95, 0x28, 0x78, 0x43, 0x6a, 0x49, 0x49, 0xd7, 0xf0, 0xa2, 0xcf, 0x1e];
+    const KEY: &str = "8d4d00143a5f2e4918af7e6e7410d46c";
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    assert_eq!(hex(&standard_key(&salt, "tika", 16)), KEY);
+    // A different password or salt gives a different key; the key is exactly the length
+    // asked for, for each AES width.
+    assert_ne!(hex(&standard_key(&salt, "tika2", 16)), KEY);
+    assert_ne!(hex(&standard_key(&[0; 16], "tika", 16)), KEY);
+    assert_eq!(standard_key(&salt, "tika", 24).len(), 24);
+    assert_eq!(standard_key(&salt, "tika", 32).len(), 32);
+}
+
 /// Standard encryption's key derivation (§2.3.4.7) for the password "Password1234_" and the
 /// salt 00 01 … 0F. The expected keys were computed outside WordCraft (Python's hashlib)
 /// following the specification's steps, so the encryptor and decryptor can't share a mistake.
