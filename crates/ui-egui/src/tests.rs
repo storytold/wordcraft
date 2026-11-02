@@ -388,12 +388,12 @@ fn recent_documents_borrow_fallback_faces() {
         ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
     };
     let mut latin = app();
-    latin.ui.recent.push("/home/ice/report.docx".into());
+    latin.ui.recent.push(RecentDocument { path: "/home/ice/report.docx".into(), last_opened: String::new(), modified: String::new() });
     frame(&mut latin);
     assert!(latin.canvas.ime_faces.is_empty(), "a Latin file name needs no extra face");
 
     let mut arabic = app();
-    arabic.ui.recent.push("/home/ice/نواقص 2026.docx".into());
+    arabic.ui.recent.push(RecentDocument { path: "/home/ice/نواقص 2026.docx".into(), last_opened: String::new(), modified: String::new() });
     frame(&mut arabic);
     let letter = 'ن';
     if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
@@ -402,6 +402,15 @@ fn recent_documents_borrow_fallback_faces() {
     let n = arabic.canvas.ime_faces.len();
     frame(&mut arabic);
     assert_eq!(arabic.canvas.ime_faces.len(), n, "the face is added once");
+}
+
+#[test]
+fn old_path_only_recent_entries_are_migrated() {
+    let ui = UiState::from_json(br#"{"recent":["/tmp/legacy.docx",{"path":"/tmp/new.docx","lastOpened":"2026-10-30T12:00:00Z"},3]}"#).unwrap();
+    assert_eq!(ui.recent[0], RecentDocument { path: "/tmp/legacy.docx".into(), last_opened: String::new(), modified: String::new() });
+    assert_eq!(ui.recent[1].path, "/tmp/new.docx");
+    assert_eq!(ui.recent[1].last_opened, "2026-10-30T12:00:00Z");
+    assert_eq!(ui.recent.len(), 2);
 }
 
 /// #3248: the Find box and the Navigation pane's Results list draw the typed query and
@@ -2816,12 +2825,17 @@ fn open_opens_beside_unsaved_work() {
     assert_eq!(prompt(&a), None);
     assert!(body_text(&a).contains("Signed contract"));
     assert_eq!(a.session.path.as_deref(), Some(path.as_path()));
+    assert_eq!(a.ui.recent.len(), 1);
+    assert!(!a.ui.recent[0].modified.is_empty(), "explicit open records file metadata");
+    assert!(a.ui.recent[0].modified.contains('T'), "Recent keeps the full modification timestamp");
+    let first_opened = a.ui.recent[0].last_opened.clone();
     let opened = a.session.document_id();
     a.run("view.switchWindows", json!({"id": first})).unwrap();
     assert!(body_text(&a).contains(UNSAVED) && a.session.dirty);
     a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
     assert_eq!(a.session.document_id(), opened, "an open file is shown, not opened twice");
     assert_eq!(a.session.documents().len(), 2);
+    assert!(a.ui.recent[0].last_opened >= first_opened, "reopening refreshes the Recent date");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2831,6 +2845,7 @@ fn open_without_a_path_only_shows_the_picker() {
     let mut a = typed();
     a.run("file.open", json!({})).unwrap();
     assert_eq!(prompt(&a), None);
+    assert!(a.ui.recent.is_empty(), "opening the picker does not add a Recent entry");
     assert!(body_text(&a).contains(UNSAVED));
 }
 
@@ -4389,11 +4404,13 @@ fn renaming_a_saved_file_keeps_autosave_and_replaces_its_recent_entry() {
     let mut a = typed();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves());
+    let opened = a.ui.recent[0].last_opened.clone();
     a.run("file.rename", json!({"name": "Notes v2"})).unwrap();
     assert_eq!(a.session.path.as_deref(), Some(renamed.as_path()));
     assert!(a.autosaves(), "AutoSave still covers the renamed file");
-    assert_eq!(a.ui.recent.first(), Some(&renamed.to_string_lossy().to_string()));
-    assert!(!a.ui.recent.contains(&path.to_string_lossy().to_string()), "{:?}", a.ui.recent);
+    assert_eq!(a.ui.recent.first().map(|r| r.path.as_str()), Some(renamed.to_string_lossy().as_ref()));
+    assert_eq!(a.ui.recent.first().map(|r| r.last_opened.as_str()), Some(opened.as_str()), "rename preserves the Recent timestamp");
+    assert!(!a.ui.recent.iter().any(|r| r.path == path.to_string_lossy()), "{:?}", a.ui.recent);
     a.run("text.insert", json!({"text": "More "})).unwrap();
     a.autosave_tick(now_ms() + 10_000.0);
     assert!(!a.session.dirty, "AutoSave wrote the renamed file");

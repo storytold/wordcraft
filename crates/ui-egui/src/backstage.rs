@@ -3,8 +3,8 @@
 use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
-use crate::theme::{Tokens, medium, regular, semibold};
-use crate::{WordApp, icons};
+use crate::theme::{Tokens, fit_text, medium, regular, semibold};
+use crate::{RecentDocument, WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
@@ -549,39 +549,161 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
-/// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
-/// stores an open failure in this page's temporary state.
+/// Draws the Recent documents table and stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
-    ui.add_space(6.0);
+    let heading = ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
+    heading.context_menu(|ui| {
+        if ui.button(tl!("Clear Recent")).clicked() {
+            let _ = app.run("ui.recentClear", json!({}));
+            ui.close();
+        }
+    });
     let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
     if !error.is_empty() {
         ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);
     }
-    if app.ui.recent.is_empty() {
-        ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
-    }
     let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
-    let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
-    let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
-    for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
-        // Two documents with the same file name are told apart by their path, as on screen.
-        let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
-        if resp.hovered() {
-            ui.painter().rect_filled(r, 4.0, t.hover);
-        }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
-        if resp.clicked() {
-            let failed = open_recent(app, p).err();
-            ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
-        }
+    if shown.is_empty() {
+        ui.label(egui::RichText::new(tl!("You haven't opened any documents recently. Click Open to browse for a document.")).color(t.text_dim));
+        return;
     }
+    let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
+    let names = shown.iter().map(|r| file_name(&r.path)).collect::<Vec<_>>();
+    recent_header(ui);
+    for i in 0..shown.len() {
+        recent_row(app, ui, &shown[i], &names[i], &t);
+    }
+}
+
+/// Keep common user folders readable in Recent while retaining the full path for actions and
+/// accessibility. Split both separators because persisted paths can come from another platform.
+fn recent_location(path: &str) -> String {
+    const KNOWN_FOLDERS: &[&str] =
+        &["documents", "document", "downloads", "download", "desktop", "pictures", "picture", "photos", "music", "movies", "videos", "public"];
+    let components = path.split(['/', '\\']).filter(|component| !component.is_empty()).collect::<Vec<_>>();
+    components
+        .iter()
+        .rev()
+        .find(|component| KNOWN_FOLDERS.iter().any(|folder| component.eq_ignore_ascii_case(folder)))
+        .map(|component| (*component).to_string())
+        .or_else(|| components.get(components.len().saturating_sub(2)).map(|component| (*component).to_string()))
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// The Recent table's responsive column widths: a narrow icon column, a flexible name column,
+/// and two fixed date columns. The same geometry is used by the header and every row.
+fn recent_columns(width: f32) -> (f32, f32, f32, f32) {
+    // Keep the logo near the left edge while reserving a wider cell after it for visual breathing
+    // room before the document name.
+    let icon = 52.0;
+    let gap = 12.0;
+    let date = ((width - icon - gap * 2.0 - 120.0) / 2.0).clamp(72.0, 120.0);
+    let name = (width - icon - date * 2.0 - gap * 2.0).max(0.0);
+    (icon, name, date, gap)
+}
+
+/// Draw the column headings using real labels so their names are available to accessibility
+/// clients as well as visually aligning with the rows below.
+fn recent_header(ui: &mut Ui) {
+    let width = ui.available_width().min(900.0);
+    let (icon, name, date, gap) = recent_columns(width);
+    let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let cells = [
+        ("Name", Rect::from_min_size(pos2(r.min.x + icon, r.min.y), vec2(name, r.height()))),
+        ("Last opened", Rect::from_min_size(pos2(r.min.x + icon + name + gap, r.min.y), vec2(date, r.height()))),
+        ("Last edited", Rect::from_min_size(pos2(r.min.x + icon + name + gap + date + gap, r.min.y), vec2(date, r.height()))),
+    ];
+    for (index, (label, cell)) in cells.into_iter().enumerate() {
+        let response = ui.interact(cell, ui.scope_id().with(("recent_header", index)), Sense::hover());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!(label)));
+        ui.painter().text(cell.left_center(), Align2::LEFT_CENTER, tl!(label), semibold(12.0), Tokens::get(ui.ctx()).text);
+    }
+}
+
+/// Draw one Recent entry and its context menu. The entry is cloned by the caller so removing it
+/// from the persisted list cannot invalidate the rows still being painted this frame.
+fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str, t: &Tokens) {
+    let path = entry.path.clone();
+    let opened = crate::local_time::local_display_datetime(&entry.last_opened).unwrap_or_else(|| tl!("Unknown").to_string());
+    let edited = crate::local_time::local_display_datetime(&entry.modified).unwrap_or_else(|| tl!("Unknown").to_string());
+    let opened_label = format!("{} {opened}", tl!("Last opened:"));
+    let edited_label = format!("{} {edited}", tl!("Last edited:"));
+    let width = ui.available_width().min(900.0);
+    let (icon, name_width, date, gap) = recent_columns(width);
+    let (r, resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
+    // Include everything painted in the row so screen readers can distinguish locations and hear
+    // the modification date even when the filename is unique.
+    let spoken = format!("{name}, {path}, {opened_label}, {edited_label}");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, t.hover);
+    }
+    if let Some(texture) = wordcraft_logo(ui.ctx()) {
+        ui.painter().image(
+            texture.id(),
+            Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(24.0, 24.0)),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
+    }
+    let name_x = r.min.x + icon;
+    let opened_x = name_x + name_width + gap;
+    let edited_x = opened_x + date + gap;
+    let name_y = r.center().y - 9.0;
+    let path_y = r.center().y + 9.0;
+    let name_rect = Rect::from_min_size(pos2(name_x, r.min.y), vec2(name_width, r.height()));
+    let name_painter = ui.painter().with_clip_rect(name_rect);
+    let name_shown = fit_text(&name_painter, name, &medium(13.0), 0.0, t.text, name_width);
+    let location = recent_location(&path);
+    let location_shown = fit_text(&name_painter, &location, &regular(11.0), 0.0, t.text_dim, name_width);
+    name_painter.text(pos2(name_x, name_y), Align2::LEFT_CENTER, name_shown, medium(13.0), t.text);
+    name_painter.text(pos2(name_x, path_y), Align2::LEFT_CENTER, location_shown, regular(11.0), t.text_dim);
+    ui.painter().text(pos2(opened_x, r.center().y), Align2::LEFT_CENTER, opened, regular(11.0), t.text_dim);
+    ui.painter().text(pos2(edited_x, r.center().y), Align2::LEFT_CENTER, edited, regular(11.0), t.text_dim);
+    if resp.clicked() {
+        let failed = open_recent(app, &path).err();
+        ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
+    }
+    let mut remove = false;
+    resp.context_menu(|ui| {
+        if ui.button(tl!("Open")).clicked() {
+            let failed = open_recent(app, &path).err();
+            ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
+            ui.close();
+        }
+        if app.services.show_in_folder.is_some() && ui.button(tl!("Show in folder")).clicked() {
+            if let Err(error) = app.run("ui.recentShowInFolder", json!({"path": path})) {
+                app.status(error);
+            }
+            ui.close();
+        }
+        ui.separator();
+        if ui.button(tl!("Remove from Recent")).clicked() {
+            remove = true;
+            ui.close();
+        }
+    });
+    if remove {
+        let _ = app.run("ui.recentRemove", json!({"path": path}));
+    }
+}
+
+/// Load the existing attributed WordCraft application icon once per egui context.
+fn wordcraft_logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique("backstage_wordcraft_logo");
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let bytes = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png");
+    let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let color = egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw());
+    let texture = ctx.load_texture("backstage_wordcraft_logo", color, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    Some(texture)
 }
 
 /// Stable storage id for the Recent list's open error.

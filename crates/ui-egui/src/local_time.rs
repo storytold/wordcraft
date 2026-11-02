@@ -29,6 +29,86 @@ pub(crate) fn comment_time(c: &wordcraft_doc::Comment) -> String {
     stamp(&c.date, c.date_utc.as_deref(), offset_minutes)
 }
 
+/// Return the user's local calendar date for an ISO-8601 timestamp. Recent-document timestamps
+/// are stored in UTC, but grouping is a calendar operation in the user's time zone.
+pub(crate) fn local_calendar_date(iso: &str) -> Option<String> {
+    let t = parse(iso)?;
+    let utc = t.secs - i64::from(t.zone.unwrap_or(0)) * 60;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(time) = chrono::DateTime::<chrono::Utc>::from_timestamp(utc, 0) {
+        let date = if t.timed { time.with_timezone(&chrono::Local).date_naive() } else { time.date_naive() };
+        return Some(date.format("%Y-%m-%d").to_string());
+    }
+    // Keep the browser implementation, and provide a fallback for timestamps outside chrono's
+    // representable range on native targets.
+    let local = if t.timed { utc + i64::from(offset_minutes(utc)) * 60 } else { utc };
+    let (y, m, d) = wordcraft_engine::cmd::civil_from_days(local.div_euclid(86_400));
+    Some(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Format a stored UTC timestamp as a short date in the device's regional convention.
+pub(crate) fn local_display_date(iso: &str) -> Option<String> {
+    let date = local_calendar_date(iso)?;
+    let mut parts = date.split('-');
+    let year = parts.next()?;
+    let month = parts.next()?;
+    let day = parts.next()?;
+    let locale = sys_locale::get_locale().unwrap_or_default();
+    let region = locale_region(&locale);
+    Some(match region.as_str() {
+        "us" | "ph" => format!("{month}/{day}/{year}"),
+        "cn" | "jp" | "tw" => format!("{year}/{month}/{day}"),
+        "kr" => format!("{year}. {month}. {day}."),
+        _ => format!("{day}/{month}/{year}"),
+    })
+}
+
+/// Format a stored UTC timestamp as a regional date and time. Date-only legacy values remain
+/// date-only, while timestamps include hours and minutes in the device's usual clock convention.
+pub(crate) fn local_display_datetime(iso: &str) -> Option<String> {
+    let t = parse(iso)?;
+    if !t.timed {
+        return local_display_date(iso);
+    }
+    let utc = t.secs - i64::from(t.zone.unwrap_or(0)) * 60;
+    let local = utc + i64::from(offset_minutes(utc)) * 60;
+    let seconds = local.rem_euclid(86_400);
+    let hour = seconds / 3_600;
+    let minute = seconds / 60 % 60;
+    let locale = sys_locale::get_locale().unwrap_or_default();
+    let region = locale_region(&locale);
+    let time = if matches!(region.as_str(), "us" | "ph") {
+        let suffix = if hour < 12 { "AM" } else { "PM" };
+        let display_hour = match hour % 12 {
+            0 => 12,
+            h => h,
+        };
+        format!("{display_hour}:{minute:02} {suffix}")
+    } else {
+        format!("{hour:02}:{minute:02}")
+    };
+    Some(format!("{} {time}", local_display_date(iso)?))
+}
+
+/// Find the locale's region, skipping the language and optional script subtags. A singleton
+/// starts extensions and cannot be a region (for example, `en-US-u-hc-h12`).
+fn locale_region(locale: &str) -> String {
+    let locale = locale.replace('_', "-").to_ascii_lowercase();
+    let mut parts = locale.split('-');
+    let _language = parts.next();
+    for part in parts {
+        if part.len() == 1 {
+            break;
+        }
+        let is_alpha_region = part.len() == 2 && part.bytes().all(|byte| byte.is_ascii_alphabetic());
+        let is_numeric_region = part.len() == 3 && part.bytes().all(|byte| byte.is_ascii_digit());
+        if is_alpha_region || is_numeric_region {
+            return part.to_string();
+        }
+    }
+    String::new()
+}
+
 fn stamp(date: &str, date_utc: Option<&str>, offset: impl Fn(i64) -> i32) -> String {
     let utc = date_utc.and_then(parse).filter(|t| t.timed).map(|t| Time { zone: Some(t.zone.unwrap_or(0)), ..t });
     let local_date = || parse(date).map(|t| if date.trim_end().ends_with(['Z', 'z']) { Time { zone: None, ..t } } else { t });
@@ -151,6 +231,15 @@ mod tests {
             assert_eq!(days_from_civil(y, m, d), days);
         }
         assert_eq!(days_from_civil(2026, 10, 12), 20_738);
+    }
+
+    #[test]
+    fn locale_region_skips_scripts_and_extensions() {
+        assert_eq!(locale_region("zh-Hant-TW"), "tw");
+        assert_eq!(locale_region("sr_Latn_RS"), "rs");
+        assert_eq!(locale_region("en-419"), "419");
+        assert_eq!(locale_region("en-US-u-hc-h12"), "us");
+        assert_eq!(locale_region("en"), "");
     }
 
     /// WordCraft's own comments carry their UTC time: shown in the user's zone, across a date

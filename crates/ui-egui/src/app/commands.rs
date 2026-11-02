@@ -3,6 +3,7 @@ use super::{
     file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
     table_pen, theme, widgets, zotero,
 };
+use crate::RecentDocument;
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -262,12 +263,21 @@ impl WordApp {
                 self.autosave_path = self.session.path.clone();
             }
             let old = old.to_string_lossy();
-            self.ui.recent.retain(|r| *r != old);
+            let new = self.session.path.as_ref().map(|path| path.to_string_lossy().to_string());
+            if let Some(new) = new
+                && let Some(entry) = self.ui.recent.iter_mut().find(|entry| entry.path == old)
+            {
+                // Renaming does not constitute a new open: retain the existing record and its
+                // timestamps while changing only the persisted path.
+                entry.path = new;
+            } else {
+                self.ui.recent.retain(|entry| entry.path != old);
+            }
         }
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
-        self.after_command(id);
+        self.after_command(id, &r);
         if let Err(e) = &r {
             self.status(e.clone());
         }
@@ -345,7 +355,8 @@ impl WordApp {
         r
     }
 
-    fn after_command(&mut self, id: &str) {
+    fn after_command(&mut self, id: &str, result: &Result<Value, String>) {
+        let succeeded = result.is_ok();
         options::sync(self);
         self.canvas.caret_visible_since = now_ms();
         if id == "view.outline" {
@@ -392,11 +403,36 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
-        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
-            && self.ui.recent.first() != Some(&p)
+        // Recent metadata is collected only after an explicit, successful file operation. In
+        // particular, drawing File's Recent page must never probe a persisted path: it may point
+        // to a network provider that blocks or prompts for credentials.
+        let completed_file_operation = match id {
+            // A successful command with no path only opened the file picker.
+            "file.open" => result.as_ref().ok().and_then(|value| value.get("path")).and_then(Value::as_str).is_some(),
+            // Native Save As reports `saved`; a web download reports `downloaded`. A pending
+            // browser save is not complete yet and must not refresh Recent.
+            "file.save" | "file.saveAs" => result.as_ref().ok().is_some_and(|value| {
+                value.get("pendingSave").is_none()
+                    && (value.get("saved").and_then(Value::as_bool) == Some(true) || value.get("downloaded").and_then(Value::as_str).is_some())
+            }),
+            _ => succeeded,
+        };
+        if completed_file_operation
+            && matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.rename")
+            && let Some(path) = self.session.path.as_ref()
         {
-            self.ui.recent.retain(|r| *r != p);
-            self.ui.recent.insert(0, p);
+            let p = path.to_string_lossy().to_string();
+            let modified = recent_modified_date(path);
+            let opened = self.ui.recent.iter().find(|r| r.path == p).map(|r| r.last_opened.clone()).unwrap_or_default();
+            self.ui.recent.retain(|r| r.path != p);
+            self.ui.recent.insert(
+                0,
+                RecentDocument {
+                    path: p,
+                    last_opened: if id == "file.open" || opened.is_empty() { wordcraft_engine::cmd::now_iso() } else { opened },
+                    modified,
+                },
+            );
             self.ui.recent.truncate(MAX_RECENT);
         }
         if !self.session.status.is_empty() {
@@ -566,6 +602,30 @@ impl WordApp {
                 self.canvas.context_menu_from_keys = true;
                 self.canvas.want_focus = true;
                 json!({"pending": "contextMenu"})
+            }
+            "ui.recentClear" => {
+                self.ui.recent.clear();
+                json!({"cleared": true})
+            }
+            "ui.recentRemove" => {
+                let Some(path) = s("path") else {
+                    return Some(Err("`path` is required".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|entry| entry.path != path);
+                json!({"removed": before != self.ui.recent.len()})
+            }
+            "ui.recentShowInFolder" => {
+                let Some(path) = s("path") else {
+                    return Some(Err("`path` is required".into()));
+                };
+                let Some(show_in_folder) = self.services.show_in_folder.as_ref() else {
+                    return Some(Err("showing files in a folder is unavailable here".into()));
+                };
+                if let Err(error) = show_in_folder(std::path::Path::new(path)) {
+                    return Some(Err(error));
+                }
+                json!({"shown": true})
             }
             "ui.paneDock" => return Some(panes::dock_command(self, p)),
             "ui.collapseRibbon" => {
@@ -884,6 +944,28 @@ impl WordApp {
     }
 }
 
+/// Read a file's modification timestamp as part of an explicit file operation. This is kept out
+/// of the Recent renderer so network-backed history entries cannot block passive UI drawing.
+fn recent_modified_date(path: &std::path::Path) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(secs) = std::fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+        else {
+            return String::new();
+        };
+        wordcraft_engine::cmd::iso_from_unix_secs(secs)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        String::new()
+    }
+}
+
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
 /// the command's own error or default instead): Select Recipients and Edit Recipient List without
 /// data, Insert Merge Field without a field, Find Recipient without text, the If and Skip
@@ -1039,6 +1121,9 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.recentClear"
+            | "ui.recentRemove"
+            | "ui.recentShowInFolder"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }

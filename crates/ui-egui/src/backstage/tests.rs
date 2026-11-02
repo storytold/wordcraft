@@ -2,7 +2,7 @@ use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
-use crate::{Services, WordApp};
+use crate::{RecentDocument, Services, WordApp};
 
 /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
 /// to a tile with its first letter, the only icon here that draws text).
@@ -551,21 +551,133 @@ fn templates_and_recent_documents_are_named_buttons() {
     let dir = std::env::temp_dir().join("wordcraft-3176-missing");
     let path = |folder: &str, file: &str| dir.join(folder).join(file).to_string_lossy().into_owned();
     let (spring, autumn) = (path("spring", "Report.docx"), path("autumn", "Report.docx"));
-    a.ui.recent = vec![path("notes", "Quarterly notes.docx"), spring.clone(), autumn.clone()];
+    a.ui.recent = vec![
+        RecentDocument { path: path("notes", "Quarterly notes.docx"), last_opened: String::new(), modified: "2026-10-30".into() },
+        RecentDocument { path: spring.clone(), last_opened: String::new(), modified: "2026-10-30".into() },
+        RecentDocument { path: autumn.clone(), last_opened: String::new(), modified: "2026-10-30".into() },
+    ];
     a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
     let mut h = a11y_harness(a);
     for (label, _) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
         assert!(h.query_by_role_and_label(Role::Button, label).is_some(), "{label} is a named button");
     }
-    assert!(h.query_by_role_and_label(Role::Button, "Quarterly notes.docx").is_some(), "a recent document is a named button");
+    let edited = crate::local_time::local_display_date("2026-10-30").unwrap_or_else(|| "Unknown".into());
+    let unique = format!("Quarterly notes.docx, {}, Last opened: Unknown, Last edited: {edited}", path("notes", "Quarterly notes.docx"));
+    assert!(h.query_by_role_and_label(Role::Button, &unique).is_some(), "a unique recent filename includes its path and date: {unique}");
     for p in [&spring, &autumn] {
-        let label = format!("Report.docx, {p}");
+        let label = format!("Report.docx, {p}, Last opened: Unknown, Last edited: {edited}");
         assert!(h.query_by_role_and_label(Role::Button, &label).is_some(), "a repeated file name is told apart by its path: {label}");
     }
     h.get_by_role_and_label(Role::Button, "Letter").click();
     h.run_steps(4);
     assert!(!h.state().ui.backstage, "the Letter button opens the template");
     assert!(!h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).is_empty(), "with the template's text");
+}
+
+/// #2716: Recent documents share one table, including legacy path-only entries with unknown dates.
+#[test]
+fn recent_documents_are_listed_in_one_table() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec![
+        RecentDocument { path: "/tmp/today.docx".into(), last_opened: wordcraft_engine::cmd::now_iso(), modified: String::new() },
+        RecentDocument { path: "/tmp/legacy.docx".into(), last_opened: String::new(), modified: String::new() },
+        RecentDocument { path: "/tmp/older.docx".into(), last_opened: "2000-01-01T00:00:00Z".into(), modified: String::new() },
+    ];
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(a);
+    assert!(h.query_by_label("Today").is_none());
+    assert!(h.query_by_label("Older").is_none());
+    assert!(h.query_by_label("Name").is_some());
+    assert!(h.query_all_by_label_contains("today.docx").next().is_some());
+    assert!(h.query_all_by_label_contains("legacy.docx").next().is_some());
+    assert!(h.query_all_by_label_contains("older.docx").next().is_some());
+    h.get_by_label("Recent").click_secondary();
+    h.run_steps(2);
+    assert!(h.query_by_label("Clear Recent").is_some());
+    h.get_by_label("Clear Recent").click();
+    h.run_steps(2);
+    assert!(h.state().ui.recent.is_empty(), "the Recent heading context menu clears the persisted list");
+}
+
+#[test]
+fn recent_location_shortens_common_folders_across_path_styles() {
+    assert_eq!(super::recent_location("/Users/alice/Downloads/report.docx"), "Downloads");
+    assert_eq!(super::recent_location(r"C:\Users\Alice\Documents\report.docx"), "Documents");
+    assert_eq!(super::recent_location("/home/alice/projects/report.docx"), "projects");
+}
+
+#[test]
+fn empty_recent_list_explains_how_to_open_a_document() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let h = a11y_harness(app);
+    assert!(h.query_by_label("You haven't opened any documents recently. Click Open to browse for a document.").is_some());
+    assert!(h.query_by_label("Name").is_none());
+}
+
+#[test]
+fn recent_actions_use_ui_commands() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.ui.recent = vec![RecentDocument { path: "/tmp/remove.docx".into(), last_opened: String::new(), modified: String::new() }];
+    assert_eq!(app.run("ui.recentRemove", json!({"path": "/tmp/remove.docx"})).unwrap(), json!({"removed": true}));
+    assert!(app.ui.recent.is_empty());
+    app.ui.recent.push(RecentDocument { path: "/tmp/clear.docx".into(), last_opened: String::new(), modified: String::new() });
+    assert_eq!(app.run("ui.recentClear", json!({})).unwrap(), json!({"cleared": true}));
+    assert!(app.ui.recent.is_empty());
+}
+
+#[test]
+fn recent_show_in_folder_uses_the_host_service() {
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = shown.clone();
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services {
+            show_in_folder: Some(Box::new(move |path| {
+                *seen.borrow_mut() = Some(path.to_path_buf());
+                Ok(())
+            })),
+            ..Default::default()
+        },
+    );
+    assert_eq!(app.run("ui.recentShowInFolder", json!({"path": "/tmp/report.docx"})).unwrap(), json!({"shown": true}));
+    assert_eq!(shown.borrow().as_deref(), Some(std::path::Path::new("/tmp/report.docx")));
+}
+
+#[test]
+fn recent_context_menu_shows_in_folder() {
+    let shown = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let seen = shown.clone();
+    let mut app = WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::new()),
+        Services {
+            show_in_folder: Some(Box::new(move |path| {
+                *seen.borrow_mut() = Some(path.to_path_buf());
+                Ok(())
+            })),
+            ..Default::default()
+        },
+    );
+    app.ui.recent = vec![RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() }];
+    app.ui.backstage = true;
+    app.ui.backstage_page = "home".into();
+    let mut h = a11y_harness(app);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Last opened: Unknown, Last edited: Unknown")
+        .click_secondary();
+    h.run_steps(2);
+    assert!(h.query_by_label("Show in folder").is_some());
+    h.get_by_label("Show in folder").click();
+    h.run_steps(2);
+    assert_eq!(shown.borrow().as_deref(), Some(std::path::Path::new("/tmp/report.docx")));
+}
+
+#[test]
+fn recent_actions_work_without_a_document() {
+    assert!(crate::works_without_document("ui.recentClear"));
+    assert!(crate::works_without_document("ui.recentRemove"));
+    assert!(crate::works_without_document("ui.recentShowInFolder"));
 }
 
 /// Clicking the back arrow closes the File page and gives the keyboard back to the page,

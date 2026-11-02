@@ -272,6 +272,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         make_default_app: default_apps::hook(),
         // Personal templates live in `Templates` in the settings folder (#2852), made on first save.
         templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
+        show_in_folder: Some(Box::new(show_in_folder)),
         animations_enabled: Some(animations::hook(ctx)),
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
@@ -280,6 +281,40 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         clipboard_formats: Some(Box::new(clipboard::formats)),
         ..Default::default()
     }
+}
+
+/// Ask the platform's file manager to reveal a document without reading its contents.
+fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.args(["-R", &path.to_string_lossy()]);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer.exe");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let folder =
+            path.parent().filter(|folder| !folder.as_os_str().is_empty()).ok_or_else(|| "the document has no containing folder".to_string())?;
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(folder);
+        command
+    };
+    let status = command.status().map_err(|error| format!("couldn't show the file in its folder: {error}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        // Explorer can successfully launch the folder window while returning a non-zero
+        // process status. The launch itself is the meaningful result on Windows.
+        let _ = status;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
+    if status.success() { Ok(()) } else { Err(format!("couldn't show the file in its folder ({status})")) }
 }
 
 /// Window, Dock and taskbar icon.

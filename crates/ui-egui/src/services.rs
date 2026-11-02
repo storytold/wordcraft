@@ -92,6 +92,8 @@ pub struct Services {
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.
     pub templates_dir: Option<std::path::PathBuf>,
+    /// Desktop: reveal a document in its containing folder. `None` (web) hides that action.
+    pub show_in_folder: Option<Box<dyn Fn(&std::path::Path) -> Result<(), String>>>,
 }
 
 /// Files delivered asynchronously.
