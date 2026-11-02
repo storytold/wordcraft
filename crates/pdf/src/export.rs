@@ -80,6 +80,8 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         tags: Vec::new(),
         tag_index: HashMap::new(),
         inline_owner: None,
+        anchor: None,
+        drawn_lines: HashSet::new(),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };

@@ -1,4 +1,4 @@
-use super::{ArtifactType, Draw, GraphicKind, ListNumbering, Node, StoryRef, Tag, TagGroup, TagKind};
+use super::{ArtifactType, BTreeMap, Draw, GraphicKind, ListNumbering, Node, StoryRef, Tag, TagGroup, TagKind};
 
 /// A chart's or diagram's alt text: its own, else what it is ("chart", "diagram").
 pub(crate) fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {
@@ -30,11 +30,55 @@ pub(crate) struct TagEntry {
     pub(crate) list: Option<ListPlace>,
     /// A list item's number or bullet, for the item's `Lbl`.
     pub(crate) label: Vec<Node>,
+    /// Where its content is in the document (story and paragraph path): content in a table cell
+    /// goes in that cell's `TD` or `TH`.
+    pub(crate) at: Option<(StoryRef, Vec<u32>)>,
 }
 
 impl TagEntry {
     pub(crate) fn new(kind: TagKind, children: Vec<Node>) -> Self {
-        Self { kind, children, list: None, label: Vec::new() }
+        Self { kind, children, list: None, label: Vec::new(), at: None }
+    }
+}
+
+/// Structure entries in reading order, the content of each table gathered in the table's place.
+pub(crate) enum Slot {
+    Entry(TagEntry),
+    Table(TableSlot),
+}
+
+/// A table being collected: the content of its cells by (row, cell), each in reading order. A
+/// row split across pages, or a cell whose text runs onto the next page, still fills one cell.
+pub(crate) struct TableSlot {
+    pub(crate) story: StoryRef,
+    /// The table block's path.
+    pub(crate) path: Vec<u32>,
+    pub(crate) cells: BTreeMap<(usize, usize), Vec<Slot>>,
+}
+
+/// Put entry `e`, whose paragraph is at `path`, in `slots`: in the cell holding it when the path
+/// goes on into a table past its first `k` indices (a cell's paragraph path is the table's path,
+/// then row, cell and block), nested tables included.
+pub(crate) fn slot_in(slots: &mut Vec<Slot>, story: StoryRef, path: &[u32], k: usize, e: TagEntry) {
+    let cell = match (path.get(..k), path.get(k..)) {
+        (Some(prefix), Some(&[t, r, c, _, ..])) => Some((prefix, t, r, c)),
+        _ => None,
+    };
+    let Some((prefix, t, r, c)) = cell else {
+        slots.push(Slot::Entry(e));
+        return;
+    };
+    let mut table = prefix.to_vec();
+    table.push(t);
+    let i = match slots.iter().rposition(|s| matches!(s, Slot::Table(ts) if ts.story == story && ts.path == table)) {
+        Some(i) => i,
+        None => {
+            slots.push(Slot::Table(TableSlot { story, path: table, cells: BTreeMap::new() }));
+            slots.len() - 1
+        }
+    };
+    if let Some(Slot::Table(ts)) = slots.get_mut(i) {
+        slot_in(ts.cells.entry((r as usize, c as usize)).or_default(), story, path, k + 3, e);
     }
 }
 
