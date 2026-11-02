@@ -1,5 +1,5 @@
 use super::{
-    Annotation, ClKind, DocPath, Exporter, Fit, HashMap, LineEnd, LinkAnnotation, Outline, OutlineNode, Placed, Point, StoryRef, Target,
+    Annotation, ClKind, DocPath, Exporter, Fit, HashMap, LineEnd, LinkAnnotation, LinkArea, Outline, OutlineNode, Placed, Point, StoryRef, Target,
     XyzDestination, krilla, write,
 };
 
@@ -53,24 +53,23 @@ impl Exporter<'_> {
         None
     }
 
-    pub(crate) fn annotations(&self, fit: Fit) -> Vec<Annotation> {
+    /// Where a link goes, or `None` when it gets no link: an unknown bookmark, or an unsafe
+    /// target (javascript:, file:, shares, other schemes), whose text stays plain text.
+    pub(crate) fn link_target(&self, target: &str) -> Option<Target> {
+        match target.strip_prefix('#') {
+            Some(name) => self.bookmark(name).map(|(page, x, y)| Target::Destination(XyzDestination::new(page, Point::from_xy(x, y)).into())),
+            None => write::uri_target(target),
+        }
+    }
+
+    /// The page's link annotations, each with the `Link` element its text is in (if tagged).
+    pub(crate) fn annotations(&self, fit: Fit) -> Vec<(Annotation, Option<(usize, usize)>)> {
         let mut v = Vec::new();
-        for (x0, y0, x1, y1, target) in &self.links {
+        for LinkArea { rect: (x0, y0, x1, y1), target, owner } in &self.links {
             let ((x0, y0), (x1, y1)) = (fit.point(*x0, *y0), fit.point(*x1, *y1));
             let Some(rect) = krilla::geom::Rect::from_ltrb(x0, y0, x1, y1) else { continue };
-            let t = if let Some(name) = target.strip_prefix('#') {
-                match self.bookmark(name) {
-                    Some((page, x, y)) => Target::Destination(XyzDestination::new(page, Point::from_xy(x, y)).into()),
-                    None => continue,
-                }
-            } else {
-                // Unsafe targets (javascript:, file:, shares, other schemes) get no link; the text stays.
-                match write::uri_target(target) {
-                    Some(t) => t,
-                    None => continue,
-                }
-            };
-            v.push(Annotation::new_link(LinkAnnotation::new(rect, t), Some(target.clone())));
+            let Some(t) = self.link_target(target) else { continue };
+            v.push((Annotation::new_link(LinkAnnotation::new(rect, t), Some(target.clone())), *owner));
         }
         v
     }

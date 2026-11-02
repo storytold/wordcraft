@@ -3,8 +3,8 @@ use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok};
 use super::{
-    DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Size, Transform, WriteError, Writer, krilla,
-    layout, write,
+    DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Node, Page, PageSettings, Size, Transform, WriteError, Writer,
+    krilla, layout, write,
 };
 
 /// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
@@ -79,7 +79,13 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        inline_owner: None,
+        anchor: None,
+        drawn_lines: HashSet::new(),
         links: Vec::new(),
+        link_owner: None,
+        open_link: None,
+        link_runs: HashMap::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
     if let Some(o) = ex.outline(pages) {
@@ -105,8 +111,17 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         }
         s.finish();
         if opts.links {
-            for a in ex.annotations(fit) {
-                kp.add_annotation(a);
+            for (a, owner) in ex.annotations(fit) {
+                // A tagged link's annotation goes in its `Link` element, beside the link text.
+                match owner {
+                    Some((i, c)) if opts.tagged => {
+                        let id = kp.add_tagged_annotation(a);
+                        if let Some(Node::Group(g)) = ex.tags.get_mut(i).and_then(|e| e.children.get_mut(c)) {
+                            g.push(Node::Leaf(id));
+                        }
+                    }
+                    _ => kp.add_annotation(a),
+                }
             }
         }
         kp.finish();
