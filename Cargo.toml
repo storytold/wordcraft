@@ -61,7 +61,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", version = "=0.1.0", default-features = false, features = ["write"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks; the dialogs
 # take the interface's translator (#5257, storytold/craft-libs#508).
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "493bdb9b1c669807ae92f3693c07003116d52e19", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "76e2bb0eb93a70b159ac015a6d0863b504b0d663", features = ["egui"] }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
