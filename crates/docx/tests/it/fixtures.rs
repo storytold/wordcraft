@@ -48,6 +48,76 @@ fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
 }
 
+/// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
+/// including where a table expects rows or cells (ECMA-376 Part 3).
+#[test]
+fn table_alternate_content_keeps_selected_rows_and_cells() {
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let row = |text: &str| format!("<w:tr>{}</w:tr>", cell(text));
+    let table =
+        |rows: &str, columns: usize| format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid>{rows}</w:tbl>"#, r#"<w:gridCol w:w="2400"/>"#.repeat(columns));
+    let alternate = |chosen: &str, fallback: &str, requires: &str| {
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="{requires}">{chosen}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    };
+    for (requires, use_choice) in [("wps", true), ("alias", true), ("unknown", false), ("wps unknown", false)] {
+        for cells in [false, true] {
+            let choice = if cells { cell("Chosen cell") } else { row("Chosen row") };
+            let fallback = if cells { cell("Fallback cell") } else { row("Fallback row") };
+            let selected = if use_choice { &choice } else { &fallback };
+            let middle = alternate(&choice, &fallback, requires);
+            let (actual, expected) = if cells {
+                (
+                    format!("<w:tr>{}{middle}{}</w:tr>", cell("Before"), cell("After")),
+                    format!("<w:tr>{}{selected}{}</w:tr>", cell("Before"), cell("After")),
+                )
+            } else {
+                (format!("{}{middle}{}", row("Before"), row("After")), format!("{}{selected}{}", row("Before"), row("After")))
+            };
+            let columns = if cells { 3 } else { 1 };
+            let expected = read_body(&table(&expected, columns));
+            let wrapped = format!(
+                r#"<w:customXml xmlns:alias="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:unknown="urn:original:unsupported">{}</w:customXml>"#,
+                table(&actual, columns)
+            );
+            let mut actual = read_body(&wrapped);
+            for round in 0..=2 {
+                assert_eq!(actual.body, expected.body, "requires={requires}, cells={cells}, round={round}");
+                if round < 2 {
+                    actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_alternate_content_keeps_nested_row_and_cell_controls() {
+    let wrap =
+        |tag: &str, content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+    let alternate =
+        |content: &str| format!(r#"<mc:AlternateContent><mc:Choice Requires="wps">{content}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#);
+    let cell = "<w:tc><w:p><w:r><w:t>Controlled cell</w:t></w:r></w:p></w:tc>";
+    let oracle_cell = wrap("cell", cell);
+    let actual_cell = alternate(&wrap("cell", &alternate(cell)));
+    let oracle_row = wrap("row", &format!("<w:tr>{oracle_cell}</w:tr>"));
+    let actual_row = wrap("row", &alternate(&format!("<w:tr>{actual_cell}</w:tr>")));
+    let expected = read_body(&format!("<w:tbl>{oracle_row}</w:tbl>"));
+    let mut actual = read_body(&format!("<w:tbl>{}</w:tbl>", alternate(&actual_row)));
+    for round in 0..=2 {
+        assert_eq!(actual.body, expected.body, "round={round}");
+        let table = actual.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].controls.open[0].tag, "row");
+        assert_eq!(table.rows[0].controls.close, 1);
+        assert_eq!(table.rows[0].cells[0].controls.open[0].tag, "cell");
+        assert_eq!(table.rows[0].cells[0].controls.close, 1);
+        if round < 2 {
+            actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn repeated_style_ids_use_last() {
     let styles = format!(
@@ -2473,6 +2543,52 @@ fn vml_lines_and_rectangles() {
         &objs[1],
         InlineObject::Shape { kind: ShapeKind::Rectangle, fill: Some(Fill::Solid { color: Rgb(255, 0, 0), .. }), stroke: None, w: 30.0, h: 20.0, .. }
     ));
+}
+
+/// An arrowhead's kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML
+/// `startarrow`/`startarrowwidth`/`startarrowlength`) are read and saved: they set the size Word
+/// draws it at. An end without `w`/`len` is medium.
+#[test]
+fn arrowheads_keep_their_kind_and_size() {
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+    let style = |kind, width, length| ArrowStyle { kind, width, length };
+    let body = [
+        anchored_wsp(
+            "Line",
+            1270000,
+            0,
+            r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="stealth" w="sm" len="lg"/><a:tailEnd type="diamond" w="lg" len="sm"/></a:ln>"#,
+            "",
+            "<wps:cNvCnPr/>",
+        ),
+        anchored_wsp("Plain", 1270000, 0, r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#, "", "<wps:cNvCnPr/>"),
+        r#"<w:r><w:pict><v:line style="position:absolute" from="10pt,20pt" to="40pt,20pt"><v:stroke startarrow="classic" startarrowwidth="narrow" startarrowlength="long" endarrow="oval" endarrowwidth="wide" endarrowlength="short"/></v:line></w:pict></w:r>"#.to_string(),
+    ]
+    .concat();
+    let ends = |d: &Document| -> Vec<(bool, ArrowStyle, bool, ArrowStyle)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { extra, .. } => (extra.arrow_start, extra.start_style, extra.arrow_end, extra.end_style),
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let expected = vec![
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Diamond, ArrowSize::Large, ArrowSize::Small)),
+        (false, ArrowStyle::default(), true, ArrowStyle::default()),
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Oval, ArrowSize::Large, ArrowSize::Small)),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(ends(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
+    assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
 
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
