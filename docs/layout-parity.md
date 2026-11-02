@@ -190,7 +190,7 @@ No overall parity estimate changes from these probes.
 ## Equation line spacing
 
 Equations reserve the font's [OpenType MATH leading](https://learn.microsoft.com/en-us/typography/opentype/spec/math) above their ink. Glyphs and rules keep their positions relative to the equation baseline; surrounding text still sets the minimum line height. Native Word for Mac 16.113.2 controls confirm the extra line space around fractions and roots. Mixed structural sizes, nested fraction sizing, tall-operator growth and some script positions remain separate gaps. No overall parity estimate changes.
-A controlled in-memory MATH table now has a source-prepared equation-to-paragraph regression. It runs each font constant in an isolated test process, checks inline/display ascent and line height, and keeps zero-leading ink and width controls. Compilation and execution remain pending; this is not a new native comparison.
+A controlled in-memory MATH table has an equation-to-paragraph regression. It runs each font constant in an isolated test process, checks inline/display ascent and line height, and keeps zero-leading ink and width controls. This is not a new native comparison.
 
 
 ## Performance
