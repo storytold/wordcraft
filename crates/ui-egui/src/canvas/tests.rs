@@ -4982,6 +4982,21 @@ fn ref_visual_canvas() {
     let ime = h.output().platform_output.ime.as_ref().expect("the canvas supplies IME geometry").cursor_rect;
     assert!((ime.min.x - caret.x).abs() < 0.1 && (ime.min.y - caret.y).abs() < 0.1, "IME and caret must share the visual line");
 
+    // A right-click at the same source position replaces the earlier visual line.
+    let secondary_point = screen(h.state_mut(), point(0, 2));
+    let secondary =
+        |pressed| egui::Event::PointerButton { pos: secondary_point, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    h.event(egui::Event::PointerMoved(secondary_point));
+    h.event(secondary(true));
+    h.step();
+    h.event(secondary(false));
+    h.run_steps(3);
+    let right_clicked = caret_screen(h.state_mut()).unwrap().0;
+    assert!((right_clicked.y - pressed.y).abs() < 0.1, "right-click must replace the earlier continuation affinity");
+    assert_eq!(h.state().session.sel.focus, Pos::body(0, 0));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+
     let before = h.state().canvas.scroll_offset;
     let last = layout.pages.len() - 1;
     assert!(last > 2);
