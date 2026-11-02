@@ -826,6 +826,11 @@ impl Body<'_> {
                     self.skip = 1;
                     return;
                 }
+                // A table starting a page: its first paragraph starts it, as Word moves a table
+                // whose first row's paragraph has a page break before it.
+                if get(a, "table:style-name").is_some_and(|s| self.styles.table_breaks(s)) {
+                    self.break_next = true;
+                }
                 self.start_table(a);
             }
             "table-column" => {
@@ -901,7 +906,9 @@ impl Body<'_> {
     fn start_table(&mut self, a: &Attrs) {
         let (align, width, rel) = get(a, "table:style-name").map(|s| self.styles.table_look(s)).unwrap_or_default();
         let width_pct = rel.or_else(|| width.filter(|_| align.is_some()).map(|w| (w / self.sec.text_width().max(1.0) * 100.0).min(100.0)));
-        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new() };
+        // LibreOffice's tables keep their columns' widths, whatever their content (and however
+        // far past the margins): Word's fixed layout.
+        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
     }
 

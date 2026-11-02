@@ -740,7 +740,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 _ => None,
             })
             .collect::<Vec<_>>();
-        super::types::TableExtra { align: t.props.align, width: t.props.width, width_pct: t.props.width_pct, heights }
+        super::types::TableExtra { align: t.props.align, width: t.props.width, width_pct: t.props.width_pct, heights, fixed: t.props.fixed }
     });
     let extra =
         extra.filter(|x| x.align.is_some() || x.width.is_some() || x.width_pct.is_some() || x.heights.iter().any(Option::is_some)).map(Box::new);

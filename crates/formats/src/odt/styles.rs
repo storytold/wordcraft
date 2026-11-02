@@ -566,6 +566,10 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "table-properties" => {
+            // A table starting a page (§20.191 `fo:break-before`).
+            if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
+                s.page_break = true;
+            }
             if let Some(v) = get(a, "style:page-number") {
                 s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
             }
@@ -1165,6 +1169,11 @@ impl Styles {
     }
 
     /// A table style's alignment, width (points) and relative width (percent), whole chain.
+    /// Whether a table style starts a page (`fo:break-before="page"`, whole chain).
+    pub(super) fn table_breaks(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| s.page_break)
+    }
+
     pub(super) fn table_look(&self, name: &str) -> (Option<Align>, Option<f32>, Option<f32>) {
         let chain = self.chain(name);
         (

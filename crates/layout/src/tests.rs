@@ -12209,3 +12209,20 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+/// A page break before the first row's paragraph moves the whole table to a new page (Word's
+/// behaviour; an ODT table starting a page opens so), unless the table is at a page's top.
+#[test]
+fn a_page_break_in_a_tables_first_row_moves_the_table() {
+    let mut d = Document::from_text("Before the table.");
+    let mut table = Table::new(1, 1, 468.0);
+    let mut first = wordcraft_doc::Paragraph::with_text("First cell", Default::default());
+    first.props.page_break_before = Some(true);
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(first)];
+    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(table.clone())));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "the table starts page two");
+    // At the top of the document it starts no extra page.
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+    assert_eq!(lay(&d).pages.len(), 1);
+}

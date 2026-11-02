@@ -109,3 +109,34 @@ fn columns_are_written_with_their_share_of_the_table() {
     let c = content_of(&export(&d).unwrap());
     assert!(c.contains(r#"table:align="left""#) && !c.contains("rel-column-width"), "{c}");
 }
+
+#[test]
+fn a_tables_columns_keep_their_widths() {
+    // LibreOffice never fits a table's columns to their content, nor a wide table to the margins:
+    // Word's fixed layout.
+    let styles = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="8in" table:align="margins"/></style:style><style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="4in"/></style:style>"#;
+    let d = doc(
+        styles,
+        r#"<table:table table:style-name="T"><table:table-column table:style-name="A" table:number-columns-repeated="2"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>a much longer text in the second column</text:p></table:table-cell></table:table-row></table:table>"#,
+    );
+    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+    assert!(t.props.fixed);
+    assert_eq!(t.grid, [288.0, 288.0]);
+}
+
+#[test]
+fn a_table_starting_a_page_starts_it() {
+    // LibreOffice's agenda: the minutes table starts a new page (`fo:break-before` on the table).
+    let styles = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="6in" fo:break-before="page" table:align="margins"/></style:style>"#;
+    let d = doc(
+        styles,
+        r#"<text:p>Before.</text:p><table:table table:style-name="T"><table:table-row><table:table-cell><text:p>First cell</text:p></table:table-cell></table:table-row></table:table><text:p>After.</text:p>"#,
+    );
+    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+    let first = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(first.props.page_break_before, Some(true));
+    // Nothing else starts a page.
+    assert!(paras(&d).iter().all(|p| p.page_break_before != Some(true)));
+    let c = content_of(&export(&d).unwrap());
+    assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
+}

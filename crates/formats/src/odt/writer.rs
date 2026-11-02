@@ -143,6 +143,8 @@ pub(super) struct Writer {
     tables: Vec<Vec<f32>>,
     /// Each table's alignment and relative width (percent), by table.
     table_looks: Vec<(Option<Align>, Option<f32>)>,
+    /// Each table's whether it starts a page (its first paragraph does).
+    table_breaks: Vec<bool>,
     /// Row styles: their `style:table-row-properties` attributes.
     row_styles: Vec<String>,
     /// The master page (and page-number restart) each table in `tables` starts.
@@ -805,6 +807,7 @@ impl Writer {
             };
             // Aligned, or narrower than the text: as wide as its columns, with its relative width.
             let (align, pct) = self.table_looks.get(i).copied().unwrap_or_default();
+            let brk = if self.table_breaks.get(i).copied().unwrap_or(false) { " fo:break-before=\"page\"" } else { "" };
             let align = match align {
                 Some(Align::Left) => "left",
                 Some(Align::Center) => "center",
@@ -814,7 +817,7 @@ impl Writer {
             };
             let rel = pct.map(|p| format!(" style:rel-width=\"{}%\"", (p * 100.0).round() / 100.0)).unwrap_or_default();
             s.push_str(&format!(
-                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\"{rel} table:align=\"{align}\"{number}/></style:style>",
+                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\"{rel} table:align=\"{align}\"{number}{brk}/></style:style>",
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {

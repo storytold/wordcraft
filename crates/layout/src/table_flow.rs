@@ -111,6 +111,12 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     pb.prev = None;
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    // A page break before the first row's paragraph moves the whole table to a new page, as
+    // Word does (and as an ODT table starting a page opens).
+    let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
+    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+        pb.new_page(block, body_top);
+    }
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
