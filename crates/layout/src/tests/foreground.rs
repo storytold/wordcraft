@@ -1,5 +1,5 @@
 use super::*;
-use crate::foreground::{Foreground, order_foreground};
+use crate::foreground::Foreground;
 
 #[test]
 fn foreground_survives_later_text() {
