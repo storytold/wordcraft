@@ -301,7 +301,18 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
             (format!("<form:text{common}{}{} form:current-value=\"{}\"/>", impl_("TextField"), label, x(&v)), width(&v), 16.0)
         }
         ControlKind::Text { multi_line: true } => {
-            (format!("<form:textarea{common}{}{} form:current-value=\"{}\"/>", impl_("TextField"), label, x(&v)), 216.0, 48.0)
+            // Several lines (LibreOffice's `MultiLine` property): without it LibreOffice shows
+            // one line, centred in the box.
+            (
+                format!(
+                    "<form:textarea{common}{}{} form:current-value=\"{}\"><form:properties><form:property form:property-name=\"MultiLine\" office:value-type=\"boolean\" office:boolean-value=\"true\"/></form:properties></form:textarea>",
+                    impl_("TextField"),
+                    label,
+                    x(&v)
+                ),
+                216.0,
+                48.0,
+            )
         }
         ControlKind::CheckBox { checked, checked_char, .. } if *checked_char == RADIO_ON => (
             format!("<form:radio{common}{}{label} form:current-selected=\"{checked}\" form:selected=\"{checked}\"/>", impl_("RadioButton")),

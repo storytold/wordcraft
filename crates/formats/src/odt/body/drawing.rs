@@ -104,9 +104,14 @@ impl Body<'_> {
                 float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
-                    let look = std::mem::take(&mut self.frame_look);
+                    let mut look = std::mem::take(&mut self.frame_look);
                     // Without a height it grows from nothing to its text.
                     let kind = self.shape_kind.take().unwrap_or(wordcraft_doc::para::ShapeKind::TextBox);
+                    // A custom shape's geometry as read, kept with the path worked out from it.
+                    let geometry = self.shape_geometry.take();
+                    if kind == wordcraft_doc::para::ShapeKind::Freeform || kind == wordcraft_doc::para::ShapeKind::Rectangle {
+                        look.geometry = geometry;
+                    }
                     // A shape whose paragraphs are all empty (LibreOffice writes `<text:p/>` in
                     // each) holds no text.
                     let empty = blocks.iter().all(|b| matches!(b, FBlock::Para(p) if p.inlines.is_empty()));

@@ -135,6 +135,10 @@ pub(super) struct Body<'a> {
     /// A custom shape's geometry being read, when its type has no WordCraft kind: drawn from its
     /// own path and equations.
     geometry: Option<Box<super::geometry::Pending>>,
+    /// That geometry's markup as read (see `ShapeExtra::odf_geometry`): being read, then
+    /// finished for the shape it ends in.
+    geometry_xml: Option<String>,
+    pub(in crate::odt) shape_geometry: Option<std::sync::Arc<String>>,
     /// The turn of a group's member being read, from its `draw:transform`.
     member_rot: Option<f32>,
     /// The depth of the `draw:g` group being read: its shapes are placed by it, not anchored.
@@ -219,6 +223,8 @@ impl<'a> Body<'a> {
             shape_flip: (false, false),
             shape_path: None,
             geometry: None,
+            geometry_xml: None,
+            shape_geometry: None,
             member_rot: None,
             group_at: None,
             index: None,
@@ -739,6 +745,12 @@ impl Body<'_> {
             {
                 g.equation(a);
             }
+            if self.skip == 1
+                && (q == "draw:equation" || q == "draw:handle")
+                && let Some(xml) = &mut self.geometry_xml
+            {
+                xml.push_str(&element_xml(q, a, true));
+            }
             self.skip += 1;
             return;
         }
@@ -762,6 +774,10 @@ impl Body<'_> {
             let t = get(a, "draw:type").unwrap_or_default();
             self.shape_kind = Some(super::shapes::kind_of(t));
             self.geometry = super::geometry::Pending::of(t, a);
+            // Kept as read, its mirroring aside (written from the shape's own).
+            let kept: Attrs = a.iter().filter(|(k, _)| !k.starts_with("draw:mirror-")).cloned().collect();
+            self.geometry_xml = (self.geometry.is_some() || super::shapes::unknown_preset(t)).then(|| element_xml(q, &kept, false));
+            self.shape_geometry = None;
             // Mirrored (§20.112 `draw:mirror-horizontal`, §20.113 `draw:mirror-vertical`).
             let on = |k: &str| get(a, k).is_some_and(|v| v.trim() == "true");
             self.shape_flip = (on("draw:mirror-horizontal"), on("draw:mirror-vertical"));
@@ -958,6 +974,10 @@ impl Body<'_> {
             let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
             if let (Some(w), Some(h)) = (len("svg:width"), len("svg:height")) {
                 control.form_size = Some([w, h]);
+                // Where it stands on the line (§20.387), as an in-line frame does.
+                let g = self.styles.shape_graphic(get(a, "draw:style-name"));
+                let raise = super::frames::place(a, w, h, &g, self.text_size()).y;
+                control.form_raise = (raise.is_finite() && raise != 0.0).then_some(raise);
             }
             let fmt = self.cur_fmt();
             self.push_inline(Inline::Control { control: Box::new(control), text, fmt });
@@ -1193,6 +1213,27 @@ impl Body<'_> {
         true
     }
 
+    /// A skipped element ends; the end of a custom shape's geometry works out its path and
+    /// keeps the geometry as read.
+    fn end_skipped(&mut self) {
+        self.skip -= 1;
+        if self.skip > 0 {
+            return;
+        }
+        let xml = self.geometry_xml.take();
+        let keep = |x: Option<String>| x.filter(|x| x.len() < MAX_GEOMETRY_XML).map(|x| std::sync::Arc::new(format!("{x}</draw:enhanced-geometry>")));
+        if let Some(g) = self.geometry.take()
+            && let Some(f) = g.freeform()
+        {
+            self.shape_kind = Some(wordcraft_doc::para::ShapeKind::Freeform);
+            self.shape_path = Some(std::sync::Arc::new(f));
+            self.shape_geometry = keep(xml);
+        } else if self.shape_kind == Some(wordcraft_doc::para::ShapeKind::Rectangle) {
+            // A preset WordCraft draws as a rectangle: its geometry kept as read.
+            self.shape_geometry = keep(xml);
+        }
+    }
+
     fn end(&mut self, q: &str) {
         self.depth = self.depth.saturating_sub(1);
         if self.end_note_or_field(q) {
@@ -1215,14 +1256,7 @@ impl Body<'_> {
             return;
         }
         if self.skip > 0 {
-            self.skip -= 1;
-            if self.skip == 0
-                && let Some(g) = self.geometry.take()
-                && let Some(f) = g.freeform()
-            {
-                self.shape_kind = Some(wordcraft_doc::para::ShapeKind::Freeform);
-                self.shape_path = Some(std::sync::Arc::new(f));
-            }
+            self.end_skipped();
             return;
         }
         if !self.in_text {
@@ -1335,4 +1369,13 @@ impl Body<'_> {
             _ => {}
         }
     }
+}
+
+/// The most markup a custom shape's kept geometry may take (see `ShapeExtra::odf_geometry`).
+const MAX_GEOMETRY_XML: usize = 256 * 1024;
+
+/// Element `q` with attributes `a` as markup: empty (`<q …/>`) or an opening tag.
+fn element_xml(q: &str, a: &Attrs, empty: bool) -> String {
+    let attrs: String = a.iter().map(|(k, v)| format!(" {k}=\"{}\"", super::writer::x(v))).collect();
+    format!("<{q}{attrs}{}>", if empty { "/" } else { "" })
 }

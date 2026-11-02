@@ -264,6 +264,7 @@ impl Graphic {
             conn: None,
             chain: None,
             vert: Default::default(),
+            geometry: None,
         }
     }
 
@@ -291,6 +292,7 @@ impl Graphic {
             conn: None,
             chain: None,
             vert: self.vert.unwrap_or_default(),
+            geometry: None,
         }
     }
 }

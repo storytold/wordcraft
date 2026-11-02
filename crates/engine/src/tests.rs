@@ -6847,6 +6847,26 @@ fn password_protected_documents_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn changing_a_shape_drops_the_geometry_kept_from_a_file() {
+    // An ODT custom shape keeps its geometry as read, to save back; made another shape, it isn't
+    // that shape any more.
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "rectangle"}));
+    let geometry = |s: &Session| match cmd::objects::selected(s) {
+        Some((_, wordcraft_doc::InlineObject::Shape { extra, .. })) => extra.odf_geometry.clone(),
+        o => panic!("{o:?}"),
+    };
+    let Some((pos, _)) = cmd::objects::selected(&s) else { panic!() };
+    let para = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    if let Some(wordcraft_doc::InlineObject::Shape { extra, .. }) = para.object_at_mut(pos.off) {
+        extra.odf_geometry = Some(std::sync::Arc::new(r#"<draw:enhanced-geometry draw:type="cloud"></draw:enhanced-geometry>"#.to_string()));
+    }
+    assert!(geometry(&s).is_some());
+    run(&mut s, "shape.change", json!({"kind": "ellipse"}));
+    assert_eq!(geometry(&s), None);
+}
+
 /// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
 /// an omitted key is kept, hostile numbers are clamped and each change is one undo step.
 #[test]

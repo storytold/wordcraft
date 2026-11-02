@@ -258,6 +258,10 @@ pub struct ContentControl {
     /// `svg:height`), points: kept for saving back as one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_size: Option<[f32; 2]>,
+    /// How far that form control stands raised from the baseline (points, negative lowered:
+    /// an ODF control hanging from the baseline is lowered by its height), kept for saving back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_raise: Option<f32>,
     /// A form control WordCraft has no kind for (an ODF button, image button, label…): its form
     /// XML, kept verbatim and saved back as it was. It shows its label, locked.
     #[serde(skip_serializing_if = "String::is_empty")]

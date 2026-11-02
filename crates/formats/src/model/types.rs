@@ -314,6 +314,8 @@ pub struct BoxLook {
     pub chain: Option<Box<Chain>>,
     /// Which way a text box's text runs (turned down or up).
     pub vert: wordcraft_doc::props::TextVert,
+    /// A custom shape's geometry as read (ODT; see `ShapeExtra::odf_geometry`).
+    pub geometry: Option<std::sync::Arc<String>>,
 }
 
 /// A text box's name, and the name of the box its text continues in ([`BoxLook::chain`]).
@@ -344,6 +346,7 @@ impl Default for BoxLook {
             conn: None,
             chain: None,
             vert: Default::default(),
+            geometry: None,
         }
     }
 }

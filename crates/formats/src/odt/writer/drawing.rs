@@ -420,7 +420,13 @@ impl Writer {
         let style = self.graphic_style(format!("{props}{look_attrs}"));
         let body = self.story(blocks);
         self.boxes += 1;
+        // A custom shape's geometry as read: written back whole, LibreOffice's own shape.
+        let kept = look
+            .geometry
+            .as_deref()
+            .filter(|_| (kind == wordcraft_doc::para::ShapeKind::Freeform && path.is_some()) || kind == wordcraft_doc::para::ShapeKind::Rectangle);
         let (element, geometry) = match crate::odt::shapes::element_of(kind) {
+            _ if kept.is_some() => ("draw:custom-shape", None),
             // A freeform without paths has nothing to draw but its frame.
             ("draw:path", _) if path.is_none() => ("draw:rect", None),
             // Paths filled and unfilled: a custom shape, whose path says which is which
@@ -463,7 +469,22 @@ impl Writer {
         // Mirrored, as a custom shape's geometry says (§20.112, §20.113).
         let mirror = |on: bool, k: &str| if on { format!(" draw:mirror-{k}=\"true\"") } else { String::new() };
         let (fh, fv) = float.map_or((false, false), |f| (f.flip_h, f.flip_v));
-        let geometry = geometry
+        let geometry = match kept {
+            // Its own mirroring, now, in the kept opening tag.
+            Some(g) => match g.find('>') {
+                Some(i) if g.get(..i).is_some_and(|h| !h.ends_with('/')) => {
+                    format!(
+                        "{}{}{}{}",
+                        g.get(..i).unwrap_or_default(),
+                        mirror(fh, "horizontal"),
+                        mirror(fv, "vertical"),
+                        g.get(i..).unwrap_or_default()
+                    )
+                }
+                _ => g.to_string(),
+            },
+            None => String::new(),
+        } + &geometry
             .map(|t| {
                 if custom_path.is_empty() {
                     custom_path = " svg:viewBox=\"0 0 21600 21600\"".into();

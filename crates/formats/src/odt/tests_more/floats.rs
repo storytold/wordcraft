@@ -239,7 +239,7 @@ fn an_inline_frame_keeps_its_place_on_the_baseline() {
         let saved = crate::odt::tests::content_of(&crate::odt::export(&doc).unwrap());
         if want != 0.0 {
             assert!(saved.contains(r#"style:vertical-pos="from-top" style:vertical-rel="baseline""#), "{saved}");
-            let top = -(72.0 + want);
+            let top = -(72.0 + want) + 0.0;
             assert!(saved.contains(&format!(r#"svg:y="{}pt""#, top)), "{vpos}{y}: {saved}");
         }
         let again = crate::odt::import(&crate::odt::export(&doc).unwrap()).unwrap();

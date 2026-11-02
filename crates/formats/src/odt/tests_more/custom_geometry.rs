@@ -160,7 +160,17 @@ fn hostile_geometry_never_panics_and_draws_what_it_can() {
 fn a_freeform_with_open_and_closed_paths_is_saved_as_a_custom_shape() {
     // A face and a mouth: the face filled, the mouth not. A path with an open part would be
     // drawn unfilled whole, so it is saved as a custom shape whose path marks the mouth unfilled.
-    let d = open(&shape(r#"draw:type="smiley" draw:enhanced-path="M 0 0 L 21600 0 21600 21600 Z N M 5000 15000 L 16000 15000 F N""#, ""));
+    let mut d = open(&shape(r#"draw:type="smiley" draw:enhanced-path="M 0 0 L 21600 0 21600 21600 Z N M 5000 15000 L 16000 15000 F N""#, ""));
+    // As WordCraft's own freeform (the geometry read is written back whole otherwise).
+    for b in d.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            for o in &mut p.objects {
+                if let InlineObject::Shape { extra, .. } = o {
+                    extra.odf_geometry = None;
+                }
+            }
+        }
+    }
     let c = crate::odt::tests::content_of(&export(&d).unwrap());
     assert!(c.contains(r#"draw:type="non-primitive""#) && c.contains(" F N"), "{c}");
     assert!(!c.contains("<draw:path"), "{c}");
@@ -190,4 +200,41 @@ fn points_far_outside_the_view_box_stay_finite() {
     let d = open(&shape(r#"draw:type="hostile" draw:enhanced-path="M 0 0 L 1e300 -1e300 N""#, ""));
     let Some(InlineObject::Shape { freeform: Some(f), .. }) = d.body[0].as_para().unwrap().objects.first() else { panic!("a freeform") };
     assert!(f.paths.iter().flat_map(|p| p.pts.iter()).all(|[x, y]| x.is_finite() && y.is_finite()));
+}
+
+#[test]
+fn a_custom_shapes_geometry_is_written_back_as_it_was_read() {
+    // LibreOffice's shape presets: saved as their own geometry (type, path, equations, handles),
+    // so LibreOffice draws its own shape, not WordCraft's path of it; a preset WordCraft draws as
+    // a rectangle (a cloud) keeps its geometry too. A shape made another kind loses it.
+    let hexagon = shape(
+        r#"svg:viewBox="0 0 21600 21600" draw:type="hexagon" draw:modifiers="5400" draw:mirror-horizontal="true" draw:enhanced-path="M ?f0 0 L ?f1 0 21600 10800 ?f1 21600 ?f0 21600 0 10800 Z N""#,
+        r#"<draw:equation draw:name="f0" draw:formula="$0 "/><draw:equation draw:name="f1" draw:formula="right-$0"/><draw:handle draw:handle-position="$0 top"/>"#,
+    );
+    let cloud = r#"<draw:custom-shape text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:enhanced-geometry draw:type="cloud"/></draw:custom-shape>"#;
+    let d = open(&format!("{hexagon}{cloud}"));
+    assert_eq!(drawn(&d).iter().map(|s| s.0).collect::<Vec<_>>(), [ShapeKind::Freeform, ShapeKind::Rectangle]);
+    let out = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(out.contains(r#"draw:type="hexagon" draw:modifiers="5400""#) && out.contains(r#"draw:formula="right-$0""#), "{out}");
+    assert!(out.contains(r#"<draw:handle draw:handle-position="$0 top"/>"#), "{out}");
+    // Its mirroring is the shape's own, written once.
+    assert_eq!(out.matches("draw:mirror-horizontal=\"true\"").count(), 1, "{out}");
+    assert!(out.contains(r#"<draw:enhanced-geometry draw:type="cloud"></draw:enhanced-geometry>"#), "{out}");
+    // Read back, it is the same shape again.
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(drawn(&back), drawn(&d));
+    // Made an ellipse: written as one.
+    let mut changed = d.clone();
+    for b in changed.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            for o in &mut p.objects {
+                if let InlineObject::Shape { kind, extra, .. } = o {
+                    *kind = ShapeKind::Ellipse;
+                    extra.odf_geometry = None;
+                }
+            }
+        }
+    }
+    let out = crate::odt::tests::content_of(&export(&changed).unwrap());
+    assert!(!out.contains("hexagon") && !out.contains("cloud"), "{out}");
 }

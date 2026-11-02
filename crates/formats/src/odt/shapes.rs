@@ -40,6 +40,14 @@ pub(super) fn element_kind(name: &str) -> ShapeKind {
 /// The kind of a custom shape of `draw:type` `t`: LibreOffice's own type names, and the
 /// DrawingML preset names it writes as `ooxml-…` for shapes from Word documents. A geometry
 /// WordCraft has no shape for is a rectangle.
+/// A preset geometry type WordCraft has no kind for: drawn as a rectangle (see [`kind_of`]), its
+/// geometry kept to be written back.
+pub(super) fn unknown_preset(t: &str) -> bool {
+    let t = t.trim();
+    kind_of(t) == ShapeKind::Rectangle
+        && !matches!(t.strip_prefix("ooxml-").unwrap_or(t), "" | "rectangle" | "rect" | "flowchart-process" | "flowChartProcess" | "non-primitive")
+}
+
 pub(super) fn kind_of(t: &str) -> ShapeKind {
     let t = t.trim();
     match t.strip_prefix("ooxml-").unwrap_or(t) {

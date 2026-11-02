@@ -196,3 +196,28 @@ fn hidden_controls_are_kept() {
     let c = entry(&export(&import(&package(&only, None)).unwrap()).unwrap(), "content.xml");
     assert!(c.contains("<office:forms ") && c.contains("<form:hidden "), "{c}");
 }
+
+#[test]
+fn controls_keep_their_place_on_the_line_and_a_text_area_its_lines() {
+    // LibreOffice hangs controls it makes from the baseline (`from-top`, `svg:y` 0); one saved
+    // without a placement stands at the line's top. A text area is several lines only with its
+    // `MultiLine` property.
+    let content = doc_xml()
+        .replace(r#"<office:body>"#, r#"<office:automatic-styles><style:style style:name="gr1" style:family="graphic"><style:graphic-properties style:vertical-pos="from-top"/></style:style></office:automatic-styles><office:body>"#)
+        .replace(r#"<draw:control text:anchor-type="as-char""#, r#"<draw:control draw:style-name="gr1" text:anchor-type="as-char" svg:y="0in""#);
+    let doc = import(&package(&content, None)).unwrap();
+    let raises: Vec<Option<f32>> = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let wordcraft_doc::para::InlineObject::ControlStart { control } = o { Some(control.form_raise) } else { None })
+        .collect();
+    assert!(!raises.is_empty() && raises.iter().all(|r| r.is_some_and(|v| (v + 14.4).abs() < 0.01)), "{raises:?}");
+    let out = entry(&export(&doc).unwrap(), "content.xml");
+    assert!(out.contains(r#"style:vertical-pos="from-top" style:vertical-rel="baseline""#) && out.contains(r#"svg:y="0pt""#), "{out}");
+    assert!(out.contains(r#"form:property-name="MultiLine" office:value-type="boolean" office:boolean-value="true""#), "{out}");
+    // Saved without a raise, a control still says it stands on the baseline.
+    let plain = entry(&export(&import(&package(&doc_xml(), None)).unwrap()).unwrap(), "content.xml");
+    assert!(plain.contains(r#"style:vertical-pos="top" style:vertical-rel="baseline""#), "{plain}");
+}

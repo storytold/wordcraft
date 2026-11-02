@@ -98,7 +98,9 @@ fn starts_column(p: &Para) -> bool {
 
 pub(super) fn pt(v: f32) -> String {
     let s = format!("{:.2}", v);
-    format!("{}pt", s.trim_end_matches('0').trim_end_matches('.'))
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    // A value rounding to nothing is 0, not "-0".
+    format!("{}pt", if s == "-0" { "0" } else { s })
 }
 
 /// A section that starts a page: the master page it uses and where page numbering restarts.
@@ -512,9 +514,18 @@ impl Writer {
                     let id = format!("control{}", self.forms.len() + 1);
                     match super::forms::form_xml(control, text, &id, self.forms.len() + 1).filter(|_| self.forms_allowed) {
                         Some((xml, w, h)) => {
+                            // Text boxes with a flat border (`fo:border="solid"`, LibreOffice's for
+                            // its own text fields), not its sunken 3D one.
+                            let flat = if xml.starts_with("<form:text ") || xml.starts_with("<form:textarea") { " fo:border=\"solid\"" } else { "" };
                             self.forms.push(xml);
+                            // Placed by a style, standing on the baseline or raised as it was read
+                            // (LibreOffice puts a control with no placement at the line's top).
+                            let raise = control.form_raise.filter(|r| r.is_finite()).map(|r| r.clamp(-1584.0, 1584.0)).unwrap_or(0.0);
+                            let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Inline, y: raise, ..Default::default() };
+                            let (_, props, xy) = drawing::placement(drawing::Place::Text(Some(&float)), w, h);
+                            let style = self.graphic_style(format!("{props}{flat}"));
                             out.push_str(&format!(
-                                "<draw:control text:anchor-type=\"as-char\" draw:z-index=\"0\" svg:width=\"{}\" svg:height=\"{}\" draw:control=\"{id}\"/>",
+                                "<draw:control draw:style-name=\"{style}\" text:anchor-type=\"as-char\"{xy} draw:z-index=\"0\" svg:width=\"{}\" svg:height=\"{}\" draw:control=\"{id}\"/>",
                                 pt(w),
                                 pt(h)
                             ));

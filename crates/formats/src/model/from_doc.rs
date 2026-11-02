@@ -320,6 +320,8 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 inset: part.and_then(|p| p.body.inset.is_some().then(|| p.body.insets_pt())),
                 auto_fit: part.is_some_and(|p| p.body.auto_fit),
                 vert: part.map(|p| p.body.vert).unwrap_or_default(),
+                // Kept only while it is still the freeform it was read as.
+                geometry: extra.odf_geometry.clone().filter(|_| (kind == ShapeKind::Freeform && freeform.is_some()) || kind == ShapeKind::Rectangle),
                 conn: (opts.boxes && (extra.id != 0 || extra.start.is_some() || extra.end.is_some()))
                     .then(|| Box::new(crate::model::Conn { id: extra.id, start: extra.start, end: extra.end })),
                 // A text box is named after its story; a linked one names the box it continues in.

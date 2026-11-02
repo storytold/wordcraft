@@ -432,6 +432,10 @@ impl<'a> Builder<'a> {
                         id: look.conn.as_ref().map_or(0, |c| c.id),
                         start: look.conn.as_ref().and_then(|c| c.start).filter(|e| e.site <= wordcraft_doc::connector::MAX_SITE),
                         end: look.conn.as_ref().and_then(|c| c.end).filter(|e| e.site <= wordcraft_doc::connector::MAX_SITE),
+                        odf_geometry: look.geometry.clone().filter(|_| {
+                            (*kind == wordcraft_doc::para::ShapeKind::Freeform && path.is_some())
+                                || *kind == wordcraft_doc::para::ShapeKind::Rectangle
+                        }),
                         ..Default::default()
                     },
                 };
