@@ -57,6 +57,7 @@ impl Slot {
             break_after: false,
             obj_h,
             obj_d,
+            obj_shift: 0.0,
             dot: false,
         }
     }
@@ -172,6 +173,13 @@ impl<'a> Shaped<'a> {
 
     fn push(&mut self, slot: Slot, kind: ClKind, adv: f32, h: f32) {
         self.b.clusters.push(slot.cluster(kind, adv, (h, 0.0)));
+    }
+
+    /// A drawing cluster whose object is also shifted off the baseline by its run's `w:position`.
+    fn push_object(&mut self, slot: Slot, kind: ClKind, adv: f32, h: f32, shift: f32) {
+        let mut c = slot.cluster(kind, adv, (h, 0.0));
+        c.obj_shift = shift;
+        self.b.clusters.push(c);
     }
 
     /// Shape one run of the paragraph.
@@ -332,7 +340,8 @@ impl<'a> Shaped<'a> {
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
-            self.push(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+            let shift = self.b.styles.get(slot.style as usize).map_or(0.0, |st| st.shift);
+            self.push_object(slot, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py, shift);
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }

@@ -60,8 +60,10 @@ pub(crate) struct Brush {
     pub color: [u8; 4],
 }
 
-/// A logical font (EMF LogFont): height in logical units (negative = character height, positive =
-/// cell height, 0 = default), escapement in tenths of a degree, face name as UTF-16 (NUL-padded).
+/// A logical font (WMF LOGFONT or EMF LogFont): height in logical units (negative = character
+/// height, positive = cell height, 0 = default), escapement in tenths of a degree, face name as
+/// UTF-16 (NUL-padded), and the font's character set (0 ANSI, 1 default, 2 Symbol, 128–136 East
+/// Asian code pages, …), which says how a WMF text record's bytes are encoded.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Font {
     pub height: i32,
@@ -69,6 +71,7 @@ pub(crate) struct Font {
     pub weight: i32,
     pub italic: bool,
     pub face: [u16; 32],
+    pub charset: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -644,6 +647,12 @@ impl Canvas {
         self.text_align = a;
     }
 
+    /// The font selected now, or the default font for a file that draws text without selecting
+    /// one (a WMF text record's bytes are decoded in this font's character set).
+    pub fn current_font(&self) -> Font {
+        self.font.unwrap_or(Font { height: 0, escapement: 0, weight: 400, italic: false, face: [0; 32], charset: 0 })
+    }
+
     /// Draws `text` at the logical point `at` (the current point with TA_UPDATECP) with the selected
     /// font, text colour and alignment. `dx` holds per-character logical advances (empty for the
     /// font's own); with TA_UPDATECP the current point moves past them.
@@ -651,7 +660,7 @@ impl Canvas {
         if text.is_empty() || self.in_path {
             return;
         }
-        let font = self.font.unwrap_or(Font { height: 0, escapement: 0, weight: 400, italic: false, face: [0; 32] });
+        let font = self.current_font();
         let at = if self.text_align & TA_UPDATECP != 0 { self.pos } else { at };
         if self.text_align & TA_UPDATECP != 0 {
             self.pos = (at.0 + dx.iter().sum::<f64>(), at.1);

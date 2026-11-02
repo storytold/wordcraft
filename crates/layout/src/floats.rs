@@ -491,7 +491,10 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
-                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
+                // The run's `w:position` shifts the object's painted rect too; the hit rectangle
+                // and an inline text box's contents must follow the object (#5187 review).
+                let shift = pl.styles.get(c.style as usize).map_or(0.0, |st| st.shift);
+                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top) - shift, c.adv, c.obj_h)
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
