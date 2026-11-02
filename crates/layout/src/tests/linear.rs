@@ -2,8 +2,7 @@
 //! looked up (#3692, #3706): an input 8x the size must cost about 8x as much, not 64x.
 //!
 //! The cost is the steps the lookups' walks count ([`crate::work`]), not a timing, so a busy
-//! machine can't make a linear lookup look quadratic or the other way round. Only proofing text,
-//! whose walk is the document model's, is timed.
+//! machine can't make a linear lookup look quadratic or the other way round.
 
 use super::SCALE;
 use crate::{
