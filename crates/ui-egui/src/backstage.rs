@@ -769,7 +769,27 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
             ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
         }
         let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
-        ui.label(crate::i18n::fmt(tl!("Location: {path}"), &[("path", path)]));
+        // A path reads left to right whatever its folders are called, so it is a label of its own
+        // beside the words around it (one right-to-left line would swap its folders), and a long
+        // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
+        let shown = crate::i18n::isolate_path(path);
+        let template = tl!("Location: {path}");
+        let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
+        // The columns start left to right, so the row's own direction is set: the words before the
+        // path come first at the right edge, the path after them.
+        let row = if crate::rtl::on() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        ui.scope_builder(egui::UiBuilder::new().layout(row), |ui| {
+            if !before.trim().is_empty() {
+                ui.label(before.trim_end());
+            }
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
+            let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
+            ui.label(fitted).on_hover_text(&shown);
+            if !after.trim().is_empty() {
+                ui.label(after.trim_start());
+            }
+        });
     });
 }
 

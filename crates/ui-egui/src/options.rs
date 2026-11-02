@@ -382,10 +382,11 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     };
     for (language, file, error) in found {
         let line = match (file, error) {
-            (Some(f), Some(e)) => {
-                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
-            }
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
+            (Some(f), Some(e)) => crate::i18n::fmt(
+                tl!("{language}: {file} (unreadable: {reason})"),
+                &[("language", &language), ("file", &crate::i18n::isolate_path(&f)), ("reason", &e)],
+            ),
+            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &crate::i18n::isolate_path(&f))]),
             (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
         };
         ui.add(egui::Label::new(RichText::new(line).small()).truncate());

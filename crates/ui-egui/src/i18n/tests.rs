@@ -1285,3 +1285,17 @@ fn names_and_paths_are_isolated_in_a_right_to_left_interface() {
     assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "\u{2066}C:/\u{200E}ملفات/\u{200E}تقرير\u{200E}.docx\u{2069}");
     set_current(Lang::EN);
 }
+
+/// A path inside a sentence (the open failure on the status bar) is isolated in a right-to-left
+/// interface, so Arabic folders do not scramble; in English the message holds the path as it is.
+#[test]
+fn a_path_in_a_message_is_isolated_in_a_right_to_left_interface() {
+    let path = r"C:\ملفات\تقرير.docx";
+    set_current(Lang::EN);
+    let mut a = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    assert!(a.report_open_failure(path, "bad").contains(path));
+    set_current(fixture_lang("ar", "\tCouldn't open {path}: {error}\tتعذر فتح {path}: {error}\n"));
+    let msg = a.report_open_failure(path, "bad");
+    set_current(Lang::EN);
+    assert_eq!(msg, "تعذر فتح \u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}: \u{2068}bad\u{2069}");
+}

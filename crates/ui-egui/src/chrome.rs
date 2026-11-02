@@ -12,7 +12,7 @@ pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::Pat
     match (unreadable, missing) {
         (Some((file, reason)), _) => Some(crate::i18n::fmt(
             tl!("The spelling dictionary for {language} couldn't be read, so it isn't checked. File: {file}. Reason: {reason}"),
-            &[("language", lang), ("file", &file.to_string_lossy()), ("reason", reason)],
+            &[("language", lang), ("file", &crate::i18n::isolate_path(&file.to_string_lossy())), ("reason", reason)],
         )),
         (None, Some(name)) => Some(crate::i18n::fmt(
             tl!(

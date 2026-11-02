@@ -357,8 +357,13 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
                 app.ui.print.zoom = None;
             }
             ui.label(egui::RichText::new(format!("{}%", (z * 100.0).round())).font(regular(13.0)));
-            if nav(ui, "plus", tl!("Zoom In"), z < 5.0) {
-                app.ui.print.zoom = Some(zoom_step(z, true));
+            // The slider grows to the right in every language, as in the status bar: minus at its
+            // left end, plus at its right. This cluster fills from the far end inwards.
+            let (inner, outer) = (("minus", "Zoom Out", false), ("plus", "Zoom In", true));
+            let (near, far) = if rtl { (inner, outer) } else { (outer, inner) };
+            let enabled = |up: bool| if up { z < 5.0 } else { z > 0.1 };
+            if nav(ui, near.0, tl!(near.1), enabled(near.2)) {
+                app.ui.print.zoom = Some(zoom_step(z, near.2));
             }
             // A narrow window shortens the slider, then drops it, before it covers the page indicator.
             let room = ui.available_width() - 26.0 - 2.0 * ui.spacing().item_spacing.x - 12.0;
@@ -371,8 +376,8 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
                     app.ui.print.zoom = Some(v.clamp(0.1, 5.0));
                 }
             }
-            if nav(ui, "minus", tl!("Zoom Out"), z > 0.1) {
-                app.ui.print.zoom = Some(zoom_step(z, false));
+            if nav(ui, far.0, tl!(far.1), enabled(far.2)) {
+                app.ui.print.zoom = Some(zoom_step(z, far.2));
             }
         });
     });
