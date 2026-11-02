@@ -1,5 +1,5 @@
 use super::generated::update_generated;
-use super::render::{authors, cite};
+use super::render::{authors, cite, corporate};
 use super::styles::{CiteStyle, Order, style};
 use super::{CmdError, CmdResult, Document, InlineObject, Selection, Session, Source, StoryRef, Value, delete_selection, json, p, sort_key};
 
@@ -14,18 +14,19 @@ fn auto_tag(doc: &Document, src: &Source) -> String {
     (1u32..).map(|n| format!("{base}{n}")).find(|t| !taken(t)).unwrap_or(base)
 }
 
-/// The author of a source for matching untagged entries: the editor when there is no author.
+/// The author of a source for matching untagged entries: the corporate author (which takes the
+/// author's place when a source is saved), else the author, else the editor.
 #[cfg(not(target_arch = "wasm32"))]
 fn by_author(x: &Source) -> &str {
-    if x.author.is_empty() { x.editor.as_str() } else { x.author.as_str() }
+    [x.corporate.trim(), x.author.as_str(), x.editor.as_str()].into_iter().find(|w| !w.is_empty()).unwrap_or_default()
 }
 
 /// The stem of a new source's tag, before `1`, `2`… are added while it is taken: the first three
-/// alphanumerics of the first author's name (nothing of the author's, `Src`) and the last two
-/// digits of the year.
+/// alphanumerics of the first author's name or the corporate author (nothing of the author's,
+/// `Src`) and the last two digits of the year.
 fn auto_tag_base(src: &Source) -> String {
-    let name: String =
-        authors(&src.author).first().map(|x| x.0.clone()).unwrap_or_default().chars().filter(|c| c.is_alphanumeric()).take(3).collect();
+    let first = corporate(src).map(str::to_string).or_else(|| authors(&src.author).first().map(|x| x.0.clone())).unwrap_or_default();
+    let name: String = first.chars().filter(|c| c.is_alphanumeric()).take(3).collect();
     let name = if name.is_empty() { "Src".to_string() } else { name };
     let digits: Vec<char> = src.year.chars().filter(char::is_ascii_digit).collect();
     let year: String = digits.get(digits.len().saturating_sub(2)..).unwrap_or_default().iter().collect();
@@ -184,8 +185,13 @@ fn cited_tags(doc: &Document) -> Vec<String> {
     out
 }
 
+/// A source's place in an author-sorted bibliography: the corporate author, else the first
+/// author's surname, else the title.
 fn author_key(src: &Source) -> String {
-    authors(&src.author).first().map(|a| a.0.to_lowercase()).unwrap_or_else(|| src.title.to_lowercase())
+    corporate(src)
+        .map(str::to_lowercase)
+        .or_else(|| authors(&src.author).first().map(|a| a.0.to_lowercase()))
+        .unwrap_or_else(|| src.title.to_lowercase())
 }
 
 /// Indices into `doc.sources` in bibliography order: the cited sources (every source while

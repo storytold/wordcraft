@@ -501,9 +501,8 @@ impl Paragraph {
     pub fn next_boundary(&self, off: usize) -> usize {
         crate::cluster::next_cluster(&self.text, self.clamp(off))
     }
-    /// Where Backspace at `off` deletes from: the previous character in the Brahmic scripts
-    /// (Myanmar, Khmer, Devanagari, Thai…), where it removes one vowel sign or stacked consonant
-    /// at a time, otherwise the previous caret stop.
+    /// Where Backspace at `off` deletes from: one Arabic combining mark or one character in the
+    /// Brahmic scripts (Myanmar, Khmer, Devanagari, Thai…), otherwise the previous caret stop.
     pub fn backspace_from(&self, off: usize) -> usize {
         let off = self.clamp(off);
         match self.text.get(..off).and_then(|t| t.char_indices().next_back()) {
