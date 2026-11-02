@@ -26,9 +26,33 @@ fn background_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, raw: 
     Some(char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{fffd}'))
 }
 
+/// Distinguish a transparent colour from an unsupported token without changing foreground parsing.
+fn background_token(token: &str) -> Option<Option<wordcraft_doc::Rgb>> {
+    let token = token.trim().to_ascii_lowercase();
+    if token == "transparent" {
+        return Some(None);
+    }
+    let color = parse_color(&token)?;
+    let transparent = if let Some(hex) = token.strip_prefix('#') {
+        (hex.len() == 4 && hex.ends_with('0')) || (hex.len() == 8 && hex.ends_with("00"))
+    } else if let Some((_, args)) = token.split_once('(') {
+        let args = args.trim_end_matches(')').trim();
+        let alpha = args.split_once('/').map(|(_, alpha)| alpha).or_else(|| args.split(',').nth(3));
+        alpha.is_some_and(|alpha| {
+            let alpha = alpha.trim().trim_end_matches('%').trim();
+            // CSS alpha values below zero clamp to zero. Positive alpha keeps the existing
+            // opaque approximation because the document's background property stores RGB.
+            alpha.parse::<f64>().is_ok_and(|a| a.is_finite() && a <= 0.0)
+        })
+    } else {
+        false
+    };
+    Some((!transparent).then_some(color))
+}
+
 /// Find a supported background colour without splitting function arguments or quoted strings.
 /// Images and gradients remain unsupported; their contents aren't separate colour values.
-fn background_color(value: &str) -> Option<wordcraft_doc::Rgb> {
+fn background_color(value: &str) -> Option<Option<wordcraft_doc::Rgb>> {
     let mut depth = 0usize;
     let mut url_depth = None;
     let mut quote = None;
@@ -58,7 +82,7 @@ fn background_color(value: &str) -> Option<wordcraft_doc::Rgb> {
                 star = c == '*';
             }
             if depth == 0 {
-                if let Some(color) = parse_color(&token) {
+                if let Some(color) = background_token(&token) {
                     return Some(color);
                 }
                 token.clear();
@@ -94,7 +118,7 @@ fn background_color(value: &str) -> Option<wordcraft_doc::Rgb> {
                     name.clear();
                 }
                 _ if depth == 0 && c.is_ascii_whitespace() => {
-                    if let Some(color) = parse_color(&token) {
+                    if let Some(color) = background_token(&token) {
                         return Some(color);
                     }
                     token.clear();
@@ -107,7 +131,7 @@ fn background_color(value: &str) -> Option<wordcraft_doc::Rgb> {
         }
         token.push(c);
     }
-    parse_color(&token)
+    background_token(&token)
 }
 
 /// A CSS length (or font-size keyword) in points; `None` when it is not one.
@@ -158,6 +182,7 @@ fn strip_important(v: &str) -> &str {
 pub(super) fn apply_style(
     css: &str,
     f: &mut Fmt,
+    parent_background: Option<wordcraft_doc::Rgb>,
     align: &mut Option<Align>,
     preserve: &mut bool,
     page_break: &mut bool,
@@ -190,7 +215,9 @@ pub(super) fn apply_style(
             }
             "background-color" | "background" => {
                 if let Some(c) = background_color(v) {
-                    f.background = Some(c);
+                    // A transparent element shows its parent's background, rather than an
+                    // earlier declaration on this element or the default yellow of <mark>.
+                    f.background = c.or(parent_background);
                 }
             }
             "font-size" => {

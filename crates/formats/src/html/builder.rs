@@ -627,6 +627,7 @@ impl<'r> Builder<'r> {
 
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind) -> ElementStyle {
         let mut fmt = self.fmt();
+        let parent_background = fmt.background;
         let mut align = None;
         let mut preserve = self.preserve();
         let mut page_break = false;
@@ -663,7 +664,7 @@ impl<'r> Builder<'r> {
             align = Some(Align::Center);
         }
         if let Some(style) = attr(attrs, "style") {
-            apply_style(style, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+            apply_style(style, &mut fmt, parent_background, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
         }
         if kind == ElKind::Pre {
             preserve = true;

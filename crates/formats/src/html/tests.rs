@@ -185,6 +185,70 @@ fn background_shorthand_does_not_read_colors_inside_other_components() {
     }
 }
 
+/// A fully transparent supported colour contributes no run or table-cell shading.
+#[test]
+fn transparent_background_functions_do_not_become_opaque() {
+    use wordcraft_doc::Rgb;
+    for value in [
+        "rgba(0, 0, 0, 0)",
+        "rgba(0, 0, 0, 0%)",
+        "rgb(0 0 0 / 0)",
+        "RGB(0 0 0 / -0.0)",
+        "rgba(0, 0, 0, -1)",
+        "rgb(0 0 0 / -20%)",
+        "hsla(120, 100%, 50%, 0)",
+        "hsl(120 100% 50% / 0%)",
+        "rgba(0, /* alpha */ 0, 0, 0)",
+        "#1230",
+        "#12345600",
+        "transparent",
+    ] {
+        for property in ["background-color", "background"] {
+            let f = parse(&format!(
+                "<p><span style='{property}:{value}'>Text</span></p><table><tr><td style='{property}:{value}'>Cell</td></tr></table>"
+            ));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+            assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background.is_none()), "{property}:{value}: {p:?}");
+            let FBlock::Table(t) = &f.blocks[1] else { panic!("table") };
+            assert_eq!(t.rows[0][0].shading, None, "{property}:{value}");
+        }
+    }
+    // Positive alpha keeps the existing opaque approximation; foreground parsing is separate.
+    let f = parse("<p style='background:rgba(30, 40, 50, 0.2);color:rgba(0, 0, 0, 0)'>Control</p>");
+    let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+    assert!(matches!(&p.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(30, 40, 50)) && f.color == Some(Rgb(0, 0, 0))));
+}
+
+/// Transparent is a parsed colour that clears an earlier declaration, unlike an invalid value.
+#[test]
+fn transparent_background_declarations_clear_previous_background() {
+    use wordcraft_doc::Rgb;
+    for value in ["transparent", "rgba(0, 0, 0, 0)", "rgb(0 0 0 / 0%)", "#12345600"] {
+        let f = parse(&format!("<p style='background:red;background:{value}'>Clear</p><p style='background:navy;background:bogus'>Keep</p>"));
+        let FBlock::Para(clear) = &f.blocks[0] else { panic!("paragraph") };
+        assert!(matches!(&clear.inlines[0], Inline::Text(_, f) if f.background.is_none()), "{value}: {clear:?}");
+        let FBlock::Para(keep) = &f.blocks[1] else { panic!("paragraph") };
+        assert!(matches!(&keep.inlines[0], Inline::Text(_, f) if f.background == Some(Rgb(0, 0, 128))));
+    }
+}
+
+#[test]
+fn transparent_background_preserves_the_visible_parent_colour() {
+    for property in ["background", "background-color"] {
+        for value in ["transparent", "rgba(0, 0, 0, 0)", "#12345600"] {
+            let f = parse(&format!(
+                "<p style='background:navy'>A<span style='{property}:{value}'>B</span>C<span style='background:red;{property}:{value}'>D</span>E<mark style='{property}:{value}'>F</mark>G</p>"
+            ));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!("paragraph") };
+            assert_eq!(p.text(), "ABCDEFG");
+            assert!(
+                p.inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.background == Some(wordcraft_doc::Rgb(0, 0, 128)))),
+                "{property}:{value}: {p:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn functional_backgrounds_keep_nested_runs_and_cell_shading() {
     use wordcraft_doc::Rgb;
@@ -613,4 +677,12 @@ fn font_size_at_the_integer_limits_does_not_overflow() {
     assert_eq!(size("<font size=\"+2147483647\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"--2147483648\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"-2147483647\">x</font>"), Some(7.5));
+}
+
+#[test]
+fn empty_comments_do_not_swallow_the_rest() {
+    for html in ["<p>a<!-->b</p><p>c</p>", "<p>a<!--->b</p><p>c</p>"] {
+        let doc = crate::html::import(html);
+        assert_eq!(doc.plain_text(Default::default()), "ab\nc", "{html}");
+    }
 }
