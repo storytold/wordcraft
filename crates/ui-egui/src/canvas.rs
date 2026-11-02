@@ -72,9 +72,9 @@ use reading::{
 use rulers::rulers;
 #[cfg(test)]
 use rulers::{RULER_LABEL_PX, RULER_MAX_MARKS, RULER_SPARSEST, RulerMark, UNIT_TICK, ruler_d, ruler_density, ruler_marks, ruler_x};
+pub(crate) use story::straight_box;
 pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
-pub(crate) use story::straight_box;
 pub(crate) use story::{part_kind, text_box_host};
 
 /// Points on screen per document point at 100% (96 px per inch, like a word processor).
