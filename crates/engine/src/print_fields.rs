@@ -1198,6 +1198,67 @@ mod tests {
         assert_eq!(actual, expected_png);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn png_markup_deletions() {
+        use wordcraft_doc::props::LineSpacing;
+        use wordcraft_doc::{Revision, RevisionKind, Run};
+
+        let deleted = "DELETED\n".repeat(8);
+        let live = "Live";
+        let mut paragraph = Paragraph::with_text(&format!("{deleted}{live}"), CharProps::default());
+        paragraph.runs = vec![
+            Run { len: deleted.len(), props: CharProps { del: Some(0), ..Default::default() } },
+            Run { len: live.len(), props: CharProps::default() },
+        ];
+        paragraph.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        paragraph.props.space_before = Some(0.0);
+        paragraph.props.space_after = Some(0.0);
+        paragraph.props.widow_control = Some(false);
+        let mut doc = Document::new();
+        doc.body = vec![para_block(paragraph)];
+        doc.revisions.push(Revision::new(RevisionKind::Delete, "Control", ""));
+        doc.styles.default_chr.font = Some(wordcraft_fonts::DEFAULT_FAMILY.into());
+        doc.styles.default_chr.size = Some(12.0);
+        doc.last_section.page_w = 180.0;
+        doc.last_section.page_h = 120.0;
+        doc.last_section.margin_left = 10.0;
+        doc.last_section.margin_right = 10.0;
+        doc.last_section.margin_top = 10.0;
+        doc.last_section.margin_bottom = 10.0;
+        let mut session = crate::Session::new(doc);
+        session.prefs.markup.comments = false;
+        let before = serde_json::to_value(&session.doc).unwrap();
+        let dir = std::env::temp_dir().join(format!("wordcraft-png-markup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut images = Vec::new();
+        for markup in [false, true] {
+            // Explicit command options override the opposite saved Print Markup preference.
+            session.prefs.print_markup = !markup;
+            let path = dir.join(format!("{markup}-first.png"));
+            session.run("file.exportPng", &serde_json::json!({"path": path, "markup": markup, "scale": 1.0})).unwrap();
+            let image = image::load_from_memory(&std::fs::read(&path).unwrap()).unwrap().to_rgba8();
+            images.push(image);
+            assert_eq!(serde_json::to_value(&session.doc).unwrap(), before, "successful export keeps live tracked runs");
+            let second = dir.join(format!("{markup}-second.png"));
+            let result = session.run("file.exportPng", &serde_json::json!({"path": second, "page": 2, "markup": markup, "scale": 1.0}));
+            if markup {
+                assert!(result.is_ok(), "deleted lines must create a second printed page: {result:?}");
+                assert!(image::load_from_memory(&std::fs::read(&second).unwrap()).is_ok());
+            } else {
+                assert!(matches!(result, Err(crate::CmdError::Params(_))), "final output has only one page: {result:?}");
+                assert!(!second.exists(), "an unavailable page must not write an image");
+            }
+            assert_eq!(serde_json::to_value(&session.doc).unwrap(), before, "page selection cannot accept tracked deletions");
+        }
+        const INK_THRESHOLD: u8 = 240;
+        let ink = |image: &image::RgbaImage| image.pixels().filter(|p| p.0.iter().take(3).any(|channel| *channel < INK_THRESHOLD)).count();
+        assert_eq!(images[0].dimensions(), images[1].dimensions());
+        assert!(ink(&images[0]) > 0, "final output still draws live text");
+        assert!(ink(&images[1]) > ink(&images[0]), "markup must draw deleted text, not only change page selection");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn print_limits_keep_caches() {
         let doc = control();
