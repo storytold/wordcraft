@@ -1054,3 +1054,34 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// #5282: the File page scrolls with the wheel over its right side.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (0..12).map(|i| if cfg!(windows) { format!("C:\\Docs\\doc{i}.docx") } else { format!("/docs/doc{i}.docx") }).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let before = h.get_by_label("doc0.docx").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(1300.0, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+
+    let after = h.get_by_label("doc0.docx").rect();
+    assert!(after.min.y < before.min.y - 1.0, "expected doc0.docx to scroll up: before.min.y={}, after.min.y={}", before.min.y, after.min.y,);
+}
