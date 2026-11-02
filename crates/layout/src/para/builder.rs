@@ -186,7 +186,14 @@ impl<'a> Builder<'a> {
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
             .map(|f| (f, wordcraft_fonts::word::resolve(f, rc.bold, rc.italic)))
             .filter(|(f, r)| !r.substituted || wordcraft_fonts::word::has_named_substitutes(f))
-            .map(|(_, r)| r.face);
+            .map(|(_, r)| r.face)
+            .filter(|face| {
+                // Keep conjoining Hangul Jamo clusters intact: if `primary_ea` covers only part of
+                // the run's conjoining Jamo, yield to `ea_face`'s whole-run fallback instead of
+                // splitting a syllable across two faces.
+                let is_jamo = |ch: char| matches!(u32::from(ch), 0x1100..=0x11FF | 0xA960..=0xA97F | 0xD7B0..=0xD7FF);
+                text.chars().map(show).filter(|&ch| is_jamo(ch)).all(|ch| face.covers(ch) && face.has_layout_tables())
+            });
         // The levels by byte of `text`, from `lbase` on.
         let (levels, lbase): (&[u8], usize) = match dir {
             Dir::Para => (&self.levels, base),
