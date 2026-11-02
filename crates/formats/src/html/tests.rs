@@ -514,3 +514,11 @@ fn font_size_at_the_integer_limits_does_not_overflow() {
     assert_eq!(size("<font size=\"--2147483648\">x</font>"), Some(36.0));
     assert_eq!(size("<font size=\"-2147483647\">x</font>"), Some(7.5));
 }
+
+#[test]
+fn empty_comments_do_not_swallow_the_rest() {
+    for html in ["<p>a<!-->b</p><p>c</p>", "<p>a<!--->b</p><p>c</p>"] {
+        let doc = crate::html::import(html);
+        assert_eq!(doc.plain_text(Default::default()), "ab\nc", "{html}");
+    }
+}
