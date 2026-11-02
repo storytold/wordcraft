@@ -3591,6 +3591,37 @@ fn comments() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 0);
 }
 
+/// An `id` that does not fit a `u32` is refused, rather than truncated into another comment's
+/// id (#3677). `{"id": 4294967296}` once became 0 and `4294967301` became 5, so a delete, a
+/// reply or a resolve acted on a comment the caller never named. `validate_comment_id` guards
+/// every one of these commands; nothing pinned it.
+#[test]
+fn a_comment_id_too_large_for_u32_is_refused_not_truncated() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text here"}));
+    run(&mut s, "select.text", json!({"text": "text"}));
+    let id = run(&mut s, "review.newComment", json!({"text": "Nice"}))["id"].as_u64().unwrap();
+    assert_eq!(id, 0, "the first comment is 0, which is what 2^32 used to truncate to");
+    run(&mut s, "review.reply", json!({"id": id, "text": "Agreed"}));
+    let before = s.doc.comments.len();
+
+    // 2^32 truncates to 0 and 2^32 + id to id, so these name the comments above if they are cast.
+    for over in [4_294_967_296u64, 4_294_967_296 + id, 4_294_967_301, u64::MAX] {
+        for cmd in ["review.deleteComment", "review.reply", "review.editComment", "review.resolveComment"] {
+            let err = s.run(cmd, &json!({"id": over, "text": "x"})).unwrap_err().to_string();
+            assert!(err.contains("32-bit"), "{cmd} with id {over}: {err}");
+        }
+    }
+    // Nothing was deleted, replied to or resolved by any of them.
+    assert_eq!(s.doc.comments.len(), before, "the comments are untouched");
+    assert_eq!(run(&mut s, "review.comments", json!({}))[0]["text"], "Nice");
+    assert!(s.doc.comments.values().all(|c| !c.resolved), "and none was resolved");
+
+    // An id that does fit is still accepted, so the guard is a range check and not a refusal.
+    run(&mut s, "review.resolveComment", json!({"id": id, "value": true}));
+    assert!(s.doc.comments.get(&(id as u32)).unwrap().resolved, "a valid id still works");
+}
+
 /// #1085: a new comment with no text, in an empty document or on a word, goes with Review ›
 /// Delete at the caret (no id) and by id.
 #[test]
