@@ -21,6 +21,7 @@ mod comments;
 mod host;
 mod inspector;
 mod nav;
+mod reviewing;
 mod side;
 mod state;
 
@@ -40,6 +41,7 @@ use inspector::inspector;
 use nav::nav;
 #[cfg(test)]
 use nav::{nav_heading, nav_headings, visible_headings};
+use reviewing::reviewing;
 use side::{clipboard, styles};
 pub(crate) use state::float_rect;
 #[cfg(test)]
@@ -62,6 +64,8 @@ pub enum Pane {
     RestrictEditing,
     Proofing,
     Comments,
+    /// Review › Tracking › Reviewing Pane: the tracked changes.
+    Reviewing,
 }
 
 impl Pane {
@@ -78,6 +82,7 @@ impl Pane {
             Self::RestrictEditing => "Restrict Editing",
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
+            Self::Reviewing => "Reviewing Pane",
         }
     }
 
@@ -94,6 +99,8 @@ impl Pane {
             Self::RestrictEditing => (Edge::End, 270.0),
             Self::Proofing => (Edge::End, 400.0),
             Self::Comments => (Edge::End, 290.0),
+            // Word docks its vertical Reviewing Pane on the left.
+            Self::Reviewing => (Edge::Start, 300.0),
         };
         PaneState::docked(edge, width)
     }
@@ -112,10 +119,11 @@ impl Pane {
             Self::RestrictEditing => "restrictEditing",
             Self::Proofing => "proofing",
             Self::Comments => "comments",
+            Self::Reviewing => "reviewing",
         }
     }
 
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -127,6 +135,7 @@ impl Pane {
         Self::RestrictEditing,
         Self::Proofing,
         Self::Comments,
+        Self::Reviewing,
     ];
 
     fn from_key(key: &str) -> Option<Self> {
@@ -145,6 +154,7 @@ impl Pane {
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
+            Self::Reviewing => Some("view.reviewingPane"),
             Self::RestrictEditing | Self::Proofing => None,
         }
     }
@@ -171,6 +181,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
             Pane::Proofing => crate::proofing_pane::show(app, ui),
             Pane::Comments => comments(app, ui),
+            Pane::Reviewing => reviewing(app, ui),
         })
     }
 

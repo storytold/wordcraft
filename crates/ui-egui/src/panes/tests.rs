@@ -263,6 +263,10 @@ fn pane_bodies_fit_the_narrowest_pane() {
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
     app.run("select.all", serde_json::json!({})).unwrap();
     app.run("edit.copy", serde_json::json!({})).unwrap();
+    // A tracked change, so the Reviewing Pane has a card to lay out.
+    app.run("caret.docEnd", serde_json::json!({})).unwrap();
+    app.run("review.trackChanges", serde_json::json!({"value": true})).unwrap();
+    app.run("text.insert", serde_json::json!({"text": " and a tracked insertion long enough to wrap in the pane"})).unwrap();
     app.restrict =
         crate::dialogs_review::RestrictPane { open: true, formatting: true, show_styles: true, editing: true, asking: true, ..Default::default() };
     let panes = [
@@ -275,6 +279,7 @@ fn pane_bodies_fit_the_narrowest_pane() {
         Pane::FormatShape,
         Pane::RestrictEditing,
         Pane::Comments,
+        Pane::Reviewing,
     ];
     let widths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = widths.clone();
@@ -467,4 +472,71 @@ fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
     let go_to: Vec<egui::Rect> = h.get_all_by_label("Go to").map(|n| n.rect()).collect();
     assert_eq!(go_to.len(), 2, "one Go to button per card");
     assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
+}
+
+/// Alice's tracked insertion "Hello world", " world" then deleted by Bob, with the Reviewing
+/// Pane open.
+#[cfg(not(target_arch = "wasm32"))]
+fn reviewing_app() -> crate::WordApp {
+    let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+    session.run("review.trackChanges", &serde_json::json!({"value": true})).unwrap();
+    session.author = "Alice".into();
+    session.run("text.insert", &serde_json::json!({"text": "Hello world"})).unwrap();
+    session.author = "Bob".into();
+    session.run("select.range", &serde_json::json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 11}})).unwrap();
+    session.run("text.delete", &serde_json::json!({})).unwrap();
+    let mut app = crate::WordApp::new(session, crate::Services::default());
+    app.run("view.reviewingPane", serde_json::json!({"value": true})).unwrap();
+    app
+}
+
+/// Review › Reviewing Pane opens a pane listing every tracked change, by whom.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_reviewing_pane_lists_each_change_and_who_made_it() {
+    use egui_kittest::kittest::Queryable;
+
+    let h = pane_harness(reviewing_app());
+    assert!(super::open(h.state()).contains(&Pane::Reviewing));
+    assert!(h.query_by_label("3 revisions").is_some(), "Alice's two insertion runs and Bob's deletion");
+    assert_eq!(h.query_all_by_label("Alice").count(), 2);
+    assert_eq!(h.query_all_by_label("Bob").count(), 1);
+    assert_eq!(h.query_all_by_label("Reject").count(), 3, "one card per change");
+}
+
+/// Reject on a card rejects that change alone: Bob's deletion inside Alice's insertion goes,
+/// and her words come back as her insertion.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn reject_on_a_reviewing_pane_card_rejects_only_that_change() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = pane_harness(reviewing_app());
+    // Cards are in document order: Alice's "Hello", Alice's " world", Bob's " world".
+    h.query_all_by_label("Reject").nth(2).expect("Bob's card").click();
+    h.run_steps(4);
+    let list = h.state_mut().session.run("review.changes", &serde_json::json!({})).unwrap();
+    let authors: Vec<&str> = list.as_array().unwrap().iter().filter_map(|c| c["author"].as_str()).collect();
+    assert_eq!(authors, ["Alice"], "her two runs are one insertion again");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Hello world");
+}
+
+/// Accept All Shown with one reviewer picked accepts only that reviewer's changes.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_reviewing_pane_filter_shows_and_accepts_one_reviewers_changes() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = pane_harness(reviewing_app());
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(3);
+    // The open list's entry (the card's author label is a plain label).
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Bob").click();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Reject").count(), 1, "only Bob's card");
+    h.get_by_label("Accept All Shown").click();
+    h.run_steps(4);
+    let list = h.state_mut().session.run("review.changes", &serde_json::json!({})).unwrap();
+    let left: Vec<&str> = list.as_array().unwrap().iter().filter_map(|c| c["author"].as_str()).collect();
+    assert_eq!(left, ["Alice"], "Bob's deletion took the struck words with it; Alice's Hello stays");
 }

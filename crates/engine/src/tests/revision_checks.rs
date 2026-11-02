@@ -595,3 +595,106 @@ fn moving_another_authors_insertion_lists_the_move_source_by_its_mover() {
     assert!(has("insert", "Alice"), "Alice's insertion is still listed: {list:?}");
     assert!(crate::cmd::review::move_changes(&s).iter().any(|(_, who, from)| who == "Bob" && *from), "a Moved from balloon for Bob");
 }
+
+/// Alice's tracked insertion "Hello world", " world" then deleted by Bob.
+fn bob_struck_alices_words() -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 5), focus: Pos::body(0, 11) };
+    run(&mut s, "text.delete", json!({}));
+    s
+}
+
+/// The index in review.changes of `who`'s change of `kind` over `text`.
+fn change_index(s: &mut Session, kind: &str, who: &str, text: &str) -> usize {
+    let list = change_list(s);
+    list.iter().position(|c| c == &(kind.into(), who.into(), text.into())).unwrap_or_else(|| panic!("no {kind} by {who} of {text:?} in {list:?}"))
+}
+
+#[test]
+fn rejecting_a_listed_deletion_inside_an_insertion_keeps_the_insertion() {
+    let mut s = bob_struck_alices_words();
+    let n = change_index(&mut s, "delete", "Bob", " world");
+    run(&mut s, "review.reject", json!({"change": n}));
+    assert_eq!(visible(&s), "Hello world", "the words are back");
+    let list = change_list(&mut s);
+    assert!(list.iter().all(|(kind, who, _)| kind == "insert" && who == "Alice"), "still Alice's insertion: {list:?}");
+}
+
+#[test]
+fn accepting_a_listed_insertion_keeps_the_deletion_inside_it() {
+    let mut s = bob_struck_alices_words();
+    let n = change_index(&mut s, "insert", "Alice", " world");
+    run(&mut s, "review.accept", json!({"change": n}));
+    assert_eq!(visible(&s), "Hello", "still struck by Bob");
+    let list = change_list(&mut s);
+    assert!(list.contains(&("delete".into(), "Bob".into(), " world".into())), "{list:?}");
+    assert!(!list.contains(&("insert".into(), "Alice".into(), " world".into())), "{list:?}");
+}
+
+#[test]
+fn accepting_a_listed_deletion_or_rejecting_the_insertion_removes_the_words() {
+    for (kind, who, accept) in [("delete", "Bob", true), ("insert", "Alice", false)] {
+        let mut s = bob_struck_alices_words();
+        let n = change_index(&mut s, kind, who, " world");
+        run(&mut s, if accept { "review.accept" } else { "review.reject" }, json!({"change": n}));
+        let text = s.doc.para_at(&Pos::body(0, 0)).map(|p| p.plain_text()).unwrap_or_default();
+        assert_eq!(text, "Hello", "{kind} by {who}");
+    }
+}
+
+#[test]
+fn a_listed_change_out_of_range_is_an_error() {
+    let mut s = bob_struck_alices_words();
+    assert!(s.run("review.accept", &json!({"change": 99})).is_err());
+    assert!(s.run("review.reject", &json!({"change": u64::MAX})).is_err());
+}
+
+#[test]
+fn rejecting_a_listed_deletion_of_an_inserted_paragraph_mark_keeps_the_paragraphs() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 3), focus: Pos::body(1, 0) };
+    run(&mut s, "text.delete", json!({}));
+    let list = run(&mut s, "review.changes", json!({}));
+    let n = list
+        .as_array()
+        .and_then(|a| a.iter().position(|c| c["kind"] == "delete" && c["author"] == "Bob" && c["start"]["off"] == 3))
+        .unwrap_or_else(|| panic!("Bob's mark deletion isn't listed: {list}"));
+    run(&mut s, "review.reject", json!({"change": n}));
+    let mark = s.doc.para_at(&Pos::body(0, 0)).map(|p| (p.mark.ins.is_some(), p.mark.del.is_some()));
+    assert_eq!(mark, Some((true, false)), "Alice's inserted mark stays, no longer deleted");
+    assert_eq!(s.doc.body.len(), 2);
+}
+
+#[test]
+fn accept_all_and_reject_all_can_take_one_authors_changes() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "one two three"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " four"}));
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 4) };
+    run(&mut s, "text.delete", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " five"}));
+    run(&mut s, "review.rejectAll", json!({"author": "Bob"}));
+    let list = change_list(&mut s);
+    assert_eq!(list, [("insert".to_string(), "Alice".to_string(), " four".to_string())]);
+    assert_eq!(visible(&s), "one two three four");
+    run(&mut s, "review.acceptAll", json!({"author": "Alice"}));
+    assert!(change_list(&mut s).is_empty());
+    assert_eq!(visible(&s), "one two three four");
+    // An author with no changes changes nothing.
+    run(&mut s, "review.acceptAll", json!({"author": "Nobody"}));
+}

@@ -215,18 +215,113 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     sel_result(s)
 }
 
-/// Accept or Reject All; with `stopTracking`, Track Changes is turned off as well.
+/// Accept or Reject All; with `stopTracking`, Track Changes is turned off as well. With
+/// `author`, only that author's changes (Word's Accept/Reject All Changes Shown with one
+/// reviewer shown).
 pub(super) fn resolve_all_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
-    let out = resolve_all(s, accept)?;
+    let out = match p::str(v, "author") {
+        Some(author) => resolve_author(s, author, accept)?,
+        None => resolve_all(s, accept)?,
+    };
     if p::bool(v, "stopTracking") == Some(true) {
         s.doc.settings.track_changes = false;
     }
     Ok(out)
 }
 
-/// Accept or Reject at the selection; with `next`, the next change is selected afterwards.
+/// Accept or Reject at the selection, or with `change` that entry of `review.changes` alone;
+/// with `next`, the next change is selected afterwards.
 pub(super) fn resolve_sel_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
-    resolve_sel(s, accept, p::bool(v, "next") == Some(true))
+    let next = p::bool(v, "next") == Some(true);
+    match p::u64(v, "change") {
+        Some(n) => {
+            resolve_listed(s, usize::try_from(n).unwrap_or(usize::MAX), accept)?;
+            if next { select_next_unresolved(s) } else { sel_result(s) }
+        }
+        None => resolve_sel(s, accept, next),
+    }
+}
+
+/// Accept or reject entry `n` of `review.changes`, and only it: where a deletion was made inside
+/// another author's insertion, the two share their text, and Accept or Reject on that text would
+/// resolve both. An insertion or deletion of text or of a paragraph mark is resolved by its
+/// revision alone; a move, a formatting change or a table's change as Accept or Reject on its
+/// range would (a move takes its other end with it).
+fn resolve_listed(s: &mut Session, n: usize, accept: bool) -> Result<(), CmdError> {
+    let list = changes(s);
+    let Some(c) = list.get(n) else {
+        return Err(CmdError::Params(format!("`change` {n}: review.changes lists {} changes", list.len())));
+    };
+    let (a, b, kind, rev) = (c.a.clone(), c.b.clone(), c.kind, c.rev);
+    let (del, rev) = match (kind, rev) {
+        ("insert", Some(rev)) => (false, rev),
+        ("delete", Some(rev)) => (true, rev),
+        _ => {
+            s.sel = Selection { anchor: a, focus: b };
+            resolve_sel(s, accept, false)?;
+            return Ok(());
+        }
+    };
+    let on_mark = s.doc.para(a.story, &a.path).is_some_and(|p| a.off == p.len() && (if del { p.mark.del } else { p.mark.ins }) == Some(rev));
+    if on_mark {
+        // Accepting a deletion or rejecting an insertion removes the mark: the paragraphs join
+        // (or an empty paragraph goes away). The mark at the end of a story stays.
+        let removed = del == accept && (crate::cmd::remove_empty_para(s, a.story, &a.path)? || crate::cmd::join_next_para(s, a.story, &a.path)?);
+        if !removed {
+            let para = s.doc.para_mut(a.story, &a.path)?;
+            if del {
+                para.mark.del = None;
+            } else {
+                para.mark.ins = None;
+            }
+            para.touch();
+        }
+    } else if a.path == b.path {
+        resolve_revision_runs(s.doc.para_mut(a.story, &a.path)?, a.off, b.off, del, rev, accept)?;
+    }
+    s.sel = Selection::caret(a);
+    s.clamp_selection();
+    Ok(())
+}
+
+/// Accept or reject revision `rev` (an insertion, or with `del` a deletion) in `from..to` of
+/// one paragraph, leaving any other revision on the same text as it is.
+fn resolve_revision_runs(para: &mut Paragraph, from: usize, to: usize, del: bool, rev: u32, accept: bool) -> Result<(), CmdError> {
+    let ranges: Vec<(usize, usize)> = para
+        .run_ranges()
+        .filter(|(r, c)| r.end > from && r.start < to && (if del { c.del } else { c.ins }) == Some(rev))
+        .map(|(r, _)| (r.start.max(from), r.end.min(to)))
+        .collect();
+    for (a, b) in ranges.into_iter().rev() {
+        // An accepted deletion or a rejected insertion takes its text away.
+        if del == accept {
+            para.delete(a, b)?;
+        } else if del {
+            para.format(a, b, &|c| c.del = None)?;
+        } else {
+            para.format(a, b, &|c| c.ins = None)?;
+        }
+    }
+    para.touch();
+    Ok(())
+}
+
+/// Accept or reject every change by `author`, one at a time from the end so the earlier ones
+/// stay where they are.
+fn resolve_author(s: &mut Session, author: &str, accept: bool) -> CmdResult {
+    let by = |s: &Session, list: &[Change]| {
+        list.iter().rposition(|c| c.rev.and_then(|r| s.doc.revisions.get(r as usize)).is_some_and(|r| r.author == author))
+    };
+    // Each step resolves at least one change (a move resolves two), so this always ends.
+    let mut left = changes(s).len().saturating_add(1);
+    while left > 0 {
+        let list = changes(s);
+        let Some(n) = by(s, &list) else { break };
+        resolve_listed(s, n, accept)?;
+        left -= 1;
+    }
+    s.clamp_selection();
+    sel_result(s)
 }
 
 /// The span of the tracked change around `off` in `p`: its run, joined across the comment anchors
