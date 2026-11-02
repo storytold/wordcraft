@@ -923,6 +923,12 @@ pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, 
     split_row_with(row, cut, true)
 }
 
+fn record_item_range(map: &mut [std::ops::Range<usize>], source: usize, span: std::ops::Range<usize>) {
+    if let Some(range) = map.get_mut(source) {
+        *range = span;
+    }
+}
+
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
@@ -1065,12 +1071,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     it.translate(0.0, -shift);
                     b.push(it);
                 }
-                if let Some(r) = map_a.get_mut(source) {
-                    *r = start_a..a.len();
-                }
-                if let Some(r) = map_b.get_mut(source) {
-                    *r = start_b..b.len();
-                }
+                record_item_range(&mut map_a, source, start_a..a.len());
+                record_item_range(&mut map_b, source, start_b..b.len());
                 continue;
             }
             match it {
@@ -1155,12 +1157,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     }
                 }
             }
-            if let Some(r) = map_a.get_mut(source) {
-                *r = start_a..a.len();
-            }
-            if let Some(r) = map_b.get_mut(source) {
-                *r = start_b..b.len();
-            }
+            record_item_range(&mut map_a, source, start_a..a.len());
+            record_item_range(&mut map_b, source, start_b..b.len());
         }
         parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
