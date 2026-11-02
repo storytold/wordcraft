@@ -21,6 +21,32 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("options", "Options", "options"),
 ];
 
+/// The Backstage pages' keytips, as Word's (#4960): Alt, F, then a letter. V is Word's older
+/// Print Preview key, which opens the Print page too.
+const KEYTIPS: [(&str, &str); 11] = [
+    ("home", "H"),
+    ("new", "N"),
+    ("open", "O"),
+    ("info", "I"),
+    ("save", "S"),
+    ("saveAs", "A"),
+    ("print", "P"),
+    ("print", "V"),
+    ("export", "E"),
+    ("close", "C"),
+    ("options", "T"),
+];
+
+/// The page a Backstage keytip letter opens.
+pub(crate) fn keytip_page(letter: &str) -> Option<&'static str> {
+    KEYTIPS.iter().find(|(_, l)| *l == letter).map(|(page, _)| *page)
+}
+
+/// The badge a Backstage page shows while its keytips do (the first letter listed).
+fn keytip_letter(page: &str) -> Option<&'static str> {
+    KEYTIPS.iter().find(|(p, _)| *p == page).map(|(_, l)| *l)
+}
+
 /// The Backstage back chevron's centre on macOS (#1873): beside the traffic lights in a
 /// window (the title bar's content edge), at the plain control inset in full screen, where the
 /// lights aren't docked top-left and the reserved offset would leave dead space.
@@ -94,33 +120,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if active { semibold(14.0) } else { medium(14.0) },
                     ink,
                 );
+                if on
+                    && app.ui.keytips == crate::keytips::Phase::Backstage
+                    && let Some(letter) = keytip_letter(id)
+                {
+                    crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
+                }
                 if resp.clicked() {
-                    match id {
-                        // A document without a file goes to the Save As page (as in Word) instead
-                        // of `file.save`, which would also open the native Save As dialog.
-                        // In the browser a save is a download, so it saves right away.
-                        "save" if app.session.path.is_none() && app.services.download.is_none() => {
-                            app.ui.backstage_page = "saveAs".into();
-                        }
-                        "save" => {
-                            let r = app.run("file.save", json!({}));
-                            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
-                                app.ui.backstage = false;
-                                app.canvas.want_focus = true;
-                            } else {
-                                app.ui.backstage_page = "saveAs".into();
-                            }
-                        }
-                        "saveAs" => {
-                            app.ui.backstage_page = "saveAs".into();
-                        }
-                        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
-                        // are unsaved changes, and Cancel leaves the Backstage where it was.
-                        "close" => {
-                            let _ = app.run("file.close", json!({}));
-                        }
-                        _ => app.ui.backstage_page = id.into(),
-                    }
+                    go_to_page(app, id);
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -212,6 +219,40 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("file.recover", json!({"refresh": true}));
         }
     });
+}
+
+/// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
+/// pages that work without one open.
+pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
+    if !app.has_document() && !works_without_document(id) {
+        return;
+    }
+    match id {
+        // A document without a file goes to the Save As page (as in Word) instead
+        // of `file.save`, which would also open the native Save As dialog.
+        // In the browser a save is a download, so it saves right away.
+        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+            app.ui.backstage_page = "saveAs".into();
+        }
+        "save" => {
+            let r = app.run("file.save", json!({}));
+            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+                app.ui.backstage = false;
+                app.canvas.want_focus = true;
+            } else {
+                app.ui.backstage_page = "saveAs".into();
+            }
+        }
+        "saveAs" => {
+            app.ui.backstage_page = "saveAs".into();
+        }
+        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
+        // are unsaved changes, and Cancel leaves the Backstage where it was.
+        "close" => {
+            let _ = app.run("file.close", json!({}));
+        }
+        _ => app.ui.backstage_page = id.into(),
+    }
 }
 
 /// The Backstage pages that work while no document is open (#1129).

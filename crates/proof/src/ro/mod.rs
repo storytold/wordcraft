@@ -20,19 +20,13 @@ mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::slot::DictSlot;
 
 use crate::affix::AffixDict;
 
 pub use suggest::suggest;
-
-/// The Romanian dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<DictState> = RwLock::new(DictState { dict: None, in_memory: false });
-
-struct DictState {
-    dict: Option<Arc<AffixDict>>,
-    in_memory: bool,
-}
 
 /// File names of a Romanian Hunspell dictionary (Romania first, then Moldova).
 const NAMES: &[&str] = &["ro_RO", "ro-RO", "ro_MD", "ro"];
@@ -41,56 +35,30 @@ const NAMES: &[&str] = &["ro_RO", "ro-RO", "ro_MD", "ro"];
 /// [`install_dictionary`], or an empty one when none is available (Romanian spelling is off
 /// then; see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).dict.as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Another thread (or an install) may have filled it meanwhile: that one wins.
-    slot.dict.get_or_insert(loaded).clone()
+    DICT.get()
 }
 
-fn load_installed() -> AffixDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Romanian spelling: no Hunspell ro_RO dictionary installed");
-        return AffixDict::default();
-    };
-    crate::hunspell::note_load(NAMES[0], &dic, crate::hunspell::load(&aff, &dic)).unwrap_or_else(|e| {
-        log::warn!("Romanian spelling: {e}");
-        AffixDict::default()
-    })
-}
+/// The Romanian dictionary, managed by the shared loader and reload generation.
+pub(crate) static DICT: DictSlot<AffixDict> = DictSlot::new(NAMES, "Romanian");
 
-/// Use this Romanian dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to
-/// UTF-8), for example one the user picked. On error the current dictionary stays.
+/// Use an in-memory dictionary. A failed parse leaves the current one intact.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    slot.dict = Some(Arc::new(d));
-    slot.in_memory = true;
-    Ok(())
+    DICT.install(aff, dic)
 }
 
-/// Forget the loaded dictionary, so the next check looks for an installed one again (after
-/// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
+/// Forget the loaded dictionary and resolve the configured folder on next use.
 pub fn reload_dictionary() {
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    slot.dict = None;
-    slot.in_memory = false;
+    DICT.reload();
 }
 
-/// The installed Romanian `.dic` file, if any; in-memory dictionaries have no path to report.
+/// The installed Romanian file; in-memory dictionaries report no file.
 pub fn installed_path() -> Option<std::path::PathBuf> {
-    if DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).in_memory {
-        return None;
-    }
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.installed_path()
 }
 
-/// Is a Romanian dictionary available (spelling is checked)?
+/// Is a Romanian dictionary available?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
+    DICT.has_dictionary()
 }
 
 /// Is `c` a letter of the Latin script (the only one the Romanian dictionary covers)?

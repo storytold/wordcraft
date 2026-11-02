@@ -20,9 +20,22 @@ fn romanian_external_dictionary_qualifies_text_and_corrections() {
     for name in ["ro_RO.aff", "ro_RO.dic"] {
         assert!(folder.join(name).is_file(), "missing {}", folder.join(name).display());
     }
-    set_dictionaries_folder(Some(folder));
+    set_dictionaries_folder(Some(folder.clone()));
     assert!(ro::has_dictionary(), "the supplied Romanian dictionary must load");
     assert!(ro::dictionary().len() > 10_000, "qualification needs a real dictionary, not the unit-test fixture");
+
+    // The shared slot reports files, clears that report for in-memory installs, keeps
+    // a working dictionary on parse errors, and reloads the configured folder.
+    let path = || wordcraft_proof::installed_dictionaries().into_iter().find(|(l, _)| *l == ProofLang::Ro).unwrap().1;
+    assert_eq!(path(), Some(folder.join("ro_RO.dic")));
+    assert_eq!(wordcraft_proof::dictionary_load_error(ProofLang::Ro), None);
+    ro::install_dictionary("KEEPCASE K\n", "1\nromân/K\n").unwrap();
+    assert_eq!(path(), None);
+    assert!(ro::install_dictionary("NEEDAFFIX X\n", "1\nromân/X\n").is_err());
+    assert!(ro::is_correct("român"), "a refused replacement keeps the in-memory dictionary");
+    set_dictionaries_folder(Some(folder.clone()));
+    assert!(ro::dictionary().len() > 10_000, "folder reload restores the external dictionary");
+    assert_eq!(path(), Some(folder.join("ro_RO.dic")));
 
     let correct = [
         "Ieri dimineață, fata vecinilor s-a dus într-o librărie din București și și-a cumpărat două cărți despre științele naturii.",

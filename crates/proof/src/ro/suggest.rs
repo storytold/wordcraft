@@ -353,11 +353,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     found.sort_by_key(|(text, (cost, seq))| (*cost, diff_at(text), *seq));
     let mut out: Vec<String> = Vec::new();
     for (text, _) in found {
-        let t = match case {
-            Casing::Initial => capitalize(&text),
-            Casing::Upper if n > 1 => text.to_uppercase(),
-            _ => text,
-        };
+        let t = recase(d, text, case, n);
         if t != word && can_suggest_phrase(d, &t) && !out.contains(&t) {
             out.push(t);
         }
@@ -370,6 +366,16 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
 /// case) by shared letter pairs, then keep the forms of the best within two typos.
+/// Match the input's casing except where a KEEPCASE entry fixes the spelling.
+fn recase(d: &AffixDict, text: String, case: Casing, n: usize) -> String {
+    let recased = match case {
+        Casing::Initial => capitalize(&text),
+        Casing::Upper if n > 1 => text.to_uppercase(),
+        _ => text.clone(),
+    };
+    if recased != text && text.split(' ').any(|p| d.case_locked(p)) { text } else { recased }
+}
+
 fn scan(col: &mut Collector, chars: &[char]) {
     let d = col.d;
     let map = d.map();
@@ -428,6 +434,40 @@ fn scan(col: &mut Collector, chars: &[char]) {
 #[cfg(test)]
 mod tests {
     /// A whole-compound exclusion must not be bypassed by checking its allowed parts.
+    /// A whole compound's KEEPCASE restriction must not be bypassed by splitting it.
+    #[test]
+    fn keepcase_compounds_do_not_fall_back_to_unrestricted_parts() {
+        let d = AffixDict::from_hunspell("KEEPCASE K\n", "3\ncasă\ncaz\ncasă-caz/K\n", &[]).unwrap();
+        assert!(crate::ro::is_correct_with(&d, "casă-caz"));
+        for word in ["Casă-caz", "CASĂ-CAZ", "CaSă-CaZ"] {
+            assert!(!crate::ro::is_correct_with(&d, word), "{word}");
+        }
+        let found = suggest_in(&d, "CASĂCAZ", 8);
+        assert!(found.iter().any(|s| s == "casă-caz"), "{found:?}");
+        assert!(!found.iter().any(|s| s == "CASĂ-CAZ"), "{found:?}");
+    }
+
+    /// The 0.14 parser's aliases, conversions and KEEPCASE reach Romanian too.
+    #[test]
+    fn shared_dictionary_directives_preserve_romanian_suggestions() {
+        let d = AffixDict::from_hunspell(
+            "SET UTF-8\nFLAG UTF-8\nAF 2\nAF KA\nAF A\nKEEPCASE K\nSFX A Y 1\nSFX A 0 s .\nICONV 1\nICONV ﬁ fi\nIGNORE \u{00ad}\n",
+            "3\nkm/1\nfier/2\ncasă/2\n",
+            &[],
+        )
+        .unwrap();
+        assert!(crate::ro::is_correct_with(&d, "ﬁer"), "ICONV reaches spelling");
+        assert!(crate::ro::is_correct_with(&d, "ca\u{00ad}să"), "IGNORE reaches spelling");
+        assert!(crate::ro::is_correct_with(&d, "kms"), "AF alias carries the suffix flag");
+        assert!(!crate::ro::is_correct_with(&d, "KM"), "KEEPCASE is enforced");
+        for word in ["KMM", "Kmm"] {
+            let found = suggest_in(&d, word, 8);
+            assert!(found.iter().any(|s| s == "km"), "{word}: {found:?}");
+            assert!(found.iter().all(|s| can_suggest_phrase(&d, s)), "{found:?}");
+            assert!(!found.iter().any(|s| s == "KM" || s == "Km"), "{found:?}");
+        }
+    }
+
     #[test]
     fn romanian_compound_exclusions_are_not_bypassed() {
         let d = crate::affix::AffixDict::from_hunspell(

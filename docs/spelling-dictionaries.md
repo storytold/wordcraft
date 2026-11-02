@@ -207,3 +207,13 @@ alongside results; suggestion ranking and accepted forms can change with the dic
 | 2026-10-18 | trivial | ISO 8859-1 (`SET ISO8859-1`) dictionaries are read, so the original VERO `pt_BR` works without converting it to UTF-8 (#2824) |
 | 2026-10-18 | minor | An installed dictionary that can't be read shows **(dictionary unreadable)** in the status bar, with the file and reason in its tooltip and in File › Options › Proofing (#2830) |
 | 2026-10-16 | major | First version: the file names per language, the search order and folders on Windows, macOS and Linux, installing `pt_BR` on each, and how to check it works |
+
+### Romanian on the shared dictionary system (0.14)
+
+Romanian uses the shared `DictSlot` and language table for installed-file discovery,
+reloads and error reporting. In-memory dictionaries report no file. Its specialized
+diacritic-aware suggestions and narrow contextual checks are retained. The new parser
+handles aliases, input conversions, ignored characters and case-sensitive entries;
+Romanian suggestions preserve KEEPCASE spellings, and compound fallback cannot
+bypass a whole word's FORBIDDENWORD, NOSUGGEST, SUBSTANDARD or KEEPCASE restriction.
+The external Rospell dictionary remains a runtime input, not bundled data.
