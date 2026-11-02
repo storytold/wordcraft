@@ -498,6 +498,14 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     }
 }
 
+fn unturn(before: Vec<Draw>, t: Option<(Rect, Spin)>, out: &mut Vec<Draw>) {
+    let inner = std::mem::replace(out, before);
+    match t {
+        Some((rect, spin)) => spun(spin, rect, inner, out),
+        None => out.extend(inner),
+    }
+}
+
 #[cfg(test)]
 mod tests_clips {
     use super::*;
@@ -545,13 +553,5 @@ mod tests_clips {
             let hits = (0..cells.len() as u32).filter(|r| cell_clip(&clips, StoryRef::Body, &[0, *r, 0, 0]).is_some()).count();
             assert_eq!(hits, cells.len());
         });
-    }
-}
-
-fn unturn(before: Vec<Draw>, t: Option<(Rect, Spin)>, out: &mut Vec<Draw>) {
-    let inner = std::mem::replace(out, before);
-    match t {
-        Some((rect, spin)) => spun(spin, rect, inner, out),
-        None => out.extend(inner),
     }
 }
