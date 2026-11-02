@@ -303,6 +303,35 @@ const CELL_TOP_MARGIN: f32 = 4.0;
 const CELL_SIDE_MARGIN: f32 = 6.0;
 const SHADE_EPS: f32 = 0.01;
 
+fn assert_horizontal_fallback(kind: ShadeFallback, d: &Document, l: &DocLayout, story: StoryRef, para_path: &[u32], cell: Rect, y: &f32) {
+    match kind {
+        ShadeFallback::Clipped => {
+            assert_eq!(l.pages.len(), 1);
+            assert!((cell.h - 60.0).abs() < SHADE_EPS);
+            assert!(y + LINE_HEIGHT * MODEL_LINE_COUNT as f32 > cell.bottom());
+        }
+        ShadeFallback::Merged => {
+            assert_eq!(l.pages.len(), 2);
+            assert!((cell.h - (CELL_TOP_MARGIN + LINE_HEIGHT * MODEL_LINE_COUNT as f32)).abs() < SHADE_EPS);
+            assert!(l.pages[1].items.iter().any(|item| matches!(item,
+                Placed::Cell { story: StoryRef::Body, table, row: 1, cell: 0, covered: true, clip: false, rect }
+                if table.0 == [0] && (rect.y - PAGE_MARGIN).abs() < SHADE_EPS
+                    && (rect.h - LINE_HEIGHT * MODEL_LINE_COUNT as f32).abs() < SHADE_EPS
+            )));
+            assert!(!l.pages[1].items.iter().any(|item| matches!(item, Placed::Lines { .. } | Placed::Fill { .. })));
+        }
+        ShadeFallback::Header => {
+            assert_eq!(l.pages.len(), 1);
+            assert!((cell.y - d.last_section.header).abs() < SHADE_EPS);
+            assert!((cell.h - (CELL_TOP_MARGIN + LINE_HEIGHT * MODEL_LINE_COUNT as f32)).abs() < SHADE_EPS);
+            assert!(!l.pages[0].items.iter().any(|item| matches!(item,
+                Placed::Lines { story: actual, path, .. } if *actual == story && path.0 == para_path
+            )));
+        }
+        _ => panic!("expected horizontal fallback"),
+    }
+}
+
 // Pin source placement and legacy geometric paint, not a new native Word policy.
 fn assert_fallback_route(kind: ShadeFallback, d: &Document, l: &DocLayout) {
     use wordcraft_doc::props::TextDirection;
@@ -365,32 +394,7 @@ fn assert_fallback_route(kind: ShadeFallback, d: &Document, l: &DocLayout) {
             assert_eq!((*l0, *l1), (0, MODEL_LINE_COUNT));
             assert_eq!(*turn, TextDirection::Horizontal);
             assert!((*x - cell.x - CELL_SIDE_MARGIN).abs() < SHADE_EPS);
-            match kind {
-                ShadeFallback::Clipped => {
-                    assert_eq!(l.pages.len(), 1);
-                    assert!((cell.h - 60.0).abs() < SHADE_EPS);
-                    assert!(y + LINE_HEIGHT * MODEL_LINE_COUNT as f32 > cell.bottom());
-                }
-                ShadeFallback::Merged => {
-                    assert_eq!(l.pages.len(), 2);
-                    assert!((cell.h - (CELL_TOP_MARGIN + LINE_HEIGHT * MODEL_LINE_COUNT as f32)).abs() < SHADE_EPS);
-                    assert!(l.pages[1].items.iter().any(|item| matches!(item,
-                        Placed::Cell { story: StoryRef::Body, table, row: 1, cell: 0, covered: true, clip: false, rect }
-                        if table.0 == [0] && (rect.y - PAGE_MARGIN).abs() < SHADE_EPS
-                            && (rect.h - LINE_HEIGHT * MODEL_LINE_COUNT as f32).abs() < SHADE_EPS
-                    )));
-                    assert!(!l.pages[1].items.iter().any(|item| matches!(item, Placed::Lines { .. } | Placed::Fill { .. })));
-                }
-                ShadeFallback::Header => {
-                    assert_eq!(l.pages.len(), 1);
-                    assert!((cell.y - d.last_section.header).abs() < SHADE_EPS);
-                    assert!((cell.h - (CELL_TOP_MARGIN + LINE_HEIGHT * MODEL_LINE_COUNT as f32)).abs() < SHADE_EPS);
-                    assert!(!l.pages[0].items.iter().any(|item| matches!(item,
-                        Placed::Lines { story: actual, path, .. } if *actual == story && path.0 == para_path
-                    )));
-                }
-                _ => panic!("expected horizontal fallback"),
-            }
+            assert_horizontal_fallback(kind, d, l, story, &para_path, cell, y);
             Rect::new(*x, *y, TEXT_WIDTH, LINE_HEIGHT * MODEL_LINE_COUNT as f32)
         }
     };
