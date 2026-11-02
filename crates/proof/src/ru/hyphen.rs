@@ -57,7 +57,9 @@ pub fn points(c: &[char]) -> Vec<usize> {
         while c.get(cut).is_some_and(|&x| sticks_left(x)) && cut < end {
             cut += 1;
         }
-        if cut >= 2 && n - cut >= 2 && !out.contains(&cut) {
+        // Cuts come in increasing order (each lies after the previous pair's vowel), so a repeat
+        // can only be the last one: no scan of the whole list per syllable (#3657).
+        if cut >= 2 && n - cut >= 2 && out.last().is_none_or(|&l| l < cut) {
             out.push(cut);
         }
     }
