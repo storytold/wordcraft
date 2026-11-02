@@ -172,6 +172,7 @@ pub(super) fn field(s: &mut Session, v: &Value) -> CmdResult {
     if instr.is_empty() || instr.len() > 4096 {
         return Err(CmdError::Params("bad field code".into()));
     }
+    crate::active_fields::check(&instr)?;
     let result = p::str(v, "result").unwrap_or("").to_string();
     let props = s.typing_props();
     let at = delete_selection(s)?;

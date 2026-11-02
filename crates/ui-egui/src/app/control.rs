@@ -39,7 +39,8 @@ impl WordApp {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
             let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
+            // A control request is automation: no active fields (#3628).
+            match wordcraft_engine::active_fields::from_automation(|| control::handle(self, ctx, &req)) {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
