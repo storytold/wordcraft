@@ -11980,7 +11980,8 @@ fn turned_probe_keeps_box_budget() {
         let opts = LayoutOptions::default();
         let mut ctx = Ctx {
             doc: &d,
-            sections: d.sections(),
+            hf: Arc::new(super::headers::HfLinks::new(d.sections())),
+            alphas: Default::default(),
             cache: &mut cache,
             opts: &opts,
             counters: Default::default(),
