@@ -472,3 +472,52 @@ fn new_tracked_change_does_not_alias_separator_revision() {
         assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none()), "{slot:?}");
     }
 }
+
+/// Who changed what, in review.changes order: (kind, author, text).
+fn change_list(s: &mut Session) -> Vec<(String, String, String)> {
+    let list = run(s, "review.changes", json!({}));
+    list.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| {
+                    let f = |k: &str| c[k].as_str().unwrap_or_default().to_string();
+                    (f("kind"), f("author"), f("text"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_deletion_inside_another_authors_insertion_is_listed_as_its_own_change() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    s.author = "Bob".into();
+    s.sel = Selection { anchor: Pos::body(0, 5), focus: Pos::body(0, 11) };
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(visible(&s), "Hello", "Bob's deletion keeps Alice's text, struck");
+    let list = change_list(&mut s);
+    let has = |kind: &str, who: &str, text: &str| list.iter().any(|c| c == &(kind.into(), who.into(), text.into()));
+    assert!(has("insert", "Alice", " world"), "Alice's insertion is still listed: {list:?}");
+    assert!(has("delete", "Bob", " world"), "Bob's deletion is listed, by Bob: {list:?}");
+    // Next Change still moves on past the struck text (both changes share its range).
+    s.sel = Selection::caret(Pos::body(0, 0));
+    run(&mut s, "review.nextChange", json!({}));
+    run(&mut s, "review.nextChange", json!({}));
+    assert_eq!(s.sel.ordered().0.off, 5);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(visible(&s), "");
+}
+
+#[test]
+fn a_deletion_of_your_own_insertion_is_not_listed() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    s.sel = Selection { anchor: Pos::body(0, 5), focus: Pos::body(0, 11) };
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(visible(&s), "Hello");
+    assert!(change_list(&mut s).iter().all(|(kind, ..)| kind == "insert"));
+}
