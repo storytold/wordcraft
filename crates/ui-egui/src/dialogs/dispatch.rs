@@ -959,7 +959,22 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
-        let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
+        let was = app.session.doc.styles.get(id).map(|st| {
+            app.session.doc.styles.resolve_char(
+                if st.kind == wordcraft_doc::StyleKind::Paragraph { Some(id) } else { None },
+                &wordcraft_doc::CharProps {
+                    style: if st.kind == wordcraft_doc::StyleKind::Character { Some(id.clone()) } else { None },
+                    ..Default::default()
+                },
+            )
+        });
+        let mut chr = json!({"font": font, "size": *size});
+        if was.as_ref().map(|rc| rc.bold) != Some(*bold) {
+            chr["bold"] = json!(*bold);
+        }
+        if was.as_ref().map(|rc| rc.italic) != Some(*italic) {
+            chr["italic"] = json!(*italic);
+        }
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }

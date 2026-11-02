@@ -4169,6 +4169,29 @@ fn our_banded_table_styles_write_their_band_sizes() {
     assert_eq!(back.styles.table_style("GridTable4AccentBlue").map(|t| t.parts.band_size), Some(Some(1)));
 }
 
+/// #4198: built-in styles and table styles write `w:bCs` beside `w:b` and `w:iCs` beside `w:i` in
+/// `word/styles.xml`, so Word and LibreOffice draw Arabic and Hebrew headers and emphasis bold or
+/// italic just as WordCraft does.
+#[test]
+fn builtin_styles_write_bcs_and_ics_with_b_and_i() {
+    let d = Document::new();
+    let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/styles.xml");
+    let start = xml.find(r#"w:styleId="GridTable4AccentBlue""#).expect("Grid Table 4 – Blue is written");
+    let style = &xml[start..start + xml[start..].find("</w:style>").unwrap()];
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:bCs/><w:color w:val="FFFFFF"/></w:rPr>"#),
+        "firstRow has w:bCs beside w:b: {style}"
+    );
+    assert!(
+        style.contains(r#"<w:tblStylePr w:type="firstCol"><w:rPr><w:b/><w:bCs/></w:rPr></w:tblStylePr>"#),
+        "firstCol has w:bCs beside w:b: {style}"
+    );
+    for rpr in xml.split("<w:rPr>").skip(1).filter_map(|s| s.split("</w:rPr>").next()) {
+        assert_eq!(rpr.contains("<w:b/>"), rpr.contains("<w:bCs/>"), "unpaired w:b / w:bCs in {rpr}");
+        assert_eq!(rpr.contains("<w:i/>"), rpr.contains("<w:iCs/>"), "unpaired w:i / w:iCs in {rpr}");
+    }
+}
+
 #[test]
 fn vml_shape_wrap_side_and_anchor_case_insensitivity() {
     let body = r##"<w:p>
