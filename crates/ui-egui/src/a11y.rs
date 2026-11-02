@@ -39,6 +39,8 @@ const MAX_DEPTH: usize = 16;
 pub struct A11yCache {
     key: Option<Key>,
     tree: Tree,
+    /// The document as one text, where screen readers get it that way (`a11y_text`).
+    pub(crate) text: crate::a11y_text::TextCache,
 }
 
 struct Key {
@@ -555,6 +557,8 @@ mod tests {
     /// What AccessKit is told about `app` after a few frames in `ctx`, with AccessKit on.
     fn described(app: &mut crate::WordApp, ctx: &egui::Context) -> accesskit::TreeUpdate {
         ctx.enable_accesskit();
+        // The node-by-node description, which every platform but Windows gets (`a11y_text`).
+        app.canvas.a11y_as_text = false;
         let mut update = None;
         for _ in 0..4 {
             let input = egui::RawInput {
@@ -577,6 +581,8 @@ mod tests {
     /// lays out and describes the page from that preview.
     fn described_with_table_preview(app: &mut crate::WordApp, ctx: &egui::Context, rows: usize, cols: usize) -> accesskit::TreeUpdate {
         ctx.enable_accesskit();
+        // The node-by-node description, which every platform but Windows gets (`a11y_text`).
+        app.canvas.a11y_as_text = false;
         let mut update = None;
         for _ in 0..4 {
             let input = egui::RawInput {

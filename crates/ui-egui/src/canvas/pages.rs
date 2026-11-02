@@ -222,7 +222,7 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
 }
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
-pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
+pub(crate) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
