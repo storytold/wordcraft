@@ -300,3 +300,207 @@ fn retained_terminals_are_bounded_by_already_admitted_reads_and_saves() {
     assert!(!host.busy());
     assert!(host.take_events().is_empty());
 }
+
+#[test]
+fn failed_save_delivery_consumes_only_its_capture_even_with_a_full_command_queue() {
+    let (host, connection) = connected();
+    let save = request(&host, 1);
+    host.resolve_dialog(&save, "provider", "").unwrap();
+    host.take_commands();
+    host.capture(&save, capture(1, 23), vec![1, 2, 3]).unwrap();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+    for _ in 0..super::MAX_PENDING {
+        let read = host.request_open("one").unwrap();
+        host.open(read, "Example.docx".into(), vec![]).unwrap();
+    }
+    let mut later = 0;
+    let mut errors = 0;
+    assert!(host.publish_events_with(
+        |metadata, bytes| {
+            if metadata["type"] == "save" {
+                assert_eq!(metadata["requestId"], save);
+                assert_eq!(bytes, Some(vec![1, 2, 3]));
+                Err("copy failed")
+            } else {
+                later += 1;
+                Ok(())
+            }
+        },
+        |_| errors += 1,
+    ));
+    assert_eq!(later, super::MAX_PENDING, "a failed copy must not discard the rest of the drained batch");
+    assert_eq!(errors, 1);
+    assert_eq!(host.state().commands.len(), super::MAX_PENDING, "the ordinary command bound is unchanged");
+    assert_eq!(host.state().delivery_failures.len(), 1);
+    assert!(host.pending_for(1), "only the application logic frame consumes the failure");
+    assert!(host.result(save, "saved".into(), "late".into()).is_err());
+    let commands = host.take_commands();
+    assert_eq!(commands.len(), super::MAX_PENDING + 1);
+    assert!(matches!(commands.last(), Some(Command::Result { capture: Capture { doc: 1, revision: 23, .. }, status, resource })
+        if status == "failed" && resource.is_empty()));
+    assert!(host.state().delivery_failures.is_empty());
+    assert!(!host.pending_for(1));
+    assert!(!host.bound(1));
+    host.choose(1, 24, "Retry.docx".into(), false).unwrap();
+}
+
+#[test]
+fn accepted_reentrant_save_result_survives_success_or_failure_and_requests_consumption() {
+    for failed_dispatch in [false, true] {
+        let (host, _) = connected();
+        let save = request(&host, 1);
+        host.resolve_dialog(&save, "provider", "").unwrap();
+        host.take_commands();
+        host.capture(&save, capture(1, 23), vec![7]).unwrap();
+        assert!(
+            host.publish_events_with(
+                |_, _| {
+                    host.result(save.clone(), "saved".into(), "durable-one".into()).unwrap();
+                    if failed_dispatch { Err("exception after accepted completion") } else { Ok(()) }
+                },
+                |_| {},
+            ),
+            "accepted results must also schedule their application consumer"
+        );
+        assert!(host.state().delivery_failures.is_empty());
+        let commands = host.take_commands();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(&commands[0], Command::Result { capture: Capture { revision: 23, .. }, resource, status }
+            if resource == "durable-one" && status == "saved"));
+    }
+}
+
+#[test]
+fn full_command_queue_preserves_a_dialog_until_retry_or_cancellation() {
+    let (host, connection) = connected();
+    let dialog = request(&host, 1);
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+    for _ in 0..super::MAX_PENDING {
+        let read = host.request_open("one").unwrap();
+        host.open(read, "Example.docx".into(), vec![]).unwrap();
+    }
+    assert!(host.resolve_dialog(&dialog, "provider", "Example.docx").is_err());
+    assert!(host.pending_for(1), "a full command queue must not consume the unresolved destination owner");
+    assert_eq!(host.state().commands.len(), super::MAX_PENDING);
+    host.resolve_dialog(&dialog, "cancel", "").unwrap();
+    assert!(!host.pending_for(1));
+    assert_eq!(host.state().commands.len(), super::MAX_PENDING);
+}
+
+#[test]
+fn failed_open_and_dialog_delivery_release_only_owned_requests_and_publish_correlated_failures() {
+    let (host, connection) = connected();
+    host.choose(1, 1, "Example.docx".into(), false).unwrap();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+    let read = host.request_open("one").unwrap();
+    let mut dialog = String::new();
+    let mut terminals = Vec::new();
+    assert!(host.publish_events_with(
+        |metadata, _| {
+            match metadata["type"].as_str() {
+                Some("saveDialog") => {
+                    dialog = metadata["requestId"].as_str().unwrap().into();
+                    Err("dialog dispatch failed")
+                }
+                Some("openRequest") => Err("read dispatch failed"),
+                _ => {
+                    assert!(host.disconnect().is_err(), "a drained terminal still belongs to this account");
+                    terminals.push(metadata.clone());
+                    Ok(())
+                }
+            }
+        },
+        |_| {},
+    ));
+    assert_eq!(terminals.len(), 2);
+    assert!(terminals.iter().any(|m| m["type"] == "saveFailed" && m["requestId"] == dialog && m["connectionId"] == connection));
+    assert!(terminals.iter().any(|m| m["type"] == "openFailed" && m["requestId"] == read && m["resourceId"] == "one"));
+    assert!(host.resolve_dialog(&dialog, "provider", "").is_err());
+    assert!(host.open(read, "Example.docx".into(), vec![]).is_err());
+    assert!(!host.busy());
+    assert!(host.take_commands().is_empty());
+    host.choose(1, 2, "Retry.docx".into(), false).unwrap();
+    assert!(host.request_open("one").is_ok());
+}
+
+#[test]
+fn failed_dispatch_preserves_reentrant_dialog_resolution_and_open_admission() {
+    let (host, connection) = connected();
+    host.choose(1, 1, "Example.docx".into(), false).unwrap();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+    let read = host.request_open("one").unwrap();
+    assert!(host.publish_events_with(
+        |metadata, _| {
+            let request = metadata["requestId"].as_str().unwrap();
+            if metadata["type"] == "saveDialog" {
+                host.resolve_dialog(request, "provider", "Example.docx").unwrap();
+            } else {
+                host.open(request.into(), "Example.docx".into(), vec![7]).unwrap();
+            }
+            Err("exception after accepted callback")
+        },
+        |_| {},
+    ));
+    assert!(host.take_events().is_empty());
+    let commands = host.take_commands();
+    assert_eq!(commands.len(), 2);
+    assert!(matches!(&commands[0], Command::Save { doc: 1, .. }));
+    assert!(matches!(&commands[1], Command::Open { request, bytes, .. } if request == &read && bytes == &[7]));
+    assert!(host.busy());
+}
+
+#[test]
+fn queued_and_inflight_terminal_delivery_blocks_disconnect_and_nested_publication() {
+    let (host, connection) = connected();
+    host.set_resources(&connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+    let read = host.request_open("one").unwrap();
+    host.take_events();
+    host.cancel_open(read.clone(), "cancelled".into()).unwrap();
+    assert!(host.disconnect().is_err(), "queued terminals must not be erased by unregister");
+    let mut delivered = 0;
+    assert!(!host.publish_events_with(
+        |metadata, _| {
+            assert_eq!(metadata["requestId"], read);
+            assert!(host.disconnect().is_err(), "the last event is now in flight rather than in State.events");
+            assert!(!host.publish_events_with(|_, _| -> Result<(), ()> { panic!("nested publisher ran") }, |_| {}));
+            delivered += 1;
+            Ok::<_, ()>(())
+        },
+        |_| {},
+    ));
+    assert_eq!(delivered, 1);
+    assert!(!host.busy());
+    host.disconnect().unwrap();
+    assert!(host.set_resources(&connection, vec![]).is_err());
+}
+
+#[test]
+fn failed_dialog_terminal_survives_reentrant_full_event_queue_without_unbounded_work() {
+    let (host, _) = connected();
+    host.choose(1, 1, "Example.docx".into(), false).unwrap();
+    assert!(host.publish_events_with(
+        |metadata, _| {
+            if metadata["type"] == "saveDialog" {
+                fill_event_queue(&host);
+                Err("dialog dispatch failed")
+            } else {
+                Ok(())
+            }
+        },
+        |_| {},
+    ));
+    assert!(host.state().finished.is_empty());
+    assert_eq!(host.state().events.len(), 1);
+    assert!(host.disconnect().is_err(), "the second bounded drain queued, but did not dispatch, the retained terminal");
+    let mut delivered = 0;
+    assert!(!host.publish_events_with(
+        |metadata, _| {
+            assert_eq!(metadata["type"], "saveFailed");
+            delivered += 1;
+            Ok::<_, ()>(())
+        },
+        |_| {},
+    ));
+    assert_eq!(delivered, 1);
+    assert!(!host.busy());
+}

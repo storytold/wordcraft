@@ -490,6 +490,47 @@ mod tests {
         app.provider_tick();
         assert_eq!(app.session.document_id(), document);
         assert_eq!(app.ui.recent, device_recents);
+        assert!(host.take_events().iter().any(|event| event.metadata["type"] == "openFailed"));
         assert!(!host.busy());
+    }
+
+    #[test]
+    fn failed_provider_delivery_is_consumed_by_the_app_without_cleaning_newer_edits_and_can_retry() {
+        let (mut app, host) = app();
+        assert!(app.choose_provider_save(false));
+        let dialog = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_string();
+        host.resolve_dialog(&dialog, "provider", "Document.docx").unwrap();
+        app.provider_tick();
+        let captured_revision = app.session.rev();
+        app.session.run("text.insert", &json!({"text":" Newer edit survives delivery failure"})).unwrap();
+        let newer_revision = app.session.rev();
+        assert_ne!(newer_revision, captured_revision);
+        assert!(host.publish_events_with(
+            |metadata, bytes| {
+                assert_eq!(metadata["type"], "save");
+                assert_eq!(metadata["requestId"], dialog);
+                let restored = wordcraft_engine::io::open_bytes("Document.docx", &bytes.unwrap()).unwrap();
+                assert!(!restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Newer edit"));
+                Err("injected copy failure")
+            },
+            |_| {},
+        ));
+        assert!(host.pending_for(app.session.document_id()));
+        app.provider_tick();
+        assert!(!host.pending_for(app.session.document_id()), "the actual production consumer must release the failed capture");
+        assert!(!host.bound(app.session.document_id()));
+        assert!(app.session.dirty);
+        assert_eq!(app.session.rev(), newer_revision);
+        assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Newer edit survives"));
+        assert!(host.result(dialog, "saved".into(), "stale".into()).is_err());
+        assert_eq!(host.snapshot()["documents"][0]["provider"], false);
+        assert_eq!(host.snapshot()["documents"][0]["dirty"], true);
+        let (request, bytes) = save(&mut app, &host);
+        let restored = wordcraft_engine::io::open_bytes("Document.docx", &bytes).unwrap();
+        assert!(restored.plain_text(wordcraft_doc::StoryRef::Body).contains("Newer edit survives"));
+        host.result(request, "saved".into(), "retry-resource".into()).unwrap();
+        app.provider_tick();
+        assert!(host.bound(app.session.document_id()));
+        assert!(!app.session.dirty);
     }
 }

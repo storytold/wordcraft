@@ -102,8 +102,21 @@ document IDs/dirty state and outstanding work; `setResources` rejects stale conn
   arbitrary extra host object properties are not stringified or copied.
 
 The host should register listeners before requesting work and always settle each request.
-A failing event listener cannot silently acknowledge a save. The editor keeps authoritative
-captures pending until the host reports an explicit terminal outcome. This contract does not
+Recoverable JavaScript byte-copy or dispatch exceptions are caught and logged. A failed save
+delivery moves only its still-owned capture to a bounded failure inbox; the next application
+logic frame consumes it as `failed`, retaining unsaved work and newer edits. The inbox reserves
+space for up to 16 previously admitted captures even when the ordinary 16-command queue is full;
+it admits no new requests or file bytes. A synchronously accepted host result remains authoritative
+if a later dispatch error is reported. Failed `saveDialog` and `openRequest` delivery releases only
+an unresolved matching request and emits a correlated `saveFailed` or `openFailed` when possible.
+Already resolved dialogs or admitted reads are preserved. Publication continues with later events,
+requests another frame for recovery/remaining events, and keeps the current account owned across
+both bounded drains. Unregister also refuses queued terminal notifications until they are drained.
+
+Exceptions raised inside a listener are normally reported and swallowed by the browser's event
+dispatcher, so they cannot be detected by this boundary. Such a listener must still settle its
+request explicitly. A failed delivery never acknowledges persistence; an unrecoverable browser
+termination or true out-of-memory abort cannot be recovered by a Rust `Result`. This contract does not
 provide autosave, a background synchronization daemon, storage conflict resolution or remote
 session authentication. Those are host/backend decisions.
 
@@ -114,6 +127,14 @@ coalescing, choices, exact captures, cancellation, identity changes, aliases and
 reads. `crates/ui-egui/src/app/provider_files.rs` includes native package round-trip and
 late-edit/failure regressions. They are source fixtures; execution results belong in the PR's
 validation report after running the repository's checks.
+
+`apps/wordcraft-web/src/file_provider_browser_tests.rs` defines one real-window WASM fixture
+using the exported page API, production publisher and actual `WordApp::logic` consumer. It
+temporarily injects a recoverable JavaScript `RangeError` at the catch-enabled copy import and
+request dispatch errors, restores both globals in JavaScript `finally`, checks correlated
+failure/retry events, and decodes a successful retry's actual DOCX bytes. It does not simulate
+real memory exhaustion, storage durability or a full editor/WebRunner session. The fixture and
+the new native recovery tests require separate execution on the published lock-bearing source.
 
 Comment/reply drafts are committed again when a destination is resolved, including text typed
 while the choice was open. A refused draft fails the save; an inactive document with parked
