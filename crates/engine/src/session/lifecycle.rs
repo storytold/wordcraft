@@ -31,7 +31,9 @@ impl Session {
     /// Start an editing session at the document beginning with empty history and
     /// default view, preferences and a yellow highlighter independent of document undo.
     pub fn new(doc: Document) -> Self {
-        Self::with_registry(doc, Arc::new(crate::cmd::registry()))
+        let s = Self::with_registry(doc, Arc::new(crate::cmd::registry()));
+        super::documents::claim_fonts(s.document_id, &s.doc);
+        s
     }
 
     /// Initialise session defaults while sharing the immutable command registry with previews.

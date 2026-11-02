@@ -668,6 +668,47 @@ fn circle_without_text_face() {
     assert!(found.covers('●'));
 }
 
+/// #3687: a document's fonts stay only while an open document claims them. Closing it takes the
+/// family away (the name resolves as for any font that isn't installed); setting the same files
+/// again changes nothing; when two documents embed different files under one family, the second's
+/// face takes over once the first is closed; and a file only loaded, never claimed, stays.
+#[test]
+fn document_fonts_leave_with_the_last_document_that_embeds_them() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let a = (named_face("SourceSerif4-Regular.ttf", "Corporate Sans"), "Corporate Sans".to_string());
+    assert!(db.set_document_fonts(1, vec![a.clone()]));
+    assert!(db.has_family("Corporate Sans"));
+    let generation = db.generation();
+    assert!(!db.set_document_fonts(1, vec![a.clone()]), "the same files: nothing to do");
+    assert_eq!(db.generation(), generation);
+
+    assert!(db.set_document_fonts(1, Vec::new()));
+    assert!(!db.has_family("Corporate Sans"), "no open document embeds it");
+    assert!(db.generation() > generation, "lookups made while it was loaded are forgotten");
+    assert!(!db.face("Corporate Sans", "Regular").named("Corporate Sans"));
+
+    // Two documents embed different files of one font (a padded copy): the second one's face
+    // matches the first's and is skipped, then added once the first document closes.
+    let mut padded = a.0.clone();
+    padded.extend([0; 4]);
+    let b = (padded, "Corporate Sans".to_string());
+    assert!(db.set_document_fonts(1, vec![a.clone()]));
+    assert!(!db.set_document_fonts(2, vec![b.clone()]), "its face is present already");
+    let first = db.face("Corporate Sans", "Regular").id;
+    assert!(db.set_document_fonts(1, Vec::new()), "the first document closed");
+    let face = db.face("Corporate Sans", "Regular");
+    assert!(face.named("Corporate Sans"), "the open document still has its font");
+    assert_ne!(face.id, first, "its own file, not the closed document's");
+    assert!(db.set_document_fonts(2, Vec::new()));
+    assert!(!db.has_family("Corporate Sans"));
+
+    // Loaded without a document claiming it (a document read for its styles): it stays.
+    db.add_document_fonts(vec![a.clone()]);
+    assert!(!db.set_document_fonts(3, Vec::new()));
+    assert!(db.has_family("Corporate Sans"));
+}
+
 #[test]
 fn circle_checks_face_coverage() {
     let db = FontDb::with_font_dirs(Vec::new());

@@ -35,6 +35,16 @@ pub(super) enum FontBytes {
     Owned(Arc<Vec<u8>>),
 }
 
+impl FontBytes {
+    /// The buffer a face loaded at run time shares with the other faces made from its file.
+    pub(super) fn owned_ptr(&self) -> Option<*const Vec<u8>> {
+        match self {
+            FontBytes::Owned(data) => Some(Arc::as_ptr(data)),
+            FontBytes::Static(_) => None,
+        }
+    }
+}
+
 /// One loaded font face.
 pub struct FontFace {
     pub(super) id: u32,

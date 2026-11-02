@@ -13,6 +13,8 @@ impl Session {
         }
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
+        super::documents::release_fonts(replaced);
+        super::documents::claim_fonts(self.document_id, &doc);
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
@@ -258,7 +260,7 @@ impl Session {
         }
         self.rev = rev;
         for slot in &mut self.layout {
-            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+            if slot.as_ref().is_some_and(|l| l.0.0 != rev) {
                 *slot = None;
             }
         }

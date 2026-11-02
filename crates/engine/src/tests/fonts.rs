@@ -192,3 +192,35 @@ fn a_subset_font_word_embeds_lays_out_text_set_in_its_table_name() {
     let x = end_x(&docx_embedding(FAMILY, Some((&subset, "{6A0E3B57-1C2D-4E8F-9A7B-3D5C1E0F2B64}")), TEXT));
     assert!((x - mono).abs() < 0.01, "measured with the embedded subset: {x} vs {mono} (missing {missing})");
 }
+
+/// A document's embedded fonts stay only while a document that embeds them is open (#3687):
+/// another open document that asks for the family without embedding it lays its text out with the
+/// font while they are, and falls back once the last of them closes, as it would have had the
+/// font never been loaded.
+#[test]
+fn embedded_fonts_leave_with_the_last_document_that_embeds_them() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "JetBrains Gone";
+    const KEY: &str = "{3B7E9A21-5C4D-4F80-B2A6-8E1D0C9F7A35}";
+    let open = |family: &str, font: Option<(&[u8], &str)>| crate::io::open_bytes("e.docx", &docx_embedding(family, font, TEXT)).unwrap();
+    let end_x = |s: &mut Session| s.layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let mono = end_x(&mut Session::new(open("JetBrains Mono", None)));
+    let missing = end_x(&mut Session::new(open(FAMILY, None)));
+    assert!((missing - mono).abs() > 1.0, "not embedded anywhere, the text falls back: {missing} vs {mono}");
+    let mut s = Session::new(open(FAMILY, None));
+    let without = s.document_id();
+
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let first = s.add_document(open(FAMILY, Some((&font, KEY))));
+    let second = s.add_document(open(FAMILY, Some((&font, KEY))));
+    s.activate(without).unwrap();
+    let x = end_x(&mut s);
+    assert!((x - mono).abs() < 0.01, "set in the font another open document embeds: {x} vs {mono}");
+
+    s.close_document(first).unwrap();
+    let x = end_x(&mut s);
+    assert!((x - mono).abs() < 0.01, "a document that embeds it is still open: {x} vs {mono}");
+    s.close_document(second).unwrap();
+    let x = end_x(&mut s);
+    assert!((x - missing).abs() < 0.01, "the last document that embeds it closed: {x} vs {missing} (with the font {mono})");
+}

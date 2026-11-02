@@ -187,15 +187,20 @@ pub fn open_bytes_in(name: &str, bytes: &[u8], password: Option<&str>, region: &
 
 /// Load the fonts `doc` embeds (#1171) for this run, in memory only: text set in a font that isn't
 /// installed then lays out and exports with it instead of a fallback. Faces already available
-/// stay as they are.
+/// stay as they are. A session that opens the document claims them while it is open (#3687).
 fn load_embedded_fonts(doc: &Document) {
-    let files: Vec<(Vec<u8>, String)> = wordcraft_docx::embedded_fonts(doc)
-        .into_iter()
-        .filter_map(|f| wordcraft_fonts::decode_font_file(&f.data).ok().map(|data| (data, f.name)))
-        .collect();
+    let files = embedded_font_files(doc);
     if !files.is_empty() {
         wordcraft_fonts::FontDb::global().add_document_fonts(files);
     }
+}
+
+/// The font files `doc` embeds, decoded, each with the name its font table gives it.
+pub(crate) fn embedded_font_files(doc: &Document) -> Vec<(Vec<u8>, String)> {
+    wordcraft_docx::embedded_fonts(doc)
+        .into_iter()
+        .filter_map(|f| wordcraft_fonts::decode_font_file(&f.data).ok().map(|data| (data, f.name)))
+        .collect()
 }
 
 fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<(Document, bool), String> {

@@ -27,7 +27,10 @@ impl Session {
         let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
         let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
-        let (rev, proofing, numeral) = (self.rev, self.view.proofing, self.view.numeral);
+        // The font generation: a layout made before a font was added or removed (another
+        // document's fonts leave when it closes, #3687) is stale even for this revision.
+        let rev = (self.rev, wordcraft_fonts::FontDb::global().generation());
+        let (proofing, numeral) = (self.view.proofing, self.view.numeral);
         let fits = |e: &Option<LayoutEntry>| {
             e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
                 *r == rev
@@ -74,10 +77,8 @@ impl Session {
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
-        self.layout = [
-            Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)),
-            newest,
-        ];
+        self.layout =
+            [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
         l
     }
 

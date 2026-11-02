@@ -55,6 +55,8 @@ pub struct FontDb {
     user: RwLock<user::UserFonts>,
     /// Bumped whenever user fonts are added or removed ([`FontDb::generation`]).
     generation: AtomicU64,
+    /// The font files documents embed, by fingerprint ([`FontDb::set_document_fonts`]).
+    document: Mutex<HashMap<u64, user::DocumentFont>>,
     /// The folders the system font scan reads (the platform's font folders for [`FontDb::global`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     font_dirs: Vec<std::path::PathBuf>,
@@ -110,6 +112,7 @@ impl FontDb {
             catalog: RwLock::new(Vec::new()),
             user: RwLock::new(user::UserFonts::default()),
             generation: AtomicU64::new(0),
+            document: Mutex::new(HashMap::new()),
             font_dirs,
             #[cfg(not(target_arch = "wasm32"))]
             cataloged: std::sync::OnceLock::new(),

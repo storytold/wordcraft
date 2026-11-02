@@ -125,6 +125,11 @@ impl FontDb {
     /// [`FontDb::add_document_fonts`]) has them go by that name instead. Faces already present
     /// (same family and style) are skipped. Returns how many were added.
     pub(super) fn add_fonts(&self, files: Vec<(Vec<u8>, Option<String>)>) -> usize {
+        self.add_faces(files).len()
+    }
+
+    /// [`FontDb::add_fonts`], returning the ids of the faces added.
+    pub(super) fn add_faces(&self, files: Vec<(Vec<u8>, Option<String>)>) -> Vec<u32> {
         let mut new = Vec::new();
         for (bytes, name) in files {
             let data = Arc::new(bytes);
@@ -144,11 +149,11 @@ impl FontDb {
         // Indexed: a document's fonts may add hundreds of faces to thousands (#3716).
         let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
         let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
-        let mut added = 0;
+        let mut added = Vec::new();
         for f in new {
             if present.insert(key(&f)) {
+                added.push(f.id);
                 faces.push(f);
-                added += 1;
             }
         }
         added
