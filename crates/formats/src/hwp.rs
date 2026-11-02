@@ -13,8 +13,8 @@
 //! indents, spacing, line spacing, keep options, borders and shading), tables (merged cells, cell
 //! borders and shading, column widths, row heights, cell margins and vertical alignment, nested
 //! tables), page size and margins, columns, pictures, headers, footers, page numbers, footnotes
-//! and endnotes, and the text of text boxes. Password-protected and distribution (DRM) documents
-//! are refused with a clear error. Bounded like every WordCraft reader: stream sizes, inflated
+//! and endnotes, and the text of text boxes. Password- and certificate-protected, distribution and DRM
+//! documents are refused with a clear error. Bounded like every WordCraft reader: stream sizes, inflated
 //! sizes, nesting and parts are capped, so hostile input gives an error or a best-effort
 //! document, never a panic.
 
@@ -410,10 +410,12 @@ pub(crate) fn import_within(bytes: &[u8], media: u64, text: usize) -> Result<Doc
     if version >> 24 != 5 {
         return Err(format!("HWP: version {} documents are not supported (only HWP 5.0)", version >> 24));
     }
-    if flags & 0x02 != 0 {
-        return Err("HWP: this document is protected with a password, which WordCraft can't open yet".into());
+    // FileHeader properties: 0x02 password, 0x100 certificate encryption; 0x04 distribution,
+    // 0x10 DRM, 0x400 certificate DRM. Not the `.docx` reader's wording, which asks for a password.
+    if flags & 0x102 != 0 {
+        return Err("HWP: this document is password- or certificate-protected, which WordCraft can't open yet".into());
     }
-    if flags & 0x14 != 0 {
+    if flags & 0x414 != 0 {
         return Err("HWP: this is a distribution (DRM) document, which WordCraft can't open".into());
     }
     let compressed = flags & 1 != 0;

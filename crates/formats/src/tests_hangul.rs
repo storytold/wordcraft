@@ -105,12 +105,12 @@ fn hwpx_package() {
 
 #[test]
 fn refused_documents_say_why() {
-    // Password-protected and distribution documents.
-    for (flag, word) in [(2u8, "password"), (4, "distribution")] {
+    // Password, certificate-encrypted, distribution, DRM and certificate DRM documents.
+    for (flag, word) in [(0x02u32, "password"), (0x100, "certificate"), (0x04, "distribution"), (0x10, "DRM"), (0x400, "DRM")] {
         let mut bytes = hangul_samples::hwp(false);
-        // The FileHeader stream's flags byte: find the signature, flags at +36.
+        // The FileHeader stream's flags: find the signature, a little-endian u32 at +36.
         let at = bytes.windows(17).position(|w| w == b"HWP Document File").unwrap();
-        bytes[at + 36] = flag;
+        bytes[at + 36..at + 40].copy_from_slice(&flag.to_le_bytes());
         let err = hwp::import(&bytes).unwrap_err();
         assert!(err.starts_with("HWP: ") && err.contains(word), "{err}");
     }

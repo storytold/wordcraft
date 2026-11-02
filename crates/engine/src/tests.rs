@@ -11013,6 +11013,14 @@ fn hangul_documents_open_by_name_and_content() {
     std::io::Write::write_all(&mut z, b"<manifest><file-entry><encryption-data/></file-entry></manifest>").unwrap();
     let err = crate::io::open_bytes("locked.hwpx", &z.finish().unwrap().into_inner()).unwrap_err();
     assert!(err.contains("password") && !crate::io::needs_password(&err), "{err}");
+    // So is a password- or certificate-protected HWP file (FileHeader flags at +36).
+    for flag in [0x02u32, 0x100] {
+        let mut bytes = wordcraft_formats::hangul_samples::hwp(false);
+        let at = bytes.windows(17).position(|w| w == b"HWP Document File").unwrap();
+        bytes[at + 36..at + 40].copy_from_slice(&flag.to_le_bytes());
+        let err = crate::io::open_bytes("locked.hwp", &bytes).unwrap_err();
+        assert!(err.contains("password") && !crate::io::needs_password(&err), "{flag:#x}: {err}");
+    }
 }
 
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
