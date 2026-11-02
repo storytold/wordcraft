@@ -60,6 +60,7 @@ impl WithExtra for CharProps {
         self.hidden = x.hidden;
         self.spacing = finite(x.spacing, -1584.0, 1584.0);
         self.scale = finite(x.scale, 1.0, 600.0);
+        self.emphasis = x.emphasis;
         self.position = finite(x.position, -1584.0, 1584.0);
         self.outline = x.outline;
         self.shadow = x.shadow;

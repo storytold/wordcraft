@@ -238,14 +238,13 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         updates.push((k, if name == "REF" { text_result(instr, r) } else { r }));
                     }
                 }
-                // A value given a name: shows nothing.
+                // A value given a name (the layout draws nothing for it; its result stays).
                 "SET" => {
                     if let Some((n, v)) = set_args(instr)
                         && set.len() < MAX_SET
                     {
                         set.insert(n, v);
                     }
-                    updates.push((k, String::new()));
                 }
                 // The summary properties; a quoted text after the name replaces the property.
                 "TITLE" | "SUBJECT" | "AUTHOR" | "KEYWORDS" | "COMMENTS" => {

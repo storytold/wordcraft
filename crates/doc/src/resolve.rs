@@ -41,6 +41,9 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// A mark over or under each character (Font › Emphasis mark).
+    #[serde(default)]
+    pub emphasis: crate::props::EmphasisMark,
     /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
     /// contextual).
     #[serde(default)]
@@ -97,6 +100,7 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            emphasis: c.emphasis.unwrap_or_default(),
             ligatures: c.ligatures,
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),

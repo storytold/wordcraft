@@ -828,7 +828,7 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
                 if let wordcraft_doc::InlineObject::Field { instr, .. } = o
                     && let Some((name, _)) = super::fields::set_of(instr)
                     && out.len() < 10_000
-                    && !name.contains(|c: char| c == '"' || c == '<' || c == '&')
+                    && !name.contains(['"', '<', '&'])
                 {
                     out.insert(name.to_string());
                 }

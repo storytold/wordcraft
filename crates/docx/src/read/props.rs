@@ -250,6 +250,7 @@ impl PropCtx {
                 "w:cs" => c.cs = Some(on_off(k)),
                 "w:caps" => c.caps = Some(on_off(k)),
                 "w:smallCaps" => c.small_caps = Some(on_off(k)),
+                "w:em" => c.emphasis = Some(k.attr("w:val").map(wordcraft_doc::props::EmphasisMark::from_ooxml).unwrap_or_default()),
                 "w:strike" => c.strike = Some(on_off(k)),
                 "w:dstrike" => c.double_strike = Some(on_off(k)),
                 "w:outline" => c.outline = Some(on_off(k)),

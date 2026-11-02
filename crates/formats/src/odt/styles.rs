@@ -176,6 +176,20 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     {
         x.scale = Some(v.clamp(1.0, 600.0));
     }
+    // Emphasis marks (§20.370 `style:text-emphasize`): Word's dot, comma (an accent), circle
+    // (a disc is a dot) and dot below.
+    if let Some(v) = get(a, "style:text-emphasize") {
+        use wordcraft_doc::props::EmphasisMark as E;
+        let mut words = v.split_whitespace();
+        let below = v.split_whitespace().nth(1) == Some("below");
+        x.emphasis = Some(match words.next() {
+            Some("dot" | "disc") if below => E::UnderDot,
+            Some("dot" | "disc") => E::Dot,
+            Some("accent") => E::Comma,
+            Some("circle") => E::Circle,
+            _ => E::None,
+        });
+    }
     if let Some(v) = get(a, "style:text-outline") {
         x.outline = Some(v.trim() == "true");
     }

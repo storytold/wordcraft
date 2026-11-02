@@ -118,6 +118,7 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         hidden: set(e.hidden),
         spacing: e.spacing.filter(|v| *v != 0.0 && v.is_finite()),
         scale: e.scale.filter(|v| *v != 100.0 && v.is_finite()),
+        emphasis: e.emphasis.filter(|m| *m != wordcraft_doc::props::EmphasisMark::None),
         position: e.position.filter(|v| *v != 0.0 && v.is_finite()),
         outline: set(e.outline),
         shadow: set(e.shadow),

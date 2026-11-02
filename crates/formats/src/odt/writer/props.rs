@@ -23,6 +23,16 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
     if let Some(s) = x.scale.filter(|s| s.is_finite() && *s > 0.0 && *s != 100.0) {
         p.push_str(&format!(" style:text-scale=\"{}%\"", s.round()));
     }
+    if let Some(m) = x.emphasis {
+        use wordcraft_doc::props::EmphasisMark as E;
+        p.push_str(match m {
+            E::None => " style:text-emphasize=\"none\"",
+            E::Dot => " style:text-emphasize=\"dot above\"",
+            E::Comma => " style:text-emphasize=\"accent above\"",
+            E::Circle => " style:text-emphasize=\"circle above\"",
+            E::UnderDot => " style:text-emphasize=\"dot below\"",
+        });
+    }
     if let Some(r) = x.position.filter(|r| r.is_finite() && *r != 0.0) {
         let size = size.filter(|s| s.is_finite() && *s >= 1.0).unwrap_or(12.0);
         let pct = r / size * 100.0;

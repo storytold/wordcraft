@@ -11579,3 +11579,26 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Font › Emphasis mark puts a mark over (or under) each selected character, and the layout
+/// draws one per character; Format state reports it, and none takes it off.
+#[test]
+fn emphasis_marks_are_set_and_drawn() {
+    use wordcraft_doc::props::EmphasisMark;
+    let mut s = Session::new(wordcraft_doc::Document::from_text("強調する"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.emphasisMark", json!({"mark": "circle"}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(0).emphasis, Some(EmphasisMark::Circle));
+    assert_eq!(run(&mut s, "format.state", json!({}))["emphasisMark"], "circle");
+    // One mark per character: hollow circles, drawn as shapes.
+    let draws = s.layout().pages.first().map(|pg| wordcraft_layout::display::page_display(&s.doc, pg, &Default::default())).unwrap_or_default();
+    let marks = draws
+        .iter()
+        .filter(|d| matches!(d, wordcraft_layout::display::Draw::Shape { kind: wordcraft_doc::para::ShapeKind::Ellipse, fill: None, .. }))
+        .count();
+    assert_eq!(marks, 4);
+    run(&mut s, "format.emphasisMark", json!({"mark": "none"}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).emphasis, Some(EmphasisMark::None));
+    assert!(s.run("format.emphasisMark", &json!({"mark": "sparkles"})).is_err());
+}

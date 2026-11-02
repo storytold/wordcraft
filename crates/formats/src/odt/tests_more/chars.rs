@@ -221,3 +221,37 @@ fn a_border_around_text_is_read_and_written() {
     let c = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
     assert!(c.contains(r#"loext:border="0.74pt solid #ff0000" loext:padding="1.44pt""#), "{c}");
 }
+
+#[test]
+fn emphasis_marks_are_read_and_written() {
+    use wordcraft_doc::props::EmphasisMark as E;
+    let style = |n: &str, v: &str| {
+        format!(r#"<style:style style:name="{n}" style:family="text"><style:text-properties style:text-emphasize="{v}"/></style:style>"#)
+    };
+    let styles = [
+        style("T1", "dot above"),
+        style("T2", "accent above"),
+        style("T3", "circle above"),
+        style("T4", "dot below"),
+        style("T5", "disc above"),
+        style("T6", "none"),
+    ]
+    .concat();
+    let spans: String = (1..=6).map(|i| format!(r#"<text:span text:style-name="T{i}">{i}</text:span>"#)).collect();
+    let content = format!(
+        r#"<office:document-content {}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text><text:p>{spans}</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let d = crate::odt::import(&crate::odt::tests::package(&content, None)).unwrap();
+    let marks: Vec<Option<E>> = d.body[0].as_para().unwrap().runs.iter().map(|r| r.props.emphasis).collect();
+    assert_eq!(marks, [E::Dot, E::Comma, E::Circle, E::UnderDot, E::Dot, E::None].map(Some));
+    let saved = crate::odt::export(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    for v in ["dot above", "accent above", "circle above", "dot below"] {
+        assert!(c.contains(&format!(r#"style:text-emphasize="{v}""#)), "{v} in {c}");
+    }
+    // Read back the same (an explicit "none" with nothing to turn off is unset: the same look).
+    let back = crate::odt::import(&saved).unwrap();
+    let back: Vec<Option<E>> = back.body[0].as_para().unwrap().runs.iter().map(|r| r.props.emphasis).collect();
+    assert_eq!(back, [Some(E::Dot), Some(E::Comma), Some(E::Circle), Some(E::UnderDot), Some(E::Dot), None]);
+}
