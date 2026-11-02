@@ -245,26 +245,9 @@ pub(crate) fn canonical_match_ranges(hay: &str, needle: &str) -> Vec<(usize, usi
     if !has_hangul_or_jamo(hay) && !has_hangul_or_jamo(needle) {
         return hay.match_indices(needle).map(|(i, m)| (i, i + m.len())).collect();
     }
-    let h_units = hangul_units(hay);
-    let n_units = hangul_units(needle);
-    let m = n_units.len();
-    if m == 0 || m > h_units.len() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i + m <= h_units.len() {
-        if let Some(window) = h_units.get(i..i + m)
-            && window.iter().zip(n_units.iter()).all(|(a, b)| a.0 == b.0)
-            && let (Some(first), Some(last)) = (window.first(), window.last())
-        {
-            out.push((first.1, last.2));
-            i += m;
-        } else {
-            i += 1;
-        }
-    }
-    out
+    let needle = compose_hangul(needle);
+    let canon = CanonicalHay::new(hay, 0);
+    canon.as_str().match_indices(needle.as_str()).filter_map(|(i, m)| Some((canon.to_hay_offset(i)?, canon.to_hay_offset(i + m.len())?))).collect()
 }
 
 /// How the Find what text is read.
@@ -389,13 +372,8 @@ pub fn compile(query: &str, o: &Opts) -> Result<Compiled, String> {
     if query.chars().count() > MAX_PATTERN {
         return Err(format!("the Find what text is longer than {MAX_PATTERN} characters"));
     }
-    let norm;
-    let query = if o.regex {
-        query
-    } else {
-        norm = compose_hangul(query);
-        &norm
-    };
+    let norm = compose_hangul(query);
+    let query = norm.as_str();
     let (pat, spans) = if o.regex {
         (query.to_string(), false)
     } else if o.literal {

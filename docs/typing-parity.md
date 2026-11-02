@@ -486,11 +486,11 @@ again.
   cap, a commit at 64 KiB): larger hostile events are ignored rather than painted or inserted
   (`oversized_ime_events_are_ignored`).
 - Canonical NFC/NFD Hangul equivalence (#5239): `edit.find`, `edit.replace`, `edit.replaceAll`
-  (plain, special codes `^$`/`^?` and wildcards `?`/`*`) and `select.text` match precomposed Hangul
-  syllables (`U+AC00..=U+D7A3`, NFC) and conjoining Jamo sequences (`L+V+T?`, macOS APFS
-  filenames, Finder or PDF paste, and mixed NFC+NFD runs) canonically and return exact UTF-8 byte
-  spans in the paragraph without letting an `LV` query (`하` / `하`) match the prefix of an `LVT`
-  syllable (`한` / `한`) (`hangul_canonical_nfc_nfd_find_replace_and_select_text`,
+  (plain, special codes `^$`/`^?`, wildcards `?`/`*` and regular expressions) and `select.text`
+  match precomposed Hangul syllables (`U+AC00..=U+D7A3`, NFC) and conjoining Jamo sequences
+  (`L+V+T?`, macOS APFS filenames, Finder or PDF paste, and mixed NFC+NFD runs) canonically and
+  return exact UTF-8 byte spans in the paragraph without letting an `LV` query (`하` / `하`) match
+  the prefix of an `LVT` syllable (`한` / `한`) (`hangul_canonical_nfc_nfd_find_replace_and_select_text`,
   `hangul_mixed_nfc_nfd_replace_all_preserves_offsets_and_runs`,
   `hangul_lv_query_never_matches_lvt_syllable_prefix`,
   `hangul_wildcard_search_respects_decomposed_syllables`,

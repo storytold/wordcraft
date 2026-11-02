@@ -3850,4 +3850,14 @@ fn hangul_nfd_wildcards_quantifiers_classes_specials_and_replace_tokens() {
     let rep_grp = s.run("edit.replaceAll", &json!({"text": "(한)(글)", "with": "<\\2:\\1>", "wildcards": true})).unwrap();
     assert_eq!(rep_grp["replaced"], 1);
     assert_eq!(s.doc.plain_text(StoryRef::Body), "🎯 <\u{1100}\u{1173}\u{11AF}:\u{1112}\u{1161}\u{11AB}>");
+
+    // `regex: true` matches canonically equivalent NFC and NFD Hangul and preserves exact group spans.
+    run(&mut s, "document.setText", json!({"text": format!("버전 {nfd_hangul}2026 및 한글2027")}));
+    assert_eq!(s.run("edit.find", &json!({"text": "하+", "regex": true})).unwrap()["count"], 0);
+    let rx = s.run("edit.find", &json!({"text": "\u{1112}\u{1161}\u{11AB}글\\d+", "regex": true})).unwrap();
+    assert_eq!(rx["count"], 2);
+    assert_eq!((rx["matches"][0]["start"]["off"].clone(), rx["matches"][0]["end"]["off"].clone()), (json!(7), json!(29)));
+    let rep_rx = s.run("edit.replaceAll", &json!({"text": "(한글)(\\d+)", "with": "[\\2:\\1]", "regex": true})).unwrap();
+    assert_eq!(rep_rx["replaced"], 2);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), format!("버전 [2026:{nfd_hangul}] 및 [2027:한글]"));
 }
