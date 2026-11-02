@@ -325,6 +325,48 @@ pub fn is_thai_family(family: &str) -> bool {
     is_thai(&f) || is_thai_serif(&f)
 }
 
+/// Is `family` one of the classic WTT 2.0 Thai fonts (Cordia New, Angsana New, Browallia New
+/// and the UPC variants)?
+///
+/// WTT 2.0 fonts store short-tail glyph variants for ญ and ฐ at PUA codepoints U+F70F and
+/// U+F700.  The application must substitute these codepoints at render time; the font carries
+/// no GSUB rule to do it automatically.  Use this predicate to decide whether the render path
+/// should emit those PUA codepoints instead of the standard Unicode ones.
+pub fn is_wtt2_thai_font(family: &str) -> bool {
+    is_dedicated_wtt2_thai_font(family) || is_general_wtt2_thai_font(family)
+}
+
+/// The dedicated Microsoft WTT 2.0 Thai families (Cordia New, the UPC families, …).
+/// These are Thai-only fonts that exist *solely* to carry Thai text; they always ship with the
+/// full WTT 2.0 PUA short-tail glyphs (U+F700/U+F70F) regardless of platform.
+/// Use this — not [`is_wtt2_thai_font`] — when deciding whether to trust a name-based check
+/// as a proxy for PUA glyph presence (skrifa cannot read the old TrueType PUA cmap subtable).
+pub fn is_dedicated_wtt2_thai_font(family: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "cordia new",
+        "cordiaupc",
+        "angsana new",
+        "angsanaupc",
+        "browallia new",
+        "browalliaupc",
+        "dilleniaupc",
+        "eucrosiaupc",
+        "freesiaupc",
+        "irisupc",
+        "jasmineupc",
+        "kodchiangupc",
+        "lilyupc",
+    ];
+    NAMES.contains(&family.to_ascii_lowercase().as_str())
+}
+
+/// General-purpose Microsoft fonts that shipped with WTT 2.0 Thai PUA glyphs on Windows but
+/// do NOT necessarily carry them on macOS or Linux.  Use [`face.covers`] to confirm before
+/// emitting PUA codepoints — do not rely on the name alone.
+fn is_general_wtt2_thai_font(family: &str) -> bool {
+    matches!(family.to_ascii_lowercase().as_str(), "tahoma" | "microsoft sans serif" | "arial unicode ms")
+}
+
 /// Khmer document fonts: the Khmer OS family, Khmer Mool1 and the like, Windows' and the Mac's
 /// own and Noto's. Matched by name only.
 fn is_khmer(f: &str) -> bool {

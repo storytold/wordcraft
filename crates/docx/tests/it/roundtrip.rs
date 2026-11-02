@@ -213,6 +213,7 @@ fn every_para_prop_round_trips() {
         }),
         kinsoku: Some(false),
         word_wrap: Some(false),
+        force_char_break: false,
         overflow_punct: Some(false),
         top_line_punct: Some(true),
         auto_space_de: Some(false),

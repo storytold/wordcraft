@@ -3631,3 +3631,66 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+// ---------------------------------------------------------------------------
+// Thai WTT 2.0 input-sequence rules (#4399)
+// ---------------------------------------------------------------------------
+
+/// Reject: a tone mark typed into an empty paragraph (no preceding consonant) must be silently
+/// dropped — the document is unchanged and no panic occurs.
+#[test]
+fn thai_tcb_reject_drops_invalid_mark() {
+    let mut s = s();
+    // mai ek (U+0E48) with no preceding consonant — invalid TCB state → Reject.
+    run(&mut s, "text.insert", json!({"text": "\u{0E48}"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "", "rejected mark must not appear in the document");
+}
+
+/// Replace: sara_uu (ู) typed after sara_u (ุ) in the same slot must swap the vowel in-place.
+/// Typed sequence: ก + ุ + ู  →  stored text: กู
+#[test]
+fn thai_tcb_replace_swaps_same_class_vowel() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "\u{0E01}"})); // ก ko kai
+    run(&mut s, "text.insert", json!({"text": "\u{0E38}"})); // ุ sara u
+    run(&mut s, "text.insert", json!({"text": "\u{0E39}"})); // ู sara uu (replaces sara u)
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Body),
+        "\u{0E01}\u{0E39}",
+        "sara_uu must replace sara_u in-place; document must not contain both"
+    );
+}
+
+/// DeleteThenAppend: sara_am (ำ) typed after [cons, upper-vowel, tone] must delete the vowel
+/// and append ำ at the adjusted position, producing canonical [cons, tone, ำ] order.
+/// Typed sequence: ก + ิ + ่ + ำ  →  stored text: ก่ำ  (sara_i is removed, ำ appended after ่)
+#[test]
+fn thai_tcb_delete_then_append_reorders_vowel_tone_am() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "\u{0E01}"})); // ก ko kai
+    run(&mut s, "text.insert", json!({"text": "\u{0E34}"})); // ิ sara i (upper vowel)
+    run(&mut s, "text.insert", json!({"text": "\u{0E48}"})); // ่ mai ek (tone)
+    run(&mut s, "text.insert", json!({"text": "\u{0E33}"})); // ำ sara am → DeleteThenAppend
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Body),
+        "\u{0E01}\u{0E48}\u{0E33}",
+        "sara_i must be deleted and ำ appended after ่ to give canonical cons+tone+sara_am"
+    );
+}
+
+/// macOS Thai keyboard sends Nikhahit (◌ํ) as a two-character event: ิ (U+0E34 sara_i) +
+/// ํ (U+0E4D nikhahit).  The multi-char Thai path must process them in sequence so the
+/// vowel-upgrade rule (ิ followed by ํ → replace sara_i with ึ sara_ue, discard nikhahit)
+/// fires.  Stored text: ฐ + ึ  (U+0E10 + U+0E36).  NOT ฐ + ิ + ํ.
+#[test]
+fn thai_macos_nikhahit_two_char_event() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "\u{0E10}"})); // ฐ tho thahan
+    // Simulate the macOS Nikhahit key: 2-char insert event ิ+ํ
+    run(&mut s, "text.insert", json!({"text": "\u{0E34}\u{0E4D}"}));
+    assert_eq!(
+        s.doc.plain_text(StoryRef::Body),
+        "\u{0E10}\u{0E36}",
+        "macOS Nikhahit 2-char event (ิ+ํ) must produce ฐ+ึ via vowel-upgrade, not ฐ+ิ+ํ"
+    );
+}
