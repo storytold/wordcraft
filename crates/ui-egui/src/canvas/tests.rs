@@ -4841,3 +4841,40 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// Composing inline IME pre-edit at 500% zoom, 144pt font size, and 3.0x line spacing clamps the
+/// inline pre-edit font size safely and never panics in `epaint`'s font atlas (#5241).
+#[test]
+fn high_zoom_oversized_font_preedit_never_panics() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("view.zoom", json!({"value": 500})).unwrap();
+    app.run("format.size", json!({"size": 144})).unwrap();
+    app.run("para.lineSpacing", json!({"value": 3.0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "preedit".into(), active_range_chars: Some(0..4) }));
+    h.step();
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "preedit");
+
+    // Clear body pre-edit, insert an equation at 500% zoom + 144pt font size, and compose inline.
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    h.step();
+    h.state_mut().run("insert.equation", json!({"linear": "x="})).unwrap();
+    h.state_mut().run("format.size", json!({"size": 144})).unwrap();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "math".into(), active_range_chars: Some(0..2) }));
+    h.step();
+    h.step();
+    assert!(h.state().session.math.is_some());
+    assert_eq!(h.state().canvas.ime_preedit, "math");
+}
