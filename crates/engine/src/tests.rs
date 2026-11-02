@@ -8472,9 +8472,18 @@ fn next_footnote_skips_endnotes() {
     assert_eq!(s.sel.focus.off, 9);
 }
 
+/// Tests that install a test dictionary wait for the dictionaries-folder test, which changes the
+/// folder and then reads what each language reports: an install in between reports no file.
+static DICTIONARIES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn dictionaries_turn() -> std::sync::MutexGuard<'static, ()> {
+    DICTIONARIES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A tiny synthetic Polish Hunspell dictionary (written for these tests). Real dictionaries are
 /// installed on the system, never bundled; every Polish test installs this same one.
 fn polish_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::pl::install_dictionary(POLISH_TEST_AFF, POLISH_TEST_DIC).unwrap();
 }
 
@@ -8484,6 +8493,7 @@ const POLISH_TEST_DIC: &str = "12\npłynie\nrzeka\na\nto\nwiem\nże\ntak\nw\nog�
 /// A tiny synthetic Portuguese Hunspell dictionary (written for these tests). Real dictionaries
 /// are installed on the system, never bundled; every Portuguese test installs this same one.
 fn portuguese_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::pt::install_dictionary(PORTUGUESE_TEST_AFF, PORTUGUESE_TEST_DIC).unwrap();
 }
 
@@ -8497,6 +8507,7 @@ const PORTUGUESE_TEST_DIC: &str = "11\nsaudade\ncoração\ne\nele\ndisse\nnão\n
 /// running meanwhile see the same words; it stays set for the rest of the run for that reason.
 #[test]
 fn dictionaries_folder_option_is_saved_searched_and_reported() {
+    let _turn = dictionaries_turn();
     let dir = std::env::temp_dir().join(format!("wc-engine-dictionaries-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for (name, aff, dic) in [
@@ -8527,14 +8538,20 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
     assert_eq!(r["dictionariesFolder"], json!(dir.to_string_lossy()));
     let dicts = r["dictionaries"].as_array().unwrap();
     let file = |lang: &str| dicts.iter().find(|d| d["language"] == lang).map(|d| d["file"].clone());
-    assert_eq!(file("pl"), Some(json!(dir.join("pl_PL.dic").to_string_lossy())));
-    assert_eq!(file("pt"), Some(json!(dir.join("pt_BR.dic").to_string_lossy())));
-    assert_eq!(file("id"), Some(json!(dir.join("id_ID.dic").to_string_lossy())));
+    // Each language reports the folder's file, which is searched first.
+    let reported = |got: Option<&serde_json::Value>, name: &str| {
+        let want = dir.join(format!("{name}.dic"));
+        assert_eq!(got, Some(&json!(want.to_string_lossy())), "{name}: {dicts:?}");
+        assert_eq!(wordcraft_proof::hunspell::find(&[name]).map(|(_, dic)| dic), Some(want));
+    };
+    reported(file("pl").as_ref(), "pl_PL");
+    reported(file("pt").as_ref(), "pt_BR");
+    reported(file("id").as_ref(), "id_ID");
     // Each Spanish variety reports its own file (Spain, Mexico, Latin America, Uruguay, in order).
     let spanish: Vec<serde_json::Value> = dicts.iter().filter(|d| d["language"] == "es").map(|d| d["file"].clone()).collect();
     assert_eq!(spanish.len(), 4);
-    assert_eq!(spanish.first(), Some(&json!(dir.join("es_ES.dic").to_string_lossy())));
-    assert_eq!(spanish.last(), Some(&json!(dir.join("es_UY.dic").to_string_lossy())));
+    reported(spanish.first(), "es_ES");
+    reported(spanish.last(), "es_UY");
     // Polish text is checked against the folder's dictionary.
     run(&mut s, "document.setText", json!({"text": "rzeka płynie żeka"}));
     run(&mut s, "select.all", json!({}));
@@ -8584,6 +8601,7 @@ fn portuguese_proofing_through_the_review_commands() {
 }
 
 fn indonesian_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::id::install_dictionary(INDONESIAN_TEST_AFF, INDONESIAN_TEST_DIC).unwrap();
 }
 
@@ -8755,6 +8773,7 @@ const URUGUAYAN_TEST_DIC: &str = "10\nesto\nes\nuna\nprueba/S\ndel\ncorrector\nt
 
 fn spanish_test_dictionaries() {
     use wordcraft_proof::ProofLang;
+    let _turn = dictionaries_turn();
     for (lang, dic) in [(ProofLang::Es, SPANISH_TEST_DIC), (ProofLang::EsUy, URUGUAYAN_TEST_DIC)] {
         wordcraft_proof::es::install_dictionary(lang, SPANISH_TEST_AFF, dic).unwrap();
     }
@@ -8883,6 +8902,7 @@ const ITALIAN_TEST_AFF: &str = "SET UTF-8\nTRY aeiortnsclcaffèéè\nMAP 2\nMAP 
 const ITALIAN_TEST_DIC: &str = "6\ncasa\ncaffè\nroma\ndisse\ne\nper\n";
 
 fn italian_test_dictionary() {
+    let _turn = dictionaries_turn();
     wordcraft_proof::it::install_dictionary(ITALIAN_TEST_AFF, ITALIAN_TEST_DIC).unwrap();
 }
 
@@ -11578,4 +11598,141 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A Word package whose body holds `body` and, as `rIdC`, the chunk part `word/afchunk.{ext}`.
+#[cfg(not(target_arch = "wasm32"))]
+fn docx_with_chunk(body: &str, ext: &str, content_type: &str, chunk: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let files: [(String, Vec<u8>); 4] = [
+        (
+            "[Content_Types].xml".into(),
+            format!(r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="{ext}" ContentType="{content_type}"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#).into_bytes(),
+        ),
+        ("_rels/.rels".into(), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_vec()),
+        (
+            "word/_rels/document.xml.rels".into(),
+            format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.{ext}"/></Relationships>"#).into_bytes(),
+        ),
+        (
+            "word/document.xml".into(),
+            format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#).into_bytes(),
+        ),
+    ];
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).chain([(format!("word/afchunk.{ext}").as_str(), chunk)]) {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+/// A Single File Web Page under a Word or RTF name opens as one, like the web pages of #2853.
+#[test]
+fn a_single_file_web_page_saved_as_doc_opens_by_content() {
+    let mht = "MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"B\"\r\n\r\n--B\r\nContent-Type: text/html; charset=\"utf-8\"\r\n\r\n<p>Izvje\u{161}taj</p>\r\n--B--\r\n";
+    for name in ["report.doc", "report.docx", "report.rtf"] {
+        let doc = crate::io::open_bytes(name, mht.as_bytes()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(doc.plain_text(StoryRef::Body), "Izvje\u{161}taj", "{name}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn alt_chunks_open_in_place_as_word_brings_them_in() {
+    let png = wordcraft_formats::model::base64_encode(&tiny_png());
+    let mht = format!(
+        "MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=\"B\"\r\n\r\n--B\r\nContent-Location: file:///C:/doc.htm\r\n\
+         Content-Transfer-Encoding: quoted-printable\r\nContent-Type: text/html; charset=\"utf-8\"\r\n\r\n\
+         <style>p.c {{ text-align: center }}</style><p class=3D\"c\">=C4=8Clanak 1.</p><p><img src=3D\"doc_files/a.png\"></p>\r\n\
+         --B\r\nContent-Location: file:///C:/doc_files/a.png\r\nContent-Transfer-Encoding: base64\r\nContent-Type: image/png\r\n\r\n{png}\r\n--B--\r\n"
+    );
+    let p = |t: &str| format!(r#"<w:p><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+    let chunk = r#"<w:altChunk r:id="rIdC"/>"#;
+    let bytes = docx_with_chunk(&format!("{}{chunk}{}", p("Before"), p("After")), "mht", "message/rfc822", mht.as_bytes());
+    let doc = crate::io::open_bytes("chunk.docx", &bytes).unwrap();
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.starts_with("Before\nČlanak 1.\n") && text.ends_with("After"), "{text:?}");
+    let para = doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+    assert_eq!(para.props.align, Some(wordcraft_doc::Align::Center));
+    // Web page text: Times New Roman unless the page says otherwise.
+    assert_eq!(para.props_of_char(0).font.as_deref(), Some("Times New Roman"));
+    // The picture came along, its bytes under the key it shows.
+    let key = doc
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => p.objects.iter().find_map(|o| match o {
+                wordcraft_doc::InlineObject::Image { media, .. } => Some(media.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the chunk's picture");
+    assert_eq!(doc.media.get(&key).map(|m| m.to_vec()), Some(tiny_png()));
+
+    // HTML (in its content type's charset), RTF and plain-text chunks come in through their
+    // importers too, and an MHT chunk is known by what it holds.
+    for (ext, ct, data, want) in [
+        ("htm", "text/html; charset=windows-1250", &b"<p>\xc8lanak chunk</p>"[..], "Članak chunk"),
+        ("rtf", "application/rtf", br"{\rtf1\ansi Rich chunk\par}", "Rich chunk"),
+        ("txt", "text/plain", b"Plain chunk", "Plain chunk"),
+        ("bin", "", mht.as_bytes(), "Članak 1."),
+    ] {
+        let bytes = docx_with_chunk(&format!("{chunk}{}", p("End")), ext, ct, data);
+        let text = crate::io::open_bytes("chunk.docx", &bytes).unwrap().plain_text(StoryRef::Body);
+        assert!(text.starts_with(want) && text.ends_with("End"), "{ext}: {text:?}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn text_from_file_brings_the_files_pictures() {
+    let dir = scratch_dir("text-from-file-pictures");
+    let mut src = Session::new(wordcraft_doc::Document::new());
+    let list = src.doc.numbering.add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    // A list item, then a paragraph (a single paragraph would take the caret's formatting).
+    src.doc.split_paragraph(&Pos::body(0, 0)).unwrap();
+    src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering =
+        Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
+    let key = src.doc.add_media(tiny_png(), "png");
+    let image =
+        wordcraft_doc::InlineObject::Image { media: key, w: 20.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, image, &Default::default()).unwrap();
+    let path = dir.join("pictures.docx");
+    std::fs::write(&path, wordcraft_docx::write(&src.doc).unwrap()).unwrap();
+
+    let mut s = s();
+    // A picture and a list of our own first, so the file's key and list id would point at ours.
+    let ours = s.doc.add_media(vec![9, 9, 9], "png");
+    let our_list = s.doc.numbering.add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    run(&mut s, "insert.textFromFile", json!({"path": path.to_string_lossy()}));
+    let _ = std::fs::remove_dir_all(&dir);
+    let shown: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => p.objects.iter().find_map(|o| match o {
+                wordcraft_doc::InlineObject::Image { media, .. } => Some(media.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown.len(), 1);
+    assert_ne!(shown[0], ours);
+    assert_eq!(s.doc.media.get(&shown[0]).map(|m| m.to_vec()), Some(tiny_png()));
+    let listed: Vec<u32> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => p.props.numbering.map(|n| n.num),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(listed.len(), 1);
+    assert_ne!(listed[0], our_list);
+    assert!(s.doc.numbering.level(listed[0], 0).is_some_and(|l| l.format == wordcraft_doc::section::NumFormat::Bullet));
 }
