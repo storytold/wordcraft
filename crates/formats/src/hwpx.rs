@@ -419,7 +419,8 @@ pub(crate) fn import_within(bytes: &[u8], mut budget: Budget) -> Result<Document
         return Err("HWPX: not a Hangul document (wrong mimetype)".into());
     }
     if read_entry(&mut z, "META-INF/manifest.xml").is_some_and(|m| m.windows(15).any(|w| w == b"encryption-data")) {
-        return Err("HWPX: this document is protected with a password, which WordCraft can't open yet".into());
+        // Not the `.docx` reader's wording: that would offer a password prompt that can't help.
+        return Err("HWPX: this document is password-protected, which WordCraft can't open yet".into());
     }
     let header_xml = read_entry(&mut z, "Contents/header.xml").ok_or("HWPX: the package has no Contents/header.xml")?;
     let physical = match read_entry(&mut z, "version.xml") {
