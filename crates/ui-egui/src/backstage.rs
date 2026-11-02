@@ -566,15 +566,16 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
+    let (mut focused, mut any_hovered) = (None, false);
     for (p, name) in shown.iter().zip(&names) {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
         let resp = resp.on_hover_text(p);
-        // Keyboard users see the full path too, not only pointer users.
+        any_hovered |= resp.hovered();
         if resp.has_focus() {
-            resp.show_tooltip_text(p);
+            focused = Some((resp.clone(), p));
         }
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
@@ -596,6 +597,11 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+    }
+    // Keyboard users see the full path too. egui shows one tooltip per layer, so a hovered row's
+    // tooltip wins, and this plain tooltip lets the pointer through to the rows below it.
+    if let Some((resp, p)) = focused.filter(|_| !any_hovered) {
+        egui::Tooltip::for_widget(&resp).show(|ui| ui.label(p));
     }
 }
 

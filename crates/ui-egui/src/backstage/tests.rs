@@ -79,8 +79,13 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
 fn long_recent_harness(size: egui::Vec2) -> (egui_kittest::Harness<'static, WordApp>, String, String) {
     let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
     let path = format!("C:/Users/Someone/{}/{name}", "LongFolderName".repeat(20));
+    (recent_harness(std::slice::from_ref(&path), size), name, path)
+}
+
+/// Opens File > Home in a window of `size` with `recent` as the Recent list.
+fn recent_harness(recent: &[String], size: egui::Vec2) -> egui_kittest::Harness<'static, WordApp> {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
-    a.ui.recent.push(path.clone());
+    a.ui.recent = recent.to_vec();
     a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -91,7 +96,7 @@ fn long_recent_harness(size: egui::Vec2) -> (egui_kittest::Harness<'static, Word
         a,
     );
     h.run_steps(4);
-    (h, name, path)
+    h
 }
 
 /// Returns the painted bounds and clip rect of the Recent entry's name and path texts.
@@ -158,6 +163,32 @@ fn recent_shows_the_full_path_when_a_row_has_keyboard_focus() {
     h.get_by_label(&name).focus();
     h.run_steps(4);
     h.get_by_label(&path);
+}
+
+/// #5212: the focus tooltip lets the pointer through, so the Recent row under it still gets
+/// hovered, shows its own path and opens on click.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_focus_tooltip_does_not_block_the_row_below() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-5212-{}", std::process::id()));
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    h.get_by_label("one.docx").focus();
+    h.run_steps(4);
+    let tip = h.get_by_label(&paths[0]).rect();
+    let below = tip.intersect(h.get_by_label("two.docx").rect());
+    assert!(below.is_positive(), "the focus tooltip must cover part of the next row: tip={tip:?}");
+    h.event(egui::Event::PointerMoved(below.center()));
+    h.run_steps(4);
+    h.get_by_label(&paths[1]);
+
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: below.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    let error = h.ctx.data(|d| d.get_temp::<String>(super::open_error_id())).unwrap_or_default();
+    assert!(error.contains("two.docx"), "the click must reach two.docx and try to open it, got error '{error}'");
 }
 
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
