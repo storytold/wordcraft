@@ -495,7 +495,10 @@ fn ime_interrupted_equation_preedit_drops_queued_body_replacement() {
         assert_eq!(a.canvas.ime_preedit, "に");
         let mut events = Vec::new();
         if in_batch {
-            events.push(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+            // First Escape cancels the active pre-edit; second exits the equation in the same batch.
+            let esc = egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+            events.push(esc.clone());
+            events.push(esc);
         } else {
             a.run("equation.exit", json!({})).unwrap();
         }
@@ -1042,29 +1045,30 @@ fn cross_block_delete_surrounding_is_refused_and_interrupts() {
     assert!(a.canvas.ime_interrupt_now, "the refused request interrupts the composition");
 }
 
-/// An IME replacement inside an equation erases the counted characters with the equation's
-/// commands; a byte count (which has no mapping into the tree) deletes nothing. A refusal
-/// drops only the replacement immediately paired with it: the next `Commit`, or an adjacent
-/// `Text` + `Commit`. A later key, pre-edit or direct commit in the same raw batch is fresh
-/// input and applies; so does one in a later frame.
+/// An IME replacement inside an equation erases valid UTF-8 or scalar counts with the equation's
+/// commands; a mid-UTF-8 byte count deletes nothing. A refusal drops only the replacement
+/// immediately paired with it: the next `Commit`, or an adjacent `Text` + `Commit`. A later key,
+/// pre-edit or direct commit in the same raw batch is fresh input and applies; so does one in a
+/// later frame.
 #[test]
 fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     let (ctx, mut a) = alt_frame_app();
-    a.run("insert.equation", json!({"linear": "x+y"})).unwrap();
+    a.run("insert.equation", json!({"linear": "x+한y"})).unwrap();
     let linear = |a: &mut WordApp| a.run("equation.get", json!({})).unwrap().get("linear").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    assert_eq!(linear(&mut a), "x+y");
+    assert_eq!(linear(&mut a), "x+한y");
     alt_frame(&ctx, &mut a, vec![surround(1, 0)]);
-    assert_eq!(linear(&mut a), "x+", "the character before the caret in the equation is erased");
+    assert_eq!(linear(&mut a), "x+한", "the character before the caret in the equation is erased");
     let base = linear(&mut a);
 
-    // A direct commit in a later frame is fresh input, not the stale replacement.
+    // A mid-UTF-8 byte count (1 byte into 3-byte `한`) is refused; a direct commit in a later
+    // frame is fresh input, not the stale replacement.
     a.canvas.ime_interrupt_now = false;
     alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0)]);
-    assert_eq!(linear(&mut a), base, "a byte count is not guessed into equation characters");
+    assert_eq!(linear(&mut a), base, "a mid-UTF-8 byte count deletes nothing in the equation");
     assert!(a.canvas.ime_interrupt_now, "the refused byte deletion interrupts the composition");
     a.canvas.ime_interrupt_now = false;
-    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("D".into()))]);
-    assert_eq!(linear(&mut a), format!("{base}D"), "a later direct commit applies without a pre-edit");
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("가".into()))]);
+    assert_eq!(linear(&mut a), format!("{base}가"), "a later direct commit applies without a pre-edit");
 
     // The immediately following commit belongs to the refused replacement and is dropped;
     // the next commit in the same raw batch is fresh input and applies.
@@ -1073,9 +1077,9 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     alt_frame(
         &ctx,
         &mut a,
-        vec![surround_bytes(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("Z".into())), egui::Event::Ime(egui::ImeEvent::Commit("Y".into()))],
+        vec![surround_bytes(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("나".into())), egui::Event::Ime(egui::ImeEvent::Commit("다".into()))],
     );
-    assert_eq!(linear(&mut a), format!("{after_pair}Y"), "only the adjacent stale commit is dropped");
+    assert_eq!(linear(&mut a), format!("{after_pair}다"), "only the adjacent stale commit is dropped");
     let after_commit = linear(&mut a);
 
     // A platform that routes the replacement through `Text` before its `Commit` sends the
@@ -1086,19 +1090,19 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
         &mut a,
         vec![
             surround_bytes(1, 0),
-            egui::Event::Text("Q".into()),
-            egui::Event::Ime(egui::ImeEvent::Commit("Q2".into())),
-            egui::Event::Ime(egui::ImeEvent::Commit("R".into())),
+            egui::Event::Text("라".into()),
+            egui::Event::Ime(egui::ImeEvent::Commit("라2".into())),
+            egui::Event::Ime(egui::ImeEvent::Commit("마".into())),
         ],
     );
-    assert_eq!(linear(&mut a), format!("{after_commit}R"), "the adjacent Text+Commit pair is stale, the next commit is not");
+    assert_eq!(linear(&mut a), format!("{after_commit}마"), "the adjacent Text+Commit pair is stale, the next commit is not");
 
     // Any intervening event ends the pair: a key then its Text is ordinary fresh input.
     let after_commit = linear(&mut a);
     a.canvas.ime_interrupt_now = false;
     let key = egui::Event::Key { key: Key::F20, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
-    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0), key, egui::Event::Text("K".into())]);
-    assert_eq!(linear(&mut a), format!("{after_commit}K"), "a key between the deletion and text clears the suppression");
+    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0), key, egui::Event::Text("바".into())]);
+    assert_eq!(linear(&mut a), format!("{after_commit}바"), "a key between the deletion and text clears the suppression");
 
     // A pre-edit likewise ends the stale pair; its commit is fresh.
     let after_commit = linear(&mut a);
@@ -1108,11 +1112,11 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
         &mut a,
         vec![
             surround_bytes(1, 0),
-            egui::Event::Ime(egui::ImeEvent::Preedit { text: "p".into(), active_range_chars: None }),
-            egui::Event::Ime(egui::ImeEvent::Commit("P".into())),
+            egui::Event::Ime(egui::ImeEvent::Preedit { text: "사".into(), active_range_chars: None }),
+            egui::Event::Ime(egui::ImeEvent::Commit("사".into())),
         ],
     );
-    assert_eq!(linear(&mut a), format!("{after_commit}P"), "a fresh composition in the same batch is accepted");
+    assert_eq!(linear(&mut a), format!("{after_commit}사"), "a fresh composition in the same batch is accepted");
 }
 
 /// An over-cap equation deletion is still a new surrounding request: it discards the
@@ -1232,4 +1236,202 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     a.run("edit.undo", json!({})).unwrap();
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
+}
+
+/// Hangul syllable assembly (`ㅎ` -> `하` -> `한`) on a selected SmartArt graphic updates the
+/// active SmartArt item via `DeleteSurroundingBytes` instead of erasing the graphic from the
+/// body, and Escape cancels pre-edit without deselecting the graphic (#5242, #5243).
+#[test]
+fn ime_smart_art_hangul_delete_surrounding_and_escape() {
+    let (ctx, mut a) = alt_frame_app();
+    a.run("insert.smartArt", json!({"layout": "matrix", "items": ["가나", "다"]})).unwrap();
+
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("ㅎ".into()))]);
+    alt_frame(&ctx, &mut a, vec![surround_bytes(3, 0), egui::Event::Ime(egui::ImeEvent::Commit("하".into()))]);
+    alt_frame(&ctx, &mut a, vec![surround_bytes(3, 0), egui::Event::Ime(egui::ImeEvent::Commit("한".into()))]);
+
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("SmartArt graphic stays selected");
+    assert_eq!(g.items[0].text, "가나한");
+    assert_eq!(g.items[1].text, "다");
+    assert_eq!(body(&a), "", "SmartArt Hangul commits never leak into the body");
+
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "글".into(), active_range_chars: Some(0..1) })]);
+    assert_eq!(a.canvas.ime_preedit, "글");
+    let esc = egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    alt_frame(&ctx, &mut a, vec![esc]);
+    assert!(a.canvas.ime_preedit.is_empty());
+    assert!(a.canvas.ime_escaped_this_frame);
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("SmartArt stays selected after cancelling pre-edit");
+    assert_eq!(g.items[0].text, "가나한");
+}
+
+/// Hangul syllable assembly inside an equation (`ㅎ` -> `하` -> `한`) uses byte-counted
+/// `DeleteSurroundingBytes` cleanly and groups deletion + replacement into one undo step (#5243).
+#[test]
+fn ime_equation_hangul_delete_surrounding_bytes_replaces_syllable() {
+    let (ctx, mut a) = alt_frame_app();
+    a.run("insert.equation", json!({"linear": "x="})).unwrap();
+    let linear = |a: &mut WordApp| a.run("equation.get", json!({})).unwrap().get("linear").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Commit("ㅎ".into()))]);
+    assert_eq!(linear(&mut a), "x=ㅎ");
+    alt_frame(&ctx, &mut a, vec![surround_bytes("ㅎ".len(), 0), egui::Event::Ime(egui::ImeEvent::Commit("하".into()))]);
+    assert_eq!(linear(&mut a), "x=하");
+    alt_frame(&ctx, &mut a, vec![surround_bytes("하".len(), 0), egui::Event::Ime(egui::ImeEvent::Commit("한".into()))]);
+    assert_eq!(linear(&mut a), "x=한");
+
+    // Multi-frame syllable assembly (`ㅎ` -> `하` -> `한`) coalesces into one Typing undo step.
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(linear(&mut a), "x=");
+    a.run("edit.redo", json!({})).unwrap();
+    assert_eq!(linear(&mut a), "x=한");
+
+    // Replacing an existing committed syllable `한` with `글` in one transaction is a single Undo step.
+    let (ctx2, mut a2) = alt_frame_app();
+    a2.run("insert.equation", json!({"linear": "x=한"})).unwrap();
+    alt_frame(&ctx2, &mut a2, vec![surround_bytes("한".len(), 0), egui::Event::Ime(egui::ImeEvent::Commit("글".into()))]);
+    assert_eq!(linear(&mut a2), "x=글");
+    a2.run("edit.undo", json!({})).unwrap();
+    assert_eq!(linear(&mut a2), "x=한");
+}
+
+/// Pressing Escape while canvas IME pre-edit is active cancels only the pre-edit without exiting
+/// an active header/footer or equation; a second Escape exits (#5242).
+#[test]
+fn ime_preedit_escape_cancels_without_exiting_header_or_equation() {
+    let esc = || egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+
+    // Header story: first Escape cancels pre-edit, second exits header.
+    let (ctx, mut a) = alt_frame_app();
+    a.run("insert.header", json!({})).unwrap();
+    assert_ne!(a.session.sel.focus.story, wordcraft_doc::StoryRef::Body);
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) })]);
+    alt_frame(&ctx, &mut a, vec![esc()]);
+    assert!(a.canvas.ime_preedit.is_empty(), "pre-edit cancelled");
+    assert_ne!(a.session.sel.focus.story, wordcraft_doc::StoryRef::Body, "first Escape stays in the header");
+    alt_frame(&ctx, &mut a, vec![esc()]);
+    assert_eq!(a.session.sel.focus.story, wordcraft_doc::StoryRef::Body, "second Escape closes the header");
+
+    // Equation: both direct Escape and macOS `[Preedit(""), Escape]` stay in the equation.
+    for macos_batch in [false, true] {
+        let (ctx, mut a) = alt_frame_app();
+        a.run("insert.equation", json!({"linear": "a+b"})).unwrap();
+        alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) })]);
+        let batch = if macos_batch {
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }), esc()]
+        } else {
+            vec![esc()]
+        };
+        alt_frame(&ctx, &mut a, batch);
+        assert!(a.canvas.ime_preedit.is_empty());
+        assert!(a.session.math.is_some(), "first Escape stays in the equation (macos_batch={macos_batch})");
+        alt_frame(&ctx, &mut a, vec![esc()]);
+        assert!(a.session.math.is_none(), "second Escape exits the equation (macos_batch={macos_batch})");
+    }
+}
+
+/// `edit.undo` during active canvas pre-edit cancels only the uncommitted syllable without
+/// undoing the previous committed text, while formatting/navigation/save commands flush the
+/// pre-edit into the document first (#5243).
+#[test]
+fn ime_preedit_undo_cancels_only_preedit_and_commands_flush_first() {
+    let (ctx, mut a) = alt_frame_app();
+    a.ctx = Some(ctx.clone());
+    a.run("text.insert", json!({"text": "가나 "})).unwrap();
+    assert_eq!(body(&a), "가나 ");
+
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) })]);
+    assert_eq!(a.canvas.ime_preedit, "한");
+    a.canvas.ime_interrupt_now = false;
+
+    let res = a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(res.get("cancelledPreedit").and_then(|v| v.as_bool()), Some(true));
+    assert!(a.canvas.ime_preedit.is_empty(), "pre-edit is cleared");
+    assert!(a.canvas.ime_interrupt_now, "platform IME is interrupted");
+    assert_eq!(body(&a), "가나 ", "previous committed word is untouched by Undo during pre-edit");
+
+    // Formatting and navigation commands commit active pre-edit first instead of dropping it.
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) })]);
+    a.run("format.bold", json!({})).unwrap();
+    assert!(a.canvas.ime_preedit.is_empty());
+    assert_eq!(body(&a), "가나 한", "format.bold flushed the active Hangul pre-edit first");
+
+    alt_frame(&ctx, &mut a, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "글".into(), active_range_chars: Some(0..1) })]);
+    a.run("caret.docStart", json!({})).unwrap();
+    assert!(a.canvas.ime_preedit.is_empty());
+    assert_eq!(body(&a), "가나 한글", "caret navigation flushed the active Hangul pre-edit at the old position");
+    assert_eq!(a.session.sel.focus.off, 0);
+}
+
+/// With Track Changes enabled on pre-existing Korean text, `DeleteSurroundingBytes` across
+/// adjacent/merged `<w:del>` runs snaps the caret out of deleted runs so `ime_surrounding` stays
+/// available and replacement commits land cleanly (#5243).
+#[test]
+fn tracked_delete_surrounding_bytes_across_merged_deleted_runs_keeps_valid_ime_window() {
+    let (ctx, mut a) = alt_frame_app();
+    a.run("document.setText", json!({"text": "가나다라"})).unwrap();
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+
+    // Mark `다` (bytes 6..9) as a tracked deletion first.
+    a.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 6), focus: wordcraft_doc::Pos::body(0, 9) };
+    a.run("text.backspace", json!({})).unwrap();
+    let w = a.session.doc.ime_surrounding(&a.session.sel.focus, &a.session.sel.anchor, 4096).expect("visible window after deleting 다");
+    assert_eq!(w.text, "가나라");
+
+    // Place caret right after visible `가나` (stored offset 6, immediately before `<w:del>다</w:del>`)
+    // and delete 3 bytes before (`나`) and 3 bytes after (`라`), merging `<w:del>나다라</w:del>`,
+    // then commit `바`.
+    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 6));
+    alt_frame(&ctx, &mut a, vec![surround_bytes(3, 3), egui::Event::Ime(egui::ImeEvent::Commit("바".into()))]);
+
+    let w = a
+        .session
+        .doc
+        .ime_surrounding(&a.session.sel.focus, &a.session.sel.anchor, 4096)
+        .expect("caret must not be stranded inside a merged <w:del> run");
+    assert_eq!(w.text, "가바");
+    assert_eq!(w.cursor, "가바".len());
+}
+
+/// Refused surrounding deletions in Body, SmartArt, and Equation must quarantine and drop the
+/// immediately paired replacement `Commit` instead of appending duplicate text while interrupting
+/// the stale platform IME session (#5243).
+#[test]
+fn refused_surrounding_deletion_drops_paired_replacement_commit_across_targets() {
+    // 1. Body: 1-byte `DeleteSurroundingBytes` inside 3-byte `"한"` rounds inward to empty,
+    // refuses the deletion, and drops the paired `Commit("글")`.
+    let (ctx, mut a) = alt_frame_app();
+    a.run("document.setText", json!({"text": "한"})).unwrap();
+    a.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, "한".len()));
+    a.canvas.ime_interrupt_now = false;
+    alt_frame(&ctx, &mut a, vec![surround_bytes(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("글".into()))]);
+    assert_eq!(body(&a), "한", "refused body byte-deletion must drop paired replacement Commit");
+    assert!(a.canvas.ime_interrupt_now);
+
+    // 2. SmartArt: mid-character `DeleteSurroundingBytes(1, 0)` and out-of-range
+    // `DeleteSurrounding(10, 0)` on `"😀글"` both refuse and drop their paired `Commit("한")`.
+    let (ctx, mut s) = alt_frame_app();
+    s.run("insert.smartArt", json!({"items": ["😀글"]})).unwrap();
+    s.canvas.ime_interrupt_now = false;
+    alt_frame(&ctx, &mut s, vec![surround_bytes(1, 0), egui::Event::Ime(egui::ImeEvent::Commit("한".into()))]);
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&s.session).expect("SmartArt remains selected");
+    assert_eq!(g.items[0].text, "😀글", "refused SmartArt byte-deletion must drop paired Commit");
+    assert!(s.canvas.ime_interrupt_now);
+
+    s.canvas.ime_interrupt_now = false;
+    alt_frame(&ctx, &mut s, vec![surround(10, 0), egui::Event::Ime(egui::ImeEvent::Commit("한".into()))]);
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&s.session).expect("SmartArt remains selected");
+    assert_eq!(g.items[0].text, "😀글", "refused SmartArt char-deletion must drop paired Commit");
+    assert!(s.canvas.ime_interrupt_now);
+
+    // 3. Equation: out-of-range char-counted `DeleteSurrounding(10, 0)` on `"x+한"`
+    // refuses and drops its paired `Commit("글")`.
+    let (ctx, mut eq_app) = alt_frame_app();
+    eq_app.run("insert.equation", json!({"linear": "x+한"})).unwrap();
+    assert!(eq_app.session.math.is_some());
+    eq_app.canvas.ime_interrupt_now = false;
+    alt_frame(&ctx, &mut eq_app, vec![surround(10, 0), egui::Event::Ime(egui::ImeEvent::Commit("글".into()))]);
+    let info = eq_app.run("equation.get", json!({})).unwrap();
+    assert_eq!(info.get("linear").and_then(|v| v.as_str()), Some("x+한"), "refused equation char-deletion must drop paired Commit");
+    assert!(eq_app.canvas.ime_interrupt_now);
 }

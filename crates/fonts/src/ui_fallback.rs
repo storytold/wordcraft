@@ -27,14 +27,16 @@ pub struct SystemUiFont {
 /// full-width form? (Latin, Cyrillic and symbols come from the interface's Latin faces.)
 pub fn is_cjk(c: char) -> bool {
     matches!(c,
-        '\u{2E80}'..='\u{2FDF}' // radicals
-        | '\u{3000}'..='\u{33FF}' // punctuation, kana, bopomofo, compatibility
+        '\u{1100}'..='\u{11FF}' // Hangul Jamo
+        | '\u{2E80}'..='\u{2FDF}' // radicals
+        | '\u{3000}'..='\u{33FF}' // punctuation, kana, bopomofo, compatibility Jamo
         | '\u{3400}'..='\u{4DBF}' // extension A
         | '\u{4E00}'..='\u{9FFF}' // unified ideographs
-        | '\u{AC00}'..='\u{D7AF}' // Hangul syllables
+        | '\u{A960}'..='\u{A97F}' // Hangul Jamo Extended-A
+        | '\u{AC00}'..='\u{D7FF}' // Hangul syllables and Hangul Jamo Extended-B
         | '\u{F900}'..='\u{FAFF}' // compatibility ideographs
         | '\u{FE30}'..='\u{FE4F}' // vertical forms
-        | '\u{FF00}'..='\u{FFEF}' // full-width forms
+        | '\u{FF00}'..='\u{FFEF}' // full-width and half-width forms
         | '\u{20000}'..='\u{3FFFF}' // extensions B and later
     )
 }
@@ -383,6 +385,13 @@ mod tests {
         assert!(ui_needs_system_cjk(&["Save", "开"], &[&latin]));
         // Latin, Cyrillic and symbols are the Latin faces' business.
         assert!(!ui_needs_system_cjk(&["Українська Español → ¶"], &[]));
+        // Decomposed (NFD) and extended Hangul Jamo count as CJK so UI labels on macOS trigger
+        // Korean fallback faces too.
+        assert_eq!(
+            ui_uncovered_cjk(&["\u{1112}\u{1161}\u{11AB} \u{A960} \u{D7B0}"], &[&latin]),
+            ['\u{1112}', '\u{1161}', '\u{11AB}', '\u{A960}', '\u{D7B0}']
+        );
+        assert!(ui_needs_system_cjk(&["\u{1112}\u{1161}\u{11AB}"], &[&latin]));
         // A damaged embedded face counts as covering nothing; it never panics.
         let broken = CraftFont { family: "x", style: "Regular", scripts: &["Hans"], bytes: b"OTTO" };
         assert!(ui_needs_system_cjk(&["页"], &[&broken]));

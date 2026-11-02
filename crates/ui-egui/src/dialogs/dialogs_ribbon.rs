@@ -283,7 +283,11 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
             ui.horizontal(|ui| {
                 ui.label(tl!("Name:"));
                 let r = ui.add(egui::TextEdit::singleline(name).desired_width(140.0));
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+                if r.lost_focus() && ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+                    r.request_focus();
+                }
+                let enter = !ime && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 // macOS puts Cancel before OK.
                 let mac = cfg!(target_os = "macos");
                 if mac && ui.button(tl!("Cancel")).clicked() {

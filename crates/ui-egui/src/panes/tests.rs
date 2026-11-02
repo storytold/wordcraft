@@ -414,3 +414,93 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
 }
+
+/// Pressing Escape while composing Hangul in a comment editor cancels only the IME pre-edit,
+/// preserving the uncommitted comment draft and keeping keyboard focus inside the editor (#5242).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn comment_editor_hangul_preedit_escape_preserves_draft_and_focus() {
+    use serde_json::json;
+
+    for macos_batch in [false, true] {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("본문")), crate::Services::default());
+        app.run("review.newComment", json!({"text": "원래 메모"})).unwrap();
+        app.run("view.commentsPane", json!({"value": true})).unwrap();
+        let mut h = pane_harness(app);
+
+        // Focus the comment editor via its existing text and replace with an uncommitted draft.
+        {
+            use egui_kittest::kittest::{By, Queryable};
+            h.get(By::new().role(egui::accesskit::Role::MultilineTextInput).value("원래 메모")).focus();
+        }
+        h.run_steps(2);
+        let focused_id = h.ctx.memory(|m| m.focused()).expect("comment editor focused");
+        assert!(h.ctx.text_edit_focused(), "comment editor has keyboard focus (macos_batch={macos_batch})");
+
+        h.input_mut().events.extend([
+            egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND },
+            egui::Event::Ime(egui::ImeEvent::Commit("안녕하세요 ".into())),
+        ]);
+        h.run_steps(2);
+        assert_eq!(crate::panes::comments::comment_draft(h.state(), 0).as_deref(), Some("안녕하세요 "));
+
+        // Begin Hangul syllable composition (`ㅎ`), then cancel it with Escape.
+        h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Preedit { text: "ㅎ".into(), active_range_chars: Some(0..1) }));
+        h.run_steps(2);
+
+        if macos_batch {
+            // macOS NSTextInputClient delivers Preedit("") immediately before Key::Escape.
+            h.input_mut().events.extend([
+                egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }),
+                egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+            ]);
+        } else {
+            h.input_mut().events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run_steps(2);
+
+        assert_eq!(
+            crate::panes::comments::comment_draft(h.state(), 0).as_deref(),
+            Some("안녕하세요 "),
+            "Escape during pre-edit must not discard the comment draft (macos_batch={macos_batch})"
+        );
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(focused_id), "focus stays in the comment editor (macos_batch={macos_batch})");
+
+        // Once composition is finished, a plain Escape discards the draft as usual.
+        if !macos_batch {
+            h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+            h.run_steps(2);
+        }
+        press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert_eq!(crate::panes::comments::comment_draft(h.state(), 0), None, "plain Escape outside IME discards the draft");
+    }
+}
+
+/// Escape during active IME composition in a dialog text field cancels only the composition and
+/// leaves the dialog open; a subsequent Escape closes the dialog (#5242).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn dialog_escape_during_ime_preedit_keeps_dialog_open() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("가나다")), crate::Services::default());
+    app.run("ui.dialog", serde_json::json!({"name": "find"})).unwrap();
+    let mut h = pane_harness(app);
+    assert!(h.state().dialog.is_some() && h.ctx.text_edit_focused());
+
+    h.input_mut().events.push(egui::Event::Ime(egui::ImeEvent::Preedit { text: "ㅎ".into(), active_range_chars: Some(0..1) }));
+    h.run_steps(2);
+    h.input_mut().events.extend([
+        egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }),
+        egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+    ]);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_some(), "Escape cancelling IME pre-edit must not close Find");
+
+    press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "second Escape with no active composition closes Find");
+}

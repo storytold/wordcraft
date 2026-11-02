@@ -173,6 +173,7 @@ impl WordApp {
             synthetic_injected: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
+            ime_flushing: _,
             styled: _,
             fonts_hans: _,
             fonts_korean: _,

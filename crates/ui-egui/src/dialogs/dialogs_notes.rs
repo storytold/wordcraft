@@ -149,7 +149,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let label = if f.endnote { "Insert Endnote" } else { "Insert Footnote" };
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let enter = !crate::ime_event_or_composing(ui.ctx(), None) && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if cfg!(target_os = "macos") {
                 // macOS: [Apply] [Cancel] [Insert], the default button rightmost.
                 insert = ui.add(crate::widgets::primary_button(ui, tl!(label))).clicked() || enter;

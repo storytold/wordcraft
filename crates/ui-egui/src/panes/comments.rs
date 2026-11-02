@@ -119,8 +119,11 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
     let mut text = draft.unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
     // Read-only where comments can't change (a protected document), so nothing is typed in vain.
     let editable = crate::widgets::enabled(app, "review.editComment");
+    crate::note_ime_composing_start(ui.ctx());
+    let edit_id = field_id(app, ui, "comment_edit", id);
+    let was_ime = crate::ime_event_or_composing(ui.ctx(), Some(edit_id));
     let mut edit = egui::TextEdit::multiline(&mut text)
-        .id(field_id(app, ui, "comment_edit", id))
+        .id(edit_id)
         .interactive(editable)
         .desired_rows(1)
         .desired_width(f32::INFINITY)
@@ -129,6 +132,7 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
         edit = edit.font(f);
     }
     let r = ui.add(edit);
+    let was_ime = was_ime || crate::ime_event_or_composing(ui.ctx(), Some(edit_id));
     if focus {
         r.request_focus();
     }
@@ -136,7 +140,9 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
         drafts(app).edits.insert(id, text);
     }
     if r.lost_focus() {
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if was_ime && ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+            r.request_focus();
+        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             // Escape throws the draft away: the field shows the comment's text again.
             drafts(app).edits.remove(&id);
         } else {
@@ -179,8 +185,11 @@ fn thread_root(app: &WordApp, id: u32) -> u32 {
 pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option<egui::FontId>, focus: bool) -> bool {
     let mut text = drafts(app).replies.get(&id).cloned().unwrap_or_default();
     let editable = crate::widgets::enabled(app, "review.reply");
+    crate::note_ime_composing_start(ui.ctx());
+    let edit_id = field_id(app, ui, "comment_reply", id);
+    let was_ime = crate::ime_event_or_composing(ui.ctx(), Some(edit_id));
     let mut edit = egui::TextEdit::multiline(&mut text)
-        .id(field_id(app, ui, "comment_reply", id))
+        .id(edit_id)
         .interactive(editable)
         .desired_rows(1)
         .desired_width(f32::INFINITY)
@@ -189,11 +198,16 @@ pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option
         edit = edit.font(f);
     }
     let r = ui.add(edit);
+    let was_ime = was_ime || crate::ime_event_or_composing(ui.ctx(), Some(edit_id));
     if focus {
         r.request_focus();
     }
     if r.changed() {
         drafts(app).replies.insert(id, text);
+    }
+    if r.lost_focus() && was_ime && ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+        r.request_focus();
+        return false;
     }
     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         // Escape throws the reply away and closes the field.

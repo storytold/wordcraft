@@ -40,6 +40,37 @@ impl Session {
         }
     }
 
+    fn prepare_undo_step(&mut self, id: &str, spec: &CommandSpec, join: bool, ime_replacement_join: bool) -> bool {
+        let typing = spec.id == "text.insert" || spec.id == "equation.type";
+        if spec.mutates && !typing {
+            self.typing_open = false;
+        }
+        // Whether this command pushed an undo step (a no-op command's step is dropped below,
+        // leaving its undo group without one).
+        let mut pushed = false;
+        if spec.mutates {
+            let label = if typing { "Typing" } else { spec.label };
+            // A joined command merges into its group's step; a group whose first command
+            // changed nothing has none, so the next command in it starts one (#4001).
+            if !join || self.history.is_empty() || !self.join_anchor {
+                pushed = self.checkpoint(label);
+            } else if ime_replacement_join && let Some(top) = self.history.last_mut() {
+                super::Arc::make_mut(top).label = "Typing".to_string();
+                self.typing_open = true;
+            }
+        } else if !spec.id.starts_with("caret.") && !spec.id.starts_with("view.") {
+            // Non-mutating commands other than caret movement keep the typing group.
+        } else if spec.id.starts_with("caret.") {
+            self.typing_open = false;
+        }
+        // Only the paste right after a tracked cut makes it a move.
+        if (spec.mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo")) && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial")
+        {
+            self.pending_move = None;
+        }
+        pushed
+    }
+
     /// Whether the command changed nothing: the document, the selection, the formatting
     /// waiting at the caret and the column selection are as they were before it ran.
     ///
@@ -71,9 +102,9 @@ impl Session {
         let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
-        let join = join
-            || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
-            || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
+        let ime_replacement_join =
+            (equation_join && id == "equation.type") || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
+        let join = join || (equation_join && matches!(id, "equation.type" | "equation.backspace")) || ime_replacement_join;
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
@@ -153,30 +184,7 @@ impl Session {
                 self.merge.preview,
             )
         });
-        let typing = spec.id == "text.insert" || spec.id == "equation.type";
-        if spec.mutates && !typing {
-            self.typing_open = false;
-        }
-        // Whether this command pushed an undo step (a no-op command's step is dropped below,
-        // leaving its undo group without one).
-        let mut pushed = false;
-        if spec.mutates {
-            let label = if typing { "Typing" } else { spec.label };
-            // A joined command merges into its group's step; a group whose first command
-            // changed nothing has none, so the next command in it starts one (#4001).
-            if !join || self.history.is_empty() || !self.join_anchor {
-                pushed = self.checkpoint(label);
-            }
-        } else if !spec.id.starts_with("caret.") && !spec.id.starts_with("view.") {
-            // Non-mutating commands other than caret movement keep the typing group.
-        } else if spec.id.starts_with("caret.") {
-            self.typing_open = false;
-        }
-        // Only the paste right after a tracked cut makes it a move.
-        if (spec.mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo")) && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial")
-        {
-            self.pending_move = None;
-        }
+        let pushed = self.prepare_undo_step(id, spec, join, ime_replacement_join);
         let sel_before = self.sel.clone();
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.

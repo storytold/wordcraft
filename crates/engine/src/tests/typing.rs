@@ -3631,3 +3631,79 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+#[test]
+fn ime_replacement_join_keeps_typing_undo_label() {
+    // Body IME syllable transitions (`하` -> `한` -> `글`) coalesce under `"Typing"`, even when
+    // `DeleteSurrounding` begins from a closed typing group (`"Backspace"` checkpoint relabeled).
+    let mut s = self::s();
+    s.run_ime("text.insert", &json!({"text": "하"})).unwrap();
+    s.close_typing();
+    assert!(!s.typing_open());
+    s.take_pending_ime_application_change();
+
+    s.run_ime("text.backspace", &json!({})).unwrap();
+    assert_eq!(s.undo_label(), Some("Backspace"));
+    s.join_next_ime_text_replacement();
+    s.run_ime("text.insert", &json!({"text": "한"})).unwrap();
+    assert_eq!(s.undo_label(), Some("Typing"), "IME replacement relabels Backspace to Typing");
+    assert!(s.typing_open(), "typing group reopens after IME replacement");
+    s.run_ime("text.insert", &json!({"text": "글"})).unwrap();
+    assert!(!s.take_pending_ime_application_change(), "run_ime never flags an external application change");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "한글");
+    assert_eq!(s.undo_labels(), vec!["Typing", "Typing"]);
+
+    // When `typing_open` stays open from the start (real continuous Korean 2-Set typing), the
+    // whole word `"한글"` is a single `"Typing"` undo step.
+    let mut s = self::s();
+    s.run_ime("text.insert", &json!({"text": "하"})).unwrap();
+    assert!(s.typing_open());
+    s.join_next_undo();
+    s.run_ime("text.backspace", &json!({})).unwrap();
+    s.join_next_ime_text_replacement();
+    s.run_ime("text.insert", &json!({"text": "한"})).unwrap();
+    s.run_ime("text.insert", &json!({"text": "글"})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "한글");
+    assert_eq!(s.undo_labels(), vec!["Typing"]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "");
+
+    // Equation IME syllable transition (`하` -> `한` -> `글`) via `equation.deleteSurroundingBytes`.
+    let mut s = self::s();
+    run(&mut s, "insert.equation", json!({}));
+    s.run_ime("equation.type", &json!({"text": "하"})).unwrap();
+    assert!(s.typing_open());
+    s.join_next_undo();
+    s.run_ime("equation.deleteSurroundingBytes", &json!({"beforeBytes": 3, "afterBytes": 0})).unwrap();
+    s.join_next_equation_edit();
+    s.run_ime("equation.type", &json!({"text": "한"})).unwrap();
+    assert_eq!(s.undo_label(), Some("Typing"));
+    assert!(s.typing_open());
+    s.run_ime("equation.type", &json!({"text": "글"})).unwrap();
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "한글");
+    assert_eq!(s.undo_labels(), vec!["Typing", "Equation"]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "");
+}
+
+#[test]
+fn equation_delete_surrounding_bytes_hangul_and_astral_symbols() {
+    let mut s = self::s();
+    run(&mut s, "insert.equation", json!({}));
+    s.run_ime("equation.type", &json!({"text": "𝑥가나다"})).unwrap();
+
+    // Mid-character counts (`1`, `2`) and out-of-range counts fail closed without touching the equation.
+    for bad in [1, 2, 16] {
+        assert!(s.run_ime("equation.deleteSurroundingBytes", &json!({"beforeBytes": bad, "afterBytes": 0})).is_err());
+    }
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "𝑥가나다");
+
+    // Delete 3-byte Hangul via `beforeBytes`, then via `before`, then 4-byte `𝑥` via `afterBytes`.
+    s.run_ime("equation.deleteSurroundingBytes", &json!({"beforeBytes": 3, "afterBytes": 0})).unwrap();
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "𝑥가나");
+    s.run_ime("equation.deleteSurroundingBytes", &json!({"before": 6, "after": 0})).unwrap();
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "𝑥");
+    run(&mut s, "equation.move", json!({"dir": "home"}));
+    s.run_ime("equation.deleteSurroundingBytes", &json!({"before": 0, "afterBytes": 4})).unwrap();
+    assert_eq!(s.run("equation.get", &json!({})).unwrap()["linear"], "");
+}

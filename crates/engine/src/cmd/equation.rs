@@ -46,6 +46,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("equation.deleteSurrounding", "Delete Around Caret in Equation", "Equation", delete_surrounding)
             .when(editing)
             .params(r#"{"before": n, "after": n}"#),
+        CommandSpec::new("equation.deleteSurroundingBytes", "Delete Around Caret in Equation", "Equation", delete_surrounding_bytes)
+            .when(editing)
+            .params(r#"{"before"?: n, "after"?: n, "beforeBytes"?: n, "afterBytes"?: n}"#),
         CommandSpec::new("equation.enter", "Enter in Equation", "Equation", enter).when(editing),
         CommandSpec::new("equation.convert", "Convert", "Equation › Conversions", convert)
             .when(near_equation_or_all)
@@ -524,7 +527,107 @@ fn delete_surrounding(s: &mut Session, v: &Value) -> CmdResult {
     if before > crate::MAX_EQUATION_DELETE_UNITS || after > crate::MAX_EQUATION_DELETE_UNITS {
         return Err(CmdError::Params(format!("at most {} units on each side", crate::MAX_EQUATION_DELETE_UNITS)));
     }
-    let mut nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
+    let nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
+    delete_surrounding_units(s, &m, nodes, before, after)
+}
+
+/// Delete a bounded UTF-8 byte range of contiguous run characters on each side of the caret in
+/// the active equation argument in one transaction. Refuses without touching the document if a
+/// byte count does not fall on a UTF-8 character boundary, exceeds the run text on that side, or
+/// crosses a non-run equation structure node.
+fn delete_surrounding_bytes(s: &mut Session, v: &Value) -> CmdResult {
+    let m = current(s)?;
+    let side_bytes = |primary: &str, alias: &str| -> Result<usize, CmdError> {
+        if v.get(primary).is_none() && v.get(alias).is_none() {
+            return Ok(0);
+        }
+        p::u64(v, primary)
+            .or_else(|| p::u64(v, alias))
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| CmdError::Params(format!("`{primary}` must be a non-negative integer")))
+    };
+    let before_bytes = side_bytes("before", "beforeBytes")?;
+    let after_bytes = side_bytes("after", "afterBytes")?;
+    let max_bytes = crate::MAX_EQUATION_DELETE_UNITS.saturating_mul(4);
+    if before_bytes.saturating_add(after_bytes) == 0 {
+        return Err(CmdError::Params("nothing to delete".into()));
+    }
+    if before_bytes > max_bytes || after_bytes > max_bytes {
+        return Err(CmdError::Params(format!("at most {max_bytes} bytes on each side")));
+    }
+    let nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
+    let clamped = me::clamp(&nodes, &m.pos);
+    let arg = me::arg_at(&nodes, &clamped.path).ok_or_else(|| CmdError::Failed("no equation argument there".into()))?;
+    let (before, after) = equation_bytes_to_chars(arg, clamped.off, before_bytes, after_bytes)?;
+    let mut r = delete_surrounding_units(s, &m, nodes, before, after)?;
+    if let Some(obj) = r.as_object_mut() {
+        obj.insert("beforeBytes".into(), json!(before_bytes));
+        obj.insert("afterBytes".into(), json!(after_bytes));
+    }
+    Ok(r)
+}
+
+fn equation_bytes_to_chars(arg: &[MNode], off: usize, before_bytes: usize, after_bytes: usize) -> Result<(usize, usize), CmdError> {
+    let cap = crate::MAX_EQUATION_DELETE_UNITS;
+    let buf_cap = cap.saturating_add(1);
+    let mut before_buf = std::collections::VecDeque::with_capacity(buf_cap);
+    let mut after_buf = Vec::with_capacity(buf_cap);
+    let mut unit_pos = 0usize;
+    let mut after_stopped = false;
+    for node in arg {
+        match node {
+            MNode::Run(r) => {
+                for c in r.text.chars() {
+                    if unit_pos < off {
+                        if before_buf.len() == buf_cap {
+                            before_buf.pop_front();
+                        }
+                        before_buf.push_back(c);
+                    } else if !after_stopped && after_buf.len() < buf_cap {
+                        after_buf.push(c);
+                    }
+                    unit_pos = unit_pos.saturating_add(1);
+                }
+            }
+            _ => {
+                if unit_pos < off {
+                    before_buf.clear();
+                } else {
+                    after_stopped = true;
+                }
+                unit_pos = unit_pos.saturating_add(1);
+            }
+        }
+        if unit_pos >= off && (after_stopped || after_buf.len() >= buf_cap || after_bytes == 0) {
+            break;
+        }
+    }
+    let count_side = |target: usize, mut chars: std::vec::IntoIter<char>| -> Result<usize, CmdError> {
+        let mut rem = target;
+        let mut count = 0usize;
+        while rem > 0 {
+            let Some(c) = chars.next() else {
+                return Err(CmdError::Failed("the equation cannot delete that many bytes".into()));
+            };
+            let w = c.len_utf8();
+            if w > rem {
+                return Err(CmdError::Failed("byte count is not on a UTF-8 character boundary".into()));
+            }
+            rem = rem.saturating_sub(w);
+            count = count.saturating_add(1);
+            if count > cap {
+                return Err(CmdError::Params(format!("at most {cap} units on each side")));
+            }
+        }
+        Ok(count)
+    };
+    let before_chars: Vec<char> = before_buf.into_iter().rev().collect();
+    let before = count_side(before_bytes, before_chars.into_iter())?;
+    let after = count_side(after_bytes, after_buf.into_iter())?;
+    Ok((before, after))
+}
+
+fn delete_surrounding_units(s: &mut Session, m: &MathEdit, mut nodes: Arg, before: usize, after: usize) -> CmdResult {
     let mut pos = m.pos.clone();
     for _ in 0..before {
         let prev_nodes = nodes.clone();

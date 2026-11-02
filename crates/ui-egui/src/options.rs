@@ -331,7 +331,11 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
         let r = ui
             .add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(tl!("Not set: the system's usual places")))
             .labelled_by(folder_label);
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+        if r.lost_focus() && ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            r.request_focus();
+        }
+        let enter = !ime && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let changed = folder.trim() != saved;
         if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
             let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };
@@ -426,7 +430,11 @@ fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
         let r = ui
             .add(egui::TextEdit::singleline(&mut word).desired_width(220.0).char_limit(MAX_WORD_CHARS).hint_text(tl!("New word")))
             .accessible_name(tl!("New word"));
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+        if r.lost_focus() && ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            r.request_focus();
+        }
+        let enter = !ime && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let w = word.trim().to_string();
         let ok = !w.is_empty() && !w.chars().any(char::is_whitespace);
         if (ui.add_enabled(ok, egui::Button::new(tl!("Add"))).clicked() || (enter && ok)) && app.run("file.options", json!({"addWords": [w]})).is_ok()
@@ -623,7 +631,11 @@ fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         let hint = default.clone().unwrap_or_else(|| tl!("Not set").to_string());
         let r = ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0).hint_text(hint)).labelled_by(templates_label);
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+        if r.lost_focus() && ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            r.request_focus();
+        }
+        let enter = !ime && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let changed = folder.trim() != saved;
         if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
             let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };

@@ -50,7 +50,8 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     let (mut add, mut new, mut cancel) = (false, false, false);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel = ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
+            cancel = ui.button(tl!("Cancel")).clicked()
+                || (!crate::ime_event_or_composing(ui.ctx(), None) && ui.input(|i| i.key_pressed(egui::Key::Escape)));
             new = ui.add_enabled(ready, egui::Button::new(tl!("New Document"))).clicked();
             add = ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Add to Document"))).clicked();
         });

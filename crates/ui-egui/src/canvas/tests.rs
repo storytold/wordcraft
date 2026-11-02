@@ -4616,15 +4616,16 @@ fn ime_equation_delete_at_start_is_refused_without_a_receipt() {
     assert!(ime.should_interrupt_composition, "the refused equation delete interrupts the composition");
 }
 
-/// A byte-counted replacement inside an equation is refused as a whole: nothing is deleted,
-/// only the immediately paired stale `Text`/`Commit` is dropped and the composition is
-/// interrupted. A later direct commit in the same raw batch or a later frame is fresh input
-/// and applies, so the adjacent-pair bound never swallows it.
+/// A refused byte-counted replacement inside an equation (here a mid-UTF-8 byte count into a
+/// three-byte Hangul syllable) is rejected as a whole: nothing is deleted, only the immediately
+/// paired stale `Text`/`Commit` is dropped and the composition is interrupted. A later direct
+/// commit in the same raw batch or a later frame is fresh input and applies, so the adjacent-pair
+/// bound never swallows it.
 #[test]
 fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     use egui::ImeChangeCause;
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-    app.run("insert.equation", json!({"linear": "x+y"})).unwrap();
+    app.run("insert.equation", json!({"linear": "x+한"})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -4643,11 +4644,11 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     // protocol replacement into RawInput to exercise a single native input batch.
     h.input_mut().events.extend([
         egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }),
-        egui::Event::Ime(egui::ImeEvent::Commit("Z".into())),
-        egui::Event::Ime(egui::ImeEvent::Commit("W".into())),
+        egui::Event::Ime(egui::ImeEvent::Commit("가".into())),
+        egui::Event::Ime(egui::ImeEvent::Commit("나".into())),
     ]);
     h.step();
-    assert_eq!(linear(&mut h), "x+yW", "the adjacent stale commit is dropped and the next direct commit applies");
+    assert_eq!(linear(&mut h), "x+한나", "the adjacent stale commit is dropped and the next direct commit applies");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the fresh direct commit is the input method's change");
     assert!(ime.should_interrupt_composition, "the refused byte deletion still interrupts the stale composition");
@@ -4656,12 +4657,12 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     let base = linear(&mut h);
     h.input_mut().events.extend([
         egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }),
-        egui::Event::Text("Q".into()),
-        egui::Event::Ime(egui::ImeEvent::Commit("Q2".into())),
-        egui::Event::Ime(egui::ImeEvent::Commit("R".into())),
+        egui::Event::Text("다".into()),
+        egui::Event::Ime(egui::ImeEvent::Commit("다2".into())),
+        egui::Event::Ime(egui::ImeEvent::Commit("라".into())),
     ]);
     h.step();
-    assert_eq!(linear(&mut h), format!("{base}R"), "the adjacent pair is dropped, not every later commit");
+    assert_eq!(linear(&mut h), format!("{base}라"), "the adjacent pair is dropped, not every later commit");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod);
     assert!(ime.should_interrupt_composition);
@@ -4671,10 +4672,10 @@ fn ime_equation_byte_delete_drops_only_its_immediate_replacement() {
     h.event(egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }));
     h.step();
     let base = linear(&mut h);
-    assert_eq!(linear(&mut h), "x+yWR", "the refused deletion alone changed nothing");
-    h.event(egui::Event::Ime(egui::ImeEvent::Commit("Y".into())));
+    assert_eq!(linear(&mut h), "x+한나라", "the refused deletion alone changed nothing");
+    h.event(egui::Event::Ime(egui::ImeEvent::Commit("마".into())));
     h.step();
-    assert_eq!(linear(&mut h), format!("{base}Y"), "a later direct commit applies without a pre-edit");
+    assert_eq!(linear(&mut h), format!("{base}마"), "a later direct commit applies without a pre-edit");
     let ime = h.output().platform_output.ime.clone().expect("still editing the equation");
     assert_eq!(ime.change_cause, ImeChangeCause::InputMethod, "the fresh commit is the input method's change");
     assert!(!ime.should_interrupt_composition, "the fresh commit is not treated as stale");
@@ -4840,4 +4841,229 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let hidden = view_key(&app, false, Some(&object));
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+}
+
+/// Clicking elsewhere on the canvas while an IME pre-edit is active commits the pre-edit at the
+/// old caret position before moving the selection to the clicked location (#5243).
+#[test]
+fn ime_preedit_commits_at_old_position_before_canvas_click() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("가나다\n라마바")), Default::default());
+    app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, "가".len()));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) }));
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "한");
+
+    let target_pos = Pos::body(1, "라마".len());
+    let caret = h.state_mut().session.layout().caret_on(&target_pos, 0).expect("second paragraph laid out");
+    let click_at = page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(click_at));
+    h.event(egui::Event::PointerButton { pos: click_at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: click_at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    assert!(h.state().canvas.ime_preedit.is_empty(), "pre-edit is cleared after click flush");
+    let p0 = h.state().session.doc.para_at(&Pos::body(0, 0)).map(|p| p.text.as_str()).unwrap_or("");
+    let p1 = h.state().session.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.as_str()).unwrap_or("");
+    assert_eq!(p0, "가한나다", "pre-edit committed at the original caret position in paragraph 0");
+    assert_eq!(p1, "라마바", "second paragraph was not mutated by the flushed pre-edit");
+    assert_eq!(h.state().session.sel.focus.path, Pos::body(1, 0).path, "caret moved to the clicked second paragraph");
+}
+
+/// Selecting a SmartArt graphic keeps IME geometry and surrounding text active on the canvas, and
+/// painting an active Hangul pre-edit badge on the selected graphic does not panic or drop focus (#5243).
+#[test]
+fn smart_art_selection_publishes_ime_geometry_and_preedit_keeps_context() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("insert.smartArt", json!({"items": ["가", "나"]})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    let ime = h.output().platform_output.ime.clone().expect("SmartArt selection publishes an IME context");
+    assert_eq!(ime.surrounding_text.available().map(|s| s.text.as_str()), Some("가"));
+
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) }));
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "한");
+    assert!(h.output().platform_output.ime.is_some(), "IME stays enabled while SmartArt pre-edit badge is painted");
+    assert!(wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).is_some());
+}
+
+/// Active Hangul pre-edit survives transient OS window focus loss (`WindowFocused(false)`, such as
+/// the macOS Hanja popup `Opt+Return` or `Cmd+Tab`), keeps `PlatformOutput::ime` published so
+/// `NSTextInputContext` is not torn down, and accepts `ImeEvent::Commit` both while unfocused and
+/// on the `WindowFocused(true)` refocus frame (#5243).
+#[test]
+fn hangul_preedit_survives_window_unfocus_and_commits_hanja_or_on_refocus() {
+    let ctx = egui::Context::default();
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut run_pass = |app: &mut WordApp, focused: bool, events: Vec<egui::Event>| -> Option<egui::output::IMEOutput> {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { focused, events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        let out = ctx.run_ui(input, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        let ime = out.platform_output.ime.clone();
+        out.drop_without_applying_deltas();
+        ime
+    };
+
+    for _ in 0..8 {
+        let _ = run_pass(&mut app, true, Vec::new());
+    }
+    assert!(app.canvas.focused, "canvas starts focused");
+
+    // 1. Compose Hangul pre-edit "한", then lose OS window focus (macOS Hanja candidate popup).
+    let ime = run_pass(&mut app, true, vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) })]);
+    assert_eq!(app.canvas.ime_preedit, "한");
+    assert!(ime.is_some());
+
+    let ime_unfocused = run_pass(&mut app, false, vec![egui::Event::WindowFocused(false)]);
+    assert!(!app.canvas.focused, "native OS window focus state remains false");
+    assert_eq!(app.canvas.ime_preedit, "한", "Hangul pre-edit survives transient WindowFocused(false)");
+    assert!(ime_unfocused.is_some(), "PlatformOutput::ime stays active across Hanja popup unfocus");
+
+    // Picking a Hanja candidate ("韓") commits while the popup still owns OS key-window focus (`focused: false`).
+    let _ = run_pass(
+        &mut app,
+        false,
+        vec![
+            egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }),
+            egui::Event::Ime(egui::ImeEvent::Commit("韓".into())),
+        ],
+    );
+    assert!(app.canvas.ime_preedit.is_empty());
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "韓");
+
+    // 2. Regain OS focus, compose "글", `Cmd+Tab` away (`focused: false`), then commit on the
+    // `WindowFocused(true)` refocus frame itself.
+    let _ = run_pass(
+        &mut app,
+        true,
+        vec![egui::Event::WindowFocused(true), egui::Event::Ime(egui::ImeEvent::Preedit { text: "글".into(), active_range_chars: Some(0..1) })],
+    );
+    assert_eq!(app.canvas.ime_preedit, "글");
+
+    let ime_cmd_tab = run_pass(&mut app, false, vec![egui::Event::WindowFocused(false)]);
+    assert_eq!(app.canvas.ime_preedit, "글");
+    assert!(ime_cmd_tab.is_some());
+
+    let _ = run_pass(
+        &mut app,
+        true,
+        vec![
+            egui::Event::WindowFocused(true),
+            egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }),
+            egui::Event::Ime(egui::ImeEvent::Commit("글".into())),
+        ],
+    );
+    assert!(app.canvas.ime_preedit.is_empty());
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "韓글");
+}
+
+/// Moving keyboard focus from the canvas to an internal `TextEdit` (`navSearch`) while a Hangul
+/// pre-edit is active commits the pre-edit once to the document body and routes subsequent typing
+/// exclusively into the `TextEdit` (#5243).
+#[test]
+fn canvas_to_text_edit_focus_handoff_flushes_preedit_and_does_not_double_route() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("view.navigationPane", json!({"value": true})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    // Re-focus canvas after opening Navigation pane and start composing "한".
+    h.state_mut().canvas.want_focus = true;
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) }));
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "한");
+
+    // Move focus to the Navigation search `TextEdit` and type into it.
+    h.state_mut().nav_search_focus = true;
+    h.step();
+    assert!(h.state().canvas.ime_preedit.is_empty(), "handoff cleared canvas pre-edit");
+    assert_eq!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(),
+        "한",
+        "unfinished Hangul pre-edit was flushed once to the body"
+    );
+
+    h.event(egui::Event::Text("검색".into()));
+    h.step();
+    let qid = h.state().window_id("nav_query");
+    let nav_query = h.ctx.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
+    assert_eq!(nav_query, "검색", "typing after handoff went to navSearch");
+    assert_eq!(
+        h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(),
+        "한",
+        "typing into navSearch was not double-routed into the document body"
+    );
+}
+
+/// Composing Hangul pre-edit at 500% zoom, 144pt font size, and 3.0x line spacing — both in the
+/// document body and inside an equation — clamps the inline pre-edit font size safely and never
+/// panics in `epaint`'s font atlas (#5241, #5243).
+#[test]
+fn high_zoom_oversized_font_hangul_preedit_never_panics() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("view.zoom", json!({"value": 500})).unwrap();
+    app.run("format.size", json!({"size": 144})).unwrap();
+    app.run("para.lineSpacing", json!({"value": 3.0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..8 {
+        h.step();
+    }
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "한글".into(), active_range_chars: Some(0..1) }));
+    h.step();
+    h.step();
+    assert_eq!(h.state().canvas.ime_preedit, "한글");
+
+    // Clear body pre-edit, insert an equation at 500% zoom + 144pt font size, and compose "한".
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
+    h.step();
+    h.state_mut().run("insert.equation", json!({"linear": "x="})).unwrap();
+    h.state_mut().run("format.size", json!({"size": 144})).unwrap();
+    h.step();
+    h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "한".into(), active_range_chars: Some(0..1) }));
+    h.step();
+    h.step();
+    assert!(h.state().session.math.is_some());
+    assert_eq!(h.state().canvas.ime_preedit, "한");
 }

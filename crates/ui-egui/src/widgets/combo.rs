@@ -228,8 +228,10 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
             v.corner_radius.se = 0;
         }
         // Up/Down move the list's highlight: take them before the text field moves its cursor.
+        crate::note_ime_composing_start(ui.ctx());
+        let ime_before = crate::ime_event_or_composing(ui.ctx(), Some(te_id));
         let mut step = 0i32;
-        if s.open && ui.memory(|m| m.has_focus(te_id)) {
+        if s.open && !ime_before && ui.memory(|m| m.has_focus(te_id)) {
             ui.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
                     step += 1;
@@ -243,6 +245,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
+        let ime = ime_before || crate::ime_event_or_composing(ui.ctx(), Some(te_id));
         // The field says what it is: without a name a screen reader has only "edit" to say
         // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
         if !tip.is_empty() {
@@ -250,7 +253,8 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         }
         keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let ime_focus_kept = ime && resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+        let enter = !ime && resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut reveal = step != 0;
         if search && resp.changed() {
             s.open = true;
@@ -260,7 +264,7 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
         }
         // The recent section shows while nothing is typed; a query lists its matches only.
         let recent_shown: &[String] = if text.trim().is_empty() { recent } else { &[] };
-        let mut regain_focus = false;
+        let mut regain_focus = ime_focus_kept;
         if s.open {
             if s.query != text || s.items_len != items.len() {
                 s.matches = std::sync::Arc::new(font_matches(&text, items));
@@ -285,9 +289,9 @@ fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
                     _ => text.clone(),
                 });
                 s.open = false;
-            } else if ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
+            } else if (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape))) || ui.input(|i| i.key_pressed(egui::Key::Tab)) {
                 s.open = false;
-            } else if !focused {
+            } else if !focused && !ime_focus_kept {
                 // A click in the list takes focus from the field: keep the list, give focus back.
                 let over = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| s.popup.is_some_and(|r| r.contains(p)));
                 if over {

@@ -243,6 +243,12 @@ pub struct CanvasState {
     /// A nonempty preedit lost its body/equation target. The next canvas event batch must
     /// reject that old composition's queued replacement before dispatching any mutation.
     pub(crate) ime_interrupted_preedit: bool,
+    /// Snap `CaretGlide` on the frame an IME commit or pre-edit update landed so the caret never
+    /// slides backward across newly committed syllables.
+    pub(crate) ime_snap_caret: bool,
+    /// `Escape` cancelled an active canvas IME pre-edit in this frame, so later Escape handlers
+    /// in the same frame do not also exit equations, headers/footers, drags or full screen.
+    pub(crate) ime_escaped_this_frame: bool,
     /// The last bounded surrounding window and the `(revision, cursor, anchor)` it was built
     /// from. An idle pass reuses it instead of walking a long paragraph again.
     pub(crate) ime_window_cache: Option<(u64, wordcraft_doc::Pos, wordcraft_doc::Pos, Option<wordcraft_doc::ime_text::ImeWindow>)>,
@@ -250,6 +256,11 @@ pub struct CanvasState {
     pub(crate) ime_tracker: egui::ImeContextTracker,
     /// The viewport whose IME state [`Self::ime_tracker`] holds, so closing one releases it.
     pub(crate) ime_viewport: Option<egui::ViewportId>,
+    /// Whether this window's viewport was most recently the OS-focused WordCraft window, so an
+    /// active IME composition survives transient OS window focus loss (`WindowFocused(false)` from
+    /// the macOS Hanja panel or `Cmd+Tab`) while yielding immediately if another WordCraft window
+    /// takes focus.
+    pub(crate) ime_window_active: bool,
     /// Alt+numpad entry in progress: the digits typed while Alt is held (#961).
     pub(crate) alt_code: String,
     /// The character an Alt code just typed: if the platform also sends its own composed
@@ -303,6 +314,7 @@ impl CanvasState {
             web_viewport: old.web_viewport,
             scroll_to_caret: !seen,
             ime_reset,
+            ime_window_active: old.ime_window_active,
             ..CanvasState::default()
         };
     }
@@ -396,9 +408,12 @@ impl Default for CanvasState {
             ime_reset: false,
             ime_interrupt_now: false,
             ime_interrupted_preedit: false,
+            ime_snap_caret: false,
+            ime_escaped_this_frame: false,
             ime_window_cache: None,
             ime_tracker: egui::ImeContextTracker::new(),
             ime_viewport: None,
+            ime_window_active: false,
             alt_code: String::new(),
             alt_code_echo: None,
             wheel: Default::default(),
@@ -708,12 +723,66 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     scroll_area
 }
 
+fn other_wc_viewport_focused(ctx: &egui::Context) -> bool {
+    let vp = ctx.viewport_id();
+    ctx.input(|i| i.raw.viewports.iter().any(|(&vid, v)| vid != vp && v.focused == Some(true)))
+}
+
+/// Whether this window's canvas owns IME focus, including across transient OS window focus loss
+/// (`WindowFocused(false)` from the macOS Hanja popup or `Cmd+Tab`) while no other WordCraft
+/// viewport is focused and no other widget in this window took keyboard focus.
+pub(crate) fn canvas_owns_ime_focus(app: &WordApp, ctx: &egui::Context, allow_want_focus: bool) -> bool {
+    let vp = ctx.viewport_id();
+    if other_wc_viewport_focused(ctx) || (!app.windows.driven() && app.active_viewport() != vp) {
+        return false;
+    }
+    if !(ctx.input(|i| i.focused) || app.canvas.ime_window_active) {
+        return false;
+    }
+    match app.canvas.widget_id {
+        Some((id, _)) => ctx.memory(|m| m.has_focus(id) || (allow_want_focus && app.canvas.want_focus && m.focused().is_none())),
+        None => app.canvas.focused || (allow_want_focus && app.canvas.want_focus && ctx.memory(|m| m.focused().is_none())),
+    }
+}
+
+/// Whether keyboard focus in this active window just moved from the canvas to another widget
+/// (such as `navSearch`, `find_what`, or a comment editor), so an unfinished IME pre-edit on
+/// the canvas should be committed once before clearing.
+pub(crate) fn ime_focus_moved_to_other_widget(app: &WordApp, ctx: &egui::Context) -> bool {
+    let vp = ctx.viewport_id();
+    if other_wc_viewport_focused(ctx) || (!app.windows.driven() && app.active_viewport() != vp) {
+        return false;
+    }
+    if !(ctx.input(|i| i.focused) || app.canvas.ime_window_active) {
+        return false;
+    }
+    if app.session.view.read_mode || matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+        return false;
+    }
+    app.canvas.widget_id.is_some_and(|(id, _)| ctx.memory(|m| m.focused().is_some_and(|f| f != id)))
+}
+
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
+    app.canvas.ime_escaped_this_frame = false;
+    let vp = ui.ctx().viewport_id();
+    if ui.input(|i| i.focused) {
+        app.canvas.ime_window_active = true;
+    } else if other_wc_viewport_focused(ui.ctx()) || (!app.windows.driven() && app.active_viewport() != vp) {
+        app.canvas.ime_window_active = false;
+    }
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    let live_focused = canvas_owns_ime_focus(app, ui.ctx(), true);
+    if live_focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
+        if !live_focused {
+            if !app.canvas.ime_preedit.is_empty() && ime_focus_moved_to_other_widget(app, ui.ctx()) {
+                crate::keys::flush_ime_preedit(app, Some(ui.ctx()));
+            }
+            app.canvas.ime_preedit.clear();
+            app.canvas.ime_preedit_range = None;
+        }
         app.canvas.alt_code.clear();
     }
     crate::ink::replay_tick(app, ui.ctx());
@@ -777,7 +846,7 @@ fn update_canvas_scroll_state(
     app.canvas.viewport = Some(out.inner_rect);
 }
 
-fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, ime_geometry: Option<(Rect, Rect)>, ime_interrupt: bool) {
+fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response) {
     // Space and Enter also set `Response::clicked` on a focused click-sensing widget
     // (egui's fake primary click). Re-requesting an already focused widget no longer
     // interrupts IME in 0.37. A pointer
@@ -791,23 +860,19 @@ fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, im
     if focus_click {
         ui.memory_mut(|memory| memory.interrupt_ime());
     }
-    if focus_click || (app.canvas.want_focus && !resp.has_focus()) {
+    if focus_click || (app.canvas.want_focus && !ui.memory(|m| m.has_focus(resp.id))) {
         resp.request_focus();
     }
     if focus_click || app.canvas.want_focus {
         app.canvas.want_focus = false;
     }
     app.canvas.widget_id = Some((resp.id, ui.ctx().cumulative_pass_nr()));
-    if resp.has_focus() {
+    if ui.memory(|m| m.has_focus(resp.id)) {
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         });
     }
     app.canvas.focused = resp.has_focus();
-    // One observation per viewport pass, after every event and command for the pass has been
-    // applied: the owner, generation, bounded surrounding text and change cause all come from
-    // this same settled state.
-    crate::keys::observe_ime(app, ui.ctx(), ime_geometry, ime_interrupt);
 }
 
 fn dismiss_balloon_on_canvas_click(app: &mut WordApp, ui: &Ui, resp: &egui::Response) {
@@ -1101,7 +1166,23 @@ fn paint_white_space_seams(painter: &egui::Painter, rects: &[Rect], geo: &Geomet
     }
 }
 
-fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, geo: &Geometry, secondary_clicked: bool) {
+fn handle_secondary_selection(
+    app: &mut WordApp,
+    ui: &Ui,
+    resp: &egui::Response,
+    rects: &[Rect],
+    layout: &DocLayout,
+    geo: &Geometry,
+    secondary_clicked: bool,
+) {
+    let fresh_layout;
+    let layout = if secondary_clicked && !app.canvas.ime_preedit.is_empty() {
+        crate::keys::flush_ime_preedit(app, Some(ui.ctx()));
+        fresh_layout = app.session.layout();
+        &*fresh_layout
+    } else {
+        layout
+    };
     // Selected table cells: a right-click off them drops them, even between the selection's ends
     // (beside a selected column), so the menu acts on the cell clicked.
     if secondary_clicked
@@ -1153,12 +1234,12 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
 }
 
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
-    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
+    let CanvasFinish { app, ui, layout, geo, caret, mut ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out);
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
-    update_canvas_focus(app, ui, &resp, ime_geometry, ime_interrupt);
+    update_canvas_focus(app, ui, &resp);
     // Screen readers: the document under the canvas, with the caret (#488).
     crate::a11y::expose(app, ui.ctx(), resp.id, layout, &rects, area);
     // The buttons that start or stop middle-click scrolling don't also click the page.
@@ -1169,7 +1250,49 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         crate::content_controls::clicks(app, &resp);
     }
     let secondary_clicked = resp.secondary_clicked() && !middle_gesture;
-    handle_secondary_selection(app, &resp, &rects, layout, geo, secondary_clicked);
+    handle_secondary_selection(app, ui, &resp, &rects, layout, geo, secondary_clicked);
+    let ime_focused = app.canvas.focused || canvas_owns_ime_focus(app, ui.ctx(), false);
+    if ime_focused && ime_geometry.is_none() {
+        let fresh = app.session.layout();
+        if let Some(m) = &app.session.math
+            && let Some(bx) = fresh.equation_box(&m.at, app.session.page_hint)
+            && let Some(pr) = rects.get(bx.page)
+            && let Some(slot) = bx.math.slot(&m.pos.path, m.pos.off)
+        {
+            let s = geo.scale;
+            let x = (pr.min.x + (bx.x + slot.x) * s).round() + 0.5;
+            let y0 = pr.min.y + (bx.base - slot.y - slot.a) * s;
+            let y1 = pr.min.y + (bx.base - slot.y + slot.d) * s;
+            let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+            ime_geometry = Some((cr, cr));
+        } else if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some()
+            && let Some((hit, _)) = crate::objects::active(app, &fresh)
+            && let Some(pr) = rects.get(hit.page)
+        {
+            let scale = fresh.pages.get(hit.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+            let frame = crate::frame::to_screen(*pr, scale, hit.rect);
+            let h = (14.0 * scale).clamp(12.0, 32.0);
+            let x = frame.min.x + 8.0;
+            let y1 = (frame.max.y - 6.0).max(frame.min.y + 1.0);
+            let y0 = (y1 - h).max(frame.min.y);
+            let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+            ime_geometry = Some((cr, cr));
+        } else if let Some(c) = fresh.caret_on(&app.session.sel.focus, app.session.page_hint)
+            && let Some(pr) = rects.get(c.page)
+        {
+            let scale = fresh.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+            let x = pr.min.x + c.x * scale;
+            let y0 = pr.min.y + c.top * scale;
+            let y1 = y0 + c.height * scale;
+            let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+            ime_geometry = Some((cr, cr));
+        }
+    }
+    // One observation per viewport pass, after every event and command for the pass has been
+    // applied: the owner, generation, bounded surrounding text and change cause all come from
+    // this same settled state.
+    let ime_interrupt = ime_interrupt || std::mem::take(&mut app.canvas.ime_interrupt_now);
+    crate::keys::observe_ime(app, ui.ctx(), ime_geometry, ime_interrupt);
     // Shift+F10 opens the same menu below the caret, for the selection or the word there (#821).
     let from_keys = std::mem::take(&mut app.canvas.context_menu_from_keys);
     // A click on the equation frame's options strip opens the equation's menu below the strip.
@@ -1224,7 +1347,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         }
     });
     // Escape closes the child list first; a second Escape closes the context menu.
-    if open && !shown && child_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if open && !shown && child_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !app.canvas.ime_escaped_this_frame {
         shown = true;
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
@@ -1326,6 +1449,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = canvas_response(ui, content, scroll_target);
+        if std::mem::take(&mut app.canvas.want_focus) {
+            if !ui.memory(|m| m.has_focus(resp.id)) {
+                resp.request_focus();
+            }
+            app.canvas.focused = resp.has_focus();
+        }
         // Read Mode's neighbouring columns end right at the viewport's edges: keep their
         // shadows from showing there as hairlines.
         let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
@@ -1435,160 +1564,41 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);
         // Caret.
-        let focused = resp.has_focus() || app.canvas.focused;
-        // After an automatic change the web's text agent starts afresh
-        // (`keys::note_automatic_change`) — only there, because on X11 an interrupt recreates the
-        // input context and fcitx drops later keys (#1169). A body replacement interrupts on every
-        // platform: the composition belonged to the text that was swapped out.
-        let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && cfg!(target_arch = "wasm32") && app.canvas.ime_preedit.is_empty();
+        let window_focused = resp.has_focus() || app.canvas.focused;
+        let ime_focused = window_focused || canvas_owns_ime_focus(app, ui.ctx(), false);
+        // After an automatic change (AutoCorrect, AutoFormat, smart quotes) the platform's IME
+        // context starts afresh (`keys::note_automatic_change`), as does a body replacement.
+        let ime_reset = std::mem::take(&mut app.canvas.ime_reset) && app.canvas.ime_preedit.is_empty();
         let replaced = std::mem::take(&mut app.canvas.ime_interrupt_now);
         ime_interrupt = ime_reset || replaced;
-        // Editing an equation: frame it as Word does (a box as tall as its line, a grip at its
-        // top left, an options strip at its right) and draw the caret inside it.
-        let mut math_caret = false;
-        app.canvas.eq_options = None;
-        if let Some(m) = app.session.math.clone()
-            && let Some(bx) = layout.equation_box(&m.at, app.session.page_hint)
-            && let Some(pr) = rects.get(bx.page)
-        {
-            math_caret = true;
-            let (pi, ex, base, ml) = (bx.page, bx.x, bx.base, bx.math.clone());
-            let s = geo.scale;
-            let frame = equation_frame(*pr, &bx, s);
-            // The argument the caret is in (a numerator, a radicand…) is shaded.
-            if !m.pos.path.is_empty()
-                && let Some((x0, x1, up, down)) = ml.arg_extent(&m.pos.path)
-            {
-                let arg = Rect::from_min_max(
-                    pos2(pr.min.x + (ex + x0) * s, pr.min.y + (base - up) * s),
-                    pos2(pr.min.x + (ex + x1) * s, pr.min.y + (base + down) * s),
-                );
-                painter.rect_filled(arg.expand(1.0), 0.0, Color32::from_black_alpha(26));
-            }
-            painter.rect_filled(frame.strip, 0.0, t.equation_box.gamma_multiply(0.35));
-            let (c, w) = (frame.strip.center(), frame.strip.width() * 0.3);
-            painter.add(egui::Shape::convex_polygon(
-                vec![pos2(c.x - w, c.y - w * 0.6), pos2(c.x + w, c.y - w * 0.6), pos2(c.x, c.y + w * 0.6)],
-                t.equation_box,
-                Stroke::NONE,
-            ));
-            painter.rect_stroke(frame.outline, 2.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
-            painter.rect_filled(frame.grip, 1.0, Color32::WHITE);
-            painter.rect_stroke(frame.grip, 1.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
-            for k in 0..3 {
-                painter.circle_filled(
-                    pos2(frame.grip.center().x, frame.grip.min.y + frame.grip.height() * (k as f32 + 1.0) / 4.0),
-                    0.9,
-                    t.equation_box,
-                );
-            }
-            app.canvas.eq_options = Some(frame);
-            if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
-                let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
-                let y0 = pr.min.y + (base - slot.y - slot.a) * s;
-                let y1 = pr.min.y + (base - slot.y + slot.d) * s;
-                let since = crate::now_ms() - app.canvas.caret_visible_since;
-                // The caret glides and fades like Word's (`caret_glide`).
-                let on = ((since / 530.0) as u64).is_multiple_of(2);
-                let look = crate::caret_glide::look(
-                    app,
-                    ui,
-                    crate::caret_glide::LookRequest {
-                        content_origin,
-                        geometry: &geo,
-                        target: [pos2(x, y0), pos2(x, y1)],
-                        shown: focused,
-                        since_ms: since,
-                        on,
-                    },
-                );
-                if look.opacity > 0.0 && focused {
-                    let caret_color = caret_color_at(app, &layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, page_view, dim_body);
-                    painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
-                }
-                if focused {
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
-                    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
-                    ime_geometry = Some((cr, cr));
-                }
-            }
+        let smart_art_selected = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some();
+        let (math_caret, caret_ime) = paint_equation_and_body_caret(CaretPaint {
+            app,
+            ui,
+            layout: &layout,
+            rects: &rects,
+            geo: &geo,
+            t: &t,
+            painter: &painter,
+            content_origin,
+            page_view,
+            dim_body,
+            window_focused,
+            ime_focused,
+            smart_art_selected,
+        });
+        if let Some(geo_pair) = caret_ime {
+            ime_geometry = Some(geo_pair);
         }
-        if !math_caret
-            && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
-            && let Some(pr) = rects.get(c.page)
-        {
-            let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-            let x = pr.min.x + c.x * scale;
-            let y0 = pr.min.y + c.top * scale;
-            let y1 = y0 + c.height * scale;
-            let since = crate::now_ms() - app.canvas.caret_visible_since;
-            let on = ((since / 530.0) as u64).is_multiple_of(2);
-            // The caret contrasts with what lies under it, like Word's inverted caret (#299):
-            // worked out only when something is drawn in it.
-            let caret_color =
-                |app: &mut WordApp| caret_color_at(app, &layout, c.page, c.x + c.width / 2.0, c.top + c.height / 2.0, page_view, dim_body);
-            // An input method's composition is drawn from the caret, and the caret and the candidate
-            // window move to the input method's cursor inside it.
-            let mut preedit_color = None;
-            let mut ime_dx = 0.0;
-            if focused && !app.canvas.ime_preedit.is_empty() {
-                // The composition is interface text, but it may be in a script the interface fonts lack
-                // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
-                let new = crate::theme::faces_for_preedit(
-                    &app.canvas.ime_preedit,
-                    &app.canvas.ime_faces,
-                    |c| (c as u32) < 0x250,
-                    |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
-                );
-                if !new.is_empty() {
-                    app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_language_extra(
-                        ui.ctx(),
-                        app.fonts_hans,
-                        app.fonts_korean,
-                        app.fonts_hant,
-                        app.fonts_system_cjk,
-                        &app.canvas.ime_faces,
-                    );
-                    ui.ctx().request_repaint();
-                }
-                let color = caret_color(app);
-                let g = painter.layout_no_wrap(app.canvas.ime_preedit.clone(), regular(c.height * scale * 0.8), Color32::PLACEHOLDER);
-                let at = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
-                ime_dx = g.pos_from_cursor(egui::text::CCursor::new(at)).min.x;
-                let r = Rect::from_min_size(pos2(x, y1 - g.size().y), g.size());
-                painter.galley(r.min, g, color);
-                painter.line_segment([pos2(r.min.x, r.max.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, color));
-                preedit_color = Some(color);
-            }
-            let x = x + ime_dx;
-            let bar = if c.width > 0.0 {
-                // Turned text (a table cell's text direction): the caret lies across the page.
-                [pos2(x, y0.round() + 0.5), pos2(x + c.width * scale, y0.round() + 0.5)]
-            } else {
-                [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
-            };
-            // The caret glides and fades like Word's (`caret_glide`).
-            let shown = preview_sel(app).unwrap_or(&app.session.sel).is_collapsed() && focused;
-            let look = crate::caret_glide::look(
-                app,
-                ui,
-                crate::caret_glide::LookRequest { content_origin, geometry: &geo, target: bar, shown, since_ms: since, on },
-            );
-            if shown && look.opacity > 0.0 {
-                let color = preedit_color.unwrap_or_else(|| caret_color(app));
-                painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
-            }
-            if focused {
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
-            }
-            // IME candidate window placement.
-            let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
-            if focused {
-                ime_geometry = Some((cr, cr));
-            }
-        }
+        app.canvas.ime_snap_caret = false;
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        if !math_caret
+            && smart_art_selected
+            && ime_focused
+            && let Some(geo_pair) = paint_smart_art_ime_badge(app, ui, &t, &layout, &rects, geo.scale)
+        {
+            ime_geometry = Some(geo_pair);
+        }
         crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
         crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
@@ -1600,6 +1610,283 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         CanvasFinish { app, ui, layout: &layout, geo: &geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler },
         out,
     );
+}
+
+struct CaretPaint<'a> {
+    app: &'a mut WordApp,
+    ui: &'a Ui,
+    layout: &'a std::sync::Arc<DocLayout>,
+    rects: &'a [Rect],
+    geo: &'a Geometry,
+    t: &'a Tokens,
+    painter: &'a egui::Painter,
+    content_origin: Pos2,
+    page_view: u64,
+    dim_body: bool,
+    window_focused: bool,
+    ime_focused: bool,
+    smart_art_selected: bool,
+}
+
+struct InlinePreeditSpec<'a> {
+    page_painter: &'a egui::Painter,
+    preedit: &'a str,
+    range: Option<&'a std::ops::Range<usize>>,
+    font_px: f32,
+    color: Color32,
+    pr: Rect,
+    x: f32,
+    y0: f32,
+    y1: f32,
+    has_height: bool,
+}
+
+fn paint_equation_and_body_caret(cp: CaretPaint<'_>) -> (bool, Option<(Rect, Rect)>) {
+    let CaretPaint { app, ui, layout, rects, geo, t, painter, content_origin, page_view, dim_body, window_focused, ime_focused, smart_art_selected } =
+        cp;
+    let mut math_caret = false;
+    let mut ime_geometry = None;
+    app.canvas.eq_options = None;
+    if let Some(m) = app.session.math.clone()
+        && let Some(bx) = layout.equation_box(&m.at, app.session.page_hint)
+        && let Some(pr) = rects.get(bx.page)
+    {
+        math_caret = true;
+        let (pi, ex, base, ml) = (bx.page, bx.x, bx.base, bx.math.clone());
+        let s = geo.scale;
+        let frame = equation_frame(*pr, &bx, s);
+        if !m.pos.path.is_empty()
+            && let Some((x0, x1, up, down)) = ml.arg_extent(&m.pos.path)
+        {
+            let arg = Rect::from_min_max(
+                pos2(pr.min.x + (ex + x0) * s, pr.min.y + (base - up) * s),
+                pos2(pr.min.x + (ex + x1) * s, pr.min.y + (base + down) * s),
+            );
+            painter.rect_filled(arg.expand(1.0), 0.0, Color32::from_black_alpha(26));
+        }
+        painter.rect_filled(frame.strip, 0.0, t.equation_box.gamma_multiply(0.35));
+        let (c, w) = (frame.strip.center(), frame.strip.width() * 0.3);
+        painter.add(egui::Shape::convex_polygon(
+            vec![pos2(c.x - w, c.y - w * 0.6), pos2(c.x + w, c.y - w * 0.6), pos2(c.x, c.y + w * 0.6)],
+            t.equation_box,
+            Stroke::NONE,
+        ));
+        painter.rect_stroke(frame.outline, 2.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+        painter.rect_filled(frame.grip, 1.0, Color32::WHITE);
+        painter.rect_stroke(frame.grip, 1.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+        for k in 0..3 {
+            painter.circle_filled(pos2(frame.grip.center().x, frame.grip.min.y + frame.grip.height() * (k as f32 + 1.0) / 4.0), 0.9, t.equation_box);
+        }
+        app.canvas.eq_options = Some(frame);
+        if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
+            let mut x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
+            let mut y0 = pr.min.y + (base - slot.y - slot.a) * s;
+            let mut y1 = pr.min.y + (base - slot.y + slot.d) * s;
+            let since = crate::now_ms() - app.canvas.caret_visible_since;
+            let on = ((since / 530.0) as u64).is_multiple_of(2);
+            let mut preedit_color = None;
+            if ime_focused && !app.canvas.ime_preedit.is_empty() {
+                app.ensure_preedit_fonts(ui.ctx());
+                let raw_px = (slot.a + slot.d) * 0.8 * s;
+                let font_px = if raw_px.is_finite() { raw_px.clamp(1.0, 256.0) } else { 14.0 };
+                let color = caret_color_at(app, layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, page_view, dim_body);
+                let page_painter = ui.painter_at(ui.clip_rect().intersect(*pr));
+                let (nx, ny) = paint_inline_preedit(InlinePreeditSpec {
+                    page_painter: &page_painter,
+                    preedit: &app.canvas.ime_preedit,
+                    range: app.canvas.ime_preedit_range.as_ref(),
+                    font_px,
+                    color,
+                    pr: *pr,
+                    x,
+                    y0,
+                    y1,
+                    has_height: true,
+                });
+                x = nx;
+                if let Some((ry0, ry1)) = ny {
+                    y0 = ry0;
+                    y1 = ry1;
+                }
+                preedit_color = Some(color);
+            }
+            let caret_shown = if app.canvas.ime_preedit.is_empty() { window_focused } else { ime_focused };
+            let look = crate::caret_glide::look(
+                app,
+                ui,
+                crate::caret_glide::LookRequest {
+                    content_origin,
+                    geometry: geo,
+                    target: [pos2(x, y0), pos2(x, y1)],
+                    shown: caret_shown,
+                    since_ms: since,
+                    on,
+                },
+            );
+            if look.opacity > 0.0 && caret_shown {
+                let caret_color = preedit_color
+                    .unwrap_or_else(|| caret_color_at(app, layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, page_view, dim_body));
+                painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
+            }
+            if window_focused {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+            }
+            if ime_focused {
+                let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                ime_geometry = Some((cr, cr));
+            }
+        }
+    }
+    if !math_caret && !smart_art_selected {
+        ime_geometry = paint_body_caret(CaretPaint {
+            app,
+            ui,
+            layout,
+            rects,
+            geo,
+            t,
+            painter,
+            content_origin,
+            page_view,
+            dim_body,
+            window_focused,
+            ime_focused,
+            smart_art_selected,
+        });
+    }
+    (math_caret, ime_geometry)
+}
+
+fn paint_body_caret(cp: CaretPaint<'_>) -> Option<(Rect, Rect)> {
+    let CaretPaint { app, ui, layout, rects, geo, painter, content_origin, page_view, dim_body, window_focused, ime_focused, .. } = cp;
+    let c = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)?;
+    let pr = rects.get(c.page)?;
+    let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+    let x = pr.min.x + c.x * scale;
+    let mut y0 = pr.min.y + c.top * scale;
+    let mut y1 = y0 + c.height * scale;
+    let since = crate::now_ms() - app.canvas.caret_visible_since;
+    let on = ((since / 530.0) as u64).is_multiple_of(2);
+    let caret_color = |app: &mut WordApp| caret_color_at(app, layout, c.page, c.x + c.width / 2.0, c.top + c.height / 2.0, page_view, dim_body);
+    let mut preedit_color = None;
+    let mut cur_x = x;
+    if ime_focused && !app.canvas.ime_preedit.is_empty() {
+        app.ensure_preedit_fonts(ui.ctx());
+        let style = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.style.as_deref());
+        let resolved = app.session.doc.styles.resolve_char(style, &app.session.typing_props());
+        let raw_px = resolved.size * scale;
+        let font_px = if raw_px.is_finite() { raw_px.clamp(1.0, 256.0) } else { 14.0 };
+        let color = match resolved.color {
+            wordcraft_doc::props::TextColor::Rgb(rgb) => crate::theme::c32(rgb),
+            wordcraft_doc::props::TextColor::Auto => caret_color(app),
+        };
+        let page_painter = ui.painter_at(ui.clip_rect().intersect(*pr));
+        let (nx, ny) = paint_inline_preedit(InlinePreeditSpec {
+            page_painter: &page_painter,
+            preedit: &app.canvas.ime_preedit,
+            range: app.canvas.ime_preedit_range.as_ref(),
+            font_px,
+            color,
+            pr: *pr,
+            x,
+            y0,
+            y1,
+            has_height: c.height > 0.0,
+        });
+        cur_x = nx;
+        if let Some((ry0, ry1)) = ny {
+            y0 = ry0;
+            y1 = ry1;
+        }
+        preedit_color = Some(color);
+    }
+    let x = cur_x;
+    let bar = if c.width > 0.0 && app.canvas.ime_preedit.is_empty() {
+        [pos2(x, y0.round() + 0.5), pos2(x + c.width * scale, y0.round() + 0.5)]
+    } else {
+        let bottom = if y1 > y0 { y1 } else { y0 + 14.0 };
+        [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, bottom)]
+    };
+    let shown =
+        if app.canvas.ime_preedit.is_empty() { preview_sel(app).unwrap_or(&app.session.sel).is_collapsed() && window_focused } else { ime_focused };
+    let look =
+        crate::caret_glide::look(app, ui, crate::caret_glide::LookRequest { content_origin, geometry: geo, target: bar, shown, since_ms: since, on });
+    if shown && look.opacity > 0.0 {
+        let color = preedit_color.unwrap_or_else(|| caret_color(app));
+        painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
+    }
+    if window_focused {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+    }
+    if ime_focused {
+        let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1.max(y0 + 1.0)));
+        return Some((cr, cr));
+    }
+    None
+}
+
+fn paint_inline_preedit(spec: InlinePreeditSpec<'_>) -> (f32, Option<(f32, f32)>) {
+    let InlinePreeditSpec { page_painter, preedit, range, font_px, color, pr, x, y0, y1, has_height } = spec;
+    let max_w = (pr.max.x - x).max(font_px).max(16.0);
+    let g = page_painter.layout(preedit.to_owned(), regular(font_px), color, max_w);
+    let at = preedit_cursor_chars(preedit, range);
+    let cur_rect = g.pos_from_cursor(egui::text::CCursor::new(at));
+    let row0_h = g.rows.first().map_or(g.size().y, |r| r.size.y);
+    let anchor_bottom = if has_height { y1 } else { y0 + row0_h };
+    let origin_pos = pos2(x, anchor_bottom - row0_h);
+    page_painter.galley(origin_pos, std::sync::Arc::clone(&g), color);
+    for row in &g.rows {
+        let rr = Rect::from_min_size(origin_pos + row.pos.to_vec2(), row.size);
+        page_painter.line_segment([pos2(rr.min.x, rr.max.y), pos2(rr.max.x, rr.max.y)], Stroke::new(1.0, color));
+    }
+    let cur_x = (origin_pos.x + cur_rect.min.x).min(pr.max.x.max(x));
+    let wrapped_y = (g.rows.len() > 1).then(|| {
+        let ry0 = origin_pos.y + cur_rect.min.y;
+        let ry1 = (origin_pos.y + cur_rect.max.y).max(ry0 + 1.0);
+        (ry0, ry1)
+    });
+    (cur_x, wrapped_y)
+}
+
+fn paint_smart_art_ime_badge(
+    app: &mut WordApp,
+    ui: &Ui,
+    t: &crate::theme::Tokens,
+    layout: &DocLayout,
+    rects: &[Rect],
+    geo_scale: f32,
+) -> Option<(Rect, Rect)> {
+    let (hit, _) = crate::objects::active(app, layout)?;
+    let pr = rects.get(hit.page)?;
+    let scale = layout.pages.get(hit.page).map_or(geo_scale, |page| page_screen_scale(*pr, page, geo_scale));
+    let frame = crate::frame::to_screen(*pr, scale, hit.rect);
+    let font_px = if (12.0 * scale).is_finite() { (12.0 * scale).clamp(11.0, 24.0) } else { 13.0 };
+    let mut x = frame.min.x + 8.0;
+    let mut y1 = (frame.max.y - 6.0).max(frame.min.y + 1.0);
+    let mut y0 = (y1 - font_px * 1.25).max(frame.min.y);
+    if !app.canvas.ime_preedit.is_empty() {
+        app.ensure_preedit_fonts(ui.ctx());
+        let page_painter = ui.painter_at(ui.clip_rect().intersect(*pr));
+        let max_w = (frame.width() - 16.0).max(font_px).max(32.0);
+        let g = page_painter.layout(app.canvas.ime_preedit.clone(), regular(font_px), t.text, max_w);
+        let at = preedit_cursor_chars(&app.canvas.ime_preedit, app.canvas.ime_preedit_range.as_ref());
+        let cur_rect = g.pos_from_cursor(egui::text::CCursor::new(at));
+        let pad = vec2(6.0, 3.0);
+        let origin_pos = pos2(frame.min.x + 8.0, (frame.max.y - g.size().y - 6.0).max(frame.min.y + 4.0));
+        let badge = Rect::from_min_size(origin_pos - pad, g.size() + pad * 2.0);
+        page_painter.rect(badge, 4.0, t.panel, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        page_painter.galley(origin_pos, std::sync::Arc::clone(&g), t.text);
+        for row in &g.rows {
+            let rr = Rect::from_min_size(origin_pos + row.pos.to_vec2(), row.size);
+            page_painter.line_segment([pos2(rr.min.x, rr.max.y), pos2(rr.max.x, rr.max.y)], Stroke::new(1.0, t.text));
+        }
+        x = (origin_pos.x + cur_rect.min.x).min(badge.max.x);
+        y0 = origin_pos.y + cur_rect.min.y;
+        y1 = (origin_pos.y + cur_rect.max.y).max(y0 + 1.0);
+        page_painter.line_segment([pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)], Stroke::new(1.5, t.accent));
+    }
+    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1.max(y0 + 1.0)));
+    Some((cr, cr))
 }
 
 #[cfg(test)]

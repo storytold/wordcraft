@@ -71,6 +71,7 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
 /// its body, keeps it open when it stays, and gives the Save Changes prompt the AccessKit
 /// alert-dialog role.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
+    crate::note_ime_composing_start(ctx);
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
         return;
@@ -167,7 +168,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
 
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.
 pub(crate) fn cancel_key_pressed(ui: &Ui) -> bool {
-    ui.input(|i| i.key_pressed(egui::Key::Escape) || (cfg!(target_os = "macos") && i.modifiers.command && i.key_pressed(egui::Key::Period)))
+    !crate::ime_event_or_composing(ui.ctx(), None)
+        && ui.input(|i| i.key_pressed(egui::Key::Escape) || (cfg!(target_os = "macos") && i.modifiers.command && i.key_pressed(egui::Key::Period)))
 }
 
 /// Lays out an OK and a Cancel button right-to-left, in the platform's order:
@@ -189,7 +191,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enter and Escape belong to the Colors dialog while it is open above this one.
-            let keys = !crate::colors::is_open(ui.ctx());
+            let keys = !crate::colors::is_open(ui.ctx()) && !crate::ime_event_or_composing(ui.ctx(), None);
             let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, ok)), tl!("Cancel"));
             if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
                 r.1 = true;
@@ -205,7 +207,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 /// A dialog's single Close button (Escape too).
 pub(super) fn close_button(ui: &mut Ui) -> bool {
     ui.add_space(8.0);
-    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut close = !crate::ime_event_or_composing(ui.ctx(), None) && ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         close |= ui.add(crate::widgets::primary_button(ui, tl!("Close"))).clicked();
     });

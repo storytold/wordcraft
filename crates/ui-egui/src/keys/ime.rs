@@ -11,6 +11,14 @@ pub(super) const MAX_IME_COMMIT_BYTES: usize = 64 * 1024;
 /// The bounded visible-logical window around the body selection, cached by `(revision, cursor,
 /// anchor)` so an idle pass does not walk a long paragraph again. Every edit bumps `rev`.
 fn ime_window(app: &mut WordApp) -> Option<wordcraft_doc::ime_text::ImeWindow> {
+    if let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) {
+        let i = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0))?;
+        let cur = g.items.get(i)?.text.as_str();
+        let max = wordcraft_doc::ime_text::MAX_IME_TEXT_BYTES;
+        let start = (cur.len().saturating_sub(max)..=cur.len()).find(|&b| cur.is_char_boundary(b)).unwrap_or(cur.len());
+        let tail = cur.get(start..)?;
+        return Some(wordcraft_doc::ime_text::ImeWindow { text: tail.to_string(), cursor: tail.len(), anchor: tail.len() });
+    }
     let rev = app.session.rev();
     let cursor = app.session.sel.focus.clone();
     let anchor = app.session.sel.anchor.clone();
@@ -46,7 +54,7 @@ pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Opti
     }
     let frame = ctx.cumulative_frame_nr_for(viewport);
     let pass = ctx.cumulative_pass_nr_for(viewport);
-    let focused = app.canvas.focused && geometry.is_some();
+    let focused = (app.canvas.focused || crate::canvas::canvas_owns_ime_focus(app, ctx, false)) && geometry.is_some();
     let update = if focused {
         let target = ime_target(app);
         if app.session.math.is_some() {
@@ -75,7 +83,11 @@ pub(crate) fn observe_ime(app: &mut WordApp, ctx: &egui::Context, geometry: Opti
             }
         }
     } else {
-        // No editor has the keyboard: a pre-edit painted from the old focus must not linger.
+        // No editor has the keyboard: flush if focus moved to another widget in this active window,
+        // then clear so a pre-edit painted from the old focus never lingers.
+        if !app.canvas.ime_preedit.is_empty() && crate::canvas::ime_focus_moved_to_other_widget(app, ctx) {
+            crate::keys::flush_ime_preedit(app, Some(ctx));
+        }
         app.canvas.ime_preedit.clear();
         app.canvas.ime_preedit_range = None;
         app.canvas.ime_tracker.observe(viewport, None)
@@ -105,6 +117,12 @@ fn ime_target(app: &WordApp) -> egui::ImeTarget {
     let document = app.session.document_id();
     if let Some(math) = &app.session.math {
         egui::ImeTarget::new(egui::Id::unique(("wordcraft-ime-equation", document)), math.session)
+    } else if let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) {
+        let active_item = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0));
+        egui::ImeTarget::new(
+            egui::Id::unique(("wordcraft-ime-smartart", document, app.session.sel.ordered().0, active_item)),
+            app.session.ime_body_epoch(),
+        )
     } else {
         // A body replaced under the same document id (setText, version restore, compare,
         // Undo/Redo) advances the epoch, so the platform clears the old composition.
@@ -242,8 +260,8 @@ pub(super) fn note_automatic_change(app: &mut WordApp, outcome: ImeEditOutcome) 
 /// pre-edit (which never lives in the model here). Erasure joins an open typing group and the
 /// text that follows joins it too ([`type_text`]), so one Undo takes back the typing with its
 /// correction. Neither path runs inside an equation, whose text is not the document's.
-pub(super) fn delete_surrounding(app: &mut WordApp, before: usize, after: usize) {
-    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Chars);
+pub(super) fn delete_surrounding(app: &mut WordApp, before: usize, after: usize) -> bool {
+    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Chars)
 }
 
 /// An input method's byte-counted `DeleteSurroundingBytes` (macOS and Wayland): erase the UTF-8
@@ -251,8 +269,8 @@ pub(super) fn delete_surrounding(app: &mut WordApp, before: usize, after: usize)
 /// character boundary (a start forward, an end backward), so a count that ends inside a
 /// character leaves that character whole. The selection and paragraph marks stay outside the
 /// range.
-pub(super) fn delete_surrounding_bytes(app: &mut WordApp, before: usize, after: usize) {
-    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Bytes);
+pub(super) fn delete_surrounding_bytes(app: &mut WordApp, before: usize, after: usize) -> bool {
+    delete_surrounding_common(app, before, after, wordcraft_doc::ime_text::DeleteUnit::Bytes)
 }
 
 /// Refuse a body surrounding request and discard the composition it invalidates.
@@ -391,6 +409,22 @@ fn ime_delete_side(
     Some((delta, restored))
 }
 
+/// Move an offset that landed strictly inside a tracked-deletion run back to that run's start.
+///
+/// When Track Changes marks a surrounding deletion instead of erasing its bytes, `normalize` merges
+/// adjacent equal `<w:del>` runs into one span. A stored offset on the seam between the newly marked
+/// run and an existing (or after-side) `<w:del>` run then falls strictly inside the merged deletion,
+/// which `VisibleParagraph` refuses as unrepresentable; snapping to the run's start keeps the same
+/// visible position at a valid boundary before the deletion.
+fn snap_out_of_deleted_run(para: &wordcraft_doc::para::Paragraph, off: usize) -> usize {
+    for r in para.deleted_ranges() {
+        if r.start < off && off < r.end {
+            return r.start;
+        }
+    }
+    off
+}
+
 /// The final caret/selection offsets after one or two surrounding deletions. A restored
 /// placeholder end is the only provable position when one side inserted it; otherwise both
 /// stored offsets move by the paragraph's signed length change.
@@ -415,29 +449,40 @@ fn ime_surrounding_offsets(
 }
 
 /// Both delete-surrounding paths: one visible-logical mapping for the query and the deletion.
-fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, unit: wordcraft_doc::ime_text::DeleteUnit) {
+fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, unit: wordcraft_doc::ime_text::DeleteUnit) -> bool {
     if before == 0 && after == 0 {
-        return;
+        return true;
     }
     // A new surrounding request supersedes any replacement promised by an earlier one.
     app.session.clear_ime_joins();
     if app.session.math.is_some() {
         refuse_ime_request(app);
-        return;
+        return false;
+    }
+    match crate::dialogs_smart_art::delete_surrounding_in(app, before, after, unit) {
+        crate::dialogs_smart_art::SmartArtDeleteResult::NotHandled => {}
+        crate::dialogs_smart_art::SmartArtDeleteResult::Changed => {
+            note_ime_application_change(app);
+            return true;
+        }
+        crate::dialogs_smart_art::SmartArtDeleteResult::Refused => {
+            refuse_ime_request(app);
+            return false;
+        }
     }
     let cursor = app.session.sel.focus.clone();
     let anchor = app.session.sel.anchor.clone();
     if cursor.story != anchor.story || cursor.path != anchor.path {
         refuse_ime_request(app);
-        return;
+        return false;
     }
     let Some(del) = app.session.doc.ime_delete_surrounding(&cursor, &anchor, before, after, unit) else {
         refuse_ime_request(app);
-        return;
+        return false;
     };
     if del.before.is_none() && del.after.is_none() {
         refuse_ime_request(app);
-        return;
+        return matches!(unit, wordcraft_doc::ime_text::DeleteUnit::Chars);
     }
     let join = app.session.typing_open();
     let props = app.session.typing_props();
@@ -462,7 +507,7 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
     let mut first_placeholder_end = None;
     if let Some(range) = del.before.clone() {
         let Some((delta, restored)) = ime_delete_side(app, &mut rollback, &cursor, range.start, range.end, join) else {
-            return;
+            return false;
         };
         deleted = true;
         first_placeholder_end = restored;
@@ -472,11 +517,11 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
     if let Some(range) = del.after {
         let Some(start) = shift_offset(range.start, shift) else {
             rollback.apply(app);
-            return;
+            return false;
         };
         let Some(end) = shift_offset(range.end, shift) else {
             rollback.apply(app);
-            return;
+            return false;
         };
         let in_bounds = app
             .session
@@ -485,27 +530,38 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
             .is_some_and(|p| start < end && end <= p.len() && p.text.is_char_boundary(start) && p.text.is_char_boundary(end));
         if !in_bounds {
             rollback.apply(app);
-            return;
+            return false;
         }
         // The mapped end is in the paragraph as the first side left it; a control already
         // showing its placeholder there is not one this side restores.
         let Some((_, restored)) = ime_delete_side(app, &mut rollback, &cursor, start, end, deleted || join) else {
-            return;
+            return false;
         };
         deleted = true;
         second_placeholder_end = restored;
     }
     let Some((anchor_off, focus_off)) = ime_surrounding_offsets(del.anchor, del.focus, shift, first_placeholder_end, second_placeholder_end) else {
         rollback.apply(app);
-        return;
+        return false;
     };
-    let valid =
-        app.session.doc.para_at(&cursor).is_some_and(|p| {
-            anchor_off <= p.len() && focus_off <= p.len() && p.text.is_char_boundary(anchor_off) && p.text.is_char_boundary(focus_off)
-        });
+    let (anchor_off, focus_off) = match app.session.doc.para_at(&cursor) {
+        Some(p) if first_placeholder_end.is_none() && second_placeholder_end.is_none() => {
+            (snap_out_of_deleted_run(p, anchor_off), snap_out_of_deleted_run(p, focus_off))
+        }
+        _ => (anchor_off, focus_off),
+    };
+    let valid = app.session.doc.para_at(&cursor).is_some_and(|p| {
+        let view = wordcraft_doc::ime_text::VisibleParagraph::new(p);
+        anchor_off <= p.len()
+            && focus_off <= p.len()
+            && p.text.is_char_boundary(anchor_off)
+            && p.text.is_char_boundary(focus_off)
+            && view.visible_offset(anchor_off).is_some()
+            && view.visible_offset(focus_off).is_some()
+    });
     if !valid {
         rollback.apply(app);
-        return;
+        return false;
     }
     app.session.sel = wordcraft_engine::Selection {
         anchor: wordcraft_doc::Pos { off: anchor_off, ..cursor.clone() },
@@ -521,6 +577,7 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
         let outcome = ImeEditOutcome { classified: true, content_changed: true, state_changed: true, transformed: false, selection_changed: true };
         publish_ime_receipt(app, before_stamp, after_stamp, outcome);
     }
+    true
 }
 
 /// An input method's `DeleteSurrounding` inside an equation: one bounded transactional command.
@@ -530,9 +587,9 @@ fn delete_surrounding_common(app: &mut WordApp, before: usize, after: usize, uni
 /// `Session::run` has already consumed the pending undo joins before dispatch and may have
 /// recorded the attempted no-op command in the macro/Repeat; those generic side effects are not
 /// rolled back.
-pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize) {
+pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize) -> bool {
     if app.session.math.is_none() {
-        return;
+        return false;
     }
     // A new surrounding request supersedes any earlier equation deletion's promised join,
     // whether or not this one can run. Clear the painted composition before every refusal,
@@ -542,10 +599,10 @@ pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize)
     app.canvas.ime_preedit_range = None;
     if before > wordcraft_engine::MAX_EQUATION_DELETE_UNITS || after > wordcraft_engine::MAX_EQUATION_DELETE_UNITS {
         app.canvas.ime_interrupt_now = true;
-        return;
+        return false;
     }
     if before == 0 && after == 0 {
-        return;
+        return true;
     }
     if app.session.typing_open() {
         app.session.join_next_undo();
@@ -561,9 +618,47 @@ pub(super) fn delete_in_equation(app: &mut WordApp, before: usize, after: usize)
             let outcome = app.session.ime_edit_outcome();
             let after_stamp = ime_stamp(app);
             publish_ime_receipt(app, before_stamp, after_stamp, outcome);
+            true
         }
         Err(_) => {
             app.canvas.ime_interrupt_now = true;
+            false
+        }
+    }
+}
+
+/// An input method's `DeleteSurroundingBytes` inside an equation: converts exact UTF-8 byte counts
+/// in the active linear run slot into an atomic character deletion, refusing mid-character or
+/// structural boundaries without touching the document.
+pub(super) fn delete_in_equation_bytes(app: &mut WordApp, before_bytes: usize, after_bytes: usize) -> bool {
+    if app.session.math.is_none() {
+        return false;
+    }
+    app.session.clear_ime_joins();
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    if before_bytes == 0 && after_bytes == 0 {
+        return true;
+    }
+    if before_bytes > wordcraft_doc::ime_text::MAX_IME_TEXT_BYTES || after_bytes > wordcraft_doc::ime_text::MAX_IME_TEXT_BYTES {
+        app.canvas.ime_interrupt_now = true;
+        return false;
+    }
+    if app.session.typing_open() {
+        app.session.join_next_undo();
+    }
+    let before_stamp = ime_stamp(app);
+    match app.run_ime("equation.deleteSurroundingBytes", json!({"before": before_bytes, "after": after_bytes})) {
+        Ok(_) => {
+            app.session.join_next_equation_edit();
+            let outcome = app.session.ime_edit_outcome();
+            let after_stamp = ime_stamp(app);
+            publish_ime_receipt(app, before_stamp, after_stamp, outcome);
+            true
+        }
+        Err(_) => {
+            app.canvas.ime_interrupt_now = true;
+            false
         }
     }
 }

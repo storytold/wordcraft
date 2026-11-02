@@ -203,6 +203,9 @@ pub fn key(app: &mut WordApp, key: egui::Key) -> bool {
         leave(app);
         return false;
     }
+    if key == egui::Key::Escape && app.canvas.ime_escaped_this_frame {
+        return false;
+    }
     if matches!(key, egui::Key::Escape | egui::Key::Enter) {
         leave(app);
         return true;
@@ -224,7 +227,7 @@ fn laid_out(app: &WordApp, layout: &DocLayout) -> Option<(usize, wordcraft_geom:
 /// mode, so the usual object handling goes on (a press outside the picture has just left it).
 pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect], layout: &DocLayout, scale: f32, at: Pos2) -> Option<bool> {
     if let Some(mut d) = app.canvas.crop_drag.take() {
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !app.canvas.ime_escaped_this_frame && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return Some(true); // the drag is dropped without a change; crop mode stays on
         }
         if active(app).as_ref() != Some(&d.pos) {
