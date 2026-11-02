@@ -692,7 +692,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | Refresh #2473 on current main and retain right-click visual affinity; source checks only, primary qualification pending. |
+| 2026-11-02 | trivial | Right-click preserves visual affinity (#2473). |
 | 2026-10-25 | trivial | #2473: wrapped REF navigation keeps atomic source positions with snapshot-owned visual hints. Pointer hits resolve on the final layout after typing; reflow rejects old owners. Synthetic controls only; readiness unchanged. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
