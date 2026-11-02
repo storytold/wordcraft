@@ -872,7 +872,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             // close the way Word draws them instead of leaving a notch at thick borders.
             let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| e.width / 2.0);
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
-            let bottom_band = if ri + 1 == nrows && !exact && !merged {
+            let bottom_band = if ri + 1 == t.rows.len() && !exact && !merged {
                 b.bottom.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0))
             } else {
                 0.0
