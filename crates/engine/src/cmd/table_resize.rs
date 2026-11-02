@@ -641,7 +641,7 @@ fn regrid(t: &mut Table, cols: &[f32], rows: &[(usize, Vec<f32>)]) -> Result<(),
     }
     // The new total becomes the table's own width, as in Word: the table keeps it, past the
     // margin when the columns were widened (see `set_widths`).
-    t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
+    t.props.width = Some(t.grid_total());
     t.props.width_pct = None;
     super::table::sync_cell_widths(t);
     Ok(())
@@ -658,7 +658,7 @@ fn drawn_left(l: &DocLayout, page: usize, target: &ResizeTarget) -> Option<f32> 
 pub(crate) fn set_widths(t: &mut Table, widths: Vec<f32>) {
     if widths.len() == t.cols() {
         t.grid = widths;
-        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
+        t.props.width = Some(t.grid_total());
         t.props.width_pct = None;
         super::table::sync_cell_widths(t);
     }

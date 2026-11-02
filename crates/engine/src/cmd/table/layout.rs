@@ -69,7 +69,7 @@ pub(super) fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32)
         }
     }
     if any {
-        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
+        t.props.width = Some(t.grid_total());
         t.props.width_pct = None;
         sync_cell_widths(t);
     }

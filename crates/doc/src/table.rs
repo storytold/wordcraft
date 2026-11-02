@@ -76,6 +76,16 @@ pub const MAX_COLS: usize = 63;
 /// when it is saved, copied or dropped (#1596).
 pub const MAX_TABLE_DEPTH: usize = 24;
 
+/// A `w:gridCol` width as layout takes it: units can be narrower than a text box, and a column
+/// with no usable width still takes room.
+pub fn grid_col_width(w: f32) -> f32 {
+    match w {
+        w if !w.is_finite() => 72.0,
+        w if w <= 0.0 => 4.0,
+        w => w,
+    }
+}
+
 impl Table {
     /// Grid columns `lo..hi` that [`Table::slice`] copies for `rows`/`cols` (widened over merged cells),
     /// and whether any cell touches them (Cut clears the same cells it copies).
@@ -180,6 +190,11 @@ impl Table {
         let row_cols =
             |r: &Row| r.first_grid().saturating_add(r.cells.iter().map(Cell::span).fold(0, usize::saturating_add)).saturating_add(r.grid_after());
         self.grid.len().max(self.rows.iter().map(row_cols).max().unwrap_or(0))
+    }
+
+    /// The width of the grid as layout takes it (see [`grid_col_width`]).
+    pub fn grid_total(&self) -> f32 {
+        self.grid.iter().copied().map(grid_col_width).sum()
     }
 
     /// Grid column where cell `c` of row `r` starts.
@@ -648,6 +663,14 @@ mod tests {
         assert_eq!(t.rows[0].cells.iter().map(Cell::span).collect::<Vec<_>>(), [2, 1]);
         assert_eq!((t.rows[1].cells[2].props.vmerge, t.rows[2].cells[2].props.vmerge), (VMerge::Restart, VMerge::Continue));
         t
+    }
+
+    /// The total counts a column as layout will, so a table given it as its own width isn't
+    /// scaled when layout widens a zero-width column.
+    #[test]
+    fn grid_total_counts_columns_as_layout_does() {
+        let t = Table { grid: vec![100.0, 0.0, -1.0, f32::NAN], ..Default::default() };
+        assert_eq!(t.grid_total(), 100.0 + 4.0 + 4.0 + 72.0);
     }
 
     fn spans(t: &Table) -> Vec<Vec<usize>> {

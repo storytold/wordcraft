@@ -411,14 +411,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     let ncols = grid_cols(t).max(1);
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
         // Grid units can be narrower than a text box, including omitted row-end columns.
-        t.grid
-            .iter()
-            .map(|&w| match w {
-                w if !w.is_finite() => 72.0,
-                w if w <= 0.0 => 4.0,
-                w => w,
-            })
-            .collect()
+        t.grid.iter().copied().map(wordcraft_doc::table::grid_col_width).collect()
     } else {
         vec![avail / ncols as f32; ncols]
     };

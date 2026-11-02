@@ -610,6 +610,41 @@ fn a_table_without_a_grid_takes_its_columns_from_the_cells() {
     assert_eq!(t.grid, vec![1.3, 150.0]);
 }
 
+/// Spanning cells of a table without `w:tblGrid`, against the grid Word saves for the same cells
+/// (points; Word also merges columns no cell edge separates, which draws the same).
+#[test]
+fn spanning_cells_size_a_gridless_table_as_in_word() {
+    let tc = |w: u32, span: u32| format!(r#"<w:tc><w:tcPr><w:tcW w:w="{}" w:type="dxa"/><w:gridSpan w:val="{span}"/></w:tcPr><w:p/></w:tc>"#, w * 20);
+    let grid = |rows: &[&[(u32, u32)]]| {
+        let rows: String = rows.iter().map(|r| format!("<w:tr>{}</w:tr>", r.iter().map(|&(w, s)| tc(w, s)).collect::<String>())).collect();
+        let d = read_body(&format!("<w:tbl><w:tblPr/>{rows}</w:tbl><w:p/>"));
+        let Block::Table(t) = &*d.body[0] else { panic!() };
+        t.grid.clone()
+    };
+    // What a span lacks goes to its last column, in whichever order the rows come.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(300, 2)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 1), (100, 1)]]), [100.0, 200.0]);
+    assert_eq!(grid(&[&[(50, 1), (50, 1)], &[(300, 2)], &[(50, 1), (70, 1)]]), [50.0, 250.0]);
+    // The widest of several spans over the same columns decides (Word: one column, 300).
+    assert_eq!(grid(&[&[(100, 2)], &[(300, 2)]]).iter().sum::<f32>(), 300.0);
+    assert_eq!(grid(&[&[(300, 2)], &[(100, 2)]]), grid(&[&[(100, 2)], &[(300, 2)]]));
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(300, 2), (100, 1)]]).iter().sum::<f32>(), 400.0);
+    // Overlapping spans are taken from the left.
+    assert_eq!(grid(&[&[(100, 2), (100, 1)], &[(50, 1), (300, 2)]]), [50.0, 50.0, 250.0]);
+    assert_eq!(grid(&[&[(100, 2), (100, 2)], &[(40, 1), (200, 2), (40, 1)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(40, 1), (200, 2), (40, 1)], &[(100, 2), (100, 2)]]), [40.0, 60.0, 140.0, 40.0]);
+    assert_eq!(grid(&[&[(300, 3)], &[(100, 2), (50, 1)], &[(30, 1), (30, 1), (30, 1)]]), [30.0, 70.0, 200.0]);
+    // A span narrower than its columns narrows nothing.
+    assert_eq!(grid(&[&[(100, 1), (100, 1)], &[(50, 2)]]), [100.0, 100.0]);
+    // A span past the last column, and a width that means nothing, break nothing.
+    assert!((grid(&[&[(100, 1), (100, 1)], &[(500, 9)]]).iter().sum::<f32>() - 500.0).abs() < 0.01);
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="NaN" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcW w:w="-40" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0, 72.0]);
+}
+
 #[test]
 fn styles_numbering_settings_notes_comments_from_parts() {
     let styles = format!(
