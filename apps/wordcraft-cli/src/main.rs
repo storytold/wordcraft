@@ -17,13 +17,16 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--insert-color C] [--delete-color C] [--update-fields]
+                       [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt
+                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --insert-color/--delete-color RRGGBB|byAuthor colour the
+                                              tracked insertions/deletions (Track Changes Options)
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -297,6 +300,8 @@ const PASSWORD_OPTIONS: &[OptionSpec] =
     &[OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--password-file", takes_value: true }];
 const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
+    OptionSpec { name: "--insert-color", takes_value: true },
+    OptionSpec { name: "--delete-color", takes_value: true },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
@@ -412,6 +417,20 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+/// `convert`'s `--insert-color` / `--delete-color` (`RRGGBB` or `byAuthor`): how tracked
+/// changes are coloured with `--markup`, set through `review.trackingOptions`, which checks them
+/// (#5233). Without either flag nothing changes.
+fn set_tracking_colours(s: &mut Session, rest: &[String]) -> Result<(), String> {
+    let colours: serde_json::Map<String, serde_json::Value> = [("--insert-color", "insertColor"), ("--delete-color", "deleteColor")]
+        .into_iter()
+        .filter_map(|(flag, key)| arg_value(rest, flag).map(|c| (key.to_string(), json!(c))))
+        .collect();
+    if colours.is_empty() {
+        return Ok(());
+    }
+    s.run("review.trackingOptions", &serde_json::Value::Object(colours)).map(drop).map_err(|e| e.to_string())
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -439,6 +458,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }
+            set_tracking_colours(&mut s, &rest)?;
             let r = if o.to_ascii_lowercase().ends_with(".png") {
                 s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
             } else {
