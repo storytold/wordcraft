@@ -2639,8 +2639,8 @@ fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs()
     run(&mut h);
     assert_eq!(text(&h), before, "nothing is typed behind the menu");
 
-    // A right click over the menu opened from the keyboard reopens it for the mouse: the page has
-    // the keyboard, no item.
+    // A right click over the menu opened from the keyboard reopens it as the mouse opens it: the
+    // menu has the keyboard, with no item highlighted until the first Down.
     let mut h = new();
     h.state_mut().run("ui.contextMenu", json!({})).unwrap();
     run(&mut h);
@@ -2654,8 +2654,10 @@ fn the_context_menu_from_the_keyboard_gives_the_keyboard_back_where_it_belongs()
     }
     run(&mut h);
     assert!(h.state().canvas.context_menu_open, "the right click opens the menu");
-    assert!(!item_focused(&h), "no item has the keyboard");
-    assert!(h.state().canvas.focused, "the page has it");
+    assert!(!item_focused(&h), "no item is highlighted");
+    h.key_press(egui::Key::ArrowDown);
+    run(&mut h);
+    assert!(item_focused(&h), "Down gives the keyboard to an item");
 
     // A click on the ribbon's font box closes the menu and leaves the keyboard to the box.
     let mut h = new();
@@ -2756,6 +2758,7 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     run(&mut h);
     assert!(!h.state().canvas.context_menu_open, "Escape closes it");
     assert!(h.state().canvas.focused, "the page has the keyboard again");
+    assert_eq!(h.state().session.sel, caret, "at the caret where it was");
     h.key_press(egui::Key::ArrowDown);
     run(&mut h);
     assert_ne!(h.state().session.sel, caret, "and the arrows move the caret again");
@@ -2768,6 +2771,103 @@ fn the_context_menu_from_the_keyboard_takes_the_keyboard() {
     h.key_press(egui::Key::Enter);
     run(&mut h);
     assert!(!h.state().session.doc.plain_text(StoryRef::Body).contains("quick"), "Enter cut the word");
+    assert!(!h.state().canvas.context_menu_open, "and closed the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+
+    // The keys themselves: Shift+F10 and the Menu key open the menu with its first item focused.
+    // In the second line: the cut left two spaces, whose suggestion would come first.
+    h.state_mut().run("caret.set", json!({"pos": Pos::body(0, 19)})).unwrap();
+    run(&mut h);
+    for (name, modifiers, key) in [("Shift+F10", egui::Modifiers::SHIFT, egui::Key::F10), ("the Menu key", egui::Modifiers::NONE, egui::Key::Menu)] {
+        let caret = h.state().session.sel.clone();
+        h.key_press_modifiers(modifiers, key);
+        run(&mut h);
+        assert!(h.state().canvas.context_menu_open, "{name} opens the menu");
+        assert!(focused(&h).is_some_and(|l| l.starts_with("Cut")), "{name}: the first item has the keyboard: {:?}", focused(&h));
+        h.key_press(egui::Key::ArrowDown);
+        run(&mut h);
+        assert_eq!(focused(&h).as_ref(), items.get(1), "{name}: Down goes to the next item");
+        h.key_press(egui::Key::Escape);
+        run(&mut h);
+        assert!(!h.state().canvas.context_menu_open, "{name}: Escape closes the menu");
+        assert!(h.state().canvas.focused, "{name}: the page has the keyboard again");
+        assert_eq!(h.state().session.sel, caret, "{name}: at the caret where it was");
+    }
+}
+
+/// #4977: the menu a right click opens takes the keyboard too, as in Word. The menu itself has it,
+/// so a screen reader says "menu", and no item is highlighted until the first arrow: Down
+/// highlights the first item, Up the last. The page takes no keys meanwhile; Enter runs the
+/// highlighted item, on the selection the menu opened for; Escape closes the menu and gives the
+/// keyboard back to the page, at the caret where it was.
+#[test]
+fn the_context_menu_from_a_right_click_takes_the_keyboard_at_the_first_arrow() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = page_with_keyboard("The quick brown fox\nA second line");
+    let focused = |h: &H| h.query_by(|n| n.role() == Role::MenuItem && n.is_focused()).map(|n| n.accesskit_node().label().unwrap_or_default());
+    let right_click = |h: &mut H, off: usize| {
+        let c = h.state_mut().session.layout().caret(&Pos::body(0, off)).expect("laid out");
+        let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.run_steps(4);
+        assert!(h.state().canvas.context_menu_open, "the right click opens the menu");
+    };
+    let key = |h: &mut H, key: egui::Key| {
+        h.key_press(key);
+        h.run_steps(4);
+    };
+
+    right_click(&mut h, 6);
+    let caret = h.state().session.sel.clone();
+    let items: Vec<String> = h.query_all_by_role(Role::MenuItem).map(|n| n.accesskit_node().label().unwrap_or_default()).collect();
+    assert!(items.len() > 2, "the menu has several items: {items:?}");
+    assert_eq!(focused(&h), None, "no item is highlighted");
+    let menu_has_keyboard = |h: &H| h.query_by(|n| n.role() == Role::Menu && n.is_focused()).is_some();
+    assert!(menu_has_keyboard(&h), "the menu has the keyboard, so a screen reader says it");
+    assert!(!h.state().canvas.focused, "not the page");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(h.state().session.sel, caret, "the page takes no keys while the menu is open");
+    assert!(h.state().canvas.context_menu_open, "and the menu stays");
+    assert!(menu_has_keyboard(&h), "Right doesn't leave the menu");
+    key(&mut h, egui::Key::ArrowDown);
+    assert_eq!(focused(&h).as_ref(), items.first(), "the first Down highlights the first item");
+    key(&mut h, egui::Key::ArrowDown);
+    assert_eq!(focused(&h).as_ref(), items.get(1), "then Down goes on");
+    assert_eq!(h.state().session.sel, caret, "without moving the caret behind the menu");
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.state().canvas.context_menu_open, "Escape closes the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard again");
+    assert_eq!(h.state().session.sel, caret, "at the caret where it was");
+    key(&mut h, egui::Key::ArrowRight);
+    assert_ne!(h.state().session.sel, caret, "and the arrows move the caret again");
+
+    right_click(&mut h, 6);
+    assert_eq!(focused(&h), None, "no item is highlighted");
+    key(&mut h, egui::Key::ArrowUp);
+    assert_eq!(focused(&h).as_ref(), items.last(), "the first Up highlights the last item");
+    key(&mut h, egui::Key::Escape);
+    assert!(h.state().canvas.focused, "Escape gives the page the keyboard");
+
+    // Escape with no item highlighted closes the menu too.
+    right_click(&mut h, 6);
+    let caret = h.state().session.sel.clone();
+    key(&mut h, egui::Key::Escape);
+    assert!(!h.state().canvas.context_menu_open, "Escape closes the menu");
+    assert!(h.state().canvas.focused, "the page has the keyboard");
+    assert_eq!(h.state().session.sel, caret, "at the caret");
+
+    // Enter runs the highlighted item: Cut, on the word selected under the right click.
+    h.state_mut().run("select.text", json!({"text": "quick"})).unwrap();
+    right_click(&mut h, 6);
+    key(&mut h, egui::Key::ArrowDown);
+    assert!(focused(&h).is_some_and(|l| l.starts_with("Cut")), "Cut is highlighted: {:?}", focused(&h));
+    key(&mut h, egui::Key::Enter);
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The  brown fox\nA second line", "Enter cut the selected word");
     assert!(!h.state().canvas.context_menu_open, "and closed the menu");
     assert!(h.state().canvas.focused, "the page has the keyboard again");
 }

@@ -33,6 +33,11 @@ fn submenu_item(app: &mut WordApp, ui: &Ui, trigger: &egui::InnerResponse<Option
     });
 }
 
+/// The menu `ui` draws in.
+fn menu_id(ui: &Ui) -> Option<egui::Id> {
+    ui.stack().iter().find(|s| s.kind() == Some(egui::UiKind::Menu)).map(|s| s.unique_id)
+}
+
 /// Each item's place in the menu (or submenu) `ui` draws, and the number of its items, which
 /// screen readers say ("2 of 9") as in Word's menus; items that are off count too. The number
 /// goes on the menu: UI Automation takes it from the item's container.
@@ -41,18 +46,34 @@ fn number_items(ui: &Ui, items: &[(egui::LayerId, egui::Id)]) {
     for (at, id) in here.iter().enumerate() {
         ui.ctx().accesskit_node_builder(*id, |n| n.set_position_in_set(at));
     }
-    if let Some(menu) = ui.stack().iter().find(|s| s.kind() == Some(egui::UiKind::Menu)).map(|s| s.unique_id) {
+    if let Some(menu) = menu_id(ui) {
         ui.ctx().accesskit_node_builder(menu, |n| n.set_size_of_set(here.len()));
     }
 }
 
 /// The keyboard in a menu, as in Word's: opened from the keyboard, the first item takes it (one
-/// that is off too, as in Word); Up and Down go through the items of the menu (or submenu) the focus is in, round from the last to
-/// the first, Home and End to the first and the last, and Left and Right don't leave it. egui
-/// would move the focus to the nearest control in that direction, out of the menu (#4977).
+/// that is off too, as in Word); opened by the mouse, the menu itself has it, and a screen reader
+/// says "menu", until the first Down, which goes to the first item, or Up, to the last. Up and
+/// Down go through the items of the menu (or submenu) the focus is in, round from the last to the
+/// first, Home and End to the first and the last, and Left and Right don't leave it. egui would
+/// move the focus to the nearest control in that direction, out of the menu (#4977).
 fn keyboard(app: &mut WordApp, ui: &Ui) {
     let items = std::mem::take(&mut app.canvas.context_menu_items);
     number_items(ui, &items);
+    // A menu the mouse opened: egui keeps the keyboard only on a widget, and the menu's own node
+    // would lose it in the next frame. So a widget of no size with the menu's role has it, and a
+    // screen reader says "menu", until the first Down or Up.
+    let head = ui.id().with("context_menu_head");
+    if app.canvas.context_menu_focus_menu || ui.memory(|m| m.has_focus(head)) {
+        let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::ZERO);
+        let r = ui.interact(rect, head, egui::Sense::focusable_noninteractive());
+        r.widget_info(|| egui::WidgetInfo::new(egui::Role::Menu));
+        // Not in the popup's sizing pass, where nothing takes the keyboard yet.
+        if app.canvas.context_menu_focus_menu && !ui.is_sizing_pass() {
+            r.request_focus();
+            app.canvas.context_menu_focus_menu = false;
+        }
+    }
     if app.canvas.context_menu_focus_first {
         // Not in the popup's sizing pass, where nothing takes the keyboard yet.
         if let Some((_, first)) = items.iter().find(|(layer, _)| *layer == ui.layer_id()).filter(|_| !ui.is_sizing_pass()) {
@@ -64,6 +85,7 @@ fn keyboard(app: &mut WordApp, ui: &Ui) {
     let Some((layer, focused)) = items.iter().copied().find(|(_, id)| ui.memory(|m| m.has_focus(*id))) else {
         // Escape takes the focus away at the start of the pass: what the keyboard was in stays
         // known for it (`context_menu_submenu_item`).
+        first_arrow(app, ui, head, &items);
         return;
     };
     // In a submenu, the item that opens it: egui gives a submenu its item's id "with submenu".
@@ -103,6 +125,40 @@ fn keyboard(app: &mut WordApp, ui: &Ui) {
             m.move_focus(egui::FocusDirection::None);
             if let Some(id) = to.and_then(|i| level.get(i)) {
                 m.request_focus(*id);
+            }
+        });
+    }
+}
+
+/// A menu the mouse opened has the keyboard itself, with no item highlighted, and the page takes no
+/// keys meanwhile: the first Down highlights the first item, the first Up the last, Left and Right
+/// do nothing, as in Word (#4977). A control of the menu that has the keyboard (the mini toolbar's font
+/// box) keeps its arrows.
+fn first_arrow(app: &WordApp, ui: &Ui, head: egui::Id, items: &[(egui::LayerId, egui::Id)]) {
+    let page = app.canvas.widget_id.map(|(id, _)| id);
+    if !app.canvas.context_menu_keyboard || ui.is_sizing_pass() || ui.memory(|m| m.focused()).is_some_and(|f| Some(f) != page && f != head) {
+        return;
+    }
+    let (up, down, side) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::ArrowUp),
+            i.key_pressed(egui::Key::ArrowDown),
+            i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowRight),
+        )
+    });
+    let mut here = items.iter().filter(|(layer, _)| *layer == ui.layer_id()).map(|(_, id)| *id);
+    let to = if down {
+        here.next()
+    } else if up {
+        here.last()
+    } else {
+        None
+    };
+    if to.is_some() || side {
+        ui.memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            if let Some(id) = to {
+                m.request_focus(id);
             }
         });
     }

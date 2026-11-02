@@ -166,11 +166,13 @@ pub struct CanvasState {
     pub context_menu_open: bool,
     /// Shift+F10, the Menu key (or `ui.contextMenu`) asked for the context menu at the caret (#821).
     pub context_menu_from_keys: bool,
-    /// The context menu was opened from the keyboard: its items have the keyboard, and the page
+    /// The context menu has the keyboard, opened from the keyboard or by the mouse, and the page
     /// takes it back when the menu closes (#4977).
     pub context_menu_keyboard: bool,
     /// The context menu's first item still has to take the keyboard (#4977).
     pub context_menu_focus_first: bool,
+    /// The context menu itself still has to take the keyboard, opened by the mouse (#4977).
+    pub context_menu_focus_menu: bool,
     /// A dialog has just opened, and its first control still has to take the keyboard (its sizing
     /// pass draws its controls hidden), as in Word (#4977).
     pub dialog_focus_first: bool,
@@ -400,6 +402,7 @@ impl Default for CanvasState {
             context_menu_from_keys: false,
             context_menu_keyboard: false,
             context_menu_focus_first: false,
+            context_menu_focus_menu: false,
             dialog_focus_first: false,
             context_menu_items: Vec::new(),
             context_menu_submenu_item: None,
@@ -730,8 +733,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    // A menu opened from the keyboard has the keys, also in the frames before the page sees it
-    // lose the focus (#4977).
+    // An open menu has the keys, also in the frames before the page sees it lose the focus (#4977).
     if app.canvas.focused && !app.canvas.context_menu_keyboard && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
@@ -1204,16 +1206,15 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     } else if secondary_clicked {
         app.canvas.context_menu_at = resp.interact_pointer_pos();
     }
-    // Opened from the keyboard, the menu takes the keyboard, as Word's does: otherwise the arrows
-    // move the caret behind it and a screen reader never hears it (#4977).
+    // The menu takes the keyboard, as Word's does: otherwise the arrows move the caret behind it
+    // and a screen reader never hears it (#4977). Opened from the keyboard, its first item has it;
+    // opened by the mouse, no item until the first Down or Up (`first_arrow`), as in Word.
     if from_keys || secondary_clicked || eq_strip.is_some() {
-        // A click that opens the menu over one opened from the keyboard gives the keyboard back to
-        // the page: the item that had it stays focused otherwise.
-        if !from_keys && app.canvas.context_menu_keyboard {
-            app.canvas.want_focus = true;
-        }
-        app.canvas.context_menu_keyboard = from_keys;
+        app.canvas.context_menu_keyboard = true;
         app.canvas.context_menu_focus_first = from_keys;
+        // Also over a menu opened from the keyboard: the item that had the keyboard stays focused
+        // otherwise.
+        app.canvas.context_menu_focus_menu = !from_keys;
         app.canvas.context_menu_submenu_item = None;
     }
     // Keep the parent independently of egui's one memory popup: the toolbar's font, size and
