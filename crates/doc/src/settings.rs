@@ -162,6 +162,12 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// `w:bordersDoNotSurroundHeader` (ECMA-376 §17.15.1.15): do not surround header with page border.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub borders_do_not_surround_header: bool,
+    /// `w:bordersDoNotSurroundFooter` (ECMA-376 §17.15.1.14): do not surround footer with page border.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub borders_do_not_surround_footer: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -307,6 +313,8 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            borders_do_not_surround_header: false,
+            borders_do_not_surround_footer: false,
         }
     }
 }

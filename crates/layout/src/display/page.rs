@@ -325,10 +325,28 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     match s {
         BorderStyle::Dotted => Stroke::BorderDotted,
         BorderStyle::Dashed => Stroke::BorderDashed,
+        BorderStyle::DashSmallGap => Stroke::BorderDashSmallGap,
         BorderStyle::DotDash => Stroke::BorderDotDash,
+        BorderStyle::DotDotDash => Stroke::BorderDotDotDash,
         BorderStyle::Double => Stroke::Double,
         BorderStyle::Triple => Stroke::Triple,
+        BorderStyle::ThickThin => Stroke::ThickThin,
+        BorderStyle::ThinThick => Stroke::ThinThick,
+        BorderStyle::ThinThickThin => Stroke::ThinThickThin,
+        BorderStyle::ThickThinSmallGap => Stroke::ThickThinSmallGap,
+        BorderStyle::ThinThickSmallGap => Stroke::ThinThickSmallGap,
+        BorderStyle::ThinThickThinSmallGap => Stroke::ThinThickThinSmallGap,
+        BorderStyle::ThickThinLargeGap => Stroke::ThickThinLargeGap,
+        BorderStyle::ThinThickLargeGap => Stroke::ThinThickLargeGap,
+        BorderStyle::ThinThickThinLargeGap => Stroke::ThinThickThinLargeGap,
         BorderStyle::Wave => Stroke::Wave,
+        BorderStyle::DoubleWave => Stroke::DoubleWave,
+        BorderStyle::DashDotStroked => Stroke::DashDotStroked,
+        BorderStyle::DashLongDash => Stroke::DashLongDash,
+        BorderStyle::ThreeDEmboss => Stroke::ThreeDEmboss,
+        BorderStyle::ThreeDEngrave => Stroke::ThreeDEngrave,
+        BorderStyle::Outset => Stroke::Outset,
+        BorderStyle::Inset => Stroke::Inset,
         _ => Stroke::Solid,
     }
 }
@@ -352,10 +370,11 @@ fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
 // Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
 pub(super) fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
     let (l, r) = (x0 - b.space, x1 + b.space);
-    out.push(rule(l, top, r, top, b, alpha));
-    out.push(rule(l, bottom, r, bottom, b, alpha));
-    out.push(rule(l, top, l, bottom, b, alpha));
-    out.push(rule(r, top, r, bottom, b, alpha));
+    let (w, color, stroke) = (b.width.max(0.25), b.color.unwrap_or(Rgb::BLACK), border_stroke(b.style));
+    out.push(Draw::Line { x0: l, y0: top, x1: r, y1: top, width: w, color, stroke, alpha, text_bg: None });
+    out.push(Draw::Line { x0: l, y0: bottom, x1: r, y1: bottom, width: w, color, stroke, alpha, text_bg: None });
+    out.push(Draw::Line { x0: l, y0: top, x1: l, y1: bottom, width: w, color, stroke, alpha, text_bg: None });
+    out.push(Draw::Line { x0: r, y0: top, x1: r, y1: bottom, width: w, color, stroke, alpha, text_bg: None });
 }
 
 fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, out: &mut Vec<Draw>) {
@@ -368,6 +387,9 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
+        Placed::BorderBox { rect, borders } => {
+            out.push(Draw::BorderBox { rect: *rect, top: borders.top, bottom: borders.bottom, left: borders.left, right: borders.right, alpha });
+        }
         Placed::Image { rect, media, crop, spin, .. } => spun(
             *spin,
             *rect,

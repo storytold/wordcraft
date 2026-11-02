@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
-use wordcraft_doc::{Watermark, styles};
+use wordcraft_doc::{PageBorderDisplay, PageBorderOffset, PageBorderOptions, PageBorderZOrder, Watermark, styles};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -266,23 +266,83 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Page borders of the caret's section (or every section with `applyTo: "document"`).
 fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
-    let borders = match v.get("sides") {
-        Some(sides) => Some(super::para::border_sides(sides, 24.0, 24.0)?).filter(Borders::any_visible),
+    let margin_top = v.get("margins").and_then(|m| p::f32(m, "top")).unwrap_or(24.0).clamp(0.0, 72.0);
+    let margin_bottom = v.get("margins").and_then(|m| p::f32(m, "bottom")).unwrap_or(24.0).clamp(0.0, 72.0);
+    let margin_left = v.get("margins").and_then(|m| p::f32(m, "left")).unwrap_or(24.0).clamp(0.0, 72.0);
+    let margin_right = v.get("margins").and_then(|m| p::f32(m, "right")).unwrap_or(24.0).clamp(0.0, 72.0);
+
+    let mut borders = match v.get("sides") {
+        Some(sides) => Some(super::para::border_sides(sides, margin_top, margin_left)?).filter(Borders::any_visible),
         None => {
             let kind = p::str(v, "kind").unwrap_or("box");
             let width = p::f32(v, "width").unwrap_or(1.0).clamp(0.25, 6.0);
             let color = p::str(v, "color").and_then(Rgb::parse);
             let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
-            (kind != "none").then(|| Borders::box_(Border { style, width, color, space: 24.0 }))
+            (kind != "none").then(|| Borders::box_(Border { style, width, color, space: margin_top }))
         }
     };
+    if let Some(b) = &mut borders {
+        if let Some(t) = &mut b.top {
+            t.space = margin_top;
+        }
+        if let Some(bt) = &mut b.bottom {
+            bt.space = margin_bottom;
+        }
+        if let Some(l) = &mut b.left {
+            l.space = margin_left;
+        }
+        if let Some(r) = &mut b.right {
+            r.space = margin_right;
+        }
+    }
+
+    let display = match p::str(v, "applyTo") {
+        Some("firstPage") => PageBorderDisplay::FirstPage,
+        Some("notFirstPage") => PageBorderDisplay::NotFirstPage,
+        _ => match p::str(v, "display") {
+            Some("firstPage") => PageBorderDisplay::FirstPage,
+            Some("notFirstPage") => PageBorderDisplay::NotFirstPage,
+            _ => PageBorderDisplay::AllPages,
+        },
+    };
+    let offset_from = match p::str(v, "offsetFrom") {
+        Some("text") => PageBorderOffset::Text,
+        _ => PageBorderOffset::Page,
+    };
+    let z_order = match p::str(v, "zOrder") {
+        Some("back") => PageBorderZOrder::Back,
+        _ => PageBorderZOrder::Front,
+    };
+    let align_with_boundary = p::bool(v, "alignWithBoundary").unwrap_or(false);
+    let surround_header = p::bool(v, "surroundHeader").unwrap_or(true);
+    let surround_footer = p::bool(v, "surroundFooter").unwrap_or(true);
+
+    let page_border_options = borders.map(|_| PageBorderOptions {
+        display,
+        offset_from,
+        z_order,
+        align_with_boundary,
+        margin_top,
+        margin_bottom,
+        margin_left,
+        margin_right,
+        surround_header,
+        surround_footer,
+    });
+
     let blocks: Vec<usize> = match p::str(v, "applyTo") {
         Some("document") => s.doc.sections().iter().map(|(end, _)| *end).collect(),
-        Some("section") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
+        Some("section") | Some("firstPage") | Some("notFirstPage") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
-        s.doc.section_mut(block).page_borders = borders;
+        let sect = s.doc.section_mut(block);
+        sect.page_borders = borders;
+        sect.page_border_options = page_border_options.clone();
+    }
+    if let Some(opts) = &page_border_options {
+        s.doc.settings.borders_do_not_surround_header = !opts.surround_header;
+        s.doc.settings.borders_do_not_surround_footer = !opts.surround_footer;
     }
     sel_result(s)
 }

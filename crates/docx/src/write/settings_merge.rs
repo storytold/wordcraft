@@ -18,6 +18,8 @@ const OWNED: &[&str] = &[
     "w:removeDateAndTime",
     "w:displayBackgroundShape",
     "w:mirrorMargins",
+    "w:bordersDoNotSurroundHeader",
+    "w:bordersDoNotSurroundFooter",
     "w:attachedTemplate",
     "w:linkStyles",
     "w:trackRevisions",

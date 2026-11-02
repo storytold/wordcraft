@@ -1087,6 +1087,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                 | Placed::Shape { rect, .. }
                 | Placed::Graphic { rect, .. }
                 | Placed::Clip { rect, .. }
+                | Placed::BorderBox { rect, .. }
                 | Placed::Object { rect, .. } => {
                     if fits(rect.bottom()) {
                         a.push(it.clone());

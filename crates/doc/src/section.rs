@@ -717,6 +717,63 @@ impl DocGrid {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PageBorderDisplay {
+    #[default]
+    AllPages,
+    FirstPage,
+    NotFirstPage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PageBorderOffset {
+    #[default]
+    Page,
+    Text,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PageBorderZOrder {
+    #[default]
+    Front,
+    Back,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PageBorderOptions {
+    pub display: PageBorderDisplay,
+    pub offset_from: PageBorderOffset,
+    pub z_order: PageBorderZOrder,
+    pub align_with_boundary: bool,
+    pub margin_top: f32,
+    pub margin_bottom: f32,
+    pub margin_left: f32,
+    pub margin_right: f32,
+    pub surround_header: bool,
+    pub surround_footer: bool,
+}
+
+impl Default for PageBorderOptions {
+    fn default() -> Self {
+        PageBorderOptions {
+            display: PageBorderDisplay::AllPages,
+            offset_from: PageBorderOffset::Page,
+            z_order: PageBorderZOrder::Front,
+            align_with_boundary: false,
+            margin_top: 24.0,
+            margin_bottom: 24.0,
+            margin_left: 24.0,
+            margin_right: 24.0,
+            surround_header: true,
+            surround_footer: true,
+        }
+    }
+}
+
 /// Page setup and section-level settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -753,6 +810,8 @@ pub struct SectionProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_prot: Option<bool>,
     pub page_borders: Option<Borders>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_border_options: Option<PageBorderOptions>,
     /// Text direction / bidi section.
     pub rtl: bool,
     /// Which way the section's text runs (`w:textDirection`, ECMA-376 §17.6.20): vertical
@@ -800,6 +859,7 @@ impl Default for SectionProps {
             valign: PageVAlign::Top,
             form_prot: None,
             page_borders: None,
+            page_border_options: None,
             rtl: false,
             text_direction: crate::props::TextDirection::Horizontal,
             text_direction_set: false,

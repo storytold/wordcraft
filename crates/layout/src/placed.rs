@@ -27,6 +27,11 @@ pub enum Placed {
         y1: f32,
         border: Border,
     },
+    /// A rectangular border box (page borders, paragraph boxes) with connected continuous corners.
+    BorderBox {
+        rect: Rect,
+        borders: wordcraft_doc::props::Borders,
+    },
     /// A picture in `rect`, turned about the rect's centre by `spin` (as are shapes and charts).
     Image {
         rect: Rect,
@@ -117,6 +122,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::BorderBox { rect, .. }
             | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
@@ -174,6 +180,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::BorderBox { rect, .. }
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
