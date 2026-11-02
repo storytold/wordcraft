@@ -1,3 +1,5 @@
+Current main242 comparison: [paint, provenance and reproduction](current-main242/README.md). The older results below retain their original source binding.
+
 # Table paragraph shading
 
 These synthetic page renders compare main `b70c746f` with renderer code at `1051bb2f`.
