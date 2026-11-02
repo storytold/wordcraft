@@ -114,12 +114,12 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let v = snapped_indent(dist_at(pp.x), free) - rp.indent_left;
+            let v = (snapped_indent(dist_at(pp.x), free) - rp.indent_left).clamp(-1584.0, 1584.0);
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
             let _ = app.run("para.indents", json!({"firstLine": v}));
-            indent_readout(ui, app.canvas.canvas_rect, px(rp.indent_left + v), &tip("First Line Indent", rp.indent_left + v), &t);
+            indent_readout(ui, app.canvas.canvas_rect, px(rp.indent_left + v), &tip("First Line Indent", v), &t);
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(rr, ui.scope_id().with("ruler_right"), Sense::click_and_drag());
@@ -127,7 +127,7 @@ pub(super) fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let v = snapped_indent(w - dist_at(pp.x), free);
+            let v = snapped_indent(w - dist_at(pp.x), free).clamp(-1584.0, 1584.0);
             if !r.drag_started() {
                 app.session.join_next_undo();
             }

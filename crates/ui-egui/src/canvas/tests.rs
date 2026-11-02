@@ -4860,6 +4860,42 @@ fn alt_or_both_buttons_move_an_indent_marker_freely_and_the_gesture_is_one_undo_
     assert_eq!(undo, 1, "one undo step");
 }
 
+/// #4284: a first-line drag beyond the supported range clamps to the value the command stores
+/// (±1584 pt), so the drag readout can never disagree with the applied indent.
+#[test]
+fn a_first_line_drag_beyond_the_range_clamps_to_the_stored_indent() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("A line of text.")), Default::default());
+    a.run("view.ruler", json!({"value": true})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let area = h.state().canvas.canvas_rect.expect("the canvas is shown");
+    let body = h.state_mut().session.layout().pages[0].body;
+    // The first-line marker sits on top of the ruler; drag it to the far right of a wide window
+    // so the pointer's ruler distance exceeds the 1584 pt clamp.
+    let x0 = screen(&mut h, body.x, 0.0).x;
+    let start = pos2(x0, area.min.y - 12.0);
+    let end = pos2(x0 + 2200.0, area.min.y - 12.0);
+    h.event(egui::Event::PointerMoved(start));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerMoved(end));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    let focus = h.state().session.sel.focus.clone();
+    let p = h.state().session.doc.para_at(&focus).expect("the paragraph");
+    assert_eq!(p.props.indent_first, Some(1584.0), "the drag clamps to the stored bound: {:?}", p.props.indent_first);
+}
+
 /// #4284: the markers draw Word's L (hanging), J (first-line) and T (aligned) silhouettes, and
 /// the hit rects are the bounds of what is drawn.
 #[test]
