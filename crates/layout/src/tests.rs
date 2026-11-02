@@ -12784,10 +12784,22 @@ fn zero_title_page_total() {
         let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(fp)]);
         d.last_section.footers.default = Some(id);
         d.last_section.footers.first = Some(id);
+        let mut hp = wordcraft_doc::Paragraph::new();
+        hp.insert_object(0, field("NUMPAGES"), &Default::default()).unwrap();
+        hp.insert_object(hp.len(), field("SECTIONPAGES"), &Default::default()).unwrap();
+        let default_header = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp.clone())]);
+        let first_header = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        d.last_section.headers.default = Some(default_header);
+        d.last_section.headers.first = Some(first_header);
         let l = lay(&d);
         assert_eq!(l.pages.len(), 3);
-        for page in &l.pages {
-            for items in [&page.items, &page.footer] {
+        for (page_index, page) in l.pages.iter().enumerate() {
+            let header = if title && page_index == 0 { first_header } else { default_header };
+            assert!(
+                page.header.iter().any(|item| matches!(item, Placed::Lines { story: StoryRef::Part(id), .. } if *id == header)),
+                "title={title}, start={start:?}, page={page_index}: use the selected header part"
+            );
+            for items in [&page.items, &page.header, &page.footer] {
                 let shown: Vec<_> = items
                     .iter()
                     .filter_map(|it| match it {
