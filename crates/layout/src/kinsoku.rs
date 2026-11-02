@@ -14,13 +14,15 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
-/// East Asian characters a line may not start with: closing brackets and quotes, the
+/// East Asian characters a line may not start with: closing brackets and quotes (the curly ” ’
+/// too: Unicode 15.1's LB19a lets a line break before them beside East Asian text), the
 /// ideographic comma and full stop, fullwidth and halfwidth punctuation, the middle dot,
-/// iteration and sound marks.
-const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉》」』】〕〗〙〛〞〟）］｝｠｡｣､･ﾞﾟ％￠";
+/// iteration and sound marks, and the per-mille and Celsius signs (GB/T 15834, W3C clreq).
+const NO_START: &str = "、。，．・：；？！゛゜ヽヾゝゞ々〻〉》」』】〕〗〙〛〞〟）］｝｠｡｣､･ﾞﾟ％￠”’〃〆‰℃﹚﹜";
 
-/// East Asian characters a line may not end with: opening brackets and quotes, currency signs.
-const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥";
+/// East Asian characters a line may not end with: opening brackets and quotes (the curly “ ‘
+/// too, as for [`NO_START`]), currency signs.
+const NO_END: &str = "〈《「『【〔〖〘〚〝（［｛｟｢＄￡￥“‘﹙﹛";
 
 /// Whether `c` is East Asian text: CJK ideographs, kana, bopomofo, CJK punctuation, and
 /// fullwidth/halfwidth forms (not spaces, not combining sound marks).
@@ -46,7 +48,11 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
     if kinsoku {
-        opps.retain(|&i| !next_char(i).is_some_and(|c| NO_START.contains(c)) && !prev_char(i).is_some_and(|c| NO_END.contains(c)));
+        // Only beside East Asian text: `word ‰ next` keeps its break after the space, while
+        // `增长５‰` and `他说”` do not break before the mark.
+        let asian = |i: usize| next_char(i).is_some_and(is_east_asian) || prev_char(i).is_some_and(is_east_asian);
+        let forbidden = |i: usize| next_char(i).is_some_and(|c| NO_START.contains(c)) || prev_char(i).is_some_and(|c| NO_END.contains(c));
+        opps.retain(|&i| !(forbidden(i) && asian(i)));
     } else {
         // Between any two East Asian characters.
         for (i, c) in text.char_indices().skip(1) {
@@ -142,6 +148,30 @@ mod tests {
         for c in ["、", "」", "。", "漢"] {
             assert!(off.iter().any(|s| s == c), "kinsoku off: a line may start with {c}: {off:?}");
         }
+        // Simplified Chinese: curly quotes beside ideographs may be break opportunities (Unicode
+        // 15.1 LB19a); kinsoku keeps a closing quote off the line start and an opening one off the
+        // line end.
+        let zh = "他说“你好”，‘可以’。";
+        let on = breaks(zh, true, true);
+        for c in ["”", "’", "，", "。"] {
+            assert!(!on.iter().any(|s| s == c), "kinsoku: no line starts with {c}: {on:?}");
+        }
+        for (i, _) in zh.match_indices(['“', '‘']) {
+            let after = zh.get(i..).and_then(|t| t.chars().nth(1)).map(String::from).unwrap_or_default();
+            assert!(!on.contains(&after), "kinsoku: no line ends with an opening quote before {after}: {on:?}");
+        }
+        assert!(on.iter().any(|s| s == "好"), "quoted ideographs still break: {on:?}");
+        // With the extra opportunities kinsoku off adds, the curly quotes are in the sets too.
+        let mut opps: Vec<usize> = zh.char_indices().map(|(i, _)| i).skip(1).collect();
+        apply(zh, &mut opps, true, true);
+        let starts: Vec<char> = opps.iter().filter_map(|&i| zh.get(i..).and_then(|t| t.chars().next())).collect();
+        assert!(!starts.contains(&'”') && !starts.contains(&'’'), "{starts:?}");
+        let ends: Vec<char> = opps.iter().filter_map(|&i| zh.get(..i).and_then(|t| t.chars().next_back())).collect();
+        assert!(!ends.contains(&'“') && !ends.contains(&'‘'), "{ends:?}");
+        // Per-mille, Celsius and curly quotes in Latin text keep their UAX #14 breaks.
+        let latin = "rose 5 ‰ and 3 ℃, “so” it went";
+        assert_eq!(breaks(latin, true, true), breaks(latin, false, true));
+        assert!(breaks(latin, true, true).iter().any(|s| s == "‰"), "{:?}", breaks(latin, true, true));
         // Latin text: unchanged by kinsoku, broken anywhere without word wrap.
         let en = "Hello wonderful (world), 50%.";
         assert_eq!(breaks(en, true, true), breaks(en, false, true));
