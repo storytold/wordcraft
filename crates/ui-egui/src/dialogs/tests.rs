@@ -2139,3 +2139,71 @@ fn modify_style_keeps_changes_made_while_it_is_open() {
     assert_eq!(st.chr.italic, Some(true));
     assert_eq!(st.chr.size, Some(30.0), "the size set meanwhile stays");
 }
+
+/// #4621: a failed save keeps the question, its scope and source edits for retry or Cancel.
+fn set_as_default_with_a_read_only_template(dialog: &str) {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_engine::normal_template::{MemoryStore, NormalStore};
+    struct ReadOnly(std::sync::Arc<MemoryStore>);
+    impl NormalStore for ReadOnly {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> {
+            self.0.load()
+        }
+        fn save(&self, _: &[u8]) -> Result<(), String> {
+            Err("read-only".into())
+        }
+        fn reset(&self) -> Result<(), String> {
+            Err("read-only".into())
+        }
+    }
+    let (mut h, store) = normal_template_harness(dialog, |d| match d {
+        Dialog::Font { size, .. } => *size = "17".into(),
+        Dialog::Paragraph { after, .. } => *after = 33.0,
+        _ => panic!("expected Font or Paragraph"),
+    });
+    h.state_mut().session.run("format.setDefault", &json!({"props": {"bold": true}, "scope": "new"})).unwrap();
+    h.state_mut().session.normal_store = Some(std::sync::Arc::new(ReadOnly(store.clone())));
+    let doc = serde_json::to_value(&h.state().session.doc).unwrap();
+    let undo = h.state().session.undo_labels();
+    let template = store.get();
+    assert!(template.is_some(), "start with a saved template");
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("All documents based on the Normal template?").click();
+    h.run_steps(2);
+    for _ in 0..2 {
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), doc, "document unchanged");
+        assert_eq!(h.state().session.undo_labels(), undo, "no undo step");
+        assert_eq!(store.get(), template, "saved template unchanged");
+        assert!(matches!(&h.state().status_msg, Some((message, _)) if message.contains("read-only")), "show the error");
+        let Some(Dialog::SetDefault { all: true, back: Some(source), .. }) = &h.state().dialog else { panic!("question stays open for retry") };
+        match &**source {
+            Dialog::Font { size, .. } => assert_eq!(size, "17"),
+            Dialog::Paragraph { after, .. } => assert_eq!(*after, 33.0),
+            _ => panic!("source edits lost"),
+        }
+    }
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    match &h.state().dialog {
+        Some(Dialog::Font { size, .. }) => assert_eq!(size, "17"),
+        Some(Dialog::Paragraph { after, .. }) => assert_eq!(*after, 33.0),
+        _ => panic!("Cancel must return to the edited source"),
+    }
+    assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), doc);
+    assert_eq!(h.state().session.undo_labels(), undo);
+    assert_eq!(store.get(), template);
+}
+
+#[test]
+fn font_set_as_default_with_a_read_only_template_keeps_edits() {
+    set_as_default_with_a_read_only_template("font");
+}
+
+#[test]
+fn paragraph_set_as_default_with_a_read_only_template_keeps_edits() {
+    set_as_default_with_a_read_only_template("paragraph");
+}

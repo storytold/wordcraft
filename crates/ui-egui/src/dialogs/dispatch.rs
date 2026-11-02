@@ -1561,7 +1561,7 @@ fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, al
         return true;
     }
     if ok {
-        if let Some(mut source) = back.take().filter(|b| matches!(**b, Dialog::PageSetup { .. })) {
+        if matches!(back.as_deref(), Some(Dialog::PageSetup { .. })) && let Some(mut source) = back.take() {
             if let Err(e) = apply_page_setup(app, &source, *all) {
                 // Not applied: back to Page Setup, saying why.
                 if let Dialog::PageSetup { message, .. } = &mut *source {
@@ -1577,6 +1577,8 @@ fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, al
         }
         if let Err(e) = app.run(command, params) {
             app.status(e.to_string());
+            // Keep the question and its source edits available for retry or Cancel.
+            return false;
         }
     }
     ok
