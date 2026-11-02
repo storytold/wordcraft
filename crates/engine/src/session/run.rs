@@ -22,22 +22,22 @@ struct SuccessContext<'a> {
 
 /// What the front end saves between runs from the session (`WordApp::prefs`) and every later
 /// document is edited with: the user name and initials, the editing preferences (AutoCorrect,
-/// the default proofing language…), the keyboard shortcuts, the ribbon, Check Spelling as You
-/// Type, the Read Aloud speed and citation skipping, and the pens added to the Draw gallery.
-/// [`Session::preferences_locked`] keeps commands from changing it (#3622). View switches the front
-/// end also keeps (the Navigation pane, Dark page, where the Styles pane sits) aren't included:
-/// they change how the window looks, not what is written.
-#[derive(PartialEq)]
+/// the default proofing language…), the keyboard shortcuts, the ribbon and Check Spelling as You
+/// Type. [`Session::preferences_locked`] keeps commands from changing it (#3622). What the front
+/// end also keeps but that only changes how the window looks or carries live state of its own
+/// (the Navigation pane, Dark page, where panes sit, the Read Aloud settings, the Draw gallery's
+/// pens) isn't included.
 struct KeptPrefs {
     author: String,
     initials: String,
     prefs: crate::Prefs,
     keymap: crate::KeyMap,
     ribbon: crate::RibbonLayout,
+    /// Check Spelling as You Type as the window shows it is the active document's view: it is
+    /// compared and put back only while the command's own document is still the active one, as
+    /// another document (one it opened or switched to) has a view of its own.
+    document: u64,
     proofing: bool,
-    read_aloud_rate: f32,
-    skip_citations: bool,
-    pens: Vec<crate::cmd::draw::CustomPen>,
 }
 
 struct ElsewhereContext {
@@ -57,11 +57,18 @@ impl Session {
             prefs: self.prefs.clone(),
             keymap: self.keymap.clone(),
             ribbon: self.ribbon.clone(),
+            document: self.document_id,
             proofing: self.view.proofing,
-            read_aloud_rate: self.read_aloud.rate(),
-            skip_citations: self.read_aloud.skip_citations,
-            pens: self.view.draw.pens.clone(),
         }
+    }
+
+    fn kept_prefs_changed(&self, before: &KeptPrefs) -> bool {
+        self.author != before.author
+            || self.initials != before.initials
+            || self.prefs != before.prefs
+            || self.keymap != before.keymap
+            || self.ribbon != before.ribbon
+            || (self.document_id == before.document && self.view.proofing != before.proofing)
     }
 
     fn restore_kept_prefs(&mut self, kept: KeptPrefs) {
@@ -69,23 +76,22 @@ impl Session {
         if kept.prefs.dictionaries_folder != self.prefs.dictionaries_folder {
             crate::cmd::options::use_dictionaries_folder(kept.prefs.dictionaries_folder.as_deref());
         }
-        let KeptPrefs { author, initials, prefs, keymap, ribbon, proofing, read_aloud_rate, skip_citations, pens } = kept;
+        let KeptPrefs { author, initials, prefs, keymap, ribbon, document, proofing } = kept;
         self.author = author;
         self.initials = initials;
         self.prefs = prefs;
         self.keymap = keymap;
         self.ribbon = ribbon;
-        self.view.proofing = proofing;
-        self.read_aloud.set_rate(read_aloud_rate);
-        self.read_aloud.skip_citations = skip_citations;
-        self.view.draw.pens = pens;
+        if self.document_id == document {
+            self.view.proofing = proofing;
+        }
     }
 
     /// With the preferences locked (`before` taken), puts back what the command changed and turns
     /// its success into a refusal.
     fn refuse_preference_changes(&mut self, id: &str, before: Option<KeptPrefs>, result: &mut Result<Value, CmdError>) {
         let Some(before) = before else { return };
-        if self.kept_prefs() == before {
+        if !self.kept_prefs_changed(&before) {
             return;
         }
         self.restore_kept_prefs(before);

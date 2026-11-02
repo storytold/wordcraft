@@ -116,8 +116,8 @@ With `--connect`, an agent works in the user's own app, whose preferences are sa
 every later document. Its commands can't change them: the user name and initials, AutoCorrect,
 keyboard shortcuts, the ribbon and Quick Access Toolbar, the File › Options settings (including
 the default proofing language, Check Spelling as You Type, Print Markup, how tracked changes are
-shown, and the window's own settings such as the theme and the Start screen), the Read Aloud
-settings and added Draw pens. A command that would is refused with an error naming
+shown, and the window's own settings such as the theme and the Start screen). A command that
+would is refused with an error naming
 `--allow-preference-changes`, and what that command did is undone, document edits included
 (#3622). Start the app with `wordcraft --control 7981 --allow-preference-changes` to let an agent
 you trust change them. Reading them still works: `tools.customizeKeyboard` with `command` or `key`,
@@ -125,8 +125,9 @@ and `file.options` without settings, which returns them.
 
 The lock covers commands only. The `click` and `key` tools send synthetic input, which the app
 plays back after the request, so an agent clicking through File › Options can still change a
-setting; words added to the user dictionary aren't covered yet either, and a macro whose later
-step is refused keeps its earlier steps' edits. See
+setting; words added to the user dictionary aren't covered yet either, a macro whose later step
+is refused keeps its earlier steps' edits, and view switches, Read Aloud settings and Draw pens
+aren't locked. See
 [Preferences](control-protocol.md#preferences) for the full list.
 
 A headless server (`wordcraft-cli mcp`) saves no preferences: whatever its agent sets lasts until

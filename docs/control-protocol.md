@@ -142,9 +142,9 @@ the same rule (unsaved changes need `{"force": true}`), and the active window st
 ### Preferences
 
 Commands can't change what the app saves for later documents: the user name and initials,
-AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, the File › Options settings
-(including the ones the window keeps itself: `ui.theme`, `ui.startScreen`, `ui.language`…), the
-Read Aloud settings and the pens added to the Draw gallery. A command that would, sent by any
+AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options
+settings (including the ones the window keeps itself: `ui.theme`, `ui.startScreen`,
+`ui.language`…). A command that would, sent by any
 method (`engine.execute`, the bare id, or with `doc`), is refused with an error that names
 `--allow-preference-changes`, and what that command did is undone (#3622). An agent reading a
 document could otherwise be steered by text in it into leaving an AutoCorrect entry or a rebound
@@ -160,8 +160,10 @@ What the lock doesn't cover yet:
   even when the same request is refused for another setting.
 - A macro (`tools.macros` `run`) whose later step is refused keeps its earlier steps' edits, as
   it does when any step fails.
-- View switches the app also remembers (the Navigation pane, Dark page, where panes sit) are not
-  preferences and aren't locked.
+- What else the app remembers is not locked: view switches (the Navigation pane, Dark page, where
+  panes sit), the Read Aloud speed and citation skipping, and pens added to the Draw gallery. They
+  change how the window looks or reads aloud, not what is written, and carry live state (the
+  reading queue, the pen in hand) a refusal couldn't put back cleanly.
 
 ### Native printing
 

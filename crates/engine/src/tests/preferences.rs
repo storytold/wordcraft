@@ -6,22 +6,10 @@ use serde_json::{Value, json};
 
 use crate::{CmdError, KeyMap, Prefs, RibbonLayout, Session};
 
-/// What the desktop app saves between runs from the session (`WordApp::prefs`), apart from the
-/// view switches (Navigation pane, Dark page, Styles pane), which the lock leaves alone.
-type Kept = (String, String, Prefs, KeyMap, RibbonLayout, bool, f32, bool, Vec<crate::cmd::draw::CustomPen>);
-
-fn kept(s: &Session) -> Kept {
-    (
-        s.author.clone(),
-        s.initials.clone(),
-        s.prefs.clone(),
-        s.keymap.clone(),
-        s.ribbon.clone(),
-        s.view.proofing,
-        s.read_aloud.rate(),
-        s.read_aloud.skip_citations,
-        s.view.draw.pens.clone(),
-    )
+/// What the desktop app saves between runs from the session (`WordApp::prefs`) that the lock
+/// guards: not the view switches, the Read Aloud settings or the Draw gallery's pens.
+fn kept(s: &Session) -> (String, String, Prefs, KeyMap, RibbonLayout, bool) {
+    (s.author.clone(), s.initials.clone(), s.prefs.clone(), s.keymap.clone(), s.ribbon.clone(), s.view.proofing)
 }
 
 fn locked() -> Session {
@@ -47,10 +35,28 @@ fn changes() -> Vec<(&'static str, Value)> {
         ("review.proofing", json!({})),
         ("review.wordCount", json!({"includeTextBoxes": false})),
         ("review.language", json!({"lang": "pl-PL", "default": true})),
-        ("draw.addPen", json!({"kind": "highlighter", "color": "00FF00", "width": 6})),
-        ("readAloud.speed", json!({"value": 2})),
-        ("readAloud.skipCitations", json!({})),
     ]
+}
+
+/// Check Spelling as You Type is shown from the active document's view, and each open document has
+/// its own: switching to a document opened before the user turned spell checking off is not a
+/// preference change, nor is opening a new one.
+#[test]
+fn switching_documents_is_not_a_preference_change() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let first = s.document_id();
+    s.run("file.new", &json!({})).unwrap();
+    let second = s.document_id();
+    s.run("view.switchWindows", &json!({"id": first})).unwrap();
+    s.run("review.proofing", &json!({"value": false})).unwrap();
+    s.preferences_locked = true;
+    s.run("view.switchWindows", &json!({"id": second})).unwrap_or_else(|e| panic!("switching while locked: {e}"));
+    assert_eq!(s.document_id(), second);
+    assert!(s.view.proofing, "the other document keeps its own view");
+    s.run("file.new", &json!({})).unwrap_or_else(|e| panic!("file.new while locked: {e}"));
+    assert!(!s.prefs.check_spelling, "the saved preference is untouched");
+    // Turning it on in a document is still a preference change.
+    assert!(matches!(s.run("review.proofing", &json!({"value": !s.view.proofing})), Err(CmdError::Disabled(_))));
 }
 
 #[test]

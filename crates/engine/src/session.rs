@@ -198,8 +198,7 @@ pub struct Session {
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
     /// While set, a command may not change what the front end saves between runs: the user name
-    /// and initials, `prefs`, `keymap`, `ribbon`, Check Spelling as You Type, the Read Aloud
-    /// settings and the Draw gallery's added pens. One that does is
+    /// and initials, `prefs`, `keymap`, `ribbon` and Check Spelling as You Type. One that does is
     /// refused and undone (#3622). The desktop app sets it for requests from its control channel
     /// (agents and scripts), unless it was started with `--allow-preference-changes`. The refusal
     /// says [`PREFERENCES_LOCKED`].
