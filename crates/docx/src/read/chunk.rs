@@ -181,6 +181,9 @@ mod tests {
         let (shown, left) = read(super::super::MAX_GRAPHIC_WORK);
         assert!(shown);
         assert!(left < super::super::MAX_GRAPHIC_WORK, "the nested chart's work is the file's");
+        assert!(left <= super::super::MAX_GRAPHIC_WORK - chart.len(), "nested chart source bytes spend the shared allowance");
+        // The final permitted build may spend the remaining allowance, including its input.
+        assert_eq!(read(chart.len()), (true, 0));
         // With the file's budget spent, the nested document doesn't get one of its own.
         assert_eq!(read(0), (false, 0));
     }

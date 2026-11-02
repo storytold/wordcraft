@@ -15,6 +15,7 @@ mod east_asian_lang;
 mod east_asian_layout;
 mod fixtures;
 mod glossary;
+mod graphic_input_work;
 mod heading_levels;
 mod legacy_forms;
 mod ligatures;
