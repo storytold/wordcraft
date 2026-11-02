@@ -190,6 +190,19 @@ impl Drag {
         Drag { grab, page, start, press, to_page: page, rect: start, moved: false, deg: wordcraft_geom::normalize_degrees(deg) }
     }
 
+    /// Move along the dominant pointer axis, keeping the grab point fixed in the document
+    /// when scrolling moves its page. The boolean says the movement is horizontal.
+    pub(crate) fn update_axis(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, min: f32, press_origin: Pos2) -> bool {
+        let delta = pointer - self.press;
+        let horizontal = delta.x.abs() >= delta.y.abs();
+        let press = self.press;
+        self.press += pages.get(self.page).map_or(egui::Vec2::ZERO, |p| p.min - press_origin);
+        let pointer = if horizontal { pos2(pointer.x, self.press.y) } else { pos2(self.press.x, pointer.y) };
+        self.update(pointer, pages, scale, min, false);
+        self.press = press;
+        horizontal
+    }
+
     /// Follow the pointer with the rotation handle: the frame turns to face it, by whole degrees
     /// (or `snap`ping to 15° steps, Shift).
     pub fn turn_to(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, snap: bool) {
