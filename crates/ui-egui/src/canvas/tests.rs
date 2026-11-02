@@ -4841,3 +4841,68 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
     assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
+
+/// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and
+/// follows it on Ctrl/⌘+click, in line with the text and floating over it.
+#[test]
+fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
+    use egui_kittest::kittest::Queryable;
+    for floating in [false, true] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Text before the picture "})).unwrap();
+        a.run("select.text", json!({"text": "before"})).unwrap();
+        a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+        let mut png = Vec::new();
+        let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
+        if floating {
+            a.run("arrange.wrap", json!({"wrap": "inFrontOfText"})).unwrap();
+        }
+        let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the picture is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        h.get_by_label_contains("Link…").click();
+        steps(&mut h, 4);
+        h.event(egui::Event::Text("https://example.com/picture".into()));
+        steps(&mut h, 3);
+        h.get_by_label_contains("OK").click();
+        steps(&mut h, 4);
+        let s = &h.state().session;
+        let link = s.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+        assert_eq!(link, Some(Some("https://example.com/picture".to_string())), "floating {floating}: the link is on the picture");
+        // Hovering the picture shows where it goes.
+        h.event(egui::Event::PointerMoved(at + egui::vec2(1.0, 0.0)));
+        steps(&mut h, 3);
+        assert!(h.query_by_label_contains("https://example.com/picture").is_some(), "floating {floating}: the hover tip names the link");
+        // Ctrl/⌘+click follows it, instead of picking the picture for a copy: here a link to a
+        // place in the document, which moves the caret (a web address goes to the browser).
+        h.state_mut().run("insert.link", json!({"bookmark": "Spot"})).unwrap();
+        steps(&mut h, 2);
+        let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+        h.event_modifiers(press, egui::Modifiers::COMMAND);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        steps(&mut h, 3);
+        let s = &h.state().session;
+        let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+        assert!(s.sel.is_collapsed() && s.sel.focus == start, "floating {floating}: the caret went to the bookmark: {:?}", s.sel);
+        assert!(h.state().canvas.obj_drag.is_none(), "floating {floating}: no copy-drag started");
+    }
+}

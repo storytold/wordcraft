@@ -118,6 +118,17 @@ impl Reader<'_> {
         Some(obj)
     }
 
+    /// The hyperlink Word keeps on a drawing itself: its `wp:docPr`'s `a:hlinkClick` (ECMA-376
+    /// Part 1 §20.4.2.5, §21.1.2.3.5) naming an external hyperlink relationship. Word stores a
+    /// picture's link there rather than in a `w:hyperlink` around its run (#5267). Its `#name`
+    /// part, when the address has one, stays part of the address.
+    pub(super) fn drawing_link(d: &El, rels: &Rels) -> Option<String> {
+        let frame = d.child("wp:inline").or_else(|| d.child("wp:anchor"))?;
+        let id = frame.child("wp:docPr")?.child("a:hlinkClick")?.attr("r:id")?;
+        let rel = rels.by_id(id).filter(|r| r.external && crate::package::rel_is(&r.kind, rt::HYPERLINK))?;
+        Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
+    }
+
     /// Keep the selected native-ink branch and its picture fallback as one object. Reading only
     /// the fallback flattens the ink; reading only the choice loses its preview on the next save.
     pub(super) fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {

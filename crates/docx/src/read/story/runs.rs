@@ -237,7 +237,11 @@ impl Reader<'_> {
             },
             "w:drawing" => {
                 if let Some(o) = self.read_drawing(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                    // A link around the run wins over the one on the drawing.
+                    match Self::drawing_link(k, rels).filter(|_| props.link.is_none()) {
+                        Some(link) => self.emit_obj(sc, pb, o, &CharProps { link: Some(link), ..props.clone() }),
+                        None => self.emit_obj(sc, pb, o, props),
+                    }
                 }
             }
             "w:pict" => {

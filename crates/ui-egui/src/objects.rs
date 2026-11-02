@@ -277,6 +277,15 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("smartArt.textPane", json!({"value": true}));
         return true;
     }
+    // Ctrl/⌘+click on a linked picture or shape follows its link, as on linked text (#5267).
+    if pressed
+        && grab == Grab::Move
+        && ui.input(|i| i.modifiers.command && !i.modifiers.shift)
+        && let Some(link) = object_link(app, &object)
+    {
+        crate::canvas::follow_link(app, link);
+        return true;
+    }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
     // Ctrl on the object that is already selected starts a copy-drag instead, including
@@ -452,6 +461,22 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
     }
     true
+}
+
+/// The hyperlink of the picture, shape or text box under `at` (Insert › Link with it selected,
+/// or a link read from the file), not of a frame handle: what hovering shows and Ctrl/⌘+click
+/// follows, as for linked text (#5267).
+pub fn link_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<String> {
+    match grab_at(app, layout, pages, scale, at)? {
+        (object, Grab::Move) => object_link(app, &object),
+        _ => None,
+    }
+}
+
+/// The hyperlink on `object`'s character, if it has one.
+fn object_link(app: &WordApp, object: &ObjectHit) -> Option<String> {
+    let pos = object.pos();
+    app.session.doc.para_at(&pos)?.props_of_char(pos.off).link.clone().filter(|l| !l.is_empty())
 }
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object of the story
