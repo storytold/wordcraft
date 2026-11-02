@@ -4982,6 +4982,38 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
 }
 
 #[test]
+fn a_line_of_only_pictures_fits_them_in_odt_documents() {
+    // LibreOffice (ODT documents): a line holding only a picture is as tall as the picture;
+    // Word keeps the font's ascent and descent around it.
+    let height = |fit: bool, h: f32| {
+        let mut d = Document::from_text("");
+        d.settings.object_lines_fit_objects = fit;
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.space_after = Some(0.0);
+            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+            p.insert_object(0, picture(200.0, h, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.lines[0].height
+    };
+    assert!((height(true, 3.5) - 3.5).abs() < 0.01, "{}", height(true, 3.5));
+    assert!((height(true, 40.0) - 40.0).abs() < 0.01, "{}", height(true, 40.0));
+    // Word's: the font's height at least, and its descent below a taller picture.
+    assert!(height(false, 3.5) > 10.0);
+    assert!(height(false, 40.0) > 42.0);
+    // Text on the line: its font counts either way.
+    let mut d = Document::from_text("Text");
+    d.settings.object_lines_fit_objects = true;
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.insert_object(0, picture(20.0, 3.5, Default::default()), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!(para.lines[0].height > 10.0);
+}
+
+#[test]
 fn body_starts_right_below_a_tall_header() {
     let mut d = Document::from_text("Body");
     let mut hp = wordcraft_doc::Paragraph::with_text("", Default::default());

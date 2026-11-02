@@ -40,6 +40,8 @@ struct Breaker<'e> {
     rtl_para: bool,
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
+    /// A line of only pictures is as tall as they are (LibreOffice's layout, ODT documents).
+    object_lines_fit: bool,
     bidi: bool,
     est_h: f32,
     table_h: f32,
@@ -193,6 +195,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
+            object_lines_fit: settings.object_lines_fit_objects,
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
@@ -406,6 +409,9 @@ impl<'e> Breaker<'e> {
         let rp = &self.rp;
         let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let mut any = false;
+        // Only pictures on the line, and the document lays such lines out as LibreOffice does.
+        let mut only_pictures = self.object_lines_fit;
+        let mut pictures = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
             // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
@@ -421,15 +427,19 @@ impl<'e> Breaker<'e> {
             // the line keeps that font's ascent and descent, and grows to fit it.
             let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h + c.obj_d > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                    only_pictures = false;
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
+                    pictures.asc = pictures.asc.max(c.obj_h);
+                    pictures.desc = pictures.desc.max(c.obj_d);
                     // A lowered picture reaches below the baseline: the line's descent grows.
                     (st.ascent, st.descent.max(c.obj_d))
                 }
             } else {
+                only_pictures = false;
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
                 let (a, d) = st.line_extent();
                 (a.max(c.obj_h + st.shift), d)
@@ -437,6 +447,10 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
+        }
+        if any && only_pictures && pictures.asc + pictures.desc > 0.0 {
+            pictures.obj_asc = pictures.asc;
+            return pictures;
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)

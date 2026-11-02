@@ -143,6 +143,23 @@ fn a_page_layout_without_a_size_is_the_default_pages_size() {
 }
 
 #[test]
+fn a_document_without_a_page_layout_has_libreoffices_default_page() {
+    // No styles.xml at all: the region's paper with LibreOffice's 2 cm margins, not Word's
+    // 1 inch ones. ODT documents lay out a line of only pictures as LibreOffice does.
+    let content = format!(
+        "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
+        crate::odt::tests::NS_T
+    );
+    let a4 = wordcraft_doc::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
+    let d = crate::import_on("odt", &crate::odt::tests::package(&content, None), &a4).unwrap().unwrap();
+    let s = &d.last_section;
+    assert_eq!((s.page_w, s.page_h), (595.3, 841.9));
+    let cm2 = 2.0 * 72.0 / 2.54;
+    assert!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right].iter().all(|m| (m - cm2).abs() < 0.01), "{s:?}");
+    assert!(d.settings.object_lines_fit_objects);
+}
+
+#[test]
 fn a_page_layout_stating_nothing_has_libreoffices_margins() {
     // LibreOffice's CV template: a page layout with no properties at all. LibreOffice draws it
     // on its default paper with 2 cm margins.

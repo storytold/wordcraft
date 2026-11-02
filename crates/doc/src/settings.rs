@@ -162,6 +162,10 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// A line holding only in-line pictures is as tall as they are, without its font's ascent
+    /// and descent: LibreOffice's layout, which ODT documents open with. Word keeps the font's.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub object_lines_fit_objects: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -307,6 +311,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            object_lines_fit_objects: false,
         }
     }
 }

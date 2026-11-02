@@ -505,6 +505,19 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         styles.read(s, false);
         pages = read_pages(s, paper);
     }
+    // No page layout at all (no styles.xml, or no master page): LibreOffice's default page, the
+    // locale's paper with 2 cm margins.
+    if pages.first.is_none() {
+        pages.first = Some(SectionProps {
+            page_w: paper.0,
+            page_h: paper.1,
+            margin_top: DEFAULT_MARGIN,
+            margin_bottom: DEFAULT_MARGIN,
+            margin_left: DEFAULT_MARGIN,
+            margin_right: DEFAULT_MARGIN,
+            ..SectionProps::default()
+        });
+    }
     styles.read(&content, true);
     let settings = read_entry(&mut z, "settings.xml");
     styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(true);
@@ -649,6 +662,8 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         doc.settings.default_tab = t;
     }
     doc.settings.page_color = page_doc.page_color;
+    // Laid out as LibreOffice lays it out: a line of only pictures is as tall as they are.
+    doc.settings.object_lines_fit_objects = true;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
     if let Some((bytes, fill)) = page_image
         && let Some(ext) = model::sniff_image(&bytes)
