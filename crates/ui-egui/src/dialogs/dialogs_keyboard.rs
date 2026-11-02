@@ -522,4 +522,23 @@ mod tests {
         let first = bold.first().map(|(id, _)| id.clone()).unwrap_or_default();
         assert_eq!(select_in(&bold, "file.save"), first);
     }
+
+    /// On European keyboards the key beside the left Shift types < and, with Shift, >. Pressed
+    /// with Ctrl (⌘) in "New shortcut", it is written as it types, `Mod+<` and `Mod+Shift+>`: the
+    /// keys Decrease and Increase Font Size run by there, as in Word.
+    #[test]
+    fn new_shortcut_writes_the_european_less_than_key_as_it_types() {
+        use egui::{Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness("Home", Some("format.shrinkFont"));
+        for (mods, written, owner) in
+            [(Modifiers::COMMAND, "Mod+<", "Decrease Font Size"), (Modifiers::COMMAND | Modifiers::SHIFT, "Mod+Shift+>", "Increase Font Size")]
+        {
+            h.key_press_modifiers(mods, Key::IntlBackslash);
+            settle(&mut h);
+            assert_eq!(h.state().1.pressed, written, "the New shortcut box records the key as it types");
+            let used = format!("Now used by {owner}");
+            assert!(h.query_by_label(&used).is_some(), "{written}: the dialog says {used:?}");
+        }
+    }
 }
