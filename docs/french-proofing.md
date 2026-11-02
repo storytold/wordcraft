@@ -1,6 +1,6 @@
 # Shipping and improving French proofing
 
-> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-11-01 · **Change:** minor (integration with shared dictionary slots, language registry and upstream affix features; normal CI retained); previously trivial (technical integration with main e6a5cd0; French behavior and shared test fixtures retained); previously minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
+> **Last reviewed:** 2026-10-20 · **Last updated:** 2026-11-02 · **Change:** trivial (technical integration with main bbe3547 and its merged Proofing pane; French proofing sources unchanged); previously minor (integration with shared dictionary slots, language registry and upstream affix features; normal CI retained); previously trivial (technical integration with main e6a5cd0; French behavior and shared test fixtures retained); previously minor (French dictionary reload, regional language choices and dictionary-respecting suggestion casing); previously minor (French uppercase/number proofing options and review-record corrections); previously minor (integration with current main, shared NFC lookup and external interface catalogs); previously minor (French spelling keeps attached combining marks and checks compound boundaries); previously minor (French proofing region parser respects extension boundaries); previously minor (French dictionary recovery and regional labels); previously trivial (French hyphenation CI path coverage); previously minor (historical affix compatibility gates and pinned French CI toolchain); previously major (French integration and regression gates, based on #1660)
 
 ## Shared-engine compatibility and reproducible CI
 
@@ -14,7 +14,7 @@ check remains an explicit manual gate with pinned runtime inputs (see below).
 ## Baseline for review
 
 The technical integration baseline is upstream main
-[`fd7f662`](https://github.com/storytold/wordcraft/commit/fd7f6621a1419c7c99f2293c9e99b1b7c4b87282).
+[`bbe3547`](https://github.com/storytold/wordcraft/commit/bbe3547dd11bb5f613f3aa893b12f593910644de).
 Upstream document, word-count, PDF and printing fixes remain in place; the French
 dictionary fixture shared by Review and the folder-reload test is unchanged.
 This source baseline does not substitute for the exact revision’s required checks or reviews.
@@ -129,6 +129,7 @@ before proposing a suggestion/ranking change. Keep follow-ups independently revi
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Technical integration with main bbe3547 and the officially merged Proofing pane; French proofing sources retained byte-identical to C40, documentation histories combined and exact-revision checks required |
 | 2026-11-01 | minor | Integrate the shared language registry, dictionary slots and upstream affix features; retain one French/Canadian slot, recovery diagnostics and synthetic tests; replace the feature workflow with normal gates plus the explicit pinned real-dictionary command; document the ICONV underscore compatibility boundary |
 | 2026-10-31 | trivial | Technical integration with main e6a5cd0 preserves upstream fixes, French behavior and the shared Review/folder dictionary fixture; validation remains tied to the exact revision |
 | 2026-10-28 | minor | French dictionary loading is serialized with cache invalidation; both pickers offer Canada explicitly; extension keys do not select a region; final suggestion casing respects dictionary restrictions |
