@@ -511,3 +511,69 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// A fresh scratch directory for the file-name tests below.
+#[cfg(not(target_arch = "wasm32"))]
+fn filename_scratch_dir(tag: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("wordcraft-filename-field-{tag}-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// #3796: after Save As to a new name, Update Field with the caret in a header shows the new
+/// name for FILENAME and the new full path for FILENAME \p.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn filename_fields_in_a_header_follow_save_as() {
+    let dir = filename_scratch_dir("save-as");
+    let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("body"), &["FILENAME", r"FILENAME \p"]);
+    let first = dir.join("report_v1.docx");
+    let second = dir.join("report_v2.docx");
+    s.run("file.save", &json!({"path": first.to_string_lossy()})).unwrap();
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got = story_fields(&s, StoryRef::Part(hdr));
+    assert_eq!(got[0].1, "report_v1.docx");
+    assert_eq!(got[1].1, first.to_string_lossy());
+
+    s.run("file.saveAs", &json!({"path": second.to_string_lossy()})).unwrap();
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got = story_fields(&s, StoryRef::Part(hdr));
+    assert_eq!(got[0].1, "report_v2.docx");
+    assert_eq!(got[1].1, second.to_string_lossy());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3796: a Word-style `FILENAME \* MERGEFORMAT` field whose cached text names the old file
+/// shows the new name after Save As and Update Field.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn filename_mergeformat_field_replaces_its_cached_name_after_save_as() {
+    let dir = filename_scratch_dir("mergeformat");
+    let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("body"), &[r"FILENAME \* MERGEFORMAT"]);
+    let first = dir.join("report_v1.docx");
+    s.run("file.save", &json!({"path": first.to_string_lossy()})).unwrap();
+    // The cached text a file written earlier would carry.
+    let path = s.doc.para_paths(StoryRef::Part(hdr)).remove(0);
+    if let Some(InlineObject::Field { result, .. }) = s.doc.para_mut(StoryRef::Part(hdr), &path).unwrap().objects.first_mut() {
+        *result = "report_v1.docx".into();
+    }
+    s.run("file.saveAs", &json!({"path": dir.join("report_v2.docx").to_string_lossy()})).unwrap();
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(story_fields(&s, StoryRef::Part(hdr))[0].1, "report_v2.docx");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3796: renaming the document (File > Info) changes what FILENAME shows on the next Update
+/// Field; the extension stays.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn filename_field_in_a_header_follows_rename() {
+    let dir = filename_scratch_dir("rename");
+    let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("body"), &["FILENAME"]);
+    s.run("file.save", &json!({"path": dir.join("report_v1.docx").to_string_lossy()})).unwrap();
+    s.run("file.rename", &json!({"name": "report_v3"})).unwrap();
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(story_fields(&s, StoryRef::Part(hdr))[0].1, "report_v3.docx");
+    let _ = std::fs::remove_dir_all(&dir);
+}
