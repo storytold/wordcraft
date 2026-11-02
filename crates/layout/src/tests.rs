@@ -9864,7 +9864,7 @@ fn relaid_paragraphs_keep_their_equation_numbers() {
 
 /// Measuring footer slots never consumes the body's shared list or automatic equation numbers.
 #[test]
-fn footer_probes_keep_body_numbers() {
+fn footer_probe_keeps_numbers() {
     #[derive(Clone, Copy, Debug)]
     enum Slots {
         Absent,
