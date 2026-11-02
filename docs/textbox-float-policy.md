@@ -22,4 +22,5 @@ Linked graphs, dynamic content and nested measurements retain fresh probes. Link
 
 | Date | Change |
 |---|---|
+| 2026-11-02 | trivial | Refresh #2533 on current main; source checks only, primary qualification pending. |
 | 2026-10-21 | Bounded static outer fit-cache reuse; linked, dynamic and nested graphs retain fresh probes. |
