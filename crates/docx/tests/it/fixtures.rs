@@ -2600,6 +2600,10 @@ fn vml_invisible_strokes_draw_no_outline() {
     for (attrs, stroke, want) in [
         ("", r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, None),
         ("", r#"<v:stroke on="f"/>"#, None),
+        // A VML opacity can also be a percentage or 65536ths with an `f` suffix.
+        ("", r#"<v:stroke opacity="0%"/>"#, None),
+        ("", r#"<v:stroke opacity="0f"/>"#, None),
+        ("", r#"<v:stroke opacity="50%"/>"#, Some(Rgb::BLACK)),
         ("", "", Some(Rgb::BLACK)),
         (r##" stroked="t" strokecolor="#c00000""##, r#"<v:stroke on="f"/>"#, None),
         (r##" stroked="f" strokecolor="#c00000""##, r#"<v:stroke on="t"/>"#, red),
