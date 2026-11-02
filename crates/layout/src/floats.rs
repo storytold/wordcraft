@@ -619,3 +619,21 @@ fn outer_text_turn(doc: &Document, story: StoryRef, path: &[u32]) -> bool {
             }
         }
 }
+
+#[cfg(test)]
+mod tests_turn_scope {
+    use super::*;
+    use wordcraft_doc::PartKind;
+
+    #[test]
+    fn outer_turn_scope() {
+        let mut doc = Document::new();
+        assert!(outer_text_turn(&doc, StoryRef::Body, &[0]));
+        assert!(!outer_text_turn(&doc, StoryRef::Body, &[0, 0, 0, 0]));
+        for kind in [PartKind::Header, PartKind::Footer, PartKind::TextBox, PartKind::Footnote, PartKind::Endnote, PartKind::Comment] {
+            let id = doc.add_part(kind, Document::new().body);
+            assert_eq!(outer_text_turn(&doc, StoryRef::Part(id), &[0]), matches!(kind, PartKind::Header | PartKind::Footer), "{kind:?}");
+            assert!(!outer_text_turn(&doc, StoryRef::Part(id), &[0, 0, 0, 0]), "{kind:?} cell");
+        }
+    }
+}
