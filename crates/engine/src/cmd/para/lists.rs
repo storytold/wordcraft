@@ -35,14 +35,25 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         });
     }
     // Continue the nearest list above if it has the same kind, past unnumbered paragraphs in
-    // between (Word: 1., a paragraph, then Numbering gives 2.); else a new list.
-    let paths = s.doc.para_paths(a.story);
-    let prev_num = paths
-        .iter()
-        .rev()
-        .filter(|q| **q < a.path)
-        .find_map(|q| s.doc.para(a.story, q).and_then(|x| x.props.numbering).filter(|n| n.num != 0))
-        .filter(|n| same_kind(&NumRef { level: 0, ..*n }));
+    // between (Word: 1., a paragraph, then Numbering gives 2.); else a new list. A heading
+    // numbered by its style counts as the nearest list. The paragraph right above continues
+    // whatever numbered list it is in; across a gap the list must look like `kind` (1. 2. 3.
+    // for the plain button), so a) b) further up isn't picked up by it.
+    let prev = s.doc.prev_para(a.story, &a.path);
+    let nearest = s.doc.para_paths(a.story).into_iter().rev().filter(|q| *q < a.path).find_map(|q| {
+        let x = s.doc.para(a.story, &q)?;
+        let n = x.props.numbering.or_else(|| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0)?;
+        Some((q, n, x.props.numbering.is_some()))
+    });
+    let looks_like_kind = |n: &NumRef| {
+        let want = wordcraft_doc::numbering::levels_for(kind);
+        s.doc.numbering.level(n.num, 0).zip(want.first()).is_some_and(|(l, w)| l.format == w.format && l.text == w.text)
+    };
+    let prev_num = nearest
+        .filter(|(_, _, direct)| *direct)
+        .map(|(q, n, _)| (q, NumRef { level: 0, ..n }))
+        .filter(|(q, n)| same_kind(n) && (Some(q) == prev.as_ref() || looks_like_kind(n)))
+        .map(|(_, n)| n);
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {

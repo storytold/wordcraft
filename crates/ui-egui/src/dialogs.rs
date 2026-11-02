@@ -687,7 +687,10 @@ impl Dialog {
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
-            "numberingValue" => Dialog::NumberingValue { value: wordcraft_engine::cmd::lists::caret_number(&app.session)? },
+            "numberingValue" => {
+                let v = app.session.run("para.getNumberingValue", &json!({})).ok()?;
+                Dialog::NumberingValue { value: v.get("value").and_then(Value::as_u64)?.min(100_000) as u32 }
+            }
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
                 use wordcraft_doc::section::DocGridType;

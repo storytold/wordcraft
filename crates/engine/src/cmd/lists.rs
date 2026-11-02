@@ -23,6 +23,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("list.get", "List Definition", "Home › Paragraph › Multilevel List", get)
             .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
             .pure(),
+        CommandSpec::new("para.getNumberingValue", "Numbering Value", "Home › Paragraph › Numbering", |s, _| {
+            Ok(json!({"value": caret_number(s)}))
+        })
+        .params(r#"{} → {"value": the number the caret's list item shows, null outside a numbered list}"#)
+        .pure(),
         CommandSpec::new("list.multilevelPreset", "Multilevel List Library", "Home › Paragraph › Multilevel List", preset).params(
             r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered, selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1 (the first level)"#,
         ),
@@ -146,9 +151,14 @@ pub fn caret_list(s: &Session) -> Option<u32> {
 }
 
 /// The number the caret's paragraph shows (3 for `3.`), counting the story's lists up to it:
-/// what Set Numbering Value starts from. `None` outside a numbered list.
+/// what Set Numbering Value starts from. `None` outside a numbered list, on a bullet, and on a
+/// paragraph numbered only by its style (Set Numbering Value changes the paragraph's own list).
 pub fn caret_number(s: &Session) -> Option<u32> {
     let f = &s.sel.focus;
+    let own = s.doc.para_at(f)?.props.numbering.filter(|n| n.num != 0)?;
+    if s.doc.numbering.level(own.num, own.level).is_none_or(|l| matches!(l.format, NumFormat::Bullet | NumFormat::None)) {
+        return None;
+    }
     let mut counters = wordcraft_doc::numbering::Counters::default();
     let mut last = None;
     for path in s.doc.para_paths(f.story).into_iter().filter(|q| *q <= f.path) {
@@ -609,5 +619,37 @@ mod tests {
         s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
         assert_eq!(super::caret_number(&s), None);
         assert!(s.run("para.setNumberingValue", &json!({"value": 3})).is_err());
+    }
+
+    /// Review of #5245: across a gap, the plain Numbering button (no kind) continues only a `1.`
+    /// list, not `a)` further up; a heading numbered by its style in between is the
+    /// nearest list, so the numbering after it starts again.
+    #[test]
+    fn numbering_across_a_gap_needs_a_matching_list_and_stops_at_a_numbered_heading() {
+        let mut s = numbered_at(&["Letter", "Between", "Plain"], &[(0, "lowerLetter")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+        s.run("para.numbering", &json!({})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("a)"), None, Some("1.")]));
+
+        let mut s = numbered_at(&["One", "Heading", "Two"], &[(0, "numbered")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(2, 0));
+        s.run("para.numbering", &json!({"kind": "numbered"})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("1."), Some("1"), Some("1.")]));
+        // The heading's number comes from its style: no value to set there.
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        assert_eq!(super::caret_number(&s), None);
+    }
+
+    /// Review of #5245: a bullet has no number to set; `para.getNumberingValue` reads the
+    /// caret's number for agents and the dialog.
+    #[test]
+    fn the_numbering_value_is_read_by_command_and_absent_on_bullets() {
+        let mut s = numbered_at(&["One", "Two"], &[(0, "numbered"), (1, "numbered")]);
+        assert_eq!(s.run("para.getNumberingValue", &json!({})).unwrap(), json!({"value": 2}));
+        let mut s = numbered_at(&["Dot"], &[]);
+        s.run("para.bullets", &json!({})).unwrap();
+        assert_eq!(s.run("para.getNumberingValue", &json!({})).unwrap(), json!({"value": null}));
     }
 }
