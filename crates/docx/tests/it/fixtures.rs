@@ -48,6 +48,76 @@ fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
 }
 
+/// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
+/// including where a table expects rows or cells (ECMA-376 Part 3).
+#[test]
+fn table_alternate_content_keeps_selected_rows_and_cells() {
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let row = |text: &str| format!("<w:tr>{}</w:tr>", cell(text));
+    let table =
+        |rows: &str, columns: usize| format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid>{rows}</w:tbl>"#, r#"<w:gridCol w:w="2400"/>"#.repeat(columns));
+    let alternate = |chosen: &str, fallback: &str, requires: &str| {
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="{requires}">{chosen}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    };
+    for (requires, use_choice) in [("wps", true), ("alias", true), ("unknown", false), ("wps unknown", false)] {
+        for cells in [false, true] {
+            let choice = if cells { cell("Chosen cell") } else { row("Chosen row") };
+            let fallback = if cells { cell("Fallback cell") } else { row("Fallback row") };
+            let selected = if use_choice { &choice } else { &fallback };
+            let middle = alternate(&choice, &fallback, requires);
+            let (actual, expected) = if cells {
+                (
+                    format!("<w:tr>{}{middle}{}</w:tr>", cell("Before"), cell("After")),
+                    format!("<w:tr>{}{selected}{}</w:tr>", cell("Before"), cell("After")),
+                )
+            } else {
+                (format!("{}{middle}{}", row("Before"), row("After")), format!("{}{selected}{}", row("Before"), row("After")))
+            };
+            let columns = if cells { 3 } else { 1 };
+            let expected = read_body(&table(&expected, columns));
+            let wrapped = format!(
+                r#"<w:customXml xmlns:alias="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:unknown="urn:original:unsupported">{}</w:customXml>"#,
+                table(&actual, columns)
+            );
+            let mut actual = read_body(&wrapped);
+            for round in 0..=2 {
+                assert_eq!(actual.body, expected.body, "requires={requires}, cells={cells}, round={round}");
+                if round < 2 {
+                    actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_alternate_content_keeps_nested_row_and_cell_controls() {
+    let wrap =
+        |tag: &str, content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+    let alternate =
+        |content: &str| format!(r#"<mc:AlternateContent><mc:Choice Requires="wps">{content}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#);
+    let cell = "<w:tc><w:p><w:r><w:t>Controlled cell</w:t></w:r></w:p></w:tc>";
+    let oracle_cell = wrap("cell", cell);
+    let actual_cell = alternate(&wrap("cell", &alternate(cell)));
+    let oracle_row = wrap("row", &format!("<w:tr>{oracle_cell}</w:tr>"));
+    let actual_row = wrap("row", &alternate(&format!("<w:tr>{actual_cell}</w:tr>")));
+    let expected = read_body(&format!("<w:tbl>{oracle_row}</w:tbl>"));
+    let mut actual = read_body(&format!("<w:tbl>{}</w:tbl>", alternate(&actual_row)));
+    for round in 0..=2 {
+        assert_eq!(actual.body, expected.body, "round={round}");
+        let table = actual.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].controls.open[0].tag, "row");
+        assert_eq!(table.rows[0].controls.close, 1);
+        assert_eq!(table.rows[0].cells[0].controls.open[0].tag, "cell");
+        assert_eq!(table.rows[0].cells[0].controls.close, 1);
+        if round < 2 {
+            actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn repeated_style_ids_use_last() {
     let styles = format!(
