@@ -1,4 +1,5 @@
-use super::*;
+use crate::floats::rel_exclusions;
+use crate::*;
 use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::LineSpacing;
 use wordcraft_doc::{PartKind, Pos, TextBody, para_block};

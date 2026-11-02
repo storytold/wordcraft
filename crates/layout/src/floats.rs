@@ -680,3 +680,103 @@ pub(super) fn body_exclusions(ctx: &mut Ctx, pb: &PageBuilder, block: usize, y0:
     }
     rel
 }
+
+#[cfg(test)]
+mod tests_body_bounds {
+    use super::body_float_bounds;
+    use crate::*;
+    use wordcraft_doc::{PartKind, Pos, TextBody, para_block};
+
+    const LEGACY_BOX_MODE: u32 = 12;
+    const MODERN_BOX_MODE: u32 = 15;
+    const BOUNDARY_PAGE_H: f32 = 841.9;
+    const BOUNDARY_MARGIN: f32 = 72.0;
+    const BOUNDARY_BOX_H: f32 = 169.15;
+
+    fn lay(doc: &Document) -> DocLayout {
+        let mut c = LayoutCache::new();
+        layout(doc, &mut c, &LayoutOptions::default())
+    }
+
+    fn text_box(d: &mut Document, para: usize, text: &str, w: f32, h: f32, body: TextBody) -> u32 {
+        let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(text, Default::default()))]);
+        if let Some(p) = d.parts.get_mut(&id) {
+            p.body = body;
+        }
+        let shape = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::TextBox,
+            w,
+            h,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: Some(id),
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        let off = d.para(StoryRef::Body, &Path::top(para)).map_or(0, |p| p.len());
+        d.insert_object(&Pos::body(para, off), shape, &Default::default()).unwrap();
+        id
+    }
+
+    fn body_box_model(mode: u32, y: f32, h: f32) -> (Document, u32) {
+        use wordcraft_doc::para::{Anchor, Float, Wrap};
+        use wordcraft_doc::props::LineSpacing;
+        let mut doc = Document::from_text("Original spacer\n");
+        doc.settings.compat_mode = mode;
+        doc.last_section.page_h = BOUNDARY_PAGE_H;
+        doc.last_section.margin_top = 94.5;
+        doc.last_section.margin_bottom = BOUNDARY_MARGIN;
+        for index in 0..2 {
+            let p = doc.para_mut(StoryRef::Body, &Path::top(index)).unwrap();
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            if index == 0 {
+                p.props.line_spacing = Some(LineSpacing::Exactly(80.0));
+            }
+        }
+        let id = text_box(&mut doc, 1, "Original boundary box", 400.0, h, TextBody { inset: Some([0; 4]), ..Default::default() });
+        let p = doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        *p.objects[0].float_mut().unwrap() = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y, ..Default::default() };
+        (doc, id)
+    }
+
+    #[test]
+    fn body_bounds_require_box_story() {
+        use wordcraft_doc::para::ShapeKind;
+        for mode in [LEGACY_BOX_MODE, MODERN_BOX_MODE] {
+            let (mut doc, id) = body_box_model(mode, 650.0, BOUNDARY_BOX_H);
+            let object = doc.para(StoryRef::Body, &Path::top(1)).unwrap().objects[0].clone();
+            let (_, _, float) = object.frame().unwrap();
+            assert!(body_float_bounds(&doc, &object, &doc.last_section, float).is_some());
+            for kind in [PartKind::Header, PartKind::Footer, PartKind::Footnote, PartKind::Endnote, PartKind::Comment] {
+                doc.parts.get_mut(&id).unwrap().kind = kind;
+                assert_eq!(body_float_bounds(&doc, &object, &doc.last_section, float), None, "{mode} {kind:?}");
+            }
+            doc.parts.remove(&id);
+            assert_eq!(body_float_bounds(&doc, &object, &doc.last_section, float), None);
+            let mut plain = object.clone();
+            if let InlineObject::Shape { story, kind, .. } = &mut plain {
+                *story = None;
+                *kind = ShapeKind::Rectangle;
+            }
+            assert_eq!(body_float_bounds(&doc, &plain, &doc.last_section, plain.frame().unwrap().2), None);
+            let image = InlineObject::Image {
+                media: "original-picture".into(),
+                w: 400.0,
+                h: BOUNDARY_BOX_H,
+                alt: String::new(),
+                float: float.clone(),
+                crop: [0.0; 4],
+                ole: None,
+            };
+            assert_eq!(body_float_bounds(&doc, &image, &doc.last_section, image.frame().unwrap().2), None);
+            doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().objects[0] = image;
+            let laid = lay(&doc);
+            let hit = laid.object(&Pos::body(1, 0), 0).unwrap();
+            assert!((hit.rect.y - 824.5).abs() < 0.01, "{mode}: {:?}", hit.rect);
+        }
+    }
+}

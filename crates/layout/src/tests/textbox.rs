@@ -692,43 +692,6 @@ fn body_anchor_scope() {
 }
 
 #[test]
-fn body_bounds_require_box_story() {
-    use wordcraft_doc::para::ShapeKind;
-    for mode in [LEGACY_BOX_MODE, MODERN_BOX_MODE] {
-        let (mut doc, id) = body_box_model(mode, 650.0, BOUNDARY_BOX_H);
-        let object = doc.para(StoryRef::Body, &Path::top(1)).unwrap().objects[0].clone();
-        let (_, _, float) = object.frame().unwrap();
-        assert!(body_float_bounds(&doc, &object, &doc.last_section, float).is_some());
-        for kind in [PartKind::Header, PartKind::Footer, PartKind::Footnote, PartKind::Endnote, PartKind::Comment] {
-            doc.parts.get_mut(&id).unwrap().kind = kind;
-            assert_eq!(body_float_bounds(&doc, &object, &doc.last_section, float), None, "{mode} {kind:?}");
-        }
-        doc.parts.remove(&id);
-        assert_eq!(body_float_bounds(&doc, &object, &doc.last_section, float), None);
-        let mut plain = object.clone();
-        if let InlineObject::Shape { story, kind, .. } = &mut plain {
-            *story = None;
-            *kind = ShapeKind::Rectangle;
-        }
-        assert_eq!(body_float_bounds(&doc, &plain, &doc.last_section, plain.frame().unwrap().2), None);
-        let image = InlineObject::Image {
-            media: "original-picture".into(),
-            w: 400.0,
-            h: BOUNDARY_BOX_H,
-            alt: String::new(),
-            float: float.clone(),
-            crop: [0.0; 4],
-            ole: None,
-        };
-        assert_eq!(body_float_bounds(&doc, &image, &doc.last_section, image.frame().unwrap().2), None);
-        doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().objects[0] = image;
-        let laid = lay(&doc);
-        let hit = laid.object(&Pos::body(1, 0), 0).unwrap();
-        assert!((hit.rect.y - 824.5).abs() < 0.01, "{mode}: {:?}", hit.rect);
-    }
-}
-
-#[test]
 fn body_box_backward_wrap() {
     for (mode, offset, height) in
         [(LEGACY_BOX_MODE, -300.0, BOUNDARY_BOX_H), (MODERN_BOX_MODE, -300.0, BOUNDARY_BOX_H), (LEGACY_BOX_MODE, 100.0, 900.0)]

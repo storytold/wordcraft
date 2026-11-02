@@ -472,9 +472,6 @@ fn accept_wrap_relay(
     Some(k)
 }
 #[cfg(test)]
-#[path = "tests/body_wrap.rs"]
-mod body_wrap_tests;
-#[cfg(test)]
 use floats::continued_exclusions;
 
 struct ReplayInput<'a> {
