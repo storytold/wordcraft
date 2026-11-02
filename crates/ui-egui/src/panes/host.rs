@@ -152,6 +152,7 @@ fn close(app: &mut WordApp, pane: Pane) {
             let _ = app.run(id, json!({"value": false}));
         }
         None if pane == Pane::Assistant => app.assistant.open = false,
+        None if pane == Pane::Proofing => app.spelling_review = None,
         None => app.restrict.open = false,
     }
 }

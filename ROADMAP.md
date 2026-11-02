@@ -355,6 +355,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-10-26 | Spelling & Grammar opens a right-side Proofing task pane observed in Word for Windows: sentence context, directly clickable suggestion cards and ignore/dictionary actions. Current-story traversal and stale-target checks are retained. Right-click keeps its compact menu. |
 | 2026-10-20 | GeenioAI runs on the shared Craft AI layer ([craft-ai-integrations](https://github.com/storytold/craft-ai-integrations)) through the new `craft-ai-fantastico` adapter: the FANTASTICO account is a connection every Craft app and the launcher share, its key moves into the system keychain (an older key file is migrated), and a card in the pane asks before anything is sent for the first time |
 | 2026-10-18 | GeenioAI streams its replies (the text shows as it arrives, in the pane and from `wordcraft-cli ask`), through a new native crate `wordcraft-fantastico` that reads the provider's event stream under the FANTASTICO SDK; its interface strings are now in all 18 languages |
 | 2026-10-18 | GeenioAI, the AI assistant (#25, [docs/assistant.md](docs/assistant.md)): Home › GeenioAI opens a chat pane like Word's Copilot pane, and an icon in the left margin beside the caret's paragraph (like Word's Copilot icon) offers a Draft box on an empty paragraph and Rewrite, Make it shorter, Fix spelling and grammar and Summarize on a selection. The agent (new L5 crate `wordcraft-assistant`) edits the document with WordCraft's own commands through the MCP tools; one request is one undo step. The model is any the user's FANTASTICO account offers (Claude, GPT, Gemini, Llama…), chosen in the pane's settings with the reply language; the account key is checked before it is stored and never shown. `ui.assistant`, `ui.assistant.ask` and `wordcraft-cli ask` for agents |
@@ -688,7 +689,11 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 ## Revision history
 
+> 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
+>
 > 2026-10-28 · Markdown import bounds reference-label scans and normalization within the existing link-work allowance. Nested undefined labels preserve literal text instead of causing quadratic work (#4658).
+>
+> 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
 >
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.
 
@@ -707,6 +712,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
 | 2026-10-30 | trivial | Progress log: only the PDF sent to the printer leaves out link annotations; Save these pages as PDF keeps them (#4734) |
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
+| 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
+| 2026-10-30 | trivial | Synchronize the existing Proofing pane and navigation/selection/undo regressions with main `3b7f7ed`; new-SHA validation pending, readiness unchanged |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
@@ -722,6 +729,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window fallback geometry and equation symbol tooltips |
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
+| 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
 | 2026-10-27 | minor | GeenioAI (the AI assistant) landed on the shared Craft AI layer (#25): pane, margin icon, `wordcraft-cli ask`; AI features 40% → 70% |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
