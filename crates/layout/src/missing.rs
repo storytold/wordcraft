@@ -152,7 +152,16 @@ pub fn watermark_run(wm: &wordcraft_doc::Watermark, max_chars: usize) -> Option<
 /// to glyph id 0. Strict export checks these same glyphs, so the check and the exporters can't
 /// drift.
 pub fn metafile_text_run(t: &wordcraft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
+    // A symbol font's text was decoded to its Unicode equivalents; draw it from a face that has
+    // them, not from an installed copy of the proprietary font (whose 8-bit cmap has no Unicode
+    // mapping, so every glyph would be a missing-glyph box). A face that lacks characters of the
+    // run (a Chinese picture font that isn't installed) takes an installed face covering it.
+    let primary = if wordcraft_doc::symbol_fonts::is_symbol_font(&t.font) {
+        wordcraft_fonts::word::resolve_symbol(t.bold, t.italic).face
+    } else {
+        wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face
+    };
+    let face = wordcraft_fonts::word::face_for_text(primary, &t.text, t.bold, t.italic);
     let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
     (face, shaped)
 }

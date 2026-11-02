@@ -3,11 +3,12 @@ name = "wordcraft-metafile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft metafiles: parses Windows WMF and EMF records into a neutral vector model (paths and bitmaps)"
+description = "WordCraft metafiles: parses Windows WMF and EMF records into a neutral vector model (paths, bitmaps and text runs)"
 
 [lints]
 workspace = true
 
 [dependencies]
 kurbo = { workspace = true }
+encoding_rs = { workspace = true }
 thiserror = { workspace = true }

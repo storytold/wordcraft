@@ -704,6 +704,42 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     r
 }
 
+/// Resolve a symbol font's Unicode-equivalent text (Symbol, Wingdings…, mapped by
+/// `wordcraft_doc::symbol_fonts`) to a face that actually has Unicode glyphs. An installed copy of
+/// the proprietary font is deliberately ignored: its cmap is the 8-bit symbol one (U+F020–U+F0FF),
+/// so a standard character such as a big-parenthesis piece would draw as a missing-glyph box.
+pub fn resolve_symbol(bold: bool, italic: bool) -> Resolved {
+    let db = FontDb::global();
+    let family = substitute(db, "Symbol").unwrap_or(crate::FALLBACK_FAMILY);
+    let face = db.face(family, style_name(bold, italic));
+    Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted: true, face: FaceRef::of(&face) }
+}
+
+/// The face that draws a metafile text run from `primary`: `primary` itself when it has every
+/// character, else the installed fallback face that covers the whole run (a picture's text in a
+/// Chinese font that isn't installed, such as MathType's 標楷體/新細明體, would otherwise be drawn
+/// in the Latin substitute and every CJK character would be a missing-glyph box). A character no
+/// installed face covers stays in `primary`, which draws its missing-glyph box.
+pub fn face_for_text(primary: FaceRef, text: &str, bold: bool, italic: bool) -> FaceRef {
+    // The run's own face is kept when it covers every character: no list is built for the
+    // common case (equation previews are many small runs).
+    let mut uncovered = false;
+    for c in text.chars() {
+        if c.is_whitespace() || c.is_control() {
+            continue;
+        }
+        if !primary.covers(c) {
+            uncovered = true;
+            break;
+        }
+    }
+    if !uncovered {
+        return primary;
+    }
+    let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace() && !c.is_control()).collect();
+    FontDb::global().fallback_for_run(&chars, primary.id(), bold, italic).map(|f| FaceRef::of(&f)).unwrap_or(primary)
+}
+
 /// A line's (ascent, descent) from hhea values, both positive: the line gap goes above the ascent.
 fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
@@ -1142,5 +1178,36 @@ mod tests {
         assert!(is_thai_family(&thai_list) && !is_thai_family(&named_list));
         let cached = fallback_list_cache().lock().unwrap_or_else(|e| e.into_inner()).classes.len();
         assert!(cached >= 2, "{cached} lists classified");
+    }
+
+    /// A run the primary face can't cover is drawn from one installed face that covers it all
+    /// (a picture's text in a Chinese font that isn't installed would otherwise be boxes). The
+    /// face depends on what is installed, so this runs where a fallback face is present.
+    #[test]
+    #[ignore = "needs an installed face that covers the test characters"]
+    fn metafile_text_takes_a_fallback_face_for_characters_the_primary_lacks() {
+        let primary = resolve("Source Sans 3", false, false).face;
+        if primary.covers('中') {
+            return;
+        }
+        let db = FontDb::global();
+        if db.fallback_for('中', primary.id()).is_none() {
+            return;
+        }
+        let fallback = face_for_text(primary, "中", false, false);
+        assert!(fallback.covers('中'), "{}", fallback.family);
+        assert_eq!(face_for_text(primary, "abc", false, false).id(), primary.id(), "a covered run keeps its face");
+    }
+
+    /// The proprietary Symbol font's cmap is the 8-bit symbol one (U+F020–U+F0FF); decoded Symbol
+    /// text must be drawn from a face with the Unicode characters, the big-parenthesis pieces
+    /// included, not from an installed copy of the font (every glyph would be a box).
+    #[test]
+    fn resolve_symbol_returns_a_face_with_the_unicode_characters() {
+        let r = resolve_symbol(false, false);
+        assert!(r.substituted);
+        for c in ['\u{239B}', '\u{239C}', 'α', 'β', '∑', '√'] {
+            assert!(r.face.covers(c), "{c:?} in {}", r.face.family);
+        }
     }
 }
