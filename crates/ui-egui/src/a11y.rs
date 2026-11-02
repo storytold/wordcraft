@@ -745,12 +745,9 @@ mod tests {
         assert!(in_table, "the described caret is the preview's, inside the preview table");
     }
 
-    /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
-    /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
-    /// text runs and the caret at its paragraph and character.
     /// A screen reader moves the caret and the selection with SetTextSelection, as NVDA's browse
     /// mode does on every move; it was ignored, so focus mode took over from the old caret. A
-    /// position it wasn't given leaves the selection alone.
+    /// selection keeps its direction, and a position it wasn't given leaves the selection alone.
     #[test]
     fn a_screen_reader_moves_the_caret() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -796,7 +793,11 @@ mod tests {
         // A node it wasn't given, or a character past a run's end.
         request_selection(&mut app, &ctx, doc, (NodeId(u64::MAX), 0), (read, 1));
         request_selection(&mut app, &ctx, doc, (read, 11), (read, 11));
+        request_selection(&mut app, &ctx, doc, (read, 0), (read, usize::MAX));
         assert_eq!(sel(&app), (Pos::body(0, 10), Pos::body(0, 10)));
+        // Backwards, from the second paragraph's "Sec" to "this": the anchor stays the anchor.
+        request_selection(&mut app, &ctx, doc, (second, 3), (read, 5));
+        assert_eq!(sel(&app), (Pos::body(1, 3), Pos::body(0, 5)));
     }
 
     /// #4832 review: a request is refused when the tree it points into is older than the text
@@ -900,6 +901,81 @@ mod tests {
         );
     }
 
+    /// #4832 review: in a table, the caret and a selection go into the cell the screen reader
+    /// asks for, and the end of a cell's last run stays in that cell (its next paragraph would be
+    /// somewhere else).
+    #[test]
+    fn a_screen_reader_selects_inside_a_table_cell() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [("insert.table", json!({"rows": 1, "cols": 2})), ("text.insert", json!({"text": "Cell A"}))] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let a = app.session.sel.focus.path.clone();
+        app.run("text.tab", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Cell B"})).unwrap();
+        let b = app.session.sel.focus.path.clone();
+        assert!(a.0.len() > 1 && a != b, "two cells: {a:?}, {b:?}");
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let doc = update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node");
+        let run = |text: &str| {
+            update
+                .nodes
+                .iter()
+                .find(|(_, n)| n.role() == Role::TextRun && n.value() == Some(text))
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| panic!("no run {text:?}"))
+        };
+        let (cell_a, cell_b) = (run("Cell A\n"), run("Cell B\n"));
+        let sel = |app: &crate::WordApp| (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
+        let at = |path: &Path, off: usize| Pos::new(StoryRef::Body, path.clone(), off);
+
+        request_selection(&mut app, &ctx, doc, (cell_a, 2), (cell_a, 2));
+        assert_eq!(sel(&app), (at(&a, 2), at(&a, 2)), "the caret in the first cell");
+        request_selection(&mut app, &ctx, doc, (cell_b, 0), (cell_b, 4));
+        assert_eq!(sel(&app), (at(&b, 0), at(&b, 4)), "`Cell` in the second cell");
+        request_selection(&mut app, &ctx, doc, (cell_a, 7), (cell_a, 7));
+        assert_eq!(sel(&app), (at(&a, 6), at(&a, 6)), "the end of the first cell, not the second's start");
+    }
+
+    /// #4832 review: a field's result and a character outside the Basic Multilingual Plane (two
+    /// UTF-16 units) are one character each for a screen reader, so its positions are before or
+    /// after them, never inside.
+    #[test]
+    fn a_screen_reader_selects_a_field_or_an_emoji_whole() {
+        let mut doc = Document::from_text("By  \u{1F600} end");
+        let field =
+            InlineObject::Field { instr: "AUTHOR".into(), result: "Ada".into(), locked: false, dirty: false, code: false, form: String::new() };
+        doc.para_mut(StoryRef::Body, &Path::top(0)).expect("a paragraph").insert_object(3, field, &Default::default()).expect("a field");
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let text = app.session.doc.para(StoryRef::Body, &Path::top(0)).map(|p| p.text.clone()).unwrap_or_default();
+        assert_eq!(text, "By \u{FFFC} \u{1F600} end", "the field is one mark, the emoji four bytes");
+        let ctx = egui::Context::default();
+        let update = described(&mut app, &ctx);
+        let doc = update.nodes.iter().find(|(_, n)| n.role() == Role::Document).map(|(id, _)| *id).expect("a document node");
+        let (run, node) = update
+            .nodes
+            .iter()
+            .find(|(_, n)| n.role() == Role::TextRun && n.value().is_some_and(|v| v.starts_with("By ")))
+            .map(|(id, n)| (*id, n))
+            .expect("the paragraph's run");
+        // B, y, space, the field, space, the emoji, ...
+        assert_eq!(node.character_lengths().get(5), Some(&4), "the emoji is one character: {:?}", node.value());
+        let positions = &app.canvas.a11y.tree.positions;
+        assert!(
+            positions.values().all(|q| text.is_char_boundary(q.off) && wordcraft_doc::cluster::is_cluster_boundary(&text, q.off)),
+            "{positions:?}"
+        );
+        let focus = |app: &crate::WordApp| app.session.sel.focus.off;
+        for (character, off) in [(3, 3), (4, 6), (5, 7), (6, 11)] {
+            request_selection(&mut app, &ctx, doc, (run, character), (run, character));
+            assert_eq!(focus(&app), off, "character {character}");
+        }
+    }
+
+    /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
+    /// paragraph, a list item in a list, a table's rows and cells and a link, with the text in
+    /// text runs and the caret at its paragraph and character.
     #[test]
     fn the_canvas_describes_the_document_to_screen_readers() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
