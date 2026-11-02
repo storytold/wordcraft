@@ -1272,7 +1272,8 @@ fn format_then_end(s: &mut Session, text: &str, cmd: &str, params: serde_json::V
 
 /// The formatting of the character at byte `off` of body paragraph `block`.
 fn char_at(s: &Session, block: usize, off: usize) -> wordcraft_doc::props::CharProps {
-    s.doc.para_at(&Pos::body(block, 0)).map(|p| p.props_of_char(off).clone()).unwrap_or_default()
+    let p = s.doc.para_at(&Pos::body(block, 0)).unwrap_or_else(|| panic!("no paragraph {block}"));
+    p.props_of_char(off).clone()
 }
 
 #[test]
@@ -1577,6 +1578,43 @@ fn a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated() {
     format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
     run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true}));
     typ(&mut s, "\nNext: more");
+    assert_eq!(char_at(&s, 1, 0).bold, None);
+}
+
+#[test]
+fn links_language_and_revision_marks_of_the_lead_in_are_not_repeated() {
+    // A bold lead-in that is also a link, in French with proofing off: only the bold carries over.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    format_then_end(&mut s, "Label", "insert.link", json!({"url": "https://example.org/"}), 0);
+    format_then_end(&mut s, "Label", "review.language", json!({"lang": "fr-FR", "noProof": true}), 0);
+    assert_eq!(char_at(&s, 0, 2).lang.as_deref(), Some("fr-FR"));
+    typ(&mut s, "\nNext: more");
+    let (lead, body) = (char_at(&s, 1, 0), char_at(&s, 1, 6));
+    assert_eq!(lead.bold, Some(true));
+    assert_eq!((&lead.link, &lead.lang, lead.no_proof), (&None, &body.lang, body.no_proof));
+    // A lead-in typed and made bold with Track Changes on: once tracking is off, the new item's
+    // lead-in is bold without the insertion or formatting-change marks.
+    let mut s = with_list_lead_in();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    assert!(char_at(&s, 0, 0).ins.is_some());
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    typ(&mut s, "\nNext: more");
+    let c = char_at(&s, 1, 0);
+    assert_eq!((c.bold, c.ins, c.fmt_change.is_none()), (Some(true), None, true));
+}
+
+#[test]
+fn an_item_without_punctuation_is_all_lead_in() {
+    // With no punctuation, the whole item is the lead-in: bold on its first word only is not on
+    // the whole lead-in, so it is not repeated.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Bold label");
+    format_then_end(&mut s, "Bold", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext");
     assert_eq!(char_at(&s, 1, 0).bold, None);
 }
 

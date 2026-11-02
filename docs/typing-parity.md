@@ -283,9 +283,11 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   `only_formatting_the_whole_lead_in_shares_is_repeated`). The rest is WordCraft's own rule: a
   character property such as bold, italic, font, size or color is repeated when the whole
   lead-in shares it, and links, revision marks, language, proofing settings, the symbol font,
-  text direction, and hidden and web-hidden text are not; the
+  text direction, and hidden and web-hidden text are not
+  (`links_language_and_revision_marks_of_the_lead_in_are_not_repeated`); the
   punctuation character takes the lead-in's formatting and the text after it the formatting
-  typing would have had; an item with no punctuation is all lead-in; the new item must be empty
+  typing would have had; an item with no punctuation is all lead-in
+  (`an_item_without_punctuation_is_all_lead_in`); the new item must be empty
   and in the same list and level, also when its style numbers it
   (`a_list_item_numbered_by_its_style_repeats_the_lead_in`), and nothing is repeated after a
   paragraph outside a list, the Enter that ends a list or an Enter inside an item
