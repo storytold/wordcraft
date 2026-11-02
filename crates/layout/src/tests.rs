@@ -12987,7 +12987,7 @@ fn nested_rule_after_realign() {
         let mut outer = Table::new(1, 2, 300.0);
         outer.props.cell_margins = Some([0.0; 4]);
         outer.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para(&vec!["Original line"; 70].join("\n")))];
-        outer.rows[0].cells[1].props.valign = valign;
+        outer.rows[0].cells[1].props.valign = Some(valign);
         outer.rows[0].cells[1].blocks = vec![Arc::new(Block::Table(inner)), wordcraft_doc::para_block(para("End"))];
         let mut d = Document::new();
         d.last_section.page_h = 360.0;

@@ -943,6 +943,15 @@ pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, 
     split_row_with(row, cut, true)
 }
 
+// The cell end and its nested rules move together during realignment.
+fn aligned_rule_top(rule: &AnchoredRule, before: Option<f32>, after: Option<f32>) -> f32 {
+    let delta = match (after, before) {
+        (Some(now), Some(previous)) => now - previous,
+        _ => 0.0,
+    };
+    rule.top + delta
+}
+
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
@@ -1146,12 +1155,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     if (y0 - y1).abs() < 0.01 {
                         // Horizontal: the top edge stays, the bottom edge moves; both fragments close.
                         if let Some(rule) = c.anchored_rules.iter().find(|r| r.item == source) {
-                            // The cell end and its nested rules move together during realignment.
-                            let delta = match (*end, c.end) {
-                                (Some(now), Some(before)) => now - before,
-                                _ => 0.0,
-                            };
-                            let top = rule.top + delta;
+                            let top = aligned_rule_top(rule, c.end, *end);
                             if top < cut {
                                 a.push(it.clone());
                             } else {
