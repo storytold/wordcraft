@@ -479,10 +479,21 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 /// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
 /// baseline at `cx`): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+///
+/// `line` is the room a horizontal rule is placed in, from `cx`.
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32, line: f32) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
+    // line, and is placed by its alignment in what the line has left: it runs past the margin
+    // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
+    if let Some(InlineObject::Shape { w, extra, .. }) = obj
+        && let Some(hr) = extra.hr
+    {
+        let rw = hr.width(room.w, *w);
+        return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
+    }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
     // The room is the rotated bounds of the frame: undo the rotation.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
@@ -506,3 +517,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;
