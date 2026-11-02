@@ -154,7 +154,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | #4435: preserve current-main history; reject explicit null control parameters and scope Edit/Review and Comments to the selected header palette. Primary qualification pending. |
+| 2026-11-02 | trivial | #4435: reject explicit null control parameters and scope Edit/Review and Comments to the selected header palette. |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-01 | trivial | #4435: reject non-object header-colour command parameters; preserve object reads, setters and existing invalid-value errors. Dedicated command control added; runtime qualification pending. |
 | 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle; no ranked gap changed; readiness estimates unchanged |
