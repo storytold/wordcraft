@@ -14,6 +14,8 @@
 //! outside what's deleted (so deleting across a control's edge empties it rather than breaking
 //! it); writers call [`Document::balance_controls`] so a saved file always has whole controls.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use serde::{Deserialize, Serialize};
 
 use crate::para::OBJ;
@@ -312,10 +314,10 @@ pub fn control_events(bl: &Blocks) -> Vec<ControlEvent<'_>> {
                 if !p.objects.iter().any(|o| matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)) {
                     continue;
                 }
-                for off in p.object_offsets() {
-                    match p.object_at(off) {
-                        Some(InlineObject::ControlStart { control }) => out.push(ControlEvent::Open { block: i, off: Some(off), control }),
-                        Some(InlineObject::ControlEnd) => out.push(ControlEvent::Close { block: i, off: Some(off) }),
+                for (off, o) in p.objects_with_offsets() {
+                    match o {
+                        InlineObject::ControlStart { control } => out.push(ControlEvent::Open { block: i, off: Some(off), control }),
+                        InlineObject::ControlEnd => out.push(ControlEvent::Close { block: i, off: Some(off) }),
                         _ => {}
                     }
                 }
@@ -420,24 +422,37 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
 }
 
 /// Positions of the markers without a partner in a block list and the cells inside it.
-fn orphans(bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: &mut Vec<(Path, usize)>, tables: &mut Vec<(Path, usize, bool)>) {
+pub(crate) fn orphans(bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: &mut Vec<(Path, usize)>, tables: &mut Vec<(Path, usize, bool)>) {
     if depth > MAX_DEPTH {
         return;
     }
     let events = control_events(bl);
     let (_, lone) = pair_events(&events);
-    for k in lone {
-        let Some(e) = events.get(k) else { continue };
-        let mut path = prefix.clone();
-        path.push(u32::try_from(e.block()).unwrap_or(u32::MAX));
-        match (e, e.off()) {
-            (_, Some(off)) => out.push((Path(path), off)),
-            (ControlEvent::Open { .. }, None) => {
-                // Which of the table's opens: count those before it on the same table.
-                let nth = events.iter().take(k).filter(|x| matches!(x, ControlEvent::Open { block, off: None, .. } if *block == e.block())).count();
-                tables.push((Path(path), nth, true));
+    if !lone.is_empty() {
+        let mut table_counts: HashMap<usize, usize> = HashMap::new();
+        let mut open_nth = Vec::with_capacity(events.len());
+        for e in &events {
+            if let ControlEvent::Open { block, off: None, .. } = e {
+                let count = table_counts.entry(*block).or_insert(0);
+                open_nth.push(*count);
+                *count += 1;
+            } else {
+                open_nth.push(0);
             }
-            (ControlEvent::Close { .. }, None) => tables.push((Path(path), 0, false)),
+        }
+        for k in lone {
+            let Some(e) = events.get(k) else { continue };
+            let mut path = prefix.clone();
+            path.push(u32::try_from(e.block()).unwrap_or(u32::MAX));
+            match (e, e.off()) {
+                (_, Some(off)) => out.push((Path(path), off)),
+                (ControlEvent::Open { .. }, None) => {
+                    // Which of the table's opens: index among table opens on the same table.
+                    let nth = open_nth.get(k).copied().unwrap_or(0);
+                    tables.push((Path(path), nth, true));
+                }
+                (ControlEvent::Close { .. }, None) => tables.push((Path(path), 0, false)),
+            }
         }
     }
     for (i, b) in bl.iter().enumerate() {
@@ -639,34 +654,52 @@ impl Document {
                 out.push((r.end.path.clone(), r.end.off));
             }
         }
-        // Markers paired with a table wrap: their partner is never deleted with them.
+        // Markers paired with a table wrap: their partner is never deleted with them. Each lookup
+        // is a set probe, and each container is paired once, not once per marker (#3614).
+        let in_ranges: BTreeSet<(&Path, usize)> = ranges.iter().flat_map(|r| [(&r.start.path, r.start.off), (&r.end.path, r.end.off)]).collect();
+        let mut table_paired: BTreeMap<&[u32], BTreeSet<(usize, usize)>> = BTreeMap::new();
         for path in &paths {
             let Some(p) = self.para(a.story, path) else { continue };
-            for off in p.object_offsets() {
-                if !inside(path, off) || !matches!(p.object_at(off), Some(InlineObject::ControlStart { .. } | InlineObject::ControlEnd)) {
+            for (off, o) in p.objects_with_offsets() {
+                if !inside(path, off)
+                    || !matches!(o, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)
+                    || in_ranges.contains(&(path, off))
+                {
                     continue;
                 }
-                let paired = ranges.iter().any(|r| (r.start.path == *path && r.start.off == off) || (r.end.path == *path && r.end.off == off));
-                if !paired && self.paired_with_table(a.story, path, off) {
+                let paired = table_paired.entry(path.parent()).or_insert_with(|| self.table_paired_markers(a.story, path));
+                if paired.contains(&(path.last(), off)) {
                     out.push((path.clone(), off));
                 }
             }
         }
+        // Sorted and without repeats: `delete_range` groups this by paragraph and binary-searches
+        // each group (`control_markers_kept_are_sorted` pins it).
         out.sort();
         out.dedup();
         out
     }
 
-    /// Whether the marker at `path`/`off` is paired with a table wrap's open or close.
-    fn paired_with_table(&self, s: StoryRef, path: &Path, off: usize) -> bool {
-        let Some(bl) = self.container(s, path) else { return false };
+    /// (block, offset) of the paragraph markers in `path`'s container that are paired with a
+    /// table wrap's open or close.
+    fn table_paired_markers(&self, s: StoryRef, path: &Path) -> BTreeSet<(usize, usize)> {
+        let Some(bl) = self.container(s, path) else { return BTreeSet::new() };
         let events = control_events(bl);
         let (pairs, _) = pair_events(&events);
-        let me = events.iter().position(|e| e.block() == path.last() && e.off() == Some(off));
-        let Some(me) = me else { return false };
-        pairs.iter().any(|(o, c, _)| {
-            (*o == me && events.get(*c).is_some_and(|e| e.off().is_none())) || (*c == me && events.get(*o).is_some_and(|e| e.off().is_none()))
-        })
+        let mut out = BTreeSet::new();
+        for (o, c, _) in pairs {
+            let (Some(open), Some(close)) = (events.get(o), events.get(c)) else { continue };
+            match (open.off(), close.off()) {
+                (Some(off), None) => {
+                    out.insert((open.block(), off));
+                }
+                (None, Some(off)) => {
+                    out.insert((close.block(), off));
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Where typing at `p` should go: a caret at the start of a paragraph, before the start of
@@ -674,8 +707,11 @@ impl Document {
     /// end, goes inside it too (the control is around the whole paragraph).
     pub fn typing_pos(&self, p: &Pos) -> Pos {
         let Some(para) = self.para_at(p) else { return p.clone() };
-        let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::ControlStart { control }) if control.block);
-        let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::ControlEnd));
+        // The objects once, looked up by offset (object_at per step rescans the text).
+        let objs: Vec<(usize, &InlineObject)> = para.objects_with_offsets().collect();
+        let obj = |off: usize| objs.binary_search_by_key(&off, |(o, _)| *o).ok().and_then(|k| objs.get(k)).map(|(_, o)| *o);
+        let is_start = |off: usize| matches!(obj(off), Some(InlineObject::ControlStart { control }) if control.block);
+        let is_end = |off: usize| matches!(obj(off), Some(InlineObject::ControlEnd));
         let w = OBJ.len_utf8();
         let mut off = p.off;
         // Only block starts before the caret (or none) and block starts right after it.
@@ -688,8 +724,9 @@ impl Document {
         }
         if p.off == para.len() && off >= w && is_end(off - w) {
             // Step back over the trailing ends that close block-level controls.
-            let ranges = self.control_ranges(p.story);
-            while off >= w && is_end(off - w) && ranges.iter().any(|r| r.end.path == p.path && r.end.off == off - w && r.control.block) {
+            let block_ends: BTreeSet<usize> =
+                self.control_ranges(p.story).into_iter().filter(|r| r.end.path == p.path && r.control.block).map(|r| r.end.off).collect();
+            while off >= w && is_end(off - w) && block_ends.contains(&(off - w)) {
                 off -= w;
             }
             return Pos { off, ..p.clone() };
