@@ -10,8 +10,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
-use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
+use wordcraft_doc::props::{Align, TextDirection, TextVert, VAlign};
+use wordcraft_doc::{Block, Blocks, InlineObject, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
 use crate::{BoxInput, Ctx, Placed, fit_box, layout_box};
@@ -66,6 +66,64 @@ fn frame(body: &TextBody, w: f32, h: f32) -> (f32, f32) {
     (along.max(12.0), across)
 }
 
+/// The line length for `blocks` in a box whose lines are `len` long: as long as the widest line
+/// when Wrap text in shape is off, so a box saved narrower than its text keeps its lines whole.
+fn line_len(ctx: &mut Ctx, blocks: &Blocks, body: &TextBody, len: f32) -> f32 {
+    if !body.no_wrap || body.vert == TextVert::Stacked {
+        return len;
+    }
+    // Measuring doesn't count the box's list numbers and equations: laying it out does.
+    let snap = (ctx.counters.clone(), ctx.eq_count);
+    let widest = blocks.iter().map(|b| block_width(ctx, b, len)).fold(0.0, f32::max);
+    (ctx.counters, ctx.eq_count) = snap;
+    // A hair over, so rounding can't push the last word of the widest line onto a line of its own.
+    len.max(widest + 0.5)
+}
+
+/// How wide `block` of a box with lines `len` long runs without wrapping: with its list label, and
+/// with positional tabs placed in the box's own width, as they would otherwise reach the width
+/// measured in.
+fn block_width(ctx: &mut Ctx, block: &Arc<Block>, len: f32) -> f32 {
+    let Block::Para(p) = &**block else {
+        return crate::table::blocks_content(ctx, &vec![block.clone()], None, 0).1;
+    };
+    let label = ctx.next_label(p);
+    let tabs = p.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { .. }));
+    let width = if tabs { len } else { crate::table::UNBOUNDED };
+    let (widest, first) = ctx.para_measured(p, width, None, label.clone(), crate::table::para_lines);
+    if label.is_none() {
+        return widest;
+    }
+    // Alignment and direction move a line, not its length: the label's shift comes from a copy
+    // without them, as at the measuring width they would move the label too.
+    let mut plain = p.clone();
+    plain.props.align = Some(Align::Left);
+    plain.props.bidi = Some(false);
+    plain.touch();
+    let (shift, _) = ctx.para_measured(&plain, width, None, label, crate::table::label_shift);
+    widest.max(first + shift)
+}
+
+/// The width of a `w` wide box `id` as placed and drawn: as wide as its lines with Wrap text in
+/// shape off, as Word draws it whether or not it resizes to fit its text.
+pub(crate) fn no_wrap_width(ctx: &mut Ctx, id: u32, w: f32) -> f32 {
+    let Some(body) = ctx.doc.parts.get(&id).map(|p| p.body) else { return w };
+    if !body.no_wrap || body.vert.turn() != TextDirection::Horizontal || body.next.is_some() {
+        return w;
+    }
+    ctx.chains.build(ctx.doc);
+    if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
+        return w;
+    }
+    let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+    let (len, _) = frame(&body, w, 0.0);
+    let len = line_len(ctx, &blocks, &body, len);
+    ctx.boxes.leave();
+    let [l, _, r, _] = body.insets_pt();
+    let wide = len + l + r;
+    if wide.is_finite() { wide.max(w) } else { w }
+}
+
 /// The width stacked text is laid out in (a paragraph's narrowest).
 const STACK_WIDTH: f32 = 12.0;
 
@@ -107,6 +165,7 @@ pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec
                 return Vec::new();
             }
             let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+            let len = line_len(ctx, &blocks, &body, len);
             let inner = lay(ctx, id, &blocks, len, body.vert, depth);
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
@@ -131,6 +190,7 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
     }
     let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
     let (len, _) = frame(&body, w, 0.0);
+    let len = line_len(ctx, &blocks, &body, len);
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
     let items = lay(ctx, id, &blocks, len, body.vert, 0);

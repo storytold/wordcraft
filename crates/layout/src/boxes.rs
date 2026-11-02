@@ -1,6 +1,6 @@
 use super::ctx::{Ctx, page_anchored};
 use super::floats::{
-    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
+    ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, placed_width, rel_exclusions, wrap_area,
 };
 use super::page::PageFrame;
 use super::placed::Placed;
@@ -280,6 +280,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     if left_out(oi) {
                         continue;
                     }
+                    let w = placed_width(ctx, o, w);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page =
                             PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };

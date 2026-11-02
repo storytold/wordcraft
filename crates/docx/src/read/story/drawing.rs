@@ -476,6 +476,7 @@ impl Reader<'_> {
             }
             part.body.inset = (inset != wordcraft_doc::TEXT_BOX_INSET).then_some(inset);
             part.body.auto_fit = bp.child("a:spAutoFit").is_some();
+            part.body.no_wrap = bp.attr("wrap") == Some("none");
         }
         // The shape style's text colour (`a:fontRef`, often `lt1`: white on the accent fill).
         if let Some(id) = story

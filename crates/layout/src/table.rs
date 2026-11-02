@@ -1376,7 +1376,7 @@ fn row_gaps(row: &Row, end: usize) -> impl Iterator<Item = (usize, usize, f32)> 
 }
 
 /// The narrowest and widest a block list can be laid out.
-fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth: usize) -> (f32, f32) {
+pub(crate) fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth: usize) -> (f32, f32) {
     let (mut lo, mut hi) = (0.0f32, 0.0f32);
     for b in blocks.iter() {
         let (l, h) = match &**b {
@@ -1414,12 +1414,19 @@ fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Leve
 }
 
 /// A width to lay a paragraph out in so that only its own line breaks end lines.
-const UNBOUNDED: f32 = 100_000.0;
+pub(crate) const UNBOUNDED: f32 = 100_000.0;
 
 /// A paragraph's longest word and longest line (between line breaks), indents included.
 fn para_content(pl: &ParaLayout) -> (f32, f32) {
+    let (lo, hi, _) = para_widths(pl);
+    (lo, hi)
+}
+
+/// [`para_content`], and the length of its first line (up to the first line break), indents included.
+fn para_widths(pl: &ParaLayout) -> (f32, f32, f32) {
     let indents = pl.rp.indent_left.max(0.0) + pl.rp.indent_right.max(0.0) + pl.rp.indent_first.max(0.0);
     let (mut word, mut line, mut spaces) = (0.0f32, 0.0f32, 0.0f32);
+    let mut first = None;
     let (mut lo, mut hi) = (0.0f32, 0.0f32);
     for c in &pl.clusters {
         let adv = if c.adv.is_finite() { c.adv.clamp(0.0, UNBOUNDED) } else { 0.0 };
@@ -1432,6 +1439,7 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
             ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
                 lo = lo.max(word);
                 hi = hi.max(line);
+                first.get_or_insert(line);
                 (word, line, spaces) = (0.0, 0.0, 0.0);
             }
             _ => {
@@ -1445,7 +1453,22 @@ fn para_content(pl: &ParaLayout) -> (f32, f32) {
             }
         }
     }
-    (lo.max(word) + indents, hi.max(line) + indents)
+    (lo.max(word) + indents, hi.max(line) + indents, first.unwrap_or(line) + indents)
+}
+
+/// A paragraph's longest line and its first line, as [`para_widths`] gives them.
+pub(crate) fn para_lines(pl: &ParaLayout) -> (f32, f32) {
+    let (_, hi, first) = para_widths(pl);
+    (hi, first)
+}
+
+/// How far a list label pushes the first line's text past its indent, in a paragraph laid out
+/// left aligned and left to right (the rest of the pair is unused).
+pub(crate) fn label_shift(pl: &ParaLayout) -> (f32, f32) {
+    let start = pl.rp.indent_left.max(0.0) + pl.rp.indent_first.max(0.0);
+    // The leftmost: reordered right-to-left text runs from its far end.
+    let text = pl.lines.first().and_then(|l| l.xs.iter().copied().reduce(f32::min)).unwrap_or(start);
+    ((text - start).max(0.0), 0.0)
 }
 
 /// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
