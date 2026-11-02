@@ -40,6 +40,19 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     out
 }
 
+type ObjectScopes<'a> = HashMap<(StoryRef, &'a wordcraft_doc::Path, usize), Vec<usize>>;
+
+fn object_scopes(items: &[Placed]) -> ObjectScopes<'_> {
+    let mut scopes = ObjectScopes::new();
+    for (index, item) in items.iter().enumerate() {
+        crate::work::steps(1);
+        if let Placed::Object { story, path, off, .. } = item {
+            scopes.entry((*story, path, *off)).or_default().push(index);
+        }
+    }
+    scopes
+}
+
 /// A page's draw items one placed item at a time, for a caller that draws and tags each item on
 /// its own (the PDF export). What every item shares, the revision authors' colours and the cells
 /// cut off at their edge, is worked out once for the page, not once for every item as calling
@@ -49,6 +62,7 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: [Clips; 3],
+    scopes: [ObjectScopes<'a>; 3],
     positions: HashMap<usize, (usize, usize)>,
 }
 
@@ -56,6 +70,7 @@ impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let lists = [&page.header, &page.footer, &page.items];
         let clips = lists.map(|items| clipped_cells(items));
+        let scopes = lists.map(|items| object_scopes(items));
         let mut positions = HashMap::new();
         for (slice, items) in lists.iter().enumerate() {
             for (index, item) in items.iter().enumerate() {
@@ -63,7 +78,7 @@ impl<'a> ItemDisplay<'a> {
                 positions.insert(item as *const Placed as usize, (slice, index));
             }
         }
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips, positions }
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips, scopes, positions }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -72,7 +87,7 @@ impl<'a> ItemDisplay<'a> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        let shared = self.positions.get(&(it as *const Placed as usize)).map(|&(slice, index)| (&self.clips[slice], index));
+        let shared = self.positions.get(&(it as *const Placed as usize)).map(|&(slice, index)| (&self.clips[slice], &self.scopes[slice], index));
         stories_display(self.doc, &[items], shared, opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
@@ -109,7 +124,7 @@ fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &Displa
 fn stories_display(
     doc: &Document,
     stories: &[&[Placed]],
-    shared: Option<(&Clips, usize)>,
+    shared: Option<(&Clips, &ObjectScopes<'_>, usize)>,
     opts: &DisplayOptions,
     authors: &Authors,
     a: f32,
@@ -119,11 +134,13 @@ fn stories_display(
     for items in stories {
         let warps = warped_boxes(doc, items);
         let own;
-        let clips = match shared {
-            Some((c, _)) => c,
+        let own_scopes;
+        let (clips, scopes) = match shared {
+            Some((clips, scopes, _)) => (clips, scopes),
             None => {
                 own = clipped_cells(items);
-                &own
+                own_scopes = object_scopes(items);
+                (&own, &own_scopes)
             }
         };
         let mut done: Vec<u32> = Vec::new();
@@ -133,13 +150,26 @@ fn stories_display(
                 continue;
             }
             if !clips.is_empty()
-                && let Some((story, path)) = it.source()
-                && let Some(rect) = cell_clip(clips, story, &path.0, shared.map_or(index, |(_, index)| index))
+                && let Some((story, path, object)) = it.source()
             {
-                let mut inner = Vec::new();
-                item(doc, it, opts, authors, a, &mut inner);
-                out.push(Draw::Clip { rect, items: inner });
-                continue;
+                let index = shared.map_or(index, |(_, _, index)| index);
+                // Pin places object records outside the cell sequence. Drawing layer order does not own the clip.
+                let owner = object
+                    .and_then(|off| scopes.get(&(story, path, off)))
+                    .and_then(|copies| {
+                        copies.get(copies.partition_point(|at| {
+                            crate::work::steps(1);
+                            *at < index
+                        }))
+                    })
+                    .copied()
+                    .unwrap_or(index);
+                if let Some(rect) = cell_clip(clips, story, &path.0, owner) {
+                    let mut inner = Vec::new();
+                    item(doc, it, opts, authors, a, &mut inner);
+                    out.push(Draw::Clip { rect, items: inner });
+                    continue;
+                }
             }
             match it {
                 Placed::Lines { story: StoryRef::Part(id), .. } if warps.iter().any(|(w, ..)| w == id) => {

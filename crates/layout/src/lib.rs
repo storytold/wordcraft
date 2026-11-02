@@ -393,15 +393,16 @@ fn fit_lines(items: Vec<Placed>, height: f32, fit: LineFit) -> Vec<Placed> {
 
 impl Placed {
     /// The physical source owning this item, including grouped drawing members.
-    fn source(&self) -> Option<(StoryRef, &Path)> {
+    fn source(&self) -> Option<(StoryRef, &Path, Option<usize>)> {
         let mut pending = vec![self];
         while let Some(item) = pending.pop() {
             match item {
-                Placed::Lines { story, path, .. } | Placed::Image { story, path, .. } | Placed::Graphic { story, path, .. } => {
-                    return Some((*story, path));
+                Placed::Lines { story, path, .. } => return Some((*story, path, None)),
+                Placed::Image { story, path, off, .. } | Placed::Graphic { story, path, off, .. } => return Some((*story, path, Some(*off))),
+                Placed::Fill { source: Some((story, path)), .. } | Placed::Rule { source: Some((story, path)), .. } => {
+                    return Some((*story, path, None));
                 }
-                Placed::Fill { source: Some((story, path)), .. } | Placed::Rule { source: Some((story, path)), .. } => return Some((*story, path)),
-                Placed::Shape { object: Some(pos), .. } => return Some((pos.story, &pos.path)),
+                Placed::Shape { object: Some(pos), .. } => return Some((pos.story, &pos.path, Some(pos.off))),
                 Placed::Clip { items, .. } => pending.extend(items.iter().rev()),
                 _ => {}
             }

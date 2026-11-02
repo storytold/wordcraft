@@ -12922,6 +12922,75 @@ mod review2849 {
         assert!(failures.is_empty(), "page-placed floats must escape cell clipping: {failures:?}");
     }
 
+    #[test]
+    fn page_pins_escape_exact_cells() {
+        fn intersection(a: Rect, b: Rect) -> Rect {
+            let (x, y) = (a.x.max(b.x), a.y.max(b.y));
+            Rect::new(x, y, (a.right().min(b.right()) - x).max(0.0), (a.bottom().min(b.bottom()) - y).max(0.0))
+        }
+
+        fn shape_clips(draws: &[display::Draw], clip: Option<Rect>, out: &mut Vec<(Rect, Option<Rect>)>) {
+            for draw in draws {
+                match draw {
+                    display::Draw::Clip { rect, items } => shape_clips(items, Some(clip.map_or(*rect, |outer| intersection(outer, *rect))), out),
+                    display::Draw::Turned { items, .. } | display::Draw::Rotated { items, .. } => shape_clips(items, clip, out),
+                    display::Draw::Figure { draws, .. } => shape_clips(draws, clip, out),
+                    display::Draw::Shape { rect, fill: Some(_), .. } => out.push((*rect, clip)),
+                    _ => {}
+                }
+            }
+        }
+
+        for part in [PartKind::Header, PartKind::Footer] {
+            for wrap in [Wrap::BehindText, Wrap::InFrontOfText] {
+                for outside_cell in [false, true] {
+                    let mut table = cell_table(TextDirection::Horizontal, None);
+                    let mut paragraph = Paragraph::with_text("One\nTwo\nThree\nFour", Default::default());
+                    paragraph.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+                    paragraph.props.space_after = Some(0.0);
+                    let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 200.0, y: 200.0, outside_cell, ..Default::default() };
+                    let mut shape = rect_shape(OBJECT_EDGE, OBJECT_EDGE, float);
+                    let InlineObject::Shape { fill, .. } = &mut shape else { panic!("shape fixture") };
+                    *fill = Some(Fill::solid(PARA_FILL));
+                    paragraph.insert_object(0, shape, &Default::default()).unwrap();
+                    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph)];
+                    let doc = document(table, Some(part));
+                    let layout = lay(&doc);
+                    let page = &layout.pages[0];
+                    let items = if part == PartKind::Header { &page.header } else { &page.footer };
+                    let cell = items
+                        .iter()
+                        .find_map(|item| match item {
+                            Placed::Cell { rect, clip, .. } => {
+                                assert!(*clip, "the unturned exact cell must overflow: {part:?}, {wrap:?}, outside={outside_cell}");
+                                Some(*rect)
+                            }
+                            _ => None,
+                        })
+                        .unwrap();
+                    let opts = display::DisplayOptions::default();
+                    let single = display::ItemDisplay::new(&doc, page);
+                    let individual: Vec<_> = items.iter().flat_map(|item| single.draws(item, &opts)).collect();
+                    for draws in [display::page_display(&doc, page, &opts), individual] {
+                        let mut shapes = Vec::new();
+                        shape_clips(&draws, None, &mut shapes);
+                        assert_eq!(shapes.len(), 1, "inspect the actual filled drawable");
+                        let (rect, clip) = shapes[0];
+                        let visible = clip.map_or(rect, |clip| intersection(rect, clip));
+                        if outside_cell {
+                            assert_eq!(rect, Rect::new(200.0, 200.0, OBJECT_EDGE, OBJECT_EDGE), "Pin keeps page coordinates");
+                            assert_ne!(clip, Some(cell), "a page pin does not belong to its anchor cell: {part:?}, {wrap:?}");
+                            assert_eq!(visible, rect, "the page-pinned shape must retain its visible ink: {part:?}, {wrap:?}");
+                        } else {
+                            assert_eq!(clip, Some(cell), "contained drawings still use the exact cell clip: {part:?}, {wrap:?}");
+                            assert_eq!(visible.w * visible.h, 0.0, "the off-cell contained shape remains hidden");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn fills(draws: &[display::Draw], cell: Rect, clip: Option<Rect>, out: &mut Vec<(Rgb, Rect, bool)>) {
         for draw in draws {
             match draw {

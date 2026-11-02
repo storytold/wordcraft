@@ -60,7 +60,10 @@ fn page_content_key(page: &Page) -> u64 {
                     // Cell markers select the physical clip; their placement closes each occurrence.
                     (index, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits(), clip, story, table, row, cell).hash(&mut h);
                 }
-                Placed::Object { .. } => {}
+                Placed::Object { story, path, off, .. } => {
+                    // Drawing clips follow the object's physical placement, including page pins.
+                    (index, story, path, off).hash(&mut h);
+                }
             }
         }
     }
@@ -439,5 +442,56 @@ mod tests {
                 assert_eq!(key, page_content_key(&original.clone()), "unchanged drawing ownership reuses its paint key");
             }
         }
+    }
+
+    #[test]
+    fn object_scope_changes_key() {
+        use wordcraft_doc::{Path, Pos};
+        use wordcraft_geom::{Point, Rect, Spin};
+        let at = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+        let rect = Rect::new(200.0, 200.0, 100.0, 100.0);
+        let original = Page {
+            items: vec![
+                Placed::Image {
+                    rect,
+                    media: "image".into(),
+                    crop: [0.0; 4],
+                    story: at.story,
+                    path: at.path.clone(),
+                    off: at.off,
+                    spin: Spin::default(),
+                },
+                Placed::Cell {
+                    rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+                    clip: true,
+                    covered: false,
+                    story: at.story,
+                    table: Path::top(0),
+                    row: 0,
+                    cell: 0,
+                },
+                Placed::Object {
+                    rect,
+                    spin: Spin::default(),
+                    story: at.story,
+                    path: at.path.clone(),
+                    off: at.off,
+                    text_box: None,
+                    wrap: wordcraft_doc::para::Wrap::BehindText,
+                    origin: Point::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let key = page_content_key(&original);
+        for target in
+            [Pos { path: Path(vec![1, 0, 0, 0]), ..at.clone() }, Pos { off: 3, ..at.clone() }, Pos { story: StoryRef::Part(1), ..at.clone() }]
+        {
+            let mut changed = original.clone();
+            let Placed::Object { story, path, off, .. } = &mut changed.items[2] else { panic!("object fixture") };
+            (*story, *path, *off) = (target.story, target.path, target.off);
+            assert_ne!(key, page_content_key(&changed), "object scope alone changes drawing clips");
+        }
+        assert_eq!(key, page_content_key(&original.clone()));
     }
 }
