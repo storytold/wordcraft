@@ -1622,11 +1622,20 @@ fn a_command_that_fails_puts_the_lead_in_back() {
 }
 
 #[test]
-fn backspace_in_a_lead_in_keeps_the_lead_in() {
+fn backspace_or_delete_in_a_lead_in_keeps_the_lead_in() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");
     format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
     typ(&mut s, "\nNe\u{8}ext: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
+    // Delete at the end of the item, with nothing after it to delete.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext");
+    run(&mut s, "text.delete", json!({}));
+    typ(&mut s, ": more");
     assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
     assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None));
 }

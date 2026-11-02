@@ -137,9 +137,9 @@ pub(crate) fn resync(s: &mut Session) {
     }
 }
 
-/// After Backspace deleted a character of a lead-in that was being typed: the lead-in goes on at
-/// the caret while that is in the lead-in's paragraph with no punctuation character before it.
-pub(super) fn keep_after_backspace(s: &mut Session, l: LeadIn) {
+/// After Backspace or Delete in a lead-in that was being typed: the lead-in goes on at the caret
+/// while that is in the lead-in's paragraph with no punctuation character before it.
+pub(super) fn keep_after_deleting(s: &mut Session, l: LeadIn) {
     let f = s.sel.focus.clone();
     let punctuated = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).is_none_or(|t| t.chars().any(is_punctuation));
     if s.sel.is_collapsed() && !punctuated && l.at.story == f.story && l.at.path == f.path {

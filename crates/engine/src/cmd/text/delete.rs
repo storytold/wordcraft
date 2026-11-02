@@ -63,7 +63,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         s.sel = Selection { anchor: a, focus: f };
         let effect = delete_selection_effect(s)?;
         if let Some(l) = lead_in {
-            super::lead_in::keep_after_backspace(s, l);
+            super::lead_in::keep_after_deleting(s, l);
         }
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
@@ -138,8 +138,12 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 pub(super) fn delete(s: &mut Session, v: &Value) -> CmdResult {
+    let lead_in = super::lead_in::is_active(s).then(|| s.lead_in.clone()).flatten();
     let r = delete_inner(s, v)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    if let Some(l) = lead_in {
+        super::lead_in::keep_after_deleting(s, l);
+    }
     Ok(r)
 }
 
