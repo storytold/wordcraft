@@ -572,11 +572,17 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
         let resp = resp.on_hover_text(p);
+        // Keyboard users see the full path too, not only pointer users.
+        if resp.has_focus() {
+            resp.show_tooltip_text(p);
+        }
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        let text_w = (r.width() - 48.0).max(0.0);
+        // A wide row on Home can push the row past the visible area at small window sizes, so the
+        // text stops at the visible edge and its ellipsis stays in view.
+        let text_w = (r.max.x.min(ui.clip_rect().max.x) - r.min.x - 48.0).max(0.0);
         let fit = |text: &str, font: egui::FontId, color: egui::Color32| {
             let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
             job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);

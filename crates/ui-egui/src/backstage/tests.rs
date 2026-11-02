@@ -75,15 +75,14 @@ fn opening_a_missing_recent_file_keeps_file_open_with_the_error() {
     assert!(app.ui.backstage, "File stays open");
 }
 
-/// #5212: long names and paths in File > Home > Recent shorten to fit their row and show on hover.
-#[test]
-fn recent_shortens_a_long_name_and_path_to_its_row() {
+/// Opens File > Home in a window of `size` with one long Recent entry; returns its name and path.
+fn long_recent_harness(size: egui::Vec2) -> (egui_kittest::Harness<'static, WordApp>, String, String) {
     let name = format!("{}.docx", "AVeryLongDocumentName".repeat(8));
     let path = format!("C:/Users/Someone/{}/{name}", "LongFolderName".repeat(20));
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
     a.ui.recent.push(path.clone());
     a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -92,8 +91,11 @@ fn recent_shortens_a_long_name_and_path_to_its_row() {
         a,
     );
     h.run_steps(4);
+    (h, name, path)
+}
 
-    let row = h.get_by_label(&name).rect();
+/// Returns the painted bounds and clip rect of the Recent entry's name and path texts.
+fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, egui::Rect, egui::Rect)> {
     /// Collects every text shape, including those nested in shape lists.
     fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
         match s {
@@ -106,22 +108,54 @@ fn recent_shortens_a_long_name_and_path_to_its_row() {
             _ => {}
         }
     }
-    let mut texts = Vec::new();
+    let mut found = Vec::new();
     for cs in &h.output().shapes {
+        let mut texts = Vec::new();
         collect_text(&cs.shape, &mut texts);
-    }
-    let mut matched = 0;
-    for ts in texts {
-        let text = ts.galley.text();
-        if text.starts_with("C:/Users/Someone") || text.starts_with("AVeryLongDocumentName") {
-            matched += 1;
-            let bounds = ts.visual_bounding_rect();
-            assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
+        for ts in texts {
+            let text = ts.galley.text();
+            if text.starts_with("C:/Users/Someone") || text.starts_with("AVeryLongDocumentName") {
+                found.push((text.to_owned(), ts.visual_bounding_rect(), cs.clip_rect));
+            }
         }
     }
-    assert_eq!(matched, 2, "both file name and path shapes must be found");
+    found
+}
+
+/// #5212: long names and paths in File > Home > Recent shorten to fit their row and show on hover.
+#[test]
+fn recent_shortens_a_long_name_and_path_to_its_row() {
+    let (mut h, name, path) = long_recent_harness(egui::vec2(1440.0, 900.0));
+    let row = h.get_by_label(&name).rect();
+    let texts = recent_text_bounds(&h);
+    assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
+    for (text, bounds, _) in &texts {
+        assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
+    }
 
     h.event(egui::Event::PointerMoved(row.center()));
+    h.run_steps(4);
+    h.get_by_label(&path);
+}
+
+/// #5212: at the smallest window width the shortened texts end inside the visible area, so the
+/// ellipsis is not cut off.
+#[test]
+fn recent_texts_end_inside_the_visible_area_at_the_smallest_window() {
+    let (h, _, _) = long_recent_harness(egui::vec2(760.0, 480.0));
+    let texts = recent_text_bounds(&h);
+    assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
+    for (text, bounds, clip) in &texts {
+        assert!(bounds.max.x <= clip.max.x + 0.5, "text '{text}' ends at {} past the visible edge {}", bounds.max.x, clip.max.x);
+    }
+}
+
+/// #5212: a Recent row focused with the keyboard shows its full path, as hovering does.
+#[test]
+fn recent_shows_the_full_path_when_a_row_has_keyboard_focus() {
+    let (mut h, name, path) = long_recent_harness(egui::vec2(1440.0, 900.0));
+    assert!(h.query_by_label(&path).is_none(), "the full path must not show before focus");
+    h.get_by_label(&name).focus();
     h.run_steps(4);
     h.get_by_label(&path);
 }
