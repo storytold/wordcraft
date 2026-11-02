@@ -278,7 +278,6 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | #3915: preserve both published and current-main source/history in a normal merge; primary qualification pending. |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
 | 2026-10-31 | trivial | A table row that would leave a cell empty on a page that already holds something (its inline picture or first line runs past the room) moves on whole instead of leaving the other cells' text beside the empty cell; an at-least row grown by its picture no longer splits off the picture (#4272) |
 | 2026-11-01 | trivial | A cell aligned to the middle or bottom of a row split across pages is aligned within the part left on the page when its text fits there, and starts at the top of the cell otherwise, as measured in Word |
