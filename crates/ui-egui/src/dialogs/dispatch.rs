@@ -1561,7 +1561,9 @@ fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, al
         return true;
     }
     if ok {
-        if matches!(back.as_deref(), Some(Dialog::PageSetup { .. })) && let Some(mut source) = back.take() {
+        if matches!(back.as_deref(), Some(Dialog::PageSetup { .. }))
+            && let Some(mut source) = back.take()
+        {
             if let Err(e) = apply_page_setup(app, &source, *all) {
                 // Not applied: back to Page Setup, saying why.
                 if let Dialog::PageSetup { message, .. } = &mut *source {
