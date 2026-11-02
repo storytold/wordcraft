@@ -538,6 +538,22 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// Gives the bottom panel around `ui` the status bar's role, as Word's: screen readers read a
+/// status bar's controls on request (NVDA+End), finding it by its role or at the bottom of the
+/// window. The panel's bounds come along: egui gives a panel none, and a node without them isn't
+/// found at a point.
+fn name_status_bar(ui: &Ui) {
+    let Some(panel) = ui.stack().parent.as_ref().filter(|p| p.kind() == Some(egui::UiKind::BottomPanel)) else {
+        return;
+    };
+    let r = panel.max_rect;
+    ui.ctx().accesskit_node_builder(panel.unique_id, |node| {
+        node.set_role(egui::accesskit::Role::Status);
+        node.set_label(tl!("Status Bar"));
+        node.set_bounds(egui::accesskit::Rect { x0: r.min.x.into(), y0: r.min.y.into(), x1: r.max.x.into(), y1: r.max.y.into() });
+    });
+}
+
 /// Draws the status bar's page, word count, zoom and status controls, fitting a status message
 /// with a tooltip; without a document the bar is empty.
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -551,6 +567,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 .stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            name_status_bar(ui);
             // No document open (#1129): an empty status bar.
             if !app.has_document() {
                 return;
