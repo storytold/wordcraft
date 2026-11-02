@@ -84,15 +84,30 @@ sign() {
 # connection there (NSURLErrorDomain -1005, "Error 68") fails them although notarization worked.
 # Both are idempotent, so retry with a pause; a missing or bad ticket still fails every try.
 stapler_retry() {
-  local try
+  local try tool="${3:-stapler}"
   for try in 1 2 3 4; do
-    xcrun stapler "$1" "$2" && return 0
+    if [[ "$tool" = rcodesign ]]; then
+      rcodesign "$1" "$2" && return 0
+    else
+      xcrun stapler "$1" "$2" && return 0
+    fi
     [[ "$try" = 4 ]] && break
-    echo "stapler $1 failed (try $try of 4); retrying in $((try * 20)) s" >&2
+    echo "$tool $1 failed (try $try of 4); retrying in $((try * 20)) s" >&2
     sleep $((try * 20))
   done
-  echo "error: stapler $1 $(basename "$2") failed 4 times" >&2
+  echo "error: $tool $1 $(basename "$2") failed 4 times" >&2
   exit 1
+}
+
+staple() {
+  if xcrun --find stapler >/dev/null 2>&1; then
+    stapler_retry staple "$1"
+    stapler_retry validate "$1"
+  elif command -v rcodesign >/dev/null 2>&1; then
+    stapler_retry staple "$1" rcodesign
+  else
+    warn "stapler/rcodesign not found: ticket not stapled; Gatekeeper will fetch it online"
+  fi
 }
 
 notarize() {
@@ -139,8 +154,7 @@ codesign --verify --strict --deep --verbose=2 "$APP"
 if [[ "$NOTARIZE" = 1 ]]; then
   ditto -c -k --keepParent "$APP" "$WORK/WordCraft-notarize.zip"
   notarize "$WORK/WordCraft-notarize.zip"
-  stapler_retry staple "$APP"
-  stapler_retry validate "$APP"
+  staple "$APP"
   spctl --assess --type execute -vvv "$APP"
 fi
 
@@ -213,8 +227,7 @@ verify_dmg_app() {
 verify_dmg_app "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
-  stapler_retry staple "$DMG"
-  stapler_retry validate "$DMG"
+  staple "$DMG"
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 

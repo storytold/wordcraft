@@ -1,5 +1,7 @@
 # Releasing WordCraft
 
+> **Last updated:** 2026-11-02 · **Change:** macOS packaging can staple with rcodesign when Xcode stapler is absent, or warn and leave ticket retrieval to Gatekeeper; assessment checks remain required.
+
 1. Bump the version on `main`: `cargo xtask version set 0.2.0` (the one source of truth is
    `[workspace.package] version`; the app shows it in `--version` and About, with the commit from
    `WORDCRAFT_BUILD_SHA`).
@@ -26,3 +28,11 @@ Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windo
 Dry run: `gh workflow run release.yml --ref <branch>` builds the unsigned jobs (version, Linux,
 Linux riscv64, Flatpak, FreeBSD, web) on any branch; the signing jobs are refused there by the `release`
 environment's branch rule, so no draft release is made.
+
+Local macOS packaging prefers `xcrun stapler` (staple and validate). Without it, `rcodesign staple` uses the same bounded retries. If neither tool is available, packaging warns that Gatekeeper will fetch the ticket online and still runs the final Gatekeeper assessments.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-02 | macOS packaging can staple with rcodesign when Xcode stapler is absent, or warn and leave ticket retrieval to Gatekeeper; assessment checks remain required. |
