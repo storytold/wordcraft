@@ -13048,7 +13048,13 @@ mod review2849 {
             let (a, b) = note.split(20.0);
             check(&a.items);
             check(&b.items);
-            let row = RowLayout { height: 60.0, bottom: 0.0, edge: 0.0, cells: vec![CellPart { top: 0.0, items: 0..items.len(), end: None }], items };
+            let row = RowLayout {
+                height: 60.0,
+                bottom: 0.0,
+                edge: 0.0,
+                cells: vec![CellPart { top: 0.0, items: 0..items.len(), end: None, align: None }],
+                items,
+            };
             let (a, b) = split_row(&row, 20.0).expect("decorated row splits");
             check(&a.items);
             check(&b.items);
