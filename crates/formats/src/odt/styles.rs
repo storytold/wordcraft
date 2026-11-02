@@ -238,6 +238,8 @@ struct StyleInfo {
     table_align: Option<Align>,
     table_width: Option<f32>,
     table_rel_width: Option<f32>,
+    /// A table style's own space above and below (`fo:margin-top`, `fo:margin-bottom`), points.
+    table_space: [Option<f32>; 2],
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
@@ -593,6 +595,11 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 get(a, "style:rel-width").and_then(|v| v.trim().strip_suffix('%')?.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0)
             {
                 s.table_rel_width = Some(p.min(100.0));
+            }
+            for (i, k) in ["fo:margin-top", "fo:margin-bottom"].iter().enumerate() {
+                if let (Some(v), Some(slot)) = (get(a, k).and_then(length).filter(|v| v.is_finite()), s.table_space.get_mut(i)) {
+                    *slot = Some(v.clamp(0.0, MAX_LEN));
+                }
             }
         }
         "table-row-properties" => {
@@ -1204,6 +1211,13 @@ impl Styles {
             chain.iter().find_map(|(_, s)| s.table_width),
             chain.iter().find_map(|(_, s)| s.table_rel_width),
         )
+    }
+
+    /// A table style's own space above and below (points; each side from the nearest style in
+    /// the chain giving it).
+    pub(super) fn table_space(&self, name: &str) -> [Option<f32>; 2] {
+        let chain = self.chain(name);
+        [0, 1].map(|i| chain.iter().find_map(|(_, s)| s.table_space.get(i).copied().flatten()))
     }
 
     /// A table-row style's height (points) and whether it is exact, whole chain.

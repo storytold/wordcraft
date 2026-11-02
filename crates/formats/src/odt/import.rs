@@ -754,6 +754,9 @@ fn line_numbering(a: &Attrs) -> Option<wordcraft_doc::section::LineNumbering> {
 struct Band {
     height: f32,
     spacing: f32,
+    /// Content taller than the band takes its spacing first (§20.230 `style:dynamic-spacing`,
+    /// as Word does), instead of keeping it below.
+    dynamic: bool,
 }
 
 /// A page layout read from `styles.xml`: its properties, columns, and header and footer areas.
@@ -818,6 +821,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                     let band = if in_footer { &mut l.footer } else { &mut l.header };
                     band.height = len("fo:min-height").or_else(|| len("svg:height")).unwrap_or(0.0);
                     band.spacing = len(if in_footer { "fo:margin-top" } else { "fo:margin-bottom" }).unwrap_or(0.0);
+                    band.dynamic = get(&a, "style:dynamic-spacing").is_some_and(|v| v.trim() == "true");
                 }
             }
             "page-layout-properties" => {
@@ -890,10 +894,13 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
         if header {
             sec.header = sec.margin_top;
             sec.margin_top = (sec.margin_top + hb.height.max(hb.spacing)).min(limit);
+            // Content taller than the band pushes the text down, the spacing still below it.
+            sec.header_gap = if hb.dynamic { 0.0 } else { hb.spacing };
         }
         if footer {
             sec.footer = sec.margin_bottom;
             sec.margin_bottom = (sec.margin_bottom + fb.height.max(fb.spacing)).min(limit);
+            sec.footer_gap = if fb.dynamic { 0.0 } else { fb.spacing };
         }
         // A one-column layout keeps the default columns (and their gap).
         if let Some(c) = cols.as_ref().filter(|c| c.count > 1) {

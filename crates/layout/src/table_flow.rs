@@ -130,6 +130,10 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // own left edge.
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
+    // Its own space above (ODT), not at the top of a page.
+    if let Some(s) = t.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && !pb.at_top()) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
     // A table in the text flow starts below the floating objects in its way.
     below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
@@ -248,7 +252,15 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         place(pb, last);
         table_notes(ctx, pb, &last.items);
     }
+    // Its own space below (ODT).
+    if let Some(s) = t.props.space_after.filter(|s| s.is_finite() && *s > 0.0) {
+        pb.y += s.min(MAX_TABLE_SPACE);
+    }
 }
+
+/// The most space a table's own space above or below can add, points (22 inches, Word's
+/// largest paragraph spacing).
+const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it.

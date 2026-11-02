@@ -322,18 +322,23 @@ fn styles_xml(
         let (bottom, footer_h) = if pp.footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
         // A page border is at ODF's margin, the text (or header, footer) inside its padding.
         let (borders, [top, bottom, left, right]) = page_borders(sec.page_borders, [top, bottom, sec.margin_left, sec.margin_right]);
+        // The band's height takes in its spacing (see the reader), which content taller than
+        // the band keeps below it.
+        let gap = |g: f32, h: f32| if g.is_finite() { g.clamp(0.0, h) } else { 0.0 };
         let header = if pp.header {
             format!(
-                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"0pt\"/></style:header-style>",
-                pt(header_h)
+                "<style:header-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-bottom=\"{}\"/></style:header-style>",
+                pt(header_h),
+                pt(gap(sec.header_gap, header_h))
             )
         } else {
             String::new()
         };
         let footer = if pp.footer {
             format!(
-                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"0pt\"/></style:footer-style>",
-                pt(footer_h)
+                "<style:footer-style><style:header-footer-properties fo:min-height=\"{}\" fo:margin-top=\"{}\"/></style:footer-style>",
+                pt(footer_h),
+                pt(gap(sec.footer_gap, footer_h))
             )
         } else {
             String::new()

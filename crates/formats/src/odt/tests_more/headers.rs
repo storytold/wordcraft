@@ -141,6 +141,27 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
 }
 
 #[test]
+fn a_headers_spacing_stays_below_content_taller_than_it() {
+    // LibreOffice's report templates: a header taller than its band keeps its spacing below it,
+    // unless the spacing is dynamic (taken by the content first, as in Word).
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let hf = "<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>";
+    let d = import(&crate::odt::tests::package(&content, Some(&styles_with_header(hf)))).unwrap();
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    let s = &d.last_section;
+    assert!(near(s.header_gap, cm(0.25)) && near(s.footer_gap, cm(0.5)), "{} {}", s.header_gap, s.footer_gap);
+    // Written back as the band's spacing.
+    let back = import(&export(&d).unwrap()).unwrap().last_section;
+    assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)) && near(back.margin_top, s.margin_top), "{back:?}");
+    let dynamic = styles_with_header(hf).replace(r#"fo:margin-bottom="0.25cm""#, r#"fo:margin-bottom="0.25cm" style:dynamic-spacing="true""#);
+    let s = import(&crate::odt::tests::package(&content, Some(&dynamic))).unwrap().last_section;
+    assert_eq!((s.header_gap, near(s.footer_gap, cm(0.5))), (0.0, true));
+}
+
+#[test]
 fn header_and_footer_distances_round_trip() {
     let mut d = Document::new();
     d.body = vec![text_para("Body", Default::default())];

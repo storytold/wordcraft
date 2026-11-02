@@ -158,6 +158,12 @@ pub struct TableProps {
     /// the right margin.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub bidi_visual: bool,
+    /// Space above and below a table in the text flow, points (ODF's table `fo:margin-top` and
+    /// `fo:margin-bottom`; Word has none). Added to the spacing of the paragraphs around it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after: Option<f32>,
 }
 
 /// Where a floating table sits; the text after it wraps around it.

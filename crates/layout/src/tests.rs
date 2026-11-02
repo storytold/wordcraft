@@ -2027,6 +2027,28 @@ fn tables_lay_out_cells() {
     assert!(l.cell_at(0, c.x, c.top + 2.0).is_some());
 }
 
+#[test]
+fn a_tables_own_space_above_and_below_moves_the_text() {
+    // ODT tables' `fo:margin-top`/`fo:margin-bottom`: added to the spacing around the table.
+    let lay_with = |space: Option<(f32, f32)>| {
+        let mut d = Document::from_text("before\nafter");
+        let mut t = Table::new(1, 2, 468.0);
+        if let Some((a, b)) = space {
+            (t.props.space_before, t.props.space_after) = (Some(a), Some(b));
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let top = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, .. } = i { Some(rect.y) } else { None }).unwrap();
+        (top, l.caret(&Pos::body(2, 0)).unwrap().top)
+    };
+    let (top, after) = lay_with(None);
+    let (spaced_top, spaced_after) = lay_with(Some((10.0, 20.0)));
+    assert!((spaced_top - top - 10.0).abs() < 0.01, "{top} {spaced_top}");
+    assert!((spaced_after - after - 30.0).abs() < 0.01, "{after} {spaced_after}");
+    // Junk is ignored.
+    assert_eq!(lay_with(Some((f32::NAN, -5.0))), (top, after));
+}
+
 /// A vertical merge is one cell: its box spans the rows, a click anywhere in it finds it, and the
 /// continuation row's box is `covered` (no gridline, not a hit).
 #[test]
@@ -4972,8 +4994,15 @@ fn body_starts_right_below_a_tall_header() {
     let header_bottom = y + para.height;
     assert!(header_bottom > d.last_section.margin_top, "the header reaches past the top margin");
     // No gap: the body's first paragraph starts where the header ends (Word).
-    let body = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None }).unwrap();
+    let body_y = |l: &DocLayout| {
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None }).unwrap()
+    };
+    let body = body_y(&l);
     assert!((body - header_bottom).abs() < 0.01, "body at {body}, header ends at {header_bottom}");
+    // ODF's header spacing stays below it.
+    d.last_section.header_gap = 14.0;
+    let body = body_y(&lay(&d));
+    assert!((body - header_bottom - 14.0).abs() < 0.01, "body at {body}, header ends at {header_bottom}");
 }
 
 #[test]

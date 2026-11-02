@@ -145,6 +145,8 @@ pub(super) struct Writer {
     table_looks: Vec<(Option<Align>, Option<f32>)>,
     /// Each table's whether it starts a page (its first paragraph does).
     table_breaks: Vec<bool>,
+    /// Each table's own space above and below, points.
+    table_spaces: Vec<[Option<f32>; 2]>,
     /// Row styles: their `style:table-row-properties` attributes.
     row_styles: Vec<String>,
     /// The master page (and page-number restart) each table in `tables` starts.
@@ -822,8 +824,13 @@ impl Writer {
                 _ => "margins",
             };
             let rel = pct.map(|p| format!(" style:rel-width=\"{}%\"", (p * 100.0).round() / 100.0)).unwrap_or_default();
+            let space: String = ["fo:margin-top", "fo:margin-bottom"]
+                .iter()
+                .zip(self.table_spaces.get(i).copied().unwrap_or_default())
+                .filter_map(|(k, v)| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| format!(" {k}=\"{}\"", pt(v.min(1584.0)))))
+                .collect();
             s.push_str(&format!(
-                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\"{rel} table:align=\"{align}\"{number}{brk}/></style:style>",
+                "<style:style style:name=\"Table{tn}\" style:family=\"table\"{master}><style:table-properties style:width=\"{}\"{rel} table:align=\"{align}\"{space}{number}{brk}/></style:style>",
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {

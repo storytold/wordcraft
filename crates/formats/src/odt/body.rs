@@ -911,10 +911,16 @@ impl Body<'_> {
     /// one when aligned (a table filling the margins, LibreOffice's default, takes the text width).
     fn start_table(&mut self, a: &Attrs) {
         let (align, width, rel) = get(a, "table:style-name").map(|s| self.styles.table_look(s)).unwrap_or_default();
-        let width_pct = rel.or_else(|| width.filter(|_| align.is_some()).map(|w| (w / self.sec.text_width().max(1.0) * 100.0).min(100.0)));
+        // Filling the margins (§20.300 `margins`, the default), its columns are fitted to the
+        // text width whatever widths they state, as LibreOffice fits them.
+        let width_pct = match align {
+            None => Some(rel.unwrap_or(100.0)),
+            Some(_) => rel.or_else(|| width.map(|w| (w / self.sec.text_width().max(1.0) * 100.0).min(100.0))),
+        };
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
-        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true };
+        let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
+        let extra = model::TableExtra { align, width: None, width_pct, heights: Vec::new(), fixed: true, space };
         self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
     }
 

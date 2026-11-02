@@ -766,6 +766,8 @@ impl<'a> Builder<'a> {
             tb.props.width_pct = x.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0));
             tb.props.width = x.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0));
             tb.props.fixed |= x.fixed;
+            let space = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
+            (tb.props.space_before, tb.props.space_after) = (space(x.space[0]), space(x.space[1]));
         }
         for (ri, r) in rows {
             let mut row = wordcraft_doc::Row { props: RowProps::default(), cells: Vec::new(), controls: Default::default() };

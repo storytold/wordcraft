@@ -99,6 +99,7 @@ impl Writer {
         self.table_looks.push(t.extra.as_ref().map(|x| (x.align, x.width_pct.filter(|p| *p < 100.0))).unwrap_or_default());
         // Its first paragraph starting a page: the table does (§20.191).
         let first = t.rows.first().and_then(|r| r.first()).and_then(|c| c.blocks.first());
+        self.table_spaces.push(t.extra.as_ref().map(|x| x.space).unwrap_or_default());
         self.table_breaks.push(matches!(first, Some(FBlock::Para(p)) if p.page_break));
         self.table_starts.push(self.master.take());
         let tn = format!("{}{}", self.prefix, self.tables.len());

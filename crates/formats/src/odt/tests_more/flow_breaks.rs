@@ -82,10 +82,10 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     for want in [r#"style:rel-width="50%" table:align="center""#, r#"style:row-height="36pt""#, r#"style:min-row-height="18pt""#] {
         assert!(c.contains(want), "{want} in {c}");
     }
-    // A table filling the margins stays so.
+    // A table filling the margins stays so: the text width.
     let plain = doc("", r#"<table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row></table:table>"#);
     let pt = plain.body.iter().find_map(|b| b.as_table()).unwrap();
-    assert_eq!((pt.props.align, pt.props.width_pct), (None, None));
+    assert_eq!((pt.props.align, pt.props.width_pct), (None, Some(100.0)));
     assert!(content_of(&export(&plain).unwrap()).contains(r#"table:align="margins""#));
 }
 
@@ -112,8 +112,8 @@ fn columns_are_written_with_their_share_of_the_table() {
 
 #[test]
 fn a_tables_columns_keep_their_widths() {
-    // LibreOffice never fits a table's columns to their content, nor a wide table to the margins:
-    // Word's fixed layout.
+    // LibreOffice never fits a table's columns to their content (Word's fixed layout); a table
+    // filling the margins is fitted to them, its columns in their proportions.
     let styles = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="8in" table:align="margins"/></style:style><style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="4in"/></style:style>"#;
     let d = doc(
         styles,
@@ -122,6 +122,25 @@ fn a_tables_columns_keep_their_widths() {
     let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
     assert!(t.props.fixed);
     assert_eq!(t.grid, [288.0, 288.0]);
+    assert_eq!(t.props.width_pct, Some(100.0));
+}
+
+#[test]
+fn a_tables_own_space_above_and_below_is_kept() {
+    // LibreOffice's report templates: 0.3 cm below each table (`fo:margin-bottom` on the table).
+    let styles = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="6in" fo:margin-top="0.1in" fo:margin-bottom="0.3cm" table:align="margins"/></style:style>"#;
+    let d = doc(
+        styles,
+        r#"<table:table table:style-name="T"><table:table-row><table:table-cell><text:p>Cell</text:p></table:table-cell></table:table-row></table:table><text:p>After.</text:p>"#,
+    );
+    let space = |d: &wordcraft_doc::Document| {
+        let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+        (t.props.space_before.map(|v| (v * 100.0).round() / 100.0), t.props.space_after.map(|v| (v * 100.0).round() / 100.0))
+    };
+    assert_eq!(space(&d), (Some(7.2), Some(8.5)));
+    let out = content_of(&export(&d).unwrap());
+    assert!(out.contains(r#"fo:margin-top="7.2pt" fo:margin-bottom="8.5"#), "{out}");
+    assert_eq!(space(&import(&export(&d).unwrap()).unwrap()), (Some(7.2), Some(8.5)));
 }
 
 #[test]

@@ -733,6 +733,12 @@ pub struct SectionProps {
     /// Distance from the page edge to the header / footer.
     pub header: f32,
     pub footer: f32,
+    /// The space kept between a header too tall for the top margin and the body, and between
+    /// the body and such a footer, points (ODF's header and footer spacing; Word keeps none).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub header_gap: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub footer_gap: f32,
     pub gutter: f32,
     /// Mirror margins (inside/outside) — set from the document settings.
     pub columns: Columns,
@@ -788,6 +794,8 @@ impl Default for SectionProps {
             margin_right: 72.0,
             header: 36.0,
             footer: 36.0,
+            header_gap: 0.0,
+            footer_gap: 0.0,
             gutter: 0.0,
             columns: Columns::default(),
             headers: HeaderSet::default(),
@@ -809,6 +817,10 @@ impl Default for SectionProps {
             endnote_pr: NoteProps::default(),
         }
     }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_horizontal(d: &crate::props::TextDirection) -> bool {

@@ -839,6 +839,8 @@ pub struct TableExtra {
     /// Its columns keep their widths, never fitted to their content (Word's fixed layout,
     /// `w:tblLayout`): an ODT table's always do.
     pub fixed: bool,
+    /// Its own space above and below, points (ODT's table margins).
+    pub space: [Option<f32>; 2],
 }
 
 impl FTable {

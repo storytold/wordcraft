@@ -348,7 +348,9 @@ impl PageBuilder<'_> {
     /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
     /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
     fn body_bottom(&self, body_top: f32) -> f32 {
-        (self.sect.page_h - self.sect.margin_bottom).min(self.foot_top.max(body_top + 36.0))
+        // ODF keeps the footer's spacing above a footer too tall for the bottom margin.
+        let gap = if self.sect.footer_gap.is_finite() { self.sect.footer_gap.clamp(0.0, 1584.0) } else { 0.0 };
+        (self.sect.page_h - self.sect.margin_bottom).min((self.foot_top - gap).max(body_top + 36.0))
     }
     /// The room for text in the next column, or on the page [`Self::advance`] starts after the
     /// last: there, below its body top (`body_top`) and above its footer and the notes carried
@@ -417,8 +419,10 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     let (h, ..) =
         with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height);
     ctx.track_totals = track;
-    // Word starts the body right below a header that reaches past the top margin, no gap.
-    sect.margin_top.max(sect.header + h)
+    // Word starts the body right below a header that reaches past the top margin, no gap;
+    // ODF keeps the header's spacing.
+    let gap = if sect.header_gap.is_finite() { sect.header_gap.clamp(0.0, 1584.0) } else { 0.0 };
+    sect.margin_top.max(sect.header + h + gap)
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
