@@ -210,17 +210,19 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     if let Some(p) = part(rt::SETTINGS) {
         lenient("settings", r.read_settings(&p));
     }
-    if let Some(p) = part(rt::FOOTNOTES) {
-        lenient("footnotes", r.read_notes(&p, true));
-    }
-    if let Some(p) = part(rt::ENDNOTES) {
-        lenient("endnotes", r.read_notes(&p, false));
-    }
+    // Comments before notes: a comment range inside a footnote or endnote resolves its id against
+    // the comments already read, and was dropped when the notes came first.
     if let Some(p) = part(rt::COMMENTS) {
         let ex = part(rt::COMMENTS_EX);
         let ids = part(rt::COMMENTS_IDS);
         let cex = part(rt::COMMENTS_EXTENSIBLE);
         lenient("comments", r.read_comments(&p, ex.as_deref(), ids.as_deref(), cex.as_deref()));
+    }
+    if let Some(p) = part(rt::FOOTNOTES) {
+        lenient("footnotes", r.read_notes(&p, true));
+    }
+    if let Some(p) = part(rt::ENDNOTES) {
+        lenient("endnotes", r.read_notes(&p, false));
     }
     // Bibliography sources live in a custom XML data store (`b:Sources`), related from the
     // package root or the main part; Word's own files sometimes leave the relationship out, so
