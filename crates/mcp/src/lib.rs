@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
+use wordcraft_engine::command_access::{self, CommandAllowlist};
 use wordcraft_engine::file_access::{self, AutomationRoots};
 
 /// Methods that need the desktop app.
@@ -25,6 +26,7 @@ pub const NEEDS_APP: &str = "needs the desktop app: start `wordcraft --control 7
 pub struct Headless {
     pub session: Session,
     roots: Option<Arc<AutomationRoots>>,
+    commands: Option<Arc<CommandAllowlist>>,
 }
 
 impl Headless {
@@ -32,6 +34,13 @@ impl Headless {
     /// (`wordcraft-cli mcp --automation-read-root … --automation-write-root …`).
     pub fn with_automation_roots(mut self, roots: Option<Arc<AutomationRoots>>) -> Self {
         self.roots = roots;
+        self
+    }
+
+    /// Hold every command the session's clients run to `commands`
+    /// (`wordcraft-cli mcp --allow-commands …`; see [`command_access`]).
+    pub fn with_command_allowlist(mut self, commands: Option<Arc<CommandAllowlist>>) -> Self {
+        self.commands = commands;
         self
     }
 
@@ -66,14 +75,25 @@ pub fn doc_param(params: &Value) -> Result<Option<u64>, String> {
     }
 }
 
+/// Answer `method` on `session` (the active document, or the one `doc` picked). A command the
+/// client names (`engine.execute`, `command`, or a command id as the method) must be on the
+/// command list in force on this thread, and `engine.commands` lists only those; reading the
+/// document (`document.inspect`, page renders, parity) stays available.
 fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "engine.execute" | "command" => {
             let id = params.get("command").and_then(Value::as_str).ok_or("missing `command`")?.to_string();
+            command_access::check(&id)?;
             let p = params.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             session.run(&id, &p).map_err(|e| e.to_string())
         }
-        "engine.commands" => Ok(session.registry.describe()),
+        // With --allow-commands, the list shows only what the client may run.
+        "engine.commands" => Ok(match (session.registry.describe(), command_access::current()) {
+            (Value::Array(all), Some(list)) => {
+                Value::Array(all.into_iter().filter(|c| c.get("id").and_then(Value::as_str).is_some_and(|id| list.allows(id))).collect())
+            }
+            (all, _) => all,
+        }),
         "document.inspect" => session.run("document.inspect", &params).map_err(|e| e.to_string()),
         "ui.parity" => Ok(wordcraft_engine::catalog::parity(&session.registry)),
         "ui.render" | "render.page" => {
@@ -87,20 +107,26 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
             Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
         }
         m if m.starts_with("ui.") => Err(format!("`{m}` {NEEDS_APP}")),
-        other => session.run(other, &params).map_err(|e| e.to_string()),
+        other => {
+            command_access::check(other)?;
+            session.run(other, &params).map_err(|e| e.to_string())
+        }
     }
 }
 
 impl Default for Headless {
     fn default() -> Self {
-        Headless { session: Session::new(wordcraft_doc::Document::new()), roots: None }
+        Headless { session: Session::new(wordcraft_doc::Document::new()), roots: None, commands: None }
     }
 }
 
 impl Backend for Headless {
+    /// Answer one request with this server's command list and automation roots in force on the
+    /// calling thread, whichever thread that is, and the previous ones restored afterwards.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let roots = self.roots.clone();
-        file_access::confine(roots.as_ref(), || self.answer(method, params))
+        let commands = self.commands.clone();
+        command_access::confine(commands.as_ref(), || file_access::confine(roots.as_ref(), || self.answer(method, params)))
     }
     fn has_ui(&self) -> bool {
         false

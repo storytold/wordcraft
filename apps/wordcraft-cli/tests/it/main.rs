@@ -1,3 +1,4 @@
+mod allow_commands;
 #[cfg(unix)]
 mod closed_stdout;
 mod convert_fields;
