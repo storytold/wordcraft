@@ -7,7 +7,7 @@ use super::{
     Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect, Spin,
     StoryRef, Wrap, WrapText, contour, display, para, textbox,
 };
-use super::{BodyExclusions, ViewMode};
+use super::{BodyExclusions, SectionProps, ViewMode};
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
 /// text unless `show_hidden`, in a tracked deletion with `hide_deleted`, or a hidden drawing
