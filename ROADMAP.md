@@ -693,7 +693,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | #2578: current-main merge retains page-colour header ownership, Header-style clearance and inherited turned/filler defining widths. Source-only; no new native or corpus qualification. |
+| 2026-11-02 | trivial | #2578 retains page-colour header ownership, Header-style clearance and inherited turned/filler defining widths. No new native or corpus qualification. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
