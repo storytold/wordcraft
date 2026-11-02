@@ -26,11 +26,11 @@ list (author, source, license) is in ATTRIBUTION.md.
   CRAFT_I18N_DIR do not include them.
 - English word list (craft-i18n language-data/en-us/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
-  (craft-i18n language-data/en-us/en-us.pat) were trained from it and are released as CC0-1.0.
-- Polish hyphenation patterns (craft-i18n language-data/pl/pl.pat) — hyph-pl.tex from the hyph-utf8
+  (craft-i18n language-data/en-us/hyphenation.pat) were trained from it and are released as CC0-1.0.
+- Polish hyphenation patterns (craft-i18n language-data/pl/hyphenation.pat) — hyph-pl.tex from the hyph-utf8
   package, Copyright (C) 1987-1995 Hanna Kołodziejska, Bogusław Jackowski, Marek Ryćko, bundled
   unmodified and used under the MIT License; the copyright and permission notice is in the file.
-- Portuguese hyphenation patterns (craft-i18n language-data/pt/pt.pat) — hyph-pt.tex from the hyph-utf8
+- Portuguese hyphenation patterns (craft-i18n language-data/pt/hyphenation.pat) — hyph-pt.tex from the hyph-utf8
   package, bundled unmodified and used under the BSD 3-Clause License:
 
     Copyright (C) 1987, 1994, 1996, 2015 Pedro J. de Rezende, 1996, 2015 J. Joao Dias Almeida,
@@ -56,7 +56,7 @@ list (author, source, license) is in ATTRIBUTION.md.
     ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
     NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
     OF THE POSSIBILITY OF SUCH DAMAGE.
-- German hyphenation patterns (craft-i18n language-data/de/de.pat) — hyph-de-1996.tex (reformed spelling)
+- German hyphenation patterns (craft-i18n language-data/de/hyphenation.pat) — hyph-de-1996.tex (reformed spelling)
   from the hyph-utf8 package, bundled unmodified and used under the MIT License; the copyright
   and permission notice is in the file:
 
@@ -78,7 +78,7 @@ list (author, source, license) is in ATTRIBUTION.md.
     FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
     OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
-- Italian hyphenation patterns (craft-i18n language-data/it/it.pat) — hyph-it.tex from the hyph-utf8
+- Italian hyphenation patterns (craft-i18n language-data/it/hyphenation.pat) — hyph-it.tex from the hyph-utf8
   package, Copyright (C) 2008-2011 Claudio Beccari, bundled unmodified and used under the MIT
   License (offered under LPPL 1.3+ or MIT); the copyright and permission notice is in the file:
 

@@ -143,7 +143,9 @@ cargo run --release -p wordcraft -- report.docx     # open a document
 The interface translations and the spelling and hyphenation data come from
 [craft-i18n](https://github.com/storytold/craft-i18n), an optional build input. To build with them,
 check it out at the commit in `craft-i18n.rev` and point `CRAFT_I18N_DIR` at it (an absolute
-path); without it WordCraft builds in English with no English spell-checking and no hyphenation:
+path); without it WordCraft builds with an English interface, English spelling falls back to an
+installed Hunspell English or craft-proof's built-in word list, and only Bulgarian, Turkish and
+Russian hyphenate (by rule):
 
 ```sh
 git clone https://github.com/storytold/craft-i18n ../craft-i18n

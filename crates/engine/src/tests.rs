@@ -18,15 +18,16 @@ mod revision_checks;
 mod typing;
 mod wordart;
 
-/// True, after saying so on stderr, when this build has no Language data embedded (craft-proof
-/// built without `CRAFT_I18N_DIR`). The probe is craft-proof's public `english_source`: the
-/// embedded en-us word list is there exactly when the craft-i18n data was embedded, since
-/// `CRAFT_I18N_DIR` brings all of it or none. Without it English still spells from craft-proof's
-/// built-in word list, but there are no hyphenation patterns and no American/British variant
-/// table, so the tests that check those return early, as craft-proof's own do; with the data (CI,
-/// releases) they all run.
+/// True, after saying so on stderr, when this build lacks the Language data the proofing tests
+/// need (craft-proof built without `CRAFT_I18N_DIR`). The probes are craft-proof's public
+/// `english_source` (the embedded English dictionary) and its American/British variant table
+/// (`colour` → `color`): a craft-i18n checkout without some of the files embeds only the rest,
+/// so both are asked. Without them English still spells from craft-proof's built-in word list,
+/// but there are no hyphenation patterns and no variant table, so the tests that check those
+/// return early, as craft-proof's own do; with the data (CI, releases) they all run.
 pub(crate) fn no_language_data(test: &str) -> bool {
-    let missing = wordcraft_proof::english_source(wordcraft_proof::ProofLang::En) != Some(wordcraft_proof::EnglishSource::Embedded);
+    let missing = wordcraft_proof::english_source(wordcraft_proof::ProofLang::En) != Some(wordcraft_proof::EnglishSource::Embedded)
+        || wordcraft_proof::en_variants::preferred("colour", wordcraft_proof::ProofLang::En).as_deref() != Some("color");
     if missing {
         eprintln!("{test}: skipped, needs the Language data (set CRAFT_I18N_DIR to a craft-i18n checkout)");
     }
