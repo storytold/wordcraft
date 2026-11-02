@@ -988,6 +988,38 @@ mod tests {
         assert_eq!(para.text_align(), Some(accesskit::TextAlign::Center));
     }
 
+    /// #4860 review: in a table cell too, the runs carry the formatting, and only a change starts
+    /// one: two bold words are one bold run, so a screen reader that reports font changes while
+    /// reading has one change into bold and one out of it.
+    #[test]
+    fn text_runs_in_a_table_cell_carry_the_formatting() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for (cmd, p) in [
+            ("insert.table", json!({"rows": 1, "cols": 1})),
+            ("text.insert", json!({"text": "Plain bold words here"})),
+            ("para.alignRight", json!({})),
+            ("select.text", json!({"text": "bold words"})),
+            ("format.bold", json!({})),
+        ] {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        }
+        let update = described(&mut app, &egui::Context::default());
+        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let runs_of =
+            |n: &Node| -> Vec<&Node> { n.children().iter().filter_map(|c| nodes.get(c).copied()).filter(|n| n.role() == Role::TextRun).collect() };
+        // The cell's paragraph, inside the cell.
+        let cell = nodes.values().find(|n| n.role() == Role::Cell).expect("the cell");
+        let para = cell.children().iter().filter_map(|c| nodes.get(c).copied()).find(|n| n.role() == Role::Paragraph).expect("the cell's paragraph");
+        let runs = runs_of(para);
+        let values: Vec<&str> = runs.iter().map(|n| n.value().unwrap_or("")).collect();
+        assert_eq!(values, ["Plain ", "bold words", " here\n"], "a run at each change, and only there");
+        let weights: Vec<Option<f32>> = runs.iter().map(|n| n.font_weight()).collect();
+        assert_eq!(weights, [Some(400.0), Some(700.0), Some(400.0)]);
+        assert!(runs.iter().all(|n| n.font_family().is_some_and(|f| !f.is_empty()) && n.font_size().is_some()), "font and size in every run");
+        assert_eq!(runs.get(1).map(|n| n.word_starts().to_vec()), Some(vec![0, 5]), "`bold` and `words`");
+        assert_eq!(para.text_align(), Some(accesskit::TextAlign::Right));
+    }
+
     /// #1119: a magnifier keeps the caret in view by the box of the character after it (Windows
     /// Magnifier asks for that box, the caret's own being empty). On an empty line that character
     /// is the line's end mark — the paragraph mark after Enter, a line break between two Shift+Enter
