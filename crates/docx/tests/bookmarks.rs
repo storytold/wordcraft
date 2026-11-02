@@ -247,3 +247,23 @@ fn direct_table_and_row_bookmarks_stay_outside_child_content_controls() {
         d = wordcraft_docx::read(&output).unwrap();
     }
 }
+
+#[test]
+fn physical_cell_limit_is_kept_with_horizontal_merges_and_row_bookmarks() {
+    let mut cells = String::new();
+    for i in 0..wordcraft_doc::table::MAX_COLS + 2 {
+        let merge = if i == 0 { "restart" } else { "continue" };
+        cells.push_str(&format!(r#"<w:tc><w:tcPr><w:hMerge w:val="{merge}"/><w:tcPrChange w:id="{i}" w:author="Revision{i}"><w:tcPr/></w:tcPrChange></w:tcPr><w:p/></w:tc>"#));
+    }
+    let body = table(&row(&format!("{}{}{}", start(501, "LimitedRow", false), cells, end(501))));
+    let d = wordcraft_docx::read(&package(&body, &para("header"))).unwrap();
+    assert_eq!(d.revisions.len(), wordcraft_doc::table::MAX_COLS);
+    assert_eq!(d.bookmarks().len(), 1);
+}
+
+#[test]
+fn physical_row_limit_counts_empty_rows_too() {
+    let rows = format!("{}{}", "<w:tr/>".repeat(wordcraft_doc::table::MAX_ROWS), row(&cell("beyond the row limit")));
+    let d = wordcraft_docx::read(&package(&table(&rows), &para("header"))).unwrap();
+    assert!(d.body.iter().all(|b| b.as_table().is_none()));
+}

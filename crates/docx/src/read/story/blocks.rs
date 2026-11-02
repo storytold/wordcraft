@@ -366,6 +366,7 @@ impl Reader<'_> {
         let mut rows = Vec::new();
         collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
         let mut row_lead = Vec::new();
+        let mut row_count = 0;
         sc.tables = sc.tables.saturating_add(1);
         for (tr, row_controls) in rows {
             if matches!(tr.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
@@ -373,9 +374,10 @@ impl Reader<'_> {
                 self.boundary_bookmark(tr, previous, &mut row_lead, BookmarkContainer::Row);
                 continue;
             }
-            if table.rows.len() >= MAX_ROWS {
+            if row_count >= MAX_ROWS {
                 continue;
             }
+            row_count += 1;
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
             if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
@@ -385,15 +387,17 @@ impl Reader<'_> {
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
             let mut cell_lead = Vec::new();
+            let mut cell_count = 0;
             for (tc, cell_controls) in tcs {
                 if matches!(tc.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
                     let previous = row.cells.last_mut().map(|c| &mut c.blocks);
                     self.boundary_bookmark(tc, previous, &mut cell_lead, BookmarkContainer::Cell);
                     continue;
                 }
-                if row.cells.len() >= MAX_COLS {
+                if cell_count >= MAX_COLS {
                     continue;
                 }
+                cell_count += 1;
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
