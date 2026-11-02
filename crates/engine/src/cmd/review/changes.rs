@@ -339,6 +339,11 @@ fn changes(s: &Session) -> Vec<Change> {
             if !kind.is_empty() {
                 out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
             }
+            // A deletion inside another revision's insertion is a change of its own, by its own
+            // author: Word's Reviewing Pane lists both.
+            if kind == "insert" && c.del.is_some() && c.del != c.ins && s.doc.move_name(c.del).is_none() {
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind: "delete", rev: c.del, props: Vec::new() });
+            }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
             // Neighbouring runs changed the same way by the same revision are one change.
