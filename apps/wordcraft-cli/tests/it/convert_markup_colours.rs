@@ -7,6 +7,9 @@ fn convert_colours_tracked_changes_from_flags() {
     let dir = std::env::temp_dir().join(format!("wc-convert-colours-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut doc = Document::new();
+    // Saving stamps an empty creation date with the time, which the PDF carries: a fixed one
+    // keeps runs a second apart byte-identical.
+    doc.core.created = "2024-05-06T07:08:09Z".into();
     doc.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
     doc.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
     let mut p = Paragraph::with_text("Governed by ", CharProps::default());
@@ -34,5 +37,10 @@ fn convert_colours_tracked_changes_from_flags() {
     // A colour that isn't one fails instead of exporting by author.
     let (ok, err, wrote) = convert("bad.pdf", &["--insert-color", "blueish"]);
     assert!(!ok && err.contains("insertColor") && wrote.is_none(), "{err}");
+    // A flag without its value, or given twice, fails too instead of being ignored.
+    for flags in [&["--insert-color"][..], &["--delete-color", "--update-fields"], &["--insert-color", "0000FF", "--insert-color", "blueish"]] {
+        let (ok, err, wrote) = convert("bad.pdf", flags);
+        assert!(!ok && wrote.is_none(), "{flags:?} was accepted: {err}");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }

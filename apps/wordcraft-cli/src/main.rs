@@ -419,12 +419,20 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
 
 /// `convert`'s `--insert-color` / `--delete-color` (`RRGGBB` or `byAuthor`): how tracked
 /// changes are coloured with `--markup`, set through `review.trackingOptions`, which checks them
-/// (#5233). Without either flag nothing changes.
+/// (#5233). A flag without a value, or given twice, fails before anything is written. Without
+/// either flag nothing changes.
 fn set_tracking_colours(s: &mut Session, rest: &[String]) -> Result<(), String> {
-    let colours: serde_json::Map<String, serde_json::Value> = [("--insert-color", "insertColor"), ("--delete-color", "deleteColor")]
-        .into_iter()
-        .filter_map(|(flag, key)| arg_value(rest, flag).map(|c| (key.to_string(), json!(c))))
-        .collect();
+    let mut colours = serde_json::Map::new();
+    for (flag, key) in [("--insert-color", "insertColor"), ("--delete-color", "deleteColor")] {
+        match find_option_arg(rest, flag) {
+            OptionArg::Absent => {}
+            OptionArg::Duplicate => return Err(format!("convert: duplicate {flag} option")),
+            OptionArg::MissingValue => return Err(format!("convert: {flag} requires a value (RRGGBB or byAuthor)")),
+            OptionArg::Value(c) => {
+                colours.insert(key.to_string(), json!(c));
+            }
+        }
+    }
     if colours.is_empty() {
         return Ok(());
     }
