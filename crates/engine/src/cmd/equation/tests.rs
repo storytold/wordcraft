@@ -530,3 +530,102 @@ fn equation_delete_surrounding_moves_the_caret_for_a_one_step_delete() {
     assert_eq!(linear(&s), "bc");
     assert_eq!(s.math.as_ref().unwrap().pos, MathPos::new(Vec::new(), 0));
 }
+
+#[test]
+fn equation_delete_surrounding_bytes_accepts_both_param_conventions() {
+    // 3-byte Hangul syllables using both `before`/`after` and `beforeBytes`/`afterBytes`.
+    let mut s = session();
+    s.run("insert.equation", &json!({"linear": "가나다"})).unwrap();
+    let r = s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 3, "afterBytes": 0})).unwrap();
+    assert_eq!((r["before"].clone(), r["beforeBytes"].clone()), (json!(1), json!(3)));
+    assert_eq!(linear(&s), "가나");
+    s.run("equation.deleteSurroundingBytes", &json!({"before": 3})).unwrap();
+    assert_eq!(linear(&s), "가");
+
+    // Forward deletion with `afterBytes` and `after`, plus astral 4-byte math italic `𝑥` (U+1D465).
+    let mut s = session();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.type", &json!({"text": "𝑥+가나다"})).unwrap();
+    assert_eq!('𝑥'.len_utf8(), 4);
+    s.run("equation.move", &json!({"dir": "home"})).unwrap();
+    let r = s.run("equation.deleteSurroundingBytes", &json!({"afterBytes": 4})).unwrap();
+    assert_eq!((r["after"].clone(), r["afterBytes"].clone()), (json!(1), json!(4)));
+    assert_eq!(linear(&s), "+가나다");
+    s.run("equation.move", &json!({"dir": "right"})).unwrap();
+    s.run("equation.deleteSurroundingBytes", &json!({"before": 1, "after": 6})).unwrap();
+    assert_eq!(linear(&s), "다");
+}
+
+#[test]
+fn equation_delete_surrounding_bytes_across_consecutive_runs_and_refusals() {
+    // Consecutive runs in the same argument (normal text + math text, kept distinct by `tidy`).
+    let mut s = session();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.normalText", &json!({"value": true})).unwrap();
+    s.run("equation.type", &json!({"text": "가"})).unwrap();
+    s.run("equation.normalText", &json!({"value": false})).unwrap();
+    s.run("equation.type", &json!({"text": "나"})).unwrap();
+    let nodes = super::nodes_of(&s, &s.math.as_ref().unwrap().at).unwrap();
+    assert_eq!(nodes.len(), 2, "normal-text and math runs remain separate MNode::Run nodes");
+    s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 6, "afterBytes": 0})).unwrap();
+    assert_eq!(linear(&s), "");
+
+    // Mid-character byte counts on 3-byte Hangul and 4-byte `𝑥`, and counts exceeding available text.
+    let mut s = session();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.type", &json!({"text": "𝑥가나다"})).unwrap();
+    let before = linear(&s);
+    let depth = s.undo_depth();
+    for bad in [1, 2, 4, 5, 7, 8, 10, 11, 12, 14] {
+        let err = s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": bad, "afterBytes": 0})).unwrap_err();
+        assert!(err.to_string().contains("boundary") || err.to_string().contains("cannot delete"), "bad={bad}: {err}");
+        assert_eq!(linear(&s), before);
+        assert_eq!(s.undo_depth(), depth);
+    }
+    s.run("equation.move", &json!({"dir": "home"})).unwrap();
+    for bad in [1, 2, 3, 5, 6, 14] {
+        assert!(s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 0, "afterBytes": bad})).is_err(), "after bad={bad}");
+        assert_eq!(linear(&s), before);
+        assert_eq!(s.undo_depth(), depth);
+    }
+
+    // Crossing a non-run structure node (`Frac`) is refused on both sides without mutation.
+    let mut s = session();
+    s.run("insert.equation", &json!({"latex": "가\\frac{a}{b}나"})).unwrap();
+    let before = linear(&s);
+    let depth = s.undo_depth();
+    // At end (after `나`): 3 bytes deletes `나` if run, 4 bytes crosses `Frac` and must refuse.
+    assert!(s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 4, "afterBytes": 0})).is_err());
+    assert_eq!(linear(&s), before);
+    assert_eq!(s.undo_depth(), depth);
+    // At start (before `가`): 4 bytes crosses `Frac` and must refuse.
+    s.math.as_mut().unwrap().pos = MathPos::new(Vec::new(), 0);
+    assert!(s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 0, "afterBytes": 4})).is_err());
+    assert_eq!(linear(&s), before);
+    assert_eq!(s.undo_depth(), depth);
+    // Inside numerator at end: `afterBytes: 1` would step into denominator, must refuse.
+    s.math.as_mut().unwrap().pos = MathPos { path: vec![(1, 0)], off: 1 };
+    assert!(s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 0, "afterBytes": 1})).is_err());
+    assert_eq!(linear(&s), before);
+    assert_eq!(s.undo_depth(), depth);
+
+    // Unit cap (> 64 single-byte units) and hostile params while editing never panic or mutate.
+    let mut s = session();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.type", &json!({"text": "a".repeat(70)})).unwrap();
+    let before = linear(&s);
+    let err = s.run("equation.deleteSurroundingBytes", &json!({"beforeBytes": 65, "afterBytes": 0})).unwrap_err();
+    assert!(matches!(err, crate::CmdError::Params(_)), "{err:?}");
+    for bad in [
+        json!(null),
+        json!({}),
+        json!({"before": 0, "after": 0}),
+        json!({"beforeBytes": -1, "afterBytes": 3}),
+        json!({"before": "x", "after": 3}),
+        json!({"before": null, "after": 3}),
+        json!({"beforeBytes": 257, "afterBytes": 0}),
+    ] {
+        assert!(s.run("equation.deleteSurroundingBytes", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(linear(&s), before);
+}

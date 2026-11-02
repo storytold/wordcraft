@@ -73,7 +73,11 @@ fn rename_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> boo
     };
     let label = ui.label(tl!("Document name"));
     let r = ui.add(egui::TextEdit::singleline(name).desired_width(320.0).char_limit(200)).labelled_by(label.id);
-    if *focus {
+    if *focus
+        || (r.lost_focus()
+            && crate::ime_event_or_composing(ui.ctx(), Some(r.id))
+            && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)))
+    {
         r.request_focus();
         *focus = false;
     }
@@ -453,14 +457,15 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 let _ = app.run("edit.replace", opts.clone());
             }
         }
-        if ui.button(tl!("Find Next")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        let ime = crate::ime_event_or_composing(ui.ctx(), None);
+        if ui.button(tl!("Find Next")).clicked() || (!ime && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             // One step per click: `edit.find` would select a match itself, and the step after it skip one.
             match app.run("edit.findNext", opts.clone()) {
                 Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
                 Err(e) => *message = e,
             }
         }
-        if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.button(tl!("Close")).clicked() || (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
             close = true;
         }
     });
@@ -1005,7 +1010,8 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         reg.all().iter().filter(|c| command_matches(c, query)).collect()
     };
     hits.truncate(14);
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+    let enter = !ime && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut run: Option<&str> = enter.then(|| hits.first().map(|c| c.id)).flatten();
     for c in &hits {
         let sc = crate::widgets::shortcut_text(app, c.id);
@@ -1027,7 +1033,7 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     } else if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
     }
-    run.is_some() || find || ui.input(|i| i.key_pressed(egui::Key::Escape))
+    run.is_some() || find || (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape)))
 }
 
 fn paste_special_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1110,7 +1116,7 @@ fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bo
         .horizontal(|ui| {
             let cancel = ui.button(tl!("Cancel"));
             let discard = ui.button(tl!("Discard"));
-            if cancel.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if cancel.clicked() || (!crate::ime_event_or_composing(ui.ctx(), None) && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 Some("cancel")
             } else if discard.clicked() {
                 Some("discard")
@@ -1164,11 +1170,12 @@ fn save_changes_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     // Enter clicks the focused button; it means Save only when none of them has focus.
     let focused = buttons.iter().any(|(b, _)| b.has_focus());
-    let answer = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    let ime = crate::ime_event_or_composing(ui.ctx(), None);
+    let answer = if !ime && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         Some("cancel")
     } else if let Some((_, a)) = buttons.iter().find(|(b, _)| b.clicked()) {
         Some(*a)
-    } else if !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    } else if !ime && !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         Some("save")
     } else {
         None

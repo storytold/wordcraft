@@ -348,8 +348,12 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         {
             b.navigate(h);
         }
+        crate::note_ime_composing_start(ui.ctx());
         let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY)).accessible_name(tl!("Folder path"));
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        let loc_ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
+        if r.lost_focus() && loc_ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            r.request_focus();
+        } else if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             location_done = true;
             let typed = b.location.clone();
             if let Some(dir) = resolve(&b.dir, &typed) {
@@ -430,7 +434,11 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         // The name field takes what the label (longer in some languages) and the type list leave.
         let width = (ui.available_width() - 170.0).max(120.0);
         let r = ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(width)).labelled_by(label.id);
-        if b.focus_name {
+        if b.focus_name
+            || (r.lost_focus()
+                && crate::ime_event_or_composing(ui.ctx(), Some(r.id))
+                && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)))
+        {
             r.request_focus();
             b.focus_name = false;
         }
@@ -456,8 +464,9 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         b.navigate(b.dir.clone());
     }
     ui.add_space(8.0);
-    let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-    let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let ime = crate::ime_event_or_composing(ui.ctx(), None);
+    let mut cancel = !ime && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let enter = !ime && !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (ok, cancelb) =

@@ -321,6 +321,82 @@ pub(crate) enum SmartArtTypeResult {
     Changed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmartArtDeleteResult {
+    /// No SmartArt graphic is selected: the caller may delete in the body.
+    NotHandled,
+    /// A SmartArt item's text was trimmed.
+    Changed,
+    /// Selected SmartArt could not satisfy the deletion (never fall through to the body).
+    Refused,
+}
+
+/// Erase `before` units from the end of the active SmartArt item's text. Canvas typing into a
+/// selected SmartArt graphic appends at the end of its active item, so `after > 0` has no text to
+/// erase and is refused without touching the body document.
+pub(crate) fn delete_surrounding_in(
+    app: &mut WordApp,
+    before: usize,
+    after: usize,
+    unit: wordcraft_doc::ime_text::DeleteUnit,
+) -> SmartArtDeleteResult {
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
+        return SmartArtDeleteResult::NotHandled;
+    };
+    if after > 0 {
+        return SmartArtDeleteResult::Refused;
+    }
+    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0)) else {
+        return SmartArtDeleteResult::Refused;
+    };
+    let Some(cur) = g.items.get(i).map(|it| it.text.as_str()) else {
+        return SmartArtDeleteResult::Refused;
+    };
+    let cut = match unit {
+        wordcraft_doc::ime_text::DeleteUnit::Chars => {
+            if before == 0 {
+                cur.len()
+            } else {
+                let mut chars = cur.char_indices().rev();
+                let mut start = None;
+                for k in 0..before {
+                    let Some((idx, _)) = chars.next() else {
+                        return SmartArtDeleteResult::Refused;
+                    };
+                    if k + 1 == before {
+                        start = Some(idx);
+                    }
+                }
+                let Some(idx) = start else {
+                    return SmartArtDeleteResult::Refused;
+                };
+                idx
+            }
+        }
+        wordcraft_doc::ime_text::DeleteUnit::Bytes => {
+            let Some(idx) = cur.len().checked_sub(before) else {
+                return SmartArtDeleteResult::Refused;
+            };
+            if !cur.is_char_boundary(idx) {
+                return SmartArtDeleteResult::Refused;
+            }
+            idx
+        }
+    };
+    let Some(new_text) = cur.get(..cut).map(str::to_string) else {
+        return SmartArtDeleteResult::Refused;
+    };
+    if app.smart_art_typing == Some(i) {
+        app.session.join_next_undo();
+    }
+    if app.run("smartArt.items", items_with(&g, i, &new_text)).is_err() {
+        return SmartArtDeleteResult::Refused;
+    }
+    app.smart_art_item = Some(i);
+    app.smart_art_typing = Some(i);
+    SmartArtDeleteResult::Changed
+}
+
 /// Appends typing to the selected SmartArt item, joining an active typing undo, and returns
 /// whether the input was unhandled, consumed without a change, or changed an item.
 pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
@@ -385,13 +461,17 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                         app.smart_art_typing = Some(i);
                     }
                 }
-                if r.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter)) && g.items.len() < MAX_ITEMS {
-                    app.smart_art_typing = None;
-                    if app.run("smartArt.addShape", json!({"after": i})).is_ok() {
-                        // The new item comes after this one and the items under it.
-                        let next = g.descendants(i).end;
-                        app.smart_art_item = Some(next);
-                        ui.data_mut(|d| d.insert_temp(focus_id, next));
+                if r.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                    if crate::ime_event_or_composing(ui.ctx(), Some(r.id)) {
+                        r.request_focus();
+                    } else if g.items.len() < MAX_ITEMS {
+                        app.smart_art_typing = None;
+                        if app.run("smartArt.addShape", json!({"after": i})).is_ok() {
+                            // The new item comes after this one and the items under it.
+                            let next = g.descendants(i).end;
+                            app.smart_art_item = Some(next);
+                            ui.data_mut(|d| d.insert_temp(focus_id, next));
+                        }
                     }
                 }
             });

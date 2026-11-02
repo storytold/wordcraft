@@ -452,9 +452,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ctx.data_mut(|m| m.insert_temp(open_flag_id(), false));
         return;
     };
+    crate::note_ime_composing_start(ctx);
     let resp = egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
     let mut done = resp.inner;
-    if done.is_none() && resp.should_close() {
+    if done.is_none() && resp.should_close() && !crate::ime_event_or_composing(ctx, None) {
         done = Some(false);
     }
     match done {
@@ -517,7 +518,7 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
             if cancelb.clicked() {
                 out = Some(false);
             }
-            let typing = ui.ctx().memory(|m| m.focused().is_some());
+            let typing = ui.ctx().memory(|m| m.focused().is_some()) || crate::ime_event_or_composing(ui.ctx(), None);
             if okb.clicked() || (!typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                 out = Some(true);
             }

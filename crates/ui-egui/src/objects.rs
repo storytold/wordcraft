@@ -173,7 +173,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return taken;
     }
     if let Some(mut d) = app.canvas.obj_drag.take() {
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !app.canvas.ime_escaped_this_frame && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return true; // cancelled: dropped without a change
         }
         if d.pending_behind {
@@ -244,7 +244,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return true;
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
-    if app.canvas.link_from.is_some() && (pressed || ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+    if app.canvas.link_from.is_some() && (pressed || (!app.canvas.ime_escaped_this_frame && ui.input(|i| i.key_pressed(egui::Key::Escape)))) {
         link_click(app, layout, pages, scale, at, pressed);
         return true;
     }

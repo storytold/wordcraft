@@ -105,7 +105,7 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str, cancel: &str, ok_enabled: bool) -> 
             if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
                 r.1 = true;
             }
-            if okb.clicked() || (ok_enabled && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            if okb.clicked() || (ok_enabled && !crate::ime_event_or_composing(ui.ctx(), None) && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                 r.0 = true;
             }
         });

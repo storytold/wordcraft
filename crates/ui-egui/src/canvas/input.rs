@@ -94,6 +94,14 @@ fn apply_format_painter(app: &mut WordApp) {
 /// handles, then page hit testing, outlines, headers and footers, equations, selection and caret
 /// interaction.
 pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    let fresh_layout;
+    let layout = if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() && !app.canvas.ime_preedit.is_empty() {
+        crate::keys::flush_ime_preedit(app, Some(ui.ctx()));
+        fresh_layout = app.session.layout();
+        &*fresh_layout
+    } else {
+        layout
+    };
     let Some(pointer) = route_pointer_targets(app, ui, resp, rects, layout, scale) else {
         return;
     };
@@ -235,6 +243,14 @@ fn handle_primary_press(
     hf_enter: bool,
 ) {
     let PagePointer { ui, layout, p, page, x, y, story, .. } = *pointer;
+    let fresh_layout;
+    let layout = if !app.canvas.ime_preedit.is_empty() {
+        crate::keys::flush_ime_preedit(app, Some(ui.ctx()));
+        fresh_layout = app.session.layout();
+        &*fresh_layout
+    } else {
+        layout
+    };
     let now = ui.input(|i| i.time);
     let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
     let clicks = press_count(app.canvas.last_press, now, p, delay, dist);

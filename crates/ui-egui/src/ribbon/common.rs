@@ -59,7 +59,7 @@ pub(super) fn esc_cancelled(ui: &Ui, r: &egui::Response, id: egui::Id) -> bool {
     let focused = r.has_focus();
     let had_focus = ui.data(|d| d.get_temp::<bool>(focus_key)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(focus_key, focused));
-    if had_focus && !focused && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if had_focus && !focused && !crate::ime_event_or_composing(ui.ctx(), Some(r.id)) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ui.data_mut(|d| d.insert_temp(esc_key, now));
     }
     ui.data(|d| d.get_temp::<u64>(esc_key)).is_some_and(|at| now.saturating_sub(at) <= 2)

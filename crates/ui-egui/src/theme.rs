@@ -505,11 +505,22 @@ pub fn add_fallback_faces(fonts: &mut FontDefinitions, faces: &[Arc<wordcraft_fo
     }
 }
 
+/// Whether `c` is a CJK or Hangul character (including Compatibility Jamo, Conjoining Jamo,
+/// Extended-A/B Jamo, precomposed syllables and halfwidth Hangul) covered by the CJK/Korean
+/// UI fallback font chain.
+pub fn is_hangul_or_cjk(c: char) -> bool {
+    wordcraft_fonts::is_cjk(c)
+        || matches!(
+            c as u32,
+            0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xD7B0..=0xD7FF | 0xFFA0..=0xFFDC
+        )
+}
+
 /// A character the window caption can already draw without a document fallback: the Latin range
-/// the interface faces cover, or CJK, which uses the CJK UI font ([`install_fonts_with`]) rather
-/// than a document face. System CJK collections are larger than [`faces_for_preedit`] will load.
+/// the interface faces cover, or CJK/Hangul, which uses the CJK UI font ([`install_fonts_with`])
+/// rather than a document face. System CJK collections are larger than [`faces_for_preedit`] will load.
 pub fn caption_char_covered(c: char) -> bool {
-    (c as u32) < 0x250 || wordcraft_fonts::is_cjk(c)
+    (c as u32) < 0x250 || is_hangul_or_cjk(c)
 }
 
 /// Document faces needed to draw `text` (the input method's composition, or a file name in the
@@ -591,10 +602,21 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
     // installed CJK font after them, so the menus don't show boxes or `?`.
     #[cfg(not(target_arch = "wasm32"))]
-    if system_cjk && let Some(f) = system_cjk_font(prefer_hans, prefer_korean) {
-        let mut data = FontData::from_static(&f.bytes);
-        data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    if system_cjk {
+        let primary = system_cjk_font(prefer_hans, prefer_korean);
+        if let Some(f) = primary {
+            let mut data = FontData::from_static(&f.bytes);
+            data.index = f.index;
+            add_cjk(&mut fonts, format!("system {}", f.family), data);
+        }
+        if !prefer_korean
+            && let Some(ko) = system_cjk_font(false, true)
+            && primary.is_none_or(|p| p.family != ko.family || p.index != ko.index)
+        {
+            let mut data = FontData::from_static(&ko.bytes);
+            data.index = ko.index;
+            add_cjk(&mut fonts, format!("system ko {}", ko.family), data);
+        }
     }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
@@ -624,6 +646,21 @@ fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts:
         let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
         if needed.is_empty() {
             needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
+        }
+        // In builds without embedded `craft-i18n` catalogs (`Lang::all()` is English only),
+        // `catalogs` and `names` contain no CJK code points; probe representative characters for
+        // the requested script so `system_cjk` still loads the OS Korean/CJK interface face when
+        // no embedded face covers them.
+        if needed.is_empty() {
+            let probe = if korean {
+                ['한', 'ㅎ', 'ㅏ']
+            } else if hans {
+                ['页', '选', '删']
+            } else {
+                ['の', 'あ', '語']
+            };
+            let sample: String = probe.into_iter().collect();
+            needed = wordcraft_fonts::ui_uncovered_cjk(&[&sample], &embedded);
             if needed.is_empty() {
                 return None;
             }

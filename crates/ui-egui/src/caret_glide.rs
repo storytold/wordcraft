@@ -259,6 +259,12 @@ impl CaretGlide {
         self.opacity
     }
 
+    /// Snap any glide or fade in progress so the caret draws immediately at its target.
+    pub fn snap(&mut self) {
+        self.glide = None;
+        self.fade = None;
+    }
+
     /// Forget the caret: it appears wherever it belongs next frame.
     pub fn reset(&mut self) {
         self.glide = None;
@@ -361,6 +367,22 @@ fn view_key(app: &WordApp, geo: &Geometry) -> u64 {
 /// content's top-left on screen.
 pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
     let LookRequest { content_origin, geometry: geo, target, shown, since_ms, on } = request;
+    if !app.canvas.ime_preedit.is_empty() || app.canvas.ime_snap_caret {
+        let off = content_origin.to_vec2();
+        let bar_cs = [target[0] - off, target[1] - off];
+        let frame_nr = ui.ctx().cumulative_frame_nr();
+        ui.ctx().data_mut(|d| {
+            let s = d.get_temp_mut_or_default::<CaretGlide>(state_id());
+            s.snap();
+            s.target = Some(bar_cs);
+            s.drawn = Some(bar_cs);
+            s.opacity = if shown { 1.0 } else { 0.0 };
+            s.cause = cause_key(app);
+            s.view = view_key(app, geo);
+            s.frame_nr = frame_nr;
+        });
+        return Look { bar: target, opacity: if shown { 1.0 } else { 0.0 }, moving: false };
+    }
     // Turned off in Options, Animation effects off (the setting, or the system's under "Use system
     // setting"), or egui's own switch for "no animations": the caret jumps and blinks on and off.
     if !app.ui.caret_animation || !app.animations_on() || ui.style().animation_time <= 0.0 || glide_secs() <= 0.0 {
@@ -400,6 +422,11 @@ pub fn look(app: &WordApp, ui: &Ui, request: LookRequest<'_>) -> Look {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
     }
     look
+}
+
+/// Snap the caret's glide state in `ctx` (used on IME commit and pre-edit updates).
+pub fn snap_in(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<CaretGlide>(state_id()).snap());
 }
 
 /// The caret's glide state this frame (for tests and tools).

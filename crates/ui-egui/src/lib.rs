@@ -109,7 +109,7 @@ mod services;
 mod state;
 
 use app::control_click_as_secondary;
-pub(crate) use app::{discards_document, works_without_document};
+pub(crate) use app::{discards_document, ime_event_or_composing, note_ime_composing_start, works_without_document};
 pub use clock::now_ms;
 pub use services::{HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
@@ -593,6 +593,8 @@ pub struct WordApp {
     /// Whether the current command was entered by an input method's own transaction. The engine
     /// uses it to keep IME commits from setting the application-change signal.
     pub(crate) ime_origin: bool,
+    /// Re-entrancy guard while flushing an active canvas IME pre-edit before another command.
+    pub(crate) ime_flushing: bool,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) read_aloud_error: Option<String>,

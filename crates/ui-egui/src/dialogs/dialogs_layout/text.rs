@@ -214,10 +214,11 @@ fn with_off(pos: &Value, off: u64) -> Value {
 }
 
 pub(super) fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> bool {
+    let ime = crate::ime_event_or_composing(ui.ctx(), None);
     if f.done {
         ui.label(tl!("Manual hyphenation is complete."));
         ui.add_space(8.0);
-        return ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
+        return ui.button(tl!("Close")).clicked() || (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)));
     }
     ui.label(tl!("Hyphenate at:"));
     // The word with every possible break; the chosen one is the hyphen that will be inserted.
@@ -237,7 +238,7 @@ pub(super) fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> b
     let mut close = false;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ui.button(tl!("Cancel")).clicked() || (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 close = true;
             }
             if ui.button(tl!("No")).clicked() {

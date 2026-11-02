@@ -24,6 +24,19 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
+        if self.fonts_frames >= 2 {
+            let mut incoming = String::new();
+            for e in &raw.events {
+                if let egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) | egui::Event::Text(text) = e
+                    && !text.is_ascii()
+                {
+                    incoming.push_str(text);
+                }
+            }
+            if !incoming.is_empty() {
+                self.ensure_text_fonts(ctx, &incoming);
+            }
+        }
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
             return;
         }
@@ -72,6 +85,23 @@ impl WordApp {
     /// Pane's Tab/Shift+Tab, before the font warm-up return. `logic` also runs hidden, where its
     /// input events are from the previous shown frame.
     pub(super) fn handle_ui_input_events(&mut self, ctx: &egui::Context) {
+        if ctx.current_pass_index() == 0 {
+            note_ime_composing_start(ctx);
+            let incoming = ctx.input(|i| {
+                let mut s = String::new();
+                for e in &i.events {
+                    if let egui::Event::Ime(egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text)) | egui::Event::Text(text) = e
+                        && !text.is_ascii()
+                    {
+                        s.push_str(text);
+                    }
+                }
+                s
+            });
+            if !incoming.is_empty() {
+                self.ensure_text_fonts(ctx, &incoming);
+            }
+        }
         // eframe does not preserve dropped files for a later frame, so a drop in the first two
         // passes would otherwise disappear.
         #[cfg(not(target_arch = "wasm32"))]
@@ -86,7 +116,12 @@ impl WordApp {
         // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as
         // Word's pane does. This is an input action, so it runs in the first UI pass only; hidden
         // `run_logic` ticks still see the previous shown frame's keys.
-        if ctx.current_pass_index() == 0 && self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
+        if ctx.current_pass_index() == 0
+            && self.session.view.smart_art_pane
+            && self.smart_art_row_focused
+            && self.smart_art_item.is_some()
+            && !ime_event_or_composing(ctx, None)
+        {
             let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
             let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
             if shift_tab || tab {
@@ -137,6 +172,43 @@ impl WordApp {
             // now: a keystroke in the very next frame reaches the page instead of being dropped.
             self.canvas.focused = true;
             ctx.request_repaint();
+        }
+    }
+}
+
+fn ime_composing_start_key() -> egui::Id {
+    egui::Id::unique("wc_ime_composing_start")
+}
+
+/// Records which focused `TextEdit` (if any) entered the current frame with an active IME
+/// composition, before widget passes handle `Enter` or `Escape` and clear `is_ime_composition`.
+pub(crate) fn note_ime_composing_start(ctx: &egui::Context) {
+    let frame = ctx.cumulative_frame_nr();
+    if ctx.data(|d| d.get_temp::<(u64, Option<egui::Id>)>(ime_composing_start_key())).is_some_and(|(f, _)| f == frame) {
+        return;
+    }
+    let composing_id =
+        ctx.memory(|m| m.focused()).filter(|&id| egui::widgets::text_edit::TextEditState::load(ctx, id).is_some_and(|s| s.is_ime_composition()));
+    ctx.data_mut(|d| d.insert_temp(ime_composing_start_key(), (frame, composing_id)));
+}
+
+/// Whether an IME event arrived in this pass or the target/focused `TextEdit` is (or began this
+/// pass) composing an IME pre-edit. Used by dialogs, panes and combo boxes so `Enter`, `Escape`
+/// and arrow keys meant for the input method do not dismiss or submit surrounding UI.
+pub(crate) fn ime_event_or_composing(ctx: &egui::Context, widget_id: Option<egui::Id>) -> bool {
+    if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_)))) {
+        return true;
+    }
+    let frame = ctx.cumulative_frame_nr();
+    let started = ctx.data(|d| d.get_temp::<(u64, Option<egui::Id>)>(ime_composing_start_key())).filter(|(f, _)| *f == frame).and_then(|(_, id)| id);
+    match widget_id {
+        Some(id) => started == Some(id) || egui::widgets::text_edit::TextEditState::load(ctx, id).is_some_and(|s| s.is_ime_composition()),
+        None => {
+            started.is_some()
+                || ctx
+                    .memory(|m| m.focused())
+                    .and_then(|id| egui::widgets::text_edit::TextEditState::load(ctx, id))
+                    .is_some_and(|s| s.is_ime_composition())
         }
     }
 }

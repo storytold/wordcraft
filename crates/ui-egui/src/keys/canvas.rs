@@ -1,7 +1,7 @@
 use super::alt_code::{alt_code_echoed, alt_code_event, alt_codes_supported};
 use super::ime::{
-    MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, delete_in_equation, delete_surrounding, delete_surrounding_bytes, ime_stamp, note_automatic_change,
-    note_ime_application_change, publish_ime_receipt,
+    MAX_IME_COMMIT_BYTES, MAX_IME_PREEDIT_BYTES, delete_in_equation, delete_in_equation_bytes, delete_surrounding, delete_surrounding_bytes,
+    ime_stamp, note_automatic_change, note_ime_application_change, publish_ime_receipt,
 };
 use super::shortcuts::{
     EquationReplacementDrop, dispatch, equation_key, is_context_menu_key, is_modifier_key, is_paste_release, is_paste_special_release,
@@ -12,6 +12,7 @@ use super::{Key, Modifiers, WordApp, json};
 /// Events for the focused canvas: text, editing keys, clipboard, IME. While keytips are showing
 /// every key belongs to them (letters pick badges, Escape cancels), so nothing here runs.
 pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
+    app.canvas.ime_escaped_this_frame = false;
     if app.ui.keytips != crate::keytips::Phase::Off {
         return;
     }
@@ -45,6 +46,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         drop_equation_replacement: EquationReplacementDrop::None,
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
         interrupted_replacement: EquationReplacementDrop::None,
+        ime_cancelled_in_batch: false,
     };
     let held = ctx.input(|i| i.modifiers);
     if held.command {
@@ -67,7 +69,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         {
             continue;
         }
-        handle_event(app, ctx, e);
+        handle_event(app, ctx, e, &mut batch);
     }
 }
 
@@ -76,6 +78,7 @@ struct Batch {
     drop_equation_replacement: EquationReplacementDrop,
     interrupted_preedit: bool,
     interrupted_replacement: EquationReplacementDrop,
+    ime_cancelled_in_batch: bool,
 }
 
 /// Read Mode is for navigation and selection, not typing into the document.
@@ -88,7 +91,7 @@ fn read_mode_events(app: &mut WordApp, ctx: &egui::Context, events: &[egui::Even
         }
         match e {
             // Not while a dialog or menu that takes Escape is open.
-            egui::Event::Key { key: Key::Escape, pressed: true, .. } if app.escape_free => {
+            egui::Event::Key { key: Key::Escape, pressed: true, .. } if app.escape_free && !app.canvas.ime_escaped_this_frame => {
                 // Focus or Full Screen first (#1678), then Read Mode.
                 let id = crate::chrome::Screen::of(&app.session.view).exit_command().unwrap_or("view.printLayout");
                 let _ = app.run(id, json!({"value": false}));
@@ -133,10 +136,14 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty() => true,
             // A new marked composition or ordinary input is not the old target's queued
             // replacement. Commit-only input without an interrupted preedit is never gated.
-            egui::Event::Ime(egui::ImeEvent::Preedit { .. })
-            | egui::Event::Text(_)
-            | egui::Event::Paste(_)
-            | egui::Event::Key { pressed: true, .. } => {
+            // A second Escape in the same batch (e.g. cancel pre-edit, then exit equation) keeps
+            // the quarantine for any trailing stale replacement events.
+            egui::Event::Ime(egui::ImeEvent::Preedit { .. }) | egui::Event::Text(_) | egui::Event::Paste(_) => {
+                *interrupted_preedit = false;
+                *interrupted_replacement = EquationReplacementDrop::None;
+                false
+            }
+            egui::Event::Key { key, pressed: true, .. } if *key != Key::Escape => {
                 *interrupted_preedit = false;
                 *interrupted_replacement = EquationReplacementDrop::None;
                 false
@@ -298,6 +305,10 @@ fn equation_event(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, b: &m
                 return true;
             }
             egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                b.ime_cancelled_in_batch = false;
+                app.canvas.ime_escaped_this_frame = false;
+                app.canvas.ime_snap_caret = true;
+                crate::caret_glide::snap_in(ctx);
                 app.canvas.ime_preedit.clear();
                 app.canvas.ime_preedit_range = None;
                 if !text.is_empty() {
@@ -334,24 +345,17 @@ fn equation_event(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, b: &m
             // provide a surrounding snapshot; an engine revision proves a real commit and the
             // platform is never handed fabricated surroundings.
             egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, after_chars }) => {
-                delete_in_equation(app, *before_chars, *after_chars);
+                if !delete_in_equation(app, *before_chars, *after_chars) {
+                    b.drop_equation_replacement = EquationReplacementDrop::Awaiting;
+                }
                 return true;
             }
-            // Byte counts have no reversible mapping into a structured equation, so an
-            // exact replacement cannot be performed without guessing at tree units. Refuse
-            // the whole request, clear the composition and drop the replacement text that
-            // the platform sends for the deletion it believes it made. Inserting it beside
-            // the untouched equation would duplicate the old text.
+            // Byte-counted surrounding deletion inside an equation succeeds when the byte span
+            // lies on exact UTF-8 character boundaries in the active linear run slot; mid-char
+            // or structural boundaries refuse the request and drop its paired replacement.
             egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes }) => {
-                if *before_bytes != 0 || *after_bytes != 0 {
-                    log::debug!("refusing byte delete-surrounding inside an equation");
-                    app.canvas.ime_preedit.clear();
-                    app.canvas.ime_preedit_range = None;
-                    // This refusal is a new request, not the replacement promised by an
-                    // earlier equation deletion.
-                    app.session.clear_ime_joins();
+                if !delete_in_equation_bytes(app, *before_bytes, *after_bytes) {
                     b.drop_equation_replacement = EquationReplacementDrop::Awaiting;
-                    app.canvas.ime_interrupt_now = true;
                 }
                 return true;
             }
@@ -361,7 +365,20 @@ fn equation_event(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, b: &m
                 }
                 return true;
             }
-            egui::Event::Key { key, pressed: true, modifiers, .. } if equation_key(app, *key, *modifiers) => return true,
+            egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                if *key == Key::Escape && modifiers.is_none() && cancel_ime_preedit_on_escape(app, ctx, b) {
+                    return true;
+                }
+                b.ime_cancelled_in_batch = false;
+                if !app.canvas.ime_preedit.is_empty() && is_ime_flush_nav_key(*key) {
+                    flush_ime_preedit(app, Some(ctx));
+                    b.interrupted_preedit = true;
+                }
+                if equation_key(app, *key, *modifiers) {
+                    return true;
+                }
+                app.session.clear_ime_joins();
+            }
             // Anything else between the deletion and its replacement (a pre-edit, a key
             // release, focus, a pointer event) means the next equation typing command is a
             // new edit, not the immediate replacement. Drop the promise; a command consumes
@@ -407,6 +424,9 @@ fn ime_commit(app: &mut WordApp, text: String) {
 
 /// A key press the canvas handles (shortcut, ink, objects, clipboard keys).
 fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+    if key == Key::Escape && app.canvas.ime_escaped_this_frame {
+        return;
+    }
     if key == Key::Escape && app.session.painter.is_some() {
         app.session.painter = None;
         return;
@@ -469,8 +489,82 @@ fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifi
     app.canvas.swallow_text = dispatch(app, key, modifiers) && modifiers.alt;
 }
 
+/// Commits an active IME pre-edit string at the current target (equation, SmartArt, or body/text
+/// box) and asks the platform to end its marked composition before a pointer click, navigation
+/// key, or command moves or saves the document.
+pub(crate) fn flush_ime_preedit(app: &mut WordApp, ctx: Option<&egui::Context>) {
+    if app.ime_flushing || app.canvas.ime_preedit.is_empty() {
+        return;
+    }
+    let preedit = std::mem::take(&mut app.canvas.ime_preedit);
+    app.canvas.ime_preedit_range = None;
+    app.canvas.ime_snap_caret = true;
+    if let Some(ctx) = ctx {
+        crate::caret_glide::snap_in(ctx);
+        ctx.memory_mut(|m| m.interrupt_ime());
+    }
+    app.canvas.ime_interrupt_now = true;
+    app.ime_flushing = true;
+    if preedit.len() <= MAX_IME_COMMIT_BYTES {
+        if app.session.math.is_some() {
+            if preedit.chars().count() <= wordcraft_engine::MAX_EQUATION_TYPE_CHARS {
+                let _ = app.run("equation.type", json!({"text": preedit}));
+            } else {
+                app.session.clear_ime_joins();
+            }
+        } else {
+            match crate::dialogs_smart_art::type_into(app, &preedit) {
+                crate::dialogs_smart_art::SmartArtTypeResult::Changed => {
+                    app.session.clear_ime_text_join();
+                    app.canvas.ime_join_text = None;
+                    note_ime_application_change(app);
+                }
+                crate::dialogs_smart_art::SmartArtTypeResult::ConsumedNoChange => {
+                    app.session.clear_ime_text_join();
+                    app.canvas.ime_join_text = None;
+                }
+                crate::dialogs_smart_art::SmartArtTypeResult::NotHandled => {
+                    crate::objects::enter_text_box(app);
+                    type_text(app, &preedit, false);
+                }
+            }
+        }
+    } else {
+        log::warn!("ignoring an oversized IME pre-edit flush of {} bytes", preedit.len());
+        app.session.clear_ime_joins();
+        app.canvas.ime_join_text = None;
+    }
+    app.ime_flushing = false;
+}
+
+fn is_ime_flush_nav_key(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Enter | Key::Tab | Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::PageUp | Key::PageDown
+    )
+}
+
+fn cancel_ime_preedit_on_escape(app: &mut WordApp, ctx: &egui::Context, b: &mut Batch) -> bool {
+    let had_preedit = !app.canvas.ime_preedit.is_empty();
+    let cancelled_in_batch = std::mem::take(&mut b.ime_cancelled_in_batch);
+    if !had_preedit && !cancelled_in_batch {
+        return false;
+    }
+    app.canvas.ime_preedit.clear();
+    app.canvas.ime_preedit_range = None;
+    app.canvas.ime_interrupt_now = true;
+    app.canvas.ime_escaped_this_frame = true;
+    app.canvas.ime_snap_caret = true;
+    crate::caret_glide::snap_in(ctx);
+    ctx.memory_mut(|m| m.interrupt_ime());
+    app.session.clear_ime_joins();
+    app.canvas.ime_join_text = None;
+    b.interrupted_preedit = true;
+    true
+}
+
 /// Everything else: typed text, IME, clipboard and key presses.
-fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
+fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event, b: &mut Batch) {
     match e {
         egui::Event::Text(t) => {
             let m = ctx.input(|i| i.modifiers);
@@ -492,11 +586,35 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
                 type_text(app, &t, false);
             }
         }
-        egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, after_chars }) => delete_surrounding(app, before_chars, after_chars),
+        egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { before_chars, after_chars }) => {
+            if !delete_surrounding(app, before_chars, after_chars) {
+                b.drop_equation_replacement = EquationReplacementDrop::Awaiting;
+            }
+        }
         egui::Event::Ime(egui::ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes }) => {
-            delete_surrounding_bytes(app, before_bytes, after_bytes)
+            if !delete_surrounding_bytes(app, before_bytes, after_bytes) {
+                b.drop_equation_replacement = EquationReplacementDrop::Awaiting;
+            }
+        }
+        #[allow(deprecated)]
+        egui::Event::Ime(egui::ImeEvent::Disabled) => {
+            if !app.canvas.ime_preedit.is_empty() {
+                b.ime_cancelled_in_batch = true;
+                app.canvas.ime_escaped_this_frame = true;
+            }
+            app.canvas.ime_preedit.clear();
+            app.canvas.ime_preedit_range = None;
         }
         egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
+            if text.is_empty() && !app.canvas.ime_preedit.is_empty() {
+                b.ime_cancelled_in_batch = true;
+                app.canvas.ime_escaped_this_frame = true;
+            } else if !text.is_empty() {
+                b.ime_cancelled_in_batch = false;
+                app.canvas.ime_escaped_this_frame = false;
+                app.canvas.ime_snap_caret = true;
+                crate::caret_glide::snap_in(ctx);
+            }
             if text.len() <= MAX_IME_PREEDIT_BYTES {
                 app.canvas.ime_preedit = text;
                 app.canvas.ime_preedit_range = active_range_chars;
@@ -506,7 +624,13 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
                 app.canvas.ime_preedit_range = None;
             }
         }
-        egui::Event::Ime(egui::ImeEvent::Commit(text)) => ime_commit(app, text),
+        egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            b.ime_cancelled_in_batch = false;
+            app.canvas.ime_escaped_this_frame = false;
+            app.canvas.ime_snap_caret = true;
+            crate::caret_glide::snap_in(ctx);
+            ime_commit(app, text);
+        }
         egui::Event::Paste(t) => {
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
             let m = ctx.input(|i| i.modifiers);
@@ -522,7 +646,17 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
             // `run` puts the copied text on the system clipboard itself.
             let _ = app.run(id, json!({}));
         }
-        egui::Event::Key { key, pressed: true, modifiers, .. } => key_press(app, ctx, key, modifiers),
+        egui::Event::Key { key, pressed: true, modifiers, .. } => {
+            if key == Key::Escape && modifiers.is_none() && cancel_ime_preedit_on_escape(app, ctx, b) {
+                return;
+            }
+            b.ime_cancelled_in_batch = false;
+            if !app.canvas.ime_preedit.is_empty() && is_ime_flush_nav_key(key) {
+                flush_ime_preedit(app, Some(ctx));
+                b.interrupted_preedit = true;
+            }
+            key_press(app, ctx, key, modifiers);
+        }
         _ => {}
     }
 }
@@ -534,7 +668,12 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
 pub(super) fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key, m: Modifiers, canvas: bool) -> bool {
     let screen = crate::chrome::Screen::of(&app.session.view).exit_command();
     let Some(id) = screen.or(app.session.view.full_screen.then_some("view.fullScreen")) else { return false };
-    if key != Key::Escape || !m.is_none() || !app.escape_free {
+    if key != Key::Escape
+        || !m.is_none()
+        || !app.escape_free
+        || app.canvas.ime_escaped_this_frame
+        || (!canvas && crate::ime_event_or_composing(ctx, None))
+    {
         return false;
     }
     // Escape with a button held (dragging a task pane's title bar, say) cancels the drag only.

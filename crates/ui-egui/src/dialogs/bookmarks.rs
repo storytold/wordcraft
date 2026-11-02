@@ -69,7 +69,8 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
         });
     });
     ui.checkbox(hidden, tl!("Hidden bookmarks"));
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let ime = crate::ime_event_or_composing(ui.ctx(), None);
+    let enter = !ime && ui.input(|i| i.key_pressed(egui::Key::Enter));
     if add || (enter && wordcraft_engine::cmd::insert::bookmark_name_ok(name.trim())) {
         let _ = app.run("insert.bookmark", json!({"name": name.trim()}));
         return true;
@@ -82,7 +83,7 @@ pub(super) fn bookmark(app: &mut WordApp, ui: &mut Ui, name: &mut String, by_loc
         let _ = app.run("edit.goto", json!({"bookmark": name.trim()}));
     }
     ui.add_space(8.0);
-    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut close = !ime && ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             close |= ui.button(if *deleted { tl!("Close") } else { tl!("Cancel") }).clicked();

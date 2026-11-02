@@ -207,7 +207,7 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     });
     let outside = ctx.input(|i| i.pointer.any_pressed())
         && ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| !shown.response.rect.contains(p) && !anchor.contains(p));
-    if close || outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if close || outside || (!crate::ime_event_or_composing(ctx, None) && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
         app.controls.popup = None;
     }
 }

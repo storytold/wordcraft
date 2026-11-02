@@ -72,7 +72,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             d.anchor,
         );
         if d.target.spot == Spot::Handle {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if !app.canvas.ime_escaped_this_frame && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 return true;
             }
             if down {

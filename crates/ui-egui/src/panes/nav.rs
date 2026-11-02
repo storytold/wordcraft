@@ -10,14 +10,19 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
     if let Some(t) = &picked {
         q = t.clone();
     }
+    crate::note_ime_composing_start(ui.ctx());
+    let ime_before = crate::ime_event_or_composing(ui.ctx(), None);
     let mut out = egui::TextEdit::singleline(&mut q).hint_text(tl!("Search document")).desired_width(f32::INFINITY).show(ui);
     let r = out.response.clone();
+    let was_ime = ime_before || crate::ime_event_or_composing(ui.ctx(), Some(r.id));
     if focus {
         // Focused with its text selected, so typing replaces it.
         r.request_focus();
         let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(q.chars().count()));
         out.state.cursor.set_char_range(Some(all));
         out.state.store(ui.ctx(), r.id);
+    } else if r.lost_focus() && was_ime && ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter)) {
+        r.request_focus();
     }
     if r.changed() || picked.is_some() {
         app.ui.nav_tab = "results".into();

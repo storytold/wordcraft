@@ -225,7 +225,9 @@ pub(crate) fn stops(app: &mut WordApp, ui: &Ui, hp: &Painter, g: &Ruler<'_>, tab
     }
 
     if let Some(mut d) = app.canvas.tab_drag.clone() {
-        let (esc, down, released) = ui.input(|i| (i.key_pressed(egui::Key::Escape), i.pointer.primary_down(), i.pointer.primary_released()));
+        let (esc, down, released) = ui.input(|i| {
+            (!app.canvas.ime_escaped_this_frame && i.key_pressed(egui::Key::Escape), i.pointer.primary_down(), i.pointer.primary_released())
+        });
         if esc || d.para.story != para.story || d.para.path != para.path {
             // Escape cancels (like a table-border drag, #217), and a drag whose paragraph the
             // caret has left is abandoned, never applied to the new one.

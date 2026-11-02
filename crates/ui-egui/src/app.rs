@@ -20,7 +20,7 @@ mod pictures;
 mod prefs;
 
 pub(crate) use commands::{discards_document, works_without_document};
-pub(crate) use input::control_click_as_secondary;
+pub(crate) use input::{control_click_as_secondary, ime_event_or_composing, note_ime_composing_start};
 
 impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
@@ -134,6 +134,7 @@ impl WordApp {
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
+            ime_flushing: false,
             read_aloud_error: None,
             autosave_path: None,
             saves_in_flight: Vec::new(),

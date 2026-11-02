@@ -221,7 +221,8 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
     }
     let mut close = false;
     let mut go: Option<Value> = None;
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let ime = crate::ime_event_or_composing(ui.ctx(), None);
+    let enter = !ime && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         let page_step = *what == GoToWhat::Page && target.trim().is_empty();
@@ -242,7 +243,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
                 GoToWhat::Bookmark => None,
             };
         }
-        if ui.button(tl!("Close")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ui.button(tl!("Close")).clicked() || (!ime && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
             close = true;
         }
     });

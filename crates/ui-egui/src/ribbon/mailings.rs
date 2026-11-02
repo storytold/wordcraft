@@ -112,14 +112,19 @@ fn record_box(ui: &mut Ui, app: &mut WordApp) {
     let key = egui::Id::unique("merge_record_box");
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| shown.clone());
     let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).align(egui::Align2::CENTER_TOP));
+    let ime = crate::ime_event_or_composing(ui.ctx(), Some(r.id));
     let r = r.on_hover_text(tl!("Go to Record"));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
     }
     if r.lost_focus() {
-        ui.data_mut(|d| d.remove::<String>(key));
-        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && text.trim() != shown {
-            let _ = app.run("mailings.goToRecord", json!({"record": text.trim()}));
+        if ime && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            r.request_focus();
+        } else {
+            ui.data_mut(|d| d.remove::<String>(key));
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && text.trim() != shown {
+                let _ = app.run("mailings.goToRecord", json!({"record": text.trim()}));
+            }
         }
     }
 }

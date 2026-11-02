@@ -21,7 +21,7 @@ impl WordApp {
     /// those collections are too large to add here.
     pub(super) fn ensure_caption_fonts(&mut self) {
         let stem = self.title_stem();
-        if stem.chars().any(wordcraft_fonts::is_cjk) {
+        if stem.chars().any(theme::is_hangul_or_cjk) {
             self.want_system_cjk = true;
         }
         let new = theme::faces_for_preedit(&stem, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
@@ -39,6 +39,13 @@ impl WordApp {
     /// Borrow the document fonts' fallback faces for them, as the caption does. Looked at once per
     /// document revision; CJK text uses the CJK UI font instead.
     pub(super) fn ensure_comment_fonts(&mut self) {
+        if !self.want_system_cjk
+            && (wordcraft_engine::cmd::smart_art::selected_smart_art(&self.session)
+                .is_some_and(|g| g.items.iter().any(|it| it.text.chars().any(theme::is_hangul_or_cjk)))
+                || self.session.clip_history.items().iter().any(|i| i.preview().chars().any(theme::is_hangul_or_cjk)))
+        {
+            self.want_system_cjk = true;
+        }
         let key = (self.session.document_id(), self.session.rev());
         if self.comment_fonts_for == Some(key) {
             return;
@@ -50,7 +57,13 @@ impl WordApp {
             chars.extend(c.author.chars());
             chars.extend(doc.plain_text(wordcraft_doc::StoryRef::Part(c.part)).chars());
         }
-        if chars.iter().any(|c| wordcraft_fonts::is_cjk(*c)) {
+        if chars.iter().any(|c| theme::is_hangul_or_cjk(*c))
+            || (!self.want_system_cjk
+                && (blocks_have_cjk(&doc.body, 0)
+                    || doc.parts.values().any(|part| blocks_have_cjk(&part.blocks, 0))
+                    || doc.styles.styles.iter().any(|s| !s.builtin && s.name.chars().any(theme::is_hangul_or_cjk))
+                    || doc.revisions.iter().any(|r| r.author.chars().any(theme::is_hangul_or_cjk))))
+        {
             self.want_system_cjk = true;
         }
         let text: String = chars.into_iter().collect();
@@ -70,7 +83,7 @@ impl WordApp {
     pub(super) fn ensure_recover_fonts(&mut self) {
         use std::hash::{Hash, Hasher};
         let docs = self.session.recovery_documents();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = std::hash::DefaultHasher::new();
         docs.iter().for_each(|d| d.name.hash(&mut hasher));
         let key = hasher.finish();
         if self.recover_fonts_for == Some(key) {
@@ -78,7 +91,7 @@ impl WordApp {
         }
         self.recover_fonts_for = Some(key);
         let chars: std::collections::BTreeSet<char> = docs.iter().flat_map(|d| d.name.chars()).collect();
-        if chars.iter().any(|c| wordcraft_fonts::is_cjk(*c)) {
+        if chars.iter().any(|c| theme::is_hangul_or_cjk(*c)) {
             self.want_system_cjk = true;
         }
         let text: String = chars.into_iter().collect();
@@ -100,7 +113,7 @@ impl WordApp {
         }
         self.recent_fonts_for = self.ui.recent.clone();
         for p in &self.ui.recent {
-            if p.chars().any(wordcraft_fonts::is_cjk) {
+            if p.chars().any(theme::is_hangul_or_cjk) {
                 self.want_system_cjk = true;
             }
             let new = theme::faces_for_preedit(p, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
@@ -139,7 +152,7 @@ impl WordApp {
                 text.push_str(s);
             }
         }
-        if text.chars().any(wordcraft_fonts::is_cjk) {
+        if text.chars().any(theme::is_hangul_or_cjk) {
             self.want_system_cjk = true;
         }
         let new = theme::faces_for_preedit(&text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
@@ -149,6 +162,42 @@ impl WordApp {
             self.canvas.ime_faces.extend(new);
             self.styled = false;
         }
+    }
+
+    /// Ensure interface/fallback fonts for `text` (an input method's composition or incoming
+    /// text) are installed in `ctx` so Korean/CJK and non-Latin compositions render cleanly even
+    /// when the interface language is English.
+    pub(crate) fn ensure_text_fonts(&mut self, ctx: &egui::Context, text: &str) {
+        if text.is_empty() || text.is_ascii() {
+            return;
+        }
+        if text.chars().any(theme::is_hangul_or_cjk) {
+            self.want_system_cjk = true;
+        }
+        let new = theme::faces_for_preedit(text, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+            wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+        });
+        let need_system_cjk = self.want_system_cjk && !self.fonts_system_cjk;
+        if !new.is_empty() || need_system_cjk {
+            for face in new {
+                if !self.canvas.ime_faces.iter().any(|f| f.id() == face.id()) {
+                    self.canvas.ime_faces.push(face);
+                }
+            }
+            self.styled = false;
+            let lang = i18n::Lang::from_pref(&self.ui.language);
+            self.install_ui_fonts(ctx, lang);
+            ctx.request_repaint();
+        }
+    }
+
+    /// Ensure interface/fallback fonts for the active canvas IME pre-edit are installed in `ctx`.
+    pub(crate) fn ensure_preedit_fonts(&mut self, ctx: &egui::Context) {
+        if self.canvas.ime_preedit.is_empty() || self.canvas.ime_preedit.is_ascii() {
+            return;
+        }
+        let preedit = self.canvas.ime_preedit.clone();
+        self.ensure_text_fonts(ctx, &preedit);
     }
 
     /// Install the interface fonts when the language, the CJK fallback, or a caption fallback
@@ -189,4 +238,16 @@ impl WordApp {
             self.styled = true;
         }
     }
+}
+
+/// Zero-allocation in-place scan for Hangul/CJK characters across `blocks`, skipping pure-ASCII
+/// paragraphs without building temporary story `String`s.
+fn blocks_have_cjk(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize) -> bool {
+    if depth >= 16 {
+        return false;
+    }
+    blocks.iter().any(|b| match b.as_ref() {
+        wordcraft_doc::Block::Para(p) => !p.text.is_ascii() && p.text.chars().any(theme::is_hangul_or_cjk),
+        wordcraft_doc::Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).any(|c| blocks_have_cjk(&c.blocks, depth + 1)),
+    })
 }

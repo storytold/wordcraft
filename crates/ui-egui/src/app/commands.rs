@@ -32,6 +32,10 @@ impl WordApp {
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
+        if !self.ime_flushing && !self.ime_origin && !self.canvas.ime_preedit.is_empty() && flushes_comment_drafts(id, &params) {
+            let ctx = self.ctx.clone();
+            crate::keys::flush_ime_preedit(self, ctx.as_ref());
+        }
         let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
@@ -130,6 +134,9 @@ impl WordApp {
             if let Err(e) = &r {
                 self.status(e.clone());
             }
+            return r;
+        }
+        if let Some(r) = self.settle_ime_before_execute(id, ctx.as_ref()) {
             return r;
         }
         // Web: saving and exporting become downloads.
@@ -879,6 +886,31 @@ impl WordApp {
         self.status(error.clone());
         Some(error)
     }
+
+    /// Settle any live canvas IME pre-edit before running `id`: `edit.undo` cancels only the
+    /// uncommitted pre-edit, while formatting/navigation/save commands flush it first.
+    fn settle_ime_before_execute(&mut self, id: &str, ctx: Option<&egui::Context>) -> Option<Result<Value, String>> {
+        if self.ime_flushing || self.ime_origin || self.canvas.ime_preedit.is_empty() {
+            return None;
+        }
+        if id == "edit.undo" {
+            self.canvas.ime_preedit.clear();
+            self.canvas.ime_preedit_range = None;
+            self.canvas.ime_interrupt_now = true;
+            self.canvas.ime_snap_caret = true;
+            if let Some(ctx) = ctx {
+                crate::caret_glide::snap_in(ctx);
+                ctx.memory_mut(|m| m.interrupt_ime());
+            }
+            self.session.clear_ime_joins();
+            self.canvas.ime_join_text = None;
+            return Some(Ok(json!({"cancelledPreedit": true})));
+        }
+        if flushes_ime_preedit(id) {
+            crate::keys::flush_ime_preedit(self, ctx);
+        }
+        None
+    }
 }
 
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
@@ -1038,6 +1070,39 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.startScreen"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
+}
+
+/// Commands that commit an active canvas IME pre-edit before running so uncommitted syllables are
+/// included in saves/exports/copies and committed at the old position before navigation or edits.
+fn flushes_ime_preedit(id: &str) -> bool {
+    if matches!(id, "format.state" | "para.state" | "review.comments" | "review.changes" | "review.issues" | "review.suggestions") {
+        return false;
+    }
+    id.starts_with("file.save")
+        || id.starts_with("file.export")
+        || id.starts_with("file.print")
+        || id.starts_with("select.")
+        || id.starts_with("caret.")
+        || id.starts_with("format.")
+        || id.starts_with("para.")
+        || id.starts_with("style.")
+        || (id.starts_with("styles.") && !matches!(id, "styles.list" | "styles.inspect"))
+        || id.starts_with("list.")
+        || id.starts_with("insert.")
+        || id.starts_with("table.")
+        || id.starts_with("review.")
+        || matches!(
+            id,
+            "edit.copy"
+                | "edit.cut"
+                | "edit.paste"
+                | "edit.pasteSpecial"
+                | "edit.redo"
+                | "edit.find"
+                | "edit.replace"
+                | "edit.replaceAll"
+                | "edit.goto"
+        )
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
