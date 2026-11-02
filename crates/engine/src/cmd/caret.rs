@@ -212,10 +212,25 @@ fn para_down(s: &mut Session, p: &Pos) -> Pos {
     }
 }
 
+/// Up (`dir` < 0) or Down: one line from the caret, keeping the column it came from (`goal_x`);
+/// past the story's first or last line, to its start or end. With `extend` the selection grows.
 fn vert(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     let ext = extend(v);
     let l = s.layout();
-    let from = s.sel.focus.clone();
+    let mut from = s.sel.focus.clone();
+    if !ext && !s.sel.is_collapsed() {
+        // Like Word, Up leaves a selection from its start and Down from its end. A selection that
+        // ends at the start of a line doesn't cover that line, so Down goes to it.
+        let (a, b) = s.sel.ordered();
+        from = if dir < 0 {
+            a
+        } else if l.line_bounds(&b, s.page_hint).is_some_and(|(start, _)| start == b) {
+            left(s, &b)
+        } else {
+            b
+        };
+        s.goal_x = None;
+    }
     let to = match l.vertical(&from, s.goal_x, dir, s.page_hint) {
         Some((p, gx)) => {
             s.goal_x = Some(gx);
