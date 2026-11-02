@@ -81,6 +81,86 @@ fn compare_at_word_level_still_matches_a_whole_unchanged_word() {
 }
 
 #[test]
+fn compare_keeps_text_boxes_of_the_original() {
+    // Text boxes are anchored in body paragraphs: one after changed text, one alone in an
+    // otherwise empty paragraph, one after text the revised document keeps. Their anchors must
+    // survive the compare (marked deleted, since the revised text has no boxes), so no text is lost.
+    for show_in in ["original", "revised", "new"] {
+        let mut s = Session::new(Document::from_text("Body one.\n\nKeep."));
+        let mut boxes = Vec::new();
+        for (para, off, text) in [(0usize, "Body one.".len(), "Alpha boxword gamma."), (1, 0, "Vml onlyword here."), (2, "Keep.".len(), "Kept box.")]
+        {
+            s.run("caret.set", &json!({"pos": Pos::body(para, off)})).unwrap();
+            let id = s.run("insert.textBox", &json!({"text": text})).unwrap()["story"].as_u64().unwrap() as u32;
+            boxes.push((id, text));
+        }
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        s.run("review.compare", &json!({"text": "Totally new first.\nSecond new line.\nKeep.", "showIn": show_in})).unwrap();
+        for (id, text) in &boxes {
+            let anchor = s.doc.text_box_anchor(*id).unwrap_or_else(|| panic!("{show_in}: the box \"{text}\" lost its anchor"));
+            assert_eq!(s.doc.plain_text(StoryRef::Part(*id)), *text);
+            let p = s.doc.para(anchor.story, &anchor.path).unwrap();
+            assert!(
+                p.props_of_char(anchor.off - wordcraft_doc::para::OBJ.len_utf8()).del.is_some(),
+                "{show_in}: the box \"{text}\" is not marked deleted"
+            );
+        }
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Body one.\n\nKeep.");
+        for (id, text) in &boxes {
+            assert!(s.doc.text_box_anchor(*id).is_some(), "{show_in}: rejecting lost the box \"{text}\"");
+            assert_eq!(s.doc.plain_text(StoryRef::Part(*id)), *text);
+        }
+    }
+}
+
+#[test]
+fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
+    // Text boxes in both documents, the revised one from a file: every anchor in the result
+    // shows a text box story of the result, and both documents' boxes are there, marked.
+    fn with_boxes(text: &str, boxes: &[(usize, usize, &str)]) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        for (para, off, text) in boxes {
+            s.run("caret.set", &json!({"pos": Pos::body(*para, *off)})).unwrap();
+            s.run("insert.textBox", &json!({"text": text})).unwrap();
+        }
+        s
+    }
+    /// Each text box anchored in the body: its story's text, and whether its anchor is deleted
+    /// or inserted.
+    fn boxes(d: &Document) -> Vec<(String, bool, bool)> {
+        let mut out = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                for id in o.text_boxes() {
+                    let part = d.parts.get(&id).unwrap_or_else(|| panic!("an anchor shows story {id}, which the result lacks"));
+                    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox, "story {id}");
+                    let c = p.props_of_char(off);
+                    out.push((d.plain_text(StoryRef::Part(id)), c.del.is_some(), c.ins.is_some()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+    let rev = with_boxes("Body one.\nNew middle.\nKeep.", &[(1, "New middle.".len(), "Revised box."), (2, "Keep.".len(), "Kept box.")]);
+    let path = std::env::temp_dir().join(format!("wc-compare-boxes-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+    let t = |t: &str, del, ins| (t.to_string(), del, ins);
+    for show_in in ["original", "revised", "new"] {
+        for (then, left) in [("review.acceptAll", "Revised box."), ("review.rejectAll", "Original box.")] {
+            let mut s = with_boxes("Body one.\nOld middle.\nKeep.", &[(1, "Old middle.".len(), "Original box."), (2, "Keep.".len(), "Kept box.")]);
+            s.run("review.compare", &json!({"path": path.to_string_lossy(), "showIn": show_in})).unwrap();
+            assert_eq!(boxes(&s.doc), [t("Kept box.", false, false), t("Original box.", true, false), t("Revised box.", false, true)], "{show_in}");
+            s.run(then, &json!({})).unwrap();
+            assert_eq!(boxes(&s.doc), [t("Kept box.", false, false), t(left, false, false)], "{show_in} {then}");
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared
