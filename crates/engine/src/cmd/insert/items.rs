@@ -267,7 +267,7 @@ pub(super) fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
     // `keep` (the menu's Dropped / In margin): a paragraph that has a drop cap keeps its own
     // lines, distance and font unless given here.
     let keep = !none && v.get("keep").and_then(Value::as_bool) == Some(true);
-    let (distance_given, font_given) = (p::f32(v, "distance").is_some(), font.is_some());
+    let (distance_given, font_given) = (p::f32(v, "distance").is_some(), v.get("font").is_some());
     crate::cmd::para::fmt(s, &|p| {
         let own = keep && p.drop_cap.is_some();
         p.drop_cap = (!none).then(|| if own && !lines_given { p.drop_cap.unwrap_or(lines) } else { lines });

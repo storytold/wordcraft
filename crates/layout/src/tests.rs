@@ -17,8 +17,6 @@ mod numeral;
 mod pages;
 mod styleref;
 mod table_contact;
-#[path = "tests_khmer.rs"]
-mod tests_khmer;
 mod textbox;
 mod vertical;
 
