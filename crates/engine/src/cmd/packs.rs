@@ -148,6 +148,20 @@ mod tests {
         });
     }
 
+    /// The bar's missing-pack cache keys on `index_generation`, so a refresh that returns a list
+    /// of the same length must still change it (CodeRabbit on #5208).
+    #[test]
+    fn a_refresh_of_the_same_length_still_changes_the_index_generation() {
+        with_backend(FixedBackend::sample(), |s, b| {
+            b.network.store(true, Ordering::Relaxed);
+            let n = packs::available_len();
+            let before = packs::index_generation();
+            s.run("proof.packs", &json!({"refresh": true})).unwrap();
+            assert_eq!(packs::available_len(), n, "same length");
+            assert_ne!(packs::index_generation(), before);
+        });
+    }
+
     #[test]
     fn unknown_and_hostile_locales_are_errors() {
         with_backend(FixedBackend::sample(), |s, b| {
