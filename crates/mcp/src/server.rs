@@ -22,7 +22,10 @@ const INSTRUCTIONS: &str = "WordCraft is a word processor (a Microsoft Word clon
 parameters with list_commands and run them with execute (or several with batch). Positions are \
 {story:\"body\", path:[block,(row,cell,block)...], off:byteOffset}. Typical flow: new_document → type_text \
 \"Hello\" → execute text.newParagraph → execute para.style {style:\"Heading 1\"} → select_text {text:\"Hello\"} → \
-execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}.";
+execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. \
+Several documents can be open: new_document and open_document open another one and make it active; \
+list_documents gives their ids, and `doc` on execute, batch and the other document tools works on one \
+without switching.";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";

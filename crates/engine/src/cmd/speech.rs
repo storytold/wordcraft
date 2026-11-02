@@ -35,7 +35,8 @@ fn read_aloud(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = p::bool(v, "skipCitations") {
         s.read_aloud.skip_citations = b;
     }
-    if s.read_aloud.state() != State::Stopped {
+    // A reading of this document pauses or carries on; one of another document gives way.
+    if s.read_aloud.state() != State::Stopped && s.read_aloud.document == Some(s.document_id()) {
         s.read_aloud.play_pause();
         return status(s, v);
     }
@@ -54,12 +55,13 @@ fn read_aloud(s: &mut Session, v: &Value) -> CmdResult {
     if queue.is_empty() {
         return Err(CmdError::Failed("there's nothing to read".into()));
     }
+    s.read_aloud.document = Some(s.document_id());
     s.read_aloud.start(queue);
     status(s, v)
 }
 
 fn play_pause(s: &mut Session, v: &Value) -> CmdResult {
-    if s.read_aloud.progress().1 == 0 {
+    if s.read_aloud.progress().1 == 0 || s.read_aloud.document != Some(s.document_id()) {
         return read_aloud(s, v);
     }
     s.read_aloud.play_pause();
@@ -92,7 +94,7 @@ fn skip_citations(s: &mut Session, v: &Value) -> CmdResult {
     let on = p::bool(v, "value").unwrap_or(!s.read_aloud.skip_citations);
     if on != s.read_aloud.skip_citations {
         s.read_aloud.skip_citations = on;
-        if let Some(cur) = s.read_aloud.current() {
+        if let Some(cur) = s.read_aloud.current().filter(|_| s.read_aloud.document == Some(s.document_id())) {
             let paused = s.read_aloud.state() == State::Paused;
             let queue = speech::sentences(&s.doc, &cur.start, None, on);
             if !queue.is_empty() {
