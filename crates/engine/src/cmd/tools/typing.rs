@@ -156,7 +156,11 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         && s.autocap.take_if(|c| c.backspaced && c.story == f.story && c.path == f.path && c.start == start && c.prev == prev).is_some()
         && ac.auto_add_first_letter
     {
-        s.prefs.autocorrect.add_exception(prev.clone());
+        if !s.preferences_locked {
+            s.prefs.autocorrect.add_exception(prev.clone());
+        }
+        // Honour this correction in the document even when learning a persistent exception
+        // is disabled for automation.
         sentence = false;
     }
     let day = ac.cap_days && DAYS.contains(&first);
