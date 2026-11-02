@@ -4259,7 +4259,7 @@ fn group_pattern_roundtrips() {
             let InlineObject::Group { children, .. } = &paras(&doc)[0].objects[0] else { panic!() };
             assert_eq!(children.len(), expected.len(), "{paint}; cycle {cycle}");
             for (child, (fill, pattern)) in children.iter().zip(&expected) {
-                let InlineObject::Shape { fill: actual, extra, .. } = child else { panic!() };
+                let InlineObject::Shape { fill: actual, extra, .. } = &child.obj else { panic!() };
                 assert_eq!(actual, fill, "{paint}; cycle {cycle}");
                 assert_eq!(extra.pattern.as_deref(), pattern.as_ref(), "{paint}; cycle {cycle}");
             }
