@@ -144,6 +144,67 @@ fn find_replace_and_go_to_are_one_dialog() {
     }
 }
 
+/// #4327: View › Macros opens a dialog that runs, deletes and records macros; the command with
+/// a name to run or delete (what scripts send) still acts without one.
+#[test]
+fn the_macros_button_opens_a_dialog_that_runs_deletes_and_records() {
+    fn press(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str) {
+        use egui_kittest::kittest::Queryable;
+        let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Macros")))).expect("the dialog is open");
+        h.query_all_by_label(label).find(|n| dialog.contains(n.rect().center())).expect(label).click();
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+    let mut app = app_with("Start");
+    for name in ["Greet", "Spare"] {
+        app.run("tools.macros", json!({"define": {"name": name, "steps": [{"command": "text.insert", "params": {"text": name}}]}})).unwrap();
+    }
+    assert!(app.dialog.is_none(), "defining a macro opens nothing");
+    assert_eq!(app.run("tools.macros", json!({})).unwrap(), json!({"pending": "macros"}));
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Macros { .. })));
+
+    press(&mut h, "Spare");
+    press(&mut h, "Delete");
+    let names: Vec<&String> = h.state().session.macros.keys().collect();
+    assert_eq!(names, ["Greet"]);
+    assert!(h.state().dialog.is_some(), "Delete leaves the dialog open");
+
+    press(&mut h, "Greet");
+    press(&mut h, "Run");
+    assert!(h.state().dialog.is_none());
+    assert!(body_of(h.state()).contains("Greet"), "the macro ran");
+
+    // A macro whose name has spaces around it (only a script can make one) runs by its exact name.
+    h.state_mut()
+        .run("tools.macros", json!({"define": {"name": " Pad ", "steps": [{"command": "text.insert", "params": {"text": "Padded"}}]}}))
+        .unwrap();
+    h.state_mut().dialog = Dialog::open("macros", h.state_mut());
+    if let Some(Dialog::Macros { name }) = &mut h.state_mut().dialog {
+        *name = " Pad ".into();
+    }
+    h.run_steps(3);
+    press(&mut h, "Run");
+    assert!(h.state().dialog.is_none());
+    assert!(body_of(h.state()).contains("Padded"), "the macro with spaces in its name ran");
+
+    // Record starts a recording under the typed name; the dialog then offers to stop it.
+    h.state_mut().dialog = Dialog::open("macros", h.state_mut());
+    if let Some(Dialog::Macros { name }) = &mut h.state_mut().dialog {
+        *name = "Fresh".into();
+    }
+    h.run_steps(3);
+    press(&mut h, "Record…");
+    assert_eq!(h.state().session.recording.as_ref().map(|(n, _)| n.as_str()), Some("Fresh"));
+    assert!(h.state().dialog.is_none());
+}
+
+fn body_of(app: &WordApp) -> String {
+    app.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
+}
+
 fn app_with(text: &str) -> WordApp {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     let _ = app.run("document.setText", json!({"text": text}));

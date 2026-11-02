@@ -522,6 +522,9 @@ fn enter_finishes_a_word_for_autocorrect() {
 fn autocorrect_finds_the_word_after_a_wide_space() {
     let s = typed("a\u{a0}teh x\u{3000}teh ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{a0}the x\u{3000}the ");
+    // A narrow no-break space and a figure space too.
+    let s = typed("a\u{202f}teh x\u{2007}teh ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{202f}the x\u{2007}the ");
     let s = typed("end.\u{a0}hello end.\u{3000}world ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "End.\u{a0}Hello end.\u{3000}World ");
     let s = typed("the\u{a0}1st and\u{3000}22nd ");
@@ -867,6 +870,67 @@ fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
     run(&mut s, "edit.undo", json!({}));
     run(&mut s, "review.rejectAll", json!({}));
     assert!(s.doc.body.get(1).and_then(|b| b.as_para()).is_some_and(|p| p.text == "+--+------+"));
+    // The table was inserted untracked, so Reject All keeps it before the characters.
+    assert_eq!(s.doc.body.len(), 2, "{:?}", paras(&s));
+    assert!(matches!(s.doc.body.first().map(|b| &**b), Some(wordcraft_doc::Block::Table(_))));
+}
+
+#[test]
+fn a_border_line_at_the_top_with_formatting_markup_off_is_not_a_formatting_change() {
+    // Track Changes on with formatting left out of the markup: the characters are still marked
+    // deleted, the border is not a formatting change, and Reject All keeps it.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.prefs.markup.track_formatting = false;
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    assert!(p.props.fmt_change.is_none(), "{:?}", p.props.fmt_change);
+    assert!(all_deleted(&s, 0, "---"), "{:?}", paras(&s));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "---");
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+}
+
+#[test]
+fn a_border_line_at_the_top_keeps_the_authors_own_earlier_formatting_change() {
+    // Ana centers the characters' paragraph, then her Enter gives it the border: the paragraph
+    // keeps Ana's one formatting change, which holds the paragraph from before both.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let rev = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.fmt_change.as_deref()).map(|c| c.rev);
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.borders.and_then(|b| b.bottom).is_some());
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.map(|c| c.rev), rev);
+    assert_eq!(ch.map(|c| (c.old.align, c.old.borders.and_then(|b| b.bottom).is_some())), Some((None, false)));
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.align, p.props.borders.and_then(|b| b.bottom).is_some()), ("---", None, false));
+}
+
+#[test]
+fn a_border_line_the_content_control_locks_refuse_to_delete_stays_as_backspace_leaves_it() {
+    // "---" inside an editable rich text control that sits in one locked against editing:
+    // Backspace can't delete its characters, so Enter is refused too, untracked, and the line
+    // stays as it is.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("A\nB\n---\nC\nD"));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(4, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "outer"}));
+    s.sel = crate::Selection { anchor: Pos::body(1, 0), focus: Pos::body(3, 1) };
+    run(&mut s, "developer.richText", json!({"tag": "inner"}));
+    run(&mut s, "developer.properties", json!({"control": "outer", "lockEdit": true}));
+    let before = s.doc.clone();
+    for key in ["text.backspace", "text.newParagraph"] {
+        s.sel = crate::Selection::caret(Pos::body(2, 3));
+        assert!(s.run(key, &json!({})).is_err(), "{key}");
+        assert_eq!(s.doc, before, "{key}");
+    }
+    assert!(s.doc.para_at(&Pos::body(2, 0)).is_some_and(|p| p.text == "---" && p.props.borders.is_none()));
 }
 
 #[test]
@@ -1048,6 +1112,36 @@ fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
     s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: u8::MAX });
     run(&mut s, "outline.demote", json!({}));
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+}
+
+#[test]
+fn with_tab_indents_on_tab_in_a_table_cell_moves_to_the_next_cell() {
+    let mut s = typed("+--+--+\nA");
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((0, 1)));
+    let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
+    let a = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!((a.text.as_str(), a.props.indent_left, a.props.indent_first), ("A", None, None));
+}
+
+#[test]
+fn with_tab_indents_off_backspace_before_an_indented_paragraph_joins_it() {
+    // The paragraph's own left indent, in points or in characters, doesn't stop the join.
+    for chars in [false, true] {
+        let mut s = typed("One\nTwo");
+        let second = Pos::body(1, 0);
+        let p = s.doc.para_mut(StoryRef::Body, &second.path).unwrap();
+        if chars {
+            p.props.indent_left_chars = Some(6.0);
+        } else {
+            p.props.indent_left = Some(36.0);
+        }
+        s.sel = crate::Selection::caret(second);
+        typ(&mut s, "\u{8}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "OneTwo", "indent in characters: {chars}");
+    }
 }
 
 #[test]
