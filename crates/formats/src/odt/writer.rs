@@ -1,4 +1,5 @@
 use super::{Align, FBlock, FTable, Fmt, HashMap, Inline, Kind, Para, RevMark, Rgb, VAlign, mime_of, model};
+use wordcraft_doc::control::ControlKind;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
 
 mod charts;
@@ -463,6 +464,26 @@ impl Writer {
                 }
                 // A form control (in the body: forms belong to the text, ODF 1.3 §13.2), placed
                 // here; elsewhere, or of a kind forms don't have, its text.
+                // A control read from a placeholder (§7.7.2), in the body or anywhere else: a
+                // placeholder while it shows it, else what was typed in its place.
+                Inline::Control { control, text, fmt } if super::forms::is_placeholder(control) => {
+                    if control.showing_placeholder && control.kind == (ControlKind::Text { multi_line: false }) {
+                        // Its description: the control's title.
+                        let start = match control.form_xml.strip_suffix('>') {
+                            Some(head) if !control.title.is_empty() => format!("{head} text:description=\"{}\">", x(&control.title)),
+                            _ => control.form_xml.clone(),
+                        };
+                        let el = format!("{start}{}</text:placeholder>", x(control.placeholder_shown()));
+                        match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
+                            Some(n) => out.push_str(&format!("<text:span text:style-name=\"{n}\">{el}</text:span>")),
+                            None => out.push_str(&el),
+                        }
+                        prev_space = false;
+                    } else {
+                        self.plain_inlines(&[Inline::Text(text.clone(), fmt.clone())], out);
+                        prev_space = text.ends_with(' ');
+                    }
+                }
                 Inline::Control { control, text, fmt } => {
                     let id = format!("control{}", self.forms.len() + 1);
                     match super::forms::form_xml(control, text, &id, self.forms.len() + 1).filter(|_| self.forms_allowed) {
@@ -779,8 +800,11 @@ impl Writer {
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {
+                // Its share of the table too (§20.334 `style:rel-column-width`), so a table filling
+                // the margins of a narrower page keeps its columns' proportions.
+                let rel = if w.is_finite() { (w.clamp(0.0, 1584.0) * 100.0).round().max(1.0) as u32 } else { 1 };
                 s.push_str(&format!(
-                    "<style:style style:name=\"Table{tn}.C{}\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"{}\"/></style:style>",
+                    "<style:style style:name=\"Table{tn}.C{}\" style:family=\"table-column\"><style:table-column-properties style:column-width=\"{}\" style:rel-column-width=\"{rel}*\"/></style:style>",
                     c + 1,
                     pt(*w)
                 ));

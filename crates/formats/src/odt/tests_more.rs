@@ -30,6 +30,7 @@ mod outline;
 mod page_setup;
 mod para_borders;
 mod parts;
+mod placeholders;
 mod polygons;
 mod rotation;
 mod rtl;

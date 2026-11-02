@@ -118,3 +118,26 @@ fn line_numbering_is_on_unless_it_says_otherwise() {
         assert_eq!(d.last_section.line_numbers.is_some(), on, "{attr}");
     }
 }
+
+#[test]
+fn a_page_layout_without_a_size_is_the_default_pages_size() {
+    // LibreOffice's templates often state margins but no page size: it is the default paper's
+    // (the user's region's in WordCraft, as LibreOffice uses its own default).
+    let styles = format!(
+        r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:margin-top="1in" fo:margin-bottom="1in" fo:margin-left="1.25in" fo:margin-right="1.25in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#,
+        crate::odt::tests::NS_T
+    );
+    let content = format!(
+        "<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>",
+        crate::odt::tests::NS_T
+    );
+    let bytes = crate::odt::tests::package(&content, Some(&styles));
+    let a4 = wordcraft_doc::SectionProps { page_w: 595.3, page_h: 841.9, ..Default::default() };
+    let d = crate::import_on("odt", &bytes, &a4).unwrap().unwrap();
+    assert_eq!((d.last_section.page_w, d.last_section.page_h), (595.3, 841.9));
+    assert_eq!((d.last_section.margin_top, d.last_section.margin_left), (72.0, 90.0));
+    // A stated size is the file's.
+    let sized = styles.replace(r#"<style:page-layout-properties "#, r#"<style:page-layout-properties fo:page-width="5in" fo:page-height="7in" "#);
+    let d = crate::import_on("odt", &crate::odt::tests::package(&content, Some(&sized)), &a4).unwrap().unwrap();
+    assert_eq!((d.last_section.page_w, d.last_section.page_h), (360.0, 504.0));
+}

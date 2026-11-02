@@ -109,6 +109,8 @@ pub(in crate::odt) struct OpenField {
     /// A sequence's reference name: a bookmark over the caption's label and number, which
     /// references to it show.
     pub(in crate::odt) anchor: Option<String>,
+    /// Fixed without a value to be fixed at: a field while it shows nothing, else its text.
+    pub(in crate::odt) fixed: bool,
 }
 
 impl Body<'_> {
@@ -312,7 +314,7 @@ impl Body<'_> {
 
     /// Put the field read so far into the paragraph.
     pub(in crate::odt) fn end_field(&mut self) {
-        let Some(OpenField { instr, result, mut fmt, anchor, .. }) = self.field.take() else { return };
+        let Some(OpenField { instr, result, mut fmt, anchor, fixed, .. }) = self.field.take() else { return };
         fmt.ins = self.open_insertion();
         if self.para.is_none() {
             self.start_para(None, None);
@@ -326,7 +328,11 @@ impl Body<'_> {
                 let at = if before.trim() == label { 0 } else { p.inlines.len() };
                 p.inlines.insert(at, Inline::Anchor(name.clone()));
             }
-            p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
+            if fixed && !result.trim().is_empty() {
+                p.push_text(&result, &fmt);
+            } else {
+                p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
+            }
             if let Some(name) = anchor {
                 p.inlines.push(Inline::AnchorEnd(name));
             }

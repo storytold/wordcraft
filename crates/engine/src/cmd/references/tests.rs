@@ -327,6 +327,20 @@ fn document_information_fields_show_the_properties() {
     assert_eq!(got, ["Budget", "plan; costs", "Draft for review", "Grace", "7", "VII", "11", "iii"]);
 }
 
+/// USERNAME and USERINITIALS show the user's name and initials from File › Options (an ODT's
+/// `text:author-name` opens as USERNAME); a quoted text after the name is shown instead.
+#[test]
+fn user_name_fields_show_the_users_name() {
+    let doc = wordcraft_doc::Document::from_text("one");
+    let codes = ["USERNAME", "USERINITIALS", r"USERNAME \* Upper", r#"USERNAME "Someone Else""#];
+    let (mut s, hdr) = header_fields_session(doc, &codes);
+    s.author = "Ada Lovelace".into();
+    s.initials = String::new();
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["Ada Lovelace", "AL", "ADA LOVELACE", "Someone Else"]);
+}
+
 /// A quoted text after TITLE, SUBJECT, AUTHOR, KEYWORDS or COMMENTS replaces the property
 /// (at most 255 characters); the field and later ones, DOCPROPERTY too, show the new value.
 #[test]

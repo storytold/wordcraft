@@ -32,6 +32,28 @@ const PREFIXES: [&str; 19] = [
     "loext", "xml",
 ];
 
+/// The `text:placeholder-type` (§19.851) of a placeholder: what it stands for.
+pub(in crate::odt) fn placeholder_type(t: Option<&str>) -> &'static str {
+    match t.map(str::trim) {
+        Some("table") => "table",
+        Some("text-box") => "text-box",
+        Some("image") => "image",
+        Some("object") => "object",
+        _ => "text",
+    }
+}
+
+/// A placeholder's start tag, which a content control read from one keeps (in
+/// [`ContentControl::form_xml`]) to be written back as one.
+pub(in crate::odt) fn placeholder_start(kind: &str) -> String {
+    format!("<text:placeholder text:placeholder-type=\"{kind}\">")
+}
+
+/// Whether control `c` was read from a placeholder.
+pub(in crate::odt) fn is_placeholder(c: &ContentControl) -> bool {
+    c.form_xml.starts_with("<text:placeholder ")
+}
+
 /// A control read: its content control and the text it holds.
 pub(in crate::odt) type Read = (ContentControl, String);
 
@@ -261,7 +283,7 @@ pub(in crate::odt) fn form_xml(c: &ContentControl, text: &str, id: &str, n: usiz
     };
     // A control kept verbatim, with its new id, while it is still the control it was read as
     // (made another kind, it is written as that).
-    if !c.form_xml.is_empty() && c.kind == (ControlKind::Text { multi_line: false }) {
+    if !c.form_xml.is_empty() && c.kind == (ControlKind::Text { multi_line: false }) && !is_placeholder(c) {
         let end = c.form_xml.find(|ch: char| ch.is_whitespace() || ch == '>')?;
         let (head, rest) = (c.form_xml.get(..end)?, c.form_xml.get(end..)?);
         return Some(size((format!("{head} xml:id=\"{id}\" form:id=\"{id}\"{rest}"), 72.0, 20.0)));

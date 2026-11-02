@@ -363,7 +363,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// [`parse`], with the last section's properties (the others are on the paragraphs that end them).
 fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
-    parse_tracked(bytes).map(|p| (p.flow, p.last))
+    parse_tracked(bytes, default_paper()).map(|p| (p.flow, p.last))
 }
 
 /// What [`parse_tracked`] reads besides the flow.
@@ -432,8 +432,18 @@ fn hyphenation(blocks: &mut [FBlock]) -> bool {
     any
 }
 
-/// [`parse_full`], plus what the document holds outside the flow.
-fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
+/// The content of a package that has none: an empty text.
+const EMPTY_CONTENT: &str = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:text><text:p/></office:text></office:body></office:document-content>"#;
+
+/// The page size of a page layout that states none: WordCraft's default page's.
+fn default_paper() -> (f32, f32) {
+    let d = SectionProps::default();
+    (d.page_w, d.page_h)
+}
+
+/// [`parse_full`], plus what the document holds outside the flow. A page layout that states no
+/// size (§20.215 `fo:page-width` is optional) is `paper` (width, height) in size.
+fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -441,13 +451,18 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
             return Err(format!("ODT: not a text document ({})", mt.trim()));
         }
     }
-    let content = read_entry(&mut z, "content.xml").ok_or("ODT: content.xml is missing")?;
+    let styles_xml = read_entry(&mut z, "styles.xml");
+    // A template of styles only (LibreOffice's style templates) has no content: an empty text.
+    let content = match read_entry(&mut z, "content.xml") {
+        Some(c) => c,
+        None if styles_xml.is_some() => EMPTY_CONTENT.as_bytes().to_vec(),
+        None => return Err("ODT: content.xml is missing".into()),
+    };
     let mut styles = Styles::default();
     let mut pages = Pages::default();
-    let styles_xml = read_entry(&mut z, "styles.xml");
     if let Some(s) = &styles_xml {
         styles.read(s, false);
-        pages = read_pages(s);
+        pages = read_pages(s, paper);
     }
     styles.read(&content, true);
     let settings = read_entry(&mut z, "settings.xml");
@@ -471,6 +486,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
     };
     let objects = (entries.as_slice(), &manifest);
     let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects)).unwrap_or_default();
+    first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     events(&content, |ev| body.feed(ev));
@@ -533,6 +549,12 @@ fn parse_tracked(bytes: &[u8]) -> Result<Parsed, String> {
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    import_on(bytes, &SectionProps::default())
+}
+
+/// [`import`], with `page` the default page (the user's region's): a page layout that states no
+/// size is `page`'s size, as LibreOffice makes it its default paper's.
+pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> {
     model::begin_import();
     let Parsed {
         flow,
@@ -558,7 +580,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         sources,
         kept,
         hidden_controls,
-    } = parse_tracked(bytes)?;
+    } = parse_tracked(bytes, (page.page_w, page.page_h))?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
     // Elements can't hold a NUL: it parts them.
@@ -612,6 +634,9 @@ pub(super) struct Pages {
     pub(super) masters: HashMap<String, SectionProps>,
     pub(super) first: Option<SectionProps>,
     pub(super) first_name: Option<String>,
+    /// Each master page's next one (§19.511 `style:next-style-name`): the page style the pages
+    /// after its first take.
+    pub(super) next: HashMap<String, String>,
     /// What the document's first page style and its note and line numbering settings say for
     /// the whole document.
     pub(super) doc: PageDoc,
@@ -680,7 +705,7 @@ struct Layout {
     footer: Band,
 }
 
-fn read_pages(xml: &[u8]) -> Pages {
+fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     let mut layouts: HashMap<String, Layout> = HashMap::new();
     let mut cur: Option<String> = None;
     // Inside a layout's footer style (else its header style).
@@ -688,6 +713,7 @@ fn read_pages(xml: &[u8]) -> Pages {
     // Master pages: name, layout, whether a header and a footer show.
     let mut masters: Vec<(String, String, bool, bool)> = Vec::new();
     let mut in_master = false;
+    let mut nexts: HashMap<String, String> = HashMap::new();
     let mut doc = PageDoc::default();
     let mut lines = None;
     events(xml, |ev| match ev {
@@ -732,6 +758,9 @@ fn read_pages(xml: &[u8]) -> Pages {
                 if let (Some(n), Some(l)) = (get(&a, "style:name"), get(&a, "style:page-layout-name")) {
                     masters.push((n.to_string(), l.to_string(), false, false));
                     in_master = true;
+                    if let Some(next) = get(&a, "style:next-style-name").map(str::trim).filter(|x| !x.is_empty() && *x != n) {
+                        nexts.insert(n.to_string(), next.to_string());
+                    }
                 }
             }
             "header" | "footer" if in_master && q.starts_with("style:") && get(&a, "style:display") != Some("false") => {
@@ -752,10 +781,10 @@ fn read_pages(xml: &[u8]) -> Pages {
         },
         Ev::Text(_) => {}
     });
-    let mut pages = Pages { doc, ..Default::default() };
+    let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
         let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb }) = layouts.get(&layout) else { continue };
-        let mut sec = SectionProps::default();
+        let mut sec = SectionProps { page_w: paper.0, page_h: paper.1, ..SectionProps::default() };
         apply_layout(a, &mut sec);
         sec.line_numbers.clone_from(&lines);
         if pages.first.is_none() {
@@ -787,10 +816,31 @@ fn read_pages(xml: &[u8]) -> Pages {
     pages
 }
 
+/// A master page followed by another (`style:next-style-name`, LibreOffice's "First Page"
+/// before "Default") is a section with a different first page: its own headers and footers on
+/// the first page (none there is an empty one), the next master's on the pages after it. Its
+/// page size and margins are its own (the first page's).
+fn first_pages(pages: &mut Pages) {
+    let names: Vec<(String, String)> = pages.next.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+    for (name, next) in names {
+        let Some(after) = pages.masters.get(&next).cloned() else { continue };
+        let Some(sec) = pages.masters.get_mut(&name) else { continue };
+        let (own_header, own_footer) = (sec.headers.default, sec.footers.default);
+        sec.headers = after.headers;
+        sec.footers = after.footers;
+        sec.headers.first = own_header;
+        sec.footers.first = own_footer;
+        sec.title_page = true;
+        if pages.first_name.as_deref() == Some(name.as_str()) {
+            pages.first = Some(sec.clone());
+        }
+    }
+}
+
 /// Replace `sec` with the page setup of the first master page in `styles.xml`, if any.
 #[cfg(test)]
 pub(super) fn apply_page_layout(xml: &[u8], sec: &mut SectionProps) {
-    if let Some(first) = read_pages(xml).first {
+    if let Some(first) = read_pages(xml, default_paper()).first {
         *sec = first;
     }
 }

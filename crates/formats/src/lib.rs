@@ -50,6 +50,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
 pub fn import_on(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Option<Result<Document, String>> {
     let ext = ext.trim_start_matches('.').to_ascii_lowercase();
     let mut doc = match ext.as_str() {
+        "odt" | "ott" => return Some(odt::import_on(bytes, page)),
         "txt" | "text" => txt::import_on(bytes, page),
         "md" | "markdown" => markdown::import_on(&txt::decode(bytes), page),
         "html" | "htm" | "xhtml" => html::import_on(&html::decode(bytes), &|_| None, page),

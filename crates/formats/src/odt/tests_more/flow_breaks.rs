@@ -88,3 +88,16 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     assert_eq!((pt.props.align, pt.props.width_pct), (None, None));
     assert!(content_of(&export(&plain).unwrap()).contains(r#"table:align="margins""#));
 }
+
+#[test]
+fn columns_are_written_with_their_share_of_the_table() {
+    // A table filling the margins of a page narrower than it was made for keeps its columns'
+    // proportions only when they are given as shares too (LibreOffice scales by them).
+    let styles = r#"<style:style style:name="A" style:family="table-column"><style:table-column-properties style:column-width="1in"/></style:style><style:style style:name="B" style:family="table-column"><style:table-column-properties style:column-width="3in"/></style:style>"#;
+    let d = doc(
+        styles,
+        r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
+    );
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"style:column-width="72pt" style:rel-column-width="7200*""#) && c.contains(r#"style:rel-column-width="21600*""#), "{c}");
+}

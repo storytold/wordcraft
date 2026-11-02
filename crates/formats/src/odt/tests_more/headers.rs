@@ -153,3 +153,35 @@ fn header_and_footer_distances_round_trip() {
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
     assert!(near(s.header, 30.0) && near(s.margin_top, 80.0) && near(s.footer, 20.0) && near(s.margin_bottom, 70.0), "{s:?}");
 }
+
+#[test]
+fn a_first_page_master_followed_by_another_is_a_different_first_page() {
+    // LibreOffice's "First Page" style (no header) passes to "Standard" (a header) after the
+    // first page: one section, the first page's header empty, the others' Standard's.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:style style:name="Opening" style:family="paragraph" style:master-page-name="First_20_Page"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="1in"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-top="2in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Running head</text:p></style:header></style:master-page><style:master-page style:name="First_20_Page" style:page-layout-name="pm2" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p text:style-name="Opening">Letter.</text:p><text:p>More.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    let sec = &d.last_section;
+    assert!(sec.title_page, "a different first page");
+    let first_text: String = sec
+        .headers
+        .first
+        .and_then(|id| d.parts.get(&id))
+        .map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect())
+        .unwrap_or_default();
+    assert_eq!(first_text, "", "{:?}", sec.headers);
+    let head = sec.headers.default.and_then(|id| d.parts.get(&id)).expect("the running head");
+    assert_eq!(head.blocks[0].as_para().map(|p| p.text.as_str()), Some("Running head"));
+    // The first page's own size and margins.
+    assert_eq!(sec.margin_top, 144.0);
+    // Written back: an empty first-page header.
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    let first = s.split("<style:header-first>").nth(1).and_then(|r| r.split("</style:header-first>").next()).unwrap_or("missing");
+    assert!(first.trim().starts_with("<text:p") && !first.contains("Running head") && s.contains("Running head"), "{s}");
+}

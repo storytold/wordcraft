@@ -38,7 +38,10 @@ const SIMPLE: &[(&str, &str)] = &[
 /// The Word field code for the `text:` field element `local` with attributes `a`, or `None`
 /// when it is no field WordCraft keeps (then its text is read as text).
 pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let fixed = get(a, "text:fixed").is_some_and(|v| v.trim() == "true");
+    // Fixed, unless it holds no value to be fixed at (LibreOffice's templates: a date that shows
+    // the day the document is made from them).
+    let fixed =
+        get(a, "text:fixed").is_some_and(|v| v.trim() == "true") && (get(a, "text:date-value").is_some() || get(a, "text:time-value").is_some());
     // A name a field code can hold as one word.
     let name = |k: &str| {
         get(a, k)

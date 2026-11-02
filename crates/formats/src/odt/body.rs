@@ -51,6 +51,8 @@ pub(super) struct Body<'a> {
     /// A ruby being read: its base text, ruby text, which of them the text goes to (`true`:
     /// the ruby), and the base's formatting.
     ruby: Option<(String, String, Option<bool>, Fmt)>,
+    /// A placeholder being read (§7.7.2 `text:placeholder`): its text, its run's formatting.
+    placeholder: Option<(String, Fmt, &'static str, String)>,
     /// The form controls of `office:forms`, placed where a `draw:control` names them.
     forms: super::forms::FormsReader,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
@@ -161,6 +163,7 @@ impl<'a> Body<'a> {
             break_next: false,
             sources: Vec::new(),
             ruby: None,
+            placeholder: None,
             index_marks: Vec::new(),
             conn_ids: HashMap::new(),
             shape_places: HashMap::new(),
@@ -280,6 +283,31 @@ impl<'a> Body<'a> {
                         (false, true) | (true, false) => self.push_inline(Inline::Text(if base.is_empty() { ruby } else { base }, fmt)),
                         (true, true) => {}
                     }
+                }
+            }
+            // A placeholder (§7.7.2): a plain text content control showing its text until
+            // something is typed in its place.
+            Ev::Start(q, a) if q == "text:placeholder" && self.para.is_some() && self.field.is_none() && self.placeholder.is_none() => {
+                // Its description (§19.800 `text:description`): the control's title.
+                let about = get(&a, "text:description").map(|d| d.chars().take(MAX_FIELD_RESULT).collect()).unwrap_or_default();
+                self.placeholder = Some((String::new(), self.cur_fmt(), super::forms::placeholder_type(get(&a, "text:placeholder-type")), about));
+            }
+            Ev::Text(t) if self.placeholder.is_some() => {
+                if let Some((s, ..)) = &mut self.placeholder {
+                    let room = MAX_FIELD_RESULT.saturating_sub(s.len());
+                    s.extend(t.chars().take(room));
+                }
+            }
+            Ev::End(q) if q == "text:placeholder" && self.placeholder.is_some() => {
+                if let Some((text, fmt, kind, about)) = self.placeholder.take() {
+                    let mut control = wordcraft_doc::control::ContentControl::new(wordcraft_doc::control::ControlKind::Text { multi_line: false });
+                    control.placeholder_text.clone_from(&text);
+                    control.showing_placeholder = true;
+                    // Its element, so it is written back a placeholder of its type.
+                    control.form_xml = super::forms::placeholder_start(kind);
+                    control.title = about;
+                    let shown = control.placeholder_shown().to_string();
+                    self.push_inline(Inline::Control { control: Box::new(control), text: shown, fmt });
                 }
             }
             Ev::Text(t) if self.ruby.is_some() => {
@@ -963,7 +991,8 @@ impl Body<'_> {
             let anchor = (local(q) == "sequence")
                 .then(|| get(a, "text:ref-name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 1024).map(String::from))
                 .flatten();
-            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt(), anchor });
+            let fixed = get(a, "text:fixed").is_some_and(|v| v.trim() == "true");
+            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt(), anchor, fixed });
             return true;
         }
         match local(q) {

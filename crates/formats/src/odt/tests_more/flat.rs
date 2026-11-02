@@ -143,3 +143,27 @@ fn a_template_is_saved_and_opened_as_one() {
     // A document is still a document.
     assert_eq!(crate::odt::tests::entry(&crate::export("odt", &d).unwrap().unwrap(), "mimetype"), crate::odt::TEXT_MIME);
 }
+
+#[test]
+fn a_template_of_styles_only_opens_empty_with_its_styles() {
+    // LibreOffice's style templates hold `styles.xml` and no `content.xml`.
+    use std::io::Write;
+    let styles = format!(
+        r#"<office:document-styles {}><office:styles><style:style style:name="Standard" style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:style></office:styles></office:document-styles>"#,
+        crate::odt::tests::NS_T
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", crate::odt::TEMPLATE_MIME), ("styles.xml", styles.as_str())] {
+        z.start_file(name, o).unwrap();
+        z.write_all(data.as_bytes()).unwrap();
+    }
+    let d = crate::import("ott", &z.finish().unwrap().into_inner()).unwrap().unwrap();
+    assert_eq!(d.body.len(), 1);
+    assert_eq!(d.styles.default_chr.font.as_deref(), Some("DejaVu Serif"));
+    // Without styles either, it isn't a document.
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    z.start_file("mimetype", o).unwrap();
+    z.write_all(crate::odt::TEXT_MIME.as_bytes()).unwrap();
+    assert!(crate::import("odt", &z.finish().unwrap().into_inner()).unwrap().is_err());
+}

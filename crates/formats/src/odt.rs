@@ -66,7 +66,7 @@ pub use flat::{export_flat, import_flat};
 use import::Pages;
 #[cfg(test)]
 use import::{Pictures, apply_page_layout, read_entry, read_meta};
-pub use import::{import, parse};
+pub use import::{import, import_on, parse};
 #[cfg(test)]
 use limits::MAX_XML_DEPTH;
 pub use package::{TEMPLATE_MIME, TEXT_MIME, export, export_template};

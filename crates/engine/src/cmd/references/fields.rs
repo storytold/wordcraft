@@ -234,6 +234,16 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
+                // The user's name and initials (File › Options › General); a quoted text after
+                // the name is shown instead.
+                "USERNAME" | "USERINITIALS" => {
+                    let v = match new_property_value(instr) {
+                        Some(v) => v.to_string(),
+                        None if name == "USERNAME" => s.author.clone(),
+                        None => s.user_initials(),
+                    };
+                    updates.push((k, text_result(instr, v)));
+                }
                 "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
                 "NUMCHARS" => {
                     let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();

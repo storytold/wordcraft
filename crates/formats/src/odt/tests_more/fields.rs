@@ -61,6 +61,10 @@ fn a_fixed_date_and_unknown_fields_are_plain_text() {
     let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:variable-get text:name="v">4</text:variable-get>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
     assert!(fields(&d).is_empty());
     assert_eq!(d.body[0].as_para().unwrap().text, "1 May, 4, 5");
+    // A fixed date with neither a value nor text (LibreOffice's templates) shows the day: a
+    // date field.
+    let d = import(&body(r#"<text:p><text:date text:fixed="true"/>.</text:p>"#)).unwrap();
+    assert_eq!(fields(&d).len(), 1);
 }
 
 fn field_para(parts: &[(&str, Option<&str>)]) -> std::sync::Arc<wordcraft_doc::Block> {
