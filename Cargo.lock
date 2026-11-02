@@ -1084,7 +1084,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a9e5afebf8a43040c20a68e685086bbf81743fbe#a9e5afebf8a43040c20a68e685086bbf81743fbe"
+source = "git+https://github.com/storytold/craft-libs?rev=493bdb9b1c669807ae92f3693c07003116d52e19#493bdb9b1c669807ae92f3693c07003116d52e19"
 dependencies = [
  "chrono",
  "dunce",
