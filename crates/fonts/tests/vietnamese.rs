@@ -24,9 +24,9 @@ const TONES_NFD: &[&str] = &[
     "\u{0323}", // nặng (dot below)
 ];
 
-// ---------------------------------------------------------------------
-// Test 1: Every precomposed Vietnamese char shapes to exactly one glyph
-// ---------------------------------------------------------------------
+/// Verifies that every precomposed Vietnamese character in the Latin Extended Additional
+/// block (U+1EA0..=U+1EF9) and Latin-1/Latin Extended-A shapes to exactly one glyph
+/// with positive advance and non-zero glyph ID across all bundled fonts.
 #[test]
 fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
     let db = FontDb::global();
@@ -58,9 +58,8 @@ fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
     }
 }
 
-// ---------------------------------------------------------------------
-// Test 2: NFC and NFD produce identical glyph sequences (ccmp / normalization)
-// ---------------------------------------------------------------------
+/// Verifies canonical equivalence between NFC and NFD forms across all bundled fonts.
+/// Ensures identical glyph sequences, per-glyph advance widths, and positioning offsets.
 #[test]
 fn nfc_nfd_equivalence_across_bundled_fonts() {
     let db = FontDb::global();
@@ -91,15 +90,15 @@ fn nfc_nfd_equivalence_across_bundled_fonts() {
     }
 }
 
-// ---------------------------------------------------------------------
-// Test 3: Double diacritics without precomposed base (ccmp ligature or mkmk lifting)
-// ---------------------------------------------------------------------
+/// Verifies positioning of stacked double diacritics without a precomposed base.
+/// Validates that either both marks are represented with vertical separation in y-down coordinates,
+/// or one mark is composed with the base while the second mark is attached.
 #[test]
 fn double_diacritics_stacking_without_precomposed_base() {
     // 'c' + circumflex + acute has no precomposed glyph in Unicode.
     // OpenType handles this via either:
-    // (a) `ccmp` ligature composing the two marks into a dedicated double-mark glyph, OR
-    // (b) GPOS `mkmk` lifting the second mark above the first (y_offset > 0).
+    // (a) `ccmp` / normalization composing the base + first mark, with the second mark attached, OR
+    // (b) GPOS `mkmk` lifting the second mark above the first in y-down coordinates.
     let text = "c\u{0302}\u{0301}";
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
@@ -122,31 +121,57 @@ fn double_diacritics_stacking_without_precomposed_base() {
         }
 
         if marks.len() == 1 {
-            // ccmp ligature: the font composed the two marks into a single combined accent glyph.
-            assert_ne!(marks[0].gid, 0);
-            let outline = face.glyph_outline(marks[0].gid);
-            assert!(!outline.elements().is_empty(), "{family}: ccmp ligature outline is empty");
+            // Either the base composed with the first mark (leaving the second mark attached),
+            // or the two marks were composed via ccmp into a combined accent glyph.
+            // Verify that the mark glyph is non-empty and not .notdef, and that the base
+            // character absorbed the circumflex diacritic if only 1 mark remains.
+            let single_mark = &marks[0];
+            assert_ne!(single_mark.gid, 0, "{family}: mark glyph is .notdef");
+            let outline = face.glyph_outline(single_mark.gid);
+            assert!(!outline.elements().is_empty(), "{family}: mark glyph outline is empty");
+
+            let gid_plain_c = face.glyph_for('c');
+            if glyphs[0].gid != gid_plain_c {
+                // Base composed with circumflex; remaining mark is the acute accent.
+                let gid_acute = face.glyph_for('\u{0301}');
+                assert_eq!(single_mark.gid, gid_acute, "{family}: expected acute mark above composed base");
+            } else {
+                // If base is plain 'c', the single mark must be a combined ligature of both marks.
+                let gid_circ = face.glyph_for('\u{0302}');
+                let gid_acute = face.glyph_for('\u{0301}');
+                assert_ne!(single_mark.gid, gid_circ, "{family}: second mark (acute) was dropped");
+                assert_ne!(single_mark.gid, gid_acute, "{family}: first mark (circumflex) was dropped");
+            }
         } else {
-            // Separate marks: GPOS mkmk must lift the second mark above the first.
-            let outline0 = face.glyph_outline(marks[0].gid);
-            let outline1 = face.glyph_outline(marks[1].gid);
-            let bbox0 = outline0.bounding_box();
-            let bbox1 = outline1.bounding_box();
+            // Separate marks: convert shaping y_offset to y-down coordinates.
+            // In y-down coordinates, visually higher ink corresponds to smaller y values.
+            let ink_spans: Vec<(f64, f64)> = marks
+                .iter()
+                .map(|m| {
+                    let bbox = face.glyph_outline(m.gid).bounding_box();
+                    // In y-down coordinates, positive shaping y_offset lifts glyph up (subtract y_offset)
+                    let y_top = bbox.y0 - m.y_offset as f64;
+                    let y_bottom = bbox.y1 - m.y_offset as f64;
+                    (y_top, y_bottom)
+                })
+                .collect();
 
-            let top0 = bbox0.y1 + marks[0].y_offset as f64;
-            let bottom0 = bbox0.y0 + marks[0].y_offset as f64;
-            let top1 = bbox1.y1 + marks[1].y_offset as f64;
-            let bottom1 = bbox1.y0 + marks[1].y_offset as f64;
+            // Identify which mark is upper (smaller y_top) and which is lower (larger y_top)
+            let (upper, lower) = if ink_spans[0].0 < ink_spans[1].0 { (ink_spans[0], ink_spans[1]) } else { (ink_spans[1], ink_spans[0]) };
 
-            assert!(top1 > top0, "{family}: upper mark top ({top1}) should be strictly above lower mark top ({top0})");
-            assert!(bottom1 > bottom0, "{family}: upper mark bottom ({bottom1}) should be strictly above lower mark bottom ({bottom0})");
+            // Assert that the upper mark has smaller bounds and does not vertically collide with lower mark
+            assert!(
+                upper.1 <= lower.0,
+                "{family}: upper mark bottom ({}) must be at or above lower mark top ({}); ink: {ink_spans:?}",
+                upper.1,
+                lower.0
+            );
         }
     }
 }
 
-// ---------------------------------------------------------------------
-// Test 4: Vietnamese phrases shape identically in NFC and NFD
-// ---------------------------------------------------------------------
+/// Verifies shaping consistency for common Vietnamese phrases across all bundled fonts,
+/// ensuring NFC and NFD produce identical glyph IDs, per-glyph advances, and offsets.
 #[test]
 fn vietnamese_phrases_shaping_consistency() {
     let phrases =
@@ -182,9 +207,8 @@ fn vietnamese_phrases_shaping_consistency() {
     }
 }
 
-// ---------------------------------------------------------------------
-// Test 5: Fully decomposed triple-codepoints (ASCII + inherent mark + tone)
-// ---------------------------------------------------------------------
+/// Verifies that fully decomposed triple-codepoints (ASCII base + inherent diacritic + tone mark)
+/// shape identically to their precomposed counterpart, testing both canonical NFD and valid CCC orderings.
 #[test]
 fn fully_decomposed_triple_codepoint_equivalence() {
     // Letters with two marks: base ASCII + inherent diacritic (circumflex, breve, horn) + tone mark.
@@ -252,9 +276,8 @@ fn fully_decomposed_triple_codepoint_equivalence() {
     }
 }
 
-// ---------------------------------------------------------------------
-// Test 6: Orthography styles (new-style vs old-style tone placement)
-// ---------------------------------------------------------------------
+/// Verifies that both new-style (hòa, thủy) and old-style (hoà, thuỷ) orthography
+/// shape cleanly without missing glyphs and with positive advances across all bundled fonts.
 #[test]
 fn vietnamese_orthography_new_and_old_styles() {
     // Both new-style (hòa, thủy) and old-style (hoà, thuỷ) orthography are widely used.
