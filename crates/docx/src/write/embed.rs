@@ -51,6 +51,9 @@ pub(crate) struct EmbedWriter<'d> {
     scrubbed: HashMap<String, Vec<u8>>,
     /// A chart past the chart limits has been written (and the loss logged, once per save).
     chart_cut: bool,
+    /// A SmartArt graphic past the SmartArt limits has been written (and the loss logged, once
+    /// per save).
+    smart_art_cut: bool,
 }
 
 impl<'d> EmbedWriter<'d> {
@@ -98,6 +101,7 @@ impl<'d> EmbedWriter<'d> {
             drop_glossary: false,
             scrubbed: HashMap::new(),
             chart_cut: false,
+            smart_art_cut: false,
         }
     }
 
@@ -410,6 +414,13 @@ impl super::Writer<'_> {
     pub(super) fn smart_art_graphic(&mut self, spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, rels: &mut PartRels) -> String {
         use crate::package::rt;
         use crate::smart_art as sa;
+        // Written as the reader takes it back, so the graphic reopens editable.
+        let (kept, cut) = sa::bounded(spec);
+        if cut && !self.embeds.smart_art_cut {
+            self.embeds.smart_art_cut = true;
+            log::warn!("docx: a SmartArt graphic has more items, longer text or deeper levels than SmartArt keeps; it is written cut to the limits");
+        }
+        let spec = &kept;
         let names = self.embeds.fresh_set(
             &["word/diagrams/data", "word/diagrams/layout", "word/diagrams/quickStyle", "word/diagrams/colors", "word/diagrams/drawing"],
             ".xml",
@@ -882,6 +893,52 @@ mod tests {
         let warned = save(vec![chart(MAX_SERIES + 1), chart(MAX_SERIES + 5), chart(2)]);
         assert_eq!(cut(&warned), 1, "one warning for the save, not one per chart: {warned:?}");
         let warned = save(vec![chart(3)]);
+        assert_eq!(cut(&warned), 0, "nothing left out: {warned:?}");
+    }
+
+    #[test]
+    fn smart_art_cut_to_the_limits_on_save_reopens_editable_and_says_so_once() {
+        // A model deserialised as is (a `.json` document) can hold more than SmartArt keeps; the
+        // save wrote it whole and it reopened as a plain diagram (#3648).
+        use std::sync::Arc;
+        use wordcraft_doc::graphic::{Graphic, GraphicKind};
+        use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, SmartArtItem, SmartArtLayout, SmartArtSpec};
+        use wordcraft_doc::{Block, CharProps, InlineObject, Pos};
+        let spec = |n: usize, level: fn(usize) -> u8| SmartArtSpec {
+            layout: SmartArtLayout::Hierarchy,
+            items: (0..n).map(|i| SmartArtItem::new(format!("Item {i}"), level(i))).collect(),
+            ..Default::default()
+        };
+        let save = |specs: &[SmartArtSpec]| {
+            let mut doc = wordcraft_doc::Document::new();
+            for s in specs {
+                let graphic = Graphic { kind: GraphicKind::Diagram, w: 300.0, h: 200.0, smart_art: Some(Arc::new(s.clone())), ..Default::default() };
+                let o = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+                doc.insert_object(&Pos::body(0, 0), o, &CharProps::default()).unwrap();
+            }
+            crate::test_log::warnings(|| crate::write(&doc).unwrap())
+        };
+        let cut = |w: &Vec<String>| w.iter().filter(|w| w.contains("SmartArt")).count();
+        // 150 items at level 255, 101 items, and one level past the deepest.
+        let past = [spec(MAX_ITEMS + 50, |_| u8::MAX), spec(MAX_ITEMS + 1, |_| 0), spec(usize::from(MAX_LEVEL) + 2, |i| i as u8)];
+        let (bytes, warned) = save(&past);
+        let doc = crate::read(&bytes).unwrap();
+        let mut back: Vec<Option<SmartArtSpec>> = doc
+            .body
+            .iter()
+            .filter_map(|b| if let Block::Para(p) = &**b { Some(p) } else { None })
+            .flat_map(|p| &p.objects)
+            .filter_map(|o| if let InlineObject::Graphic { graphic, .. } = o { Some(graphic.smart_art.as_deref().cloned()) } else { None })
+            .collect();
+        let key = |s: &Option<SmartArtSpec>| format!("{s:?}");
+        back.sort_by_key(key);
+        let editable: Vec<bool> = back.iter().map(Option::is_some).collect();
+        assert_eq!(editable, [true; 3], "each graphic reopens editable");
+        let mut want: Vec<Option<SmartArtSpec>> = past.iter().map(|s| Some(s.clone().sanitized())).collect();
+        want.sort_by_key(key);
+        assert_eq!(back, want, "each graphic reopens as the limits keep it");
+        assert_eq!(cut(&warned), 1, "one warning for the save, not one per graphic: {warned:?}");
+        let (_, warned) = save(&[spec(5, |i| (i % 2) as u8)]);
         assert_eq!(cut(&warned), 0, "nothing left out: {warned:?}");
     }
 

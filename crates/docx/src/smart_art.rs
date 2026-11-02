@@ -722,6 +722,17 @@ fn empty_t(w: &mut W) {
     w.close("dgm:t");
 }
 
+/// `spec` as [`spec_of`] reads it back: cut to the SmartArt limits by [`SmartArtSpec::sanitize`],
+/// and whether that changed it. A model WordCraft made is within them already; one deserialised as
+/// is (a `.json` document) may not be, and written whole it reopens read-only (#3648). Only the
+/// items the limits keep are copied.
+pub(crate) fn bounded(spec: &SmartArtSpec) -> (SmartArtSpec, bool) {
+    let items = spec.items.iter().take(MAX_ITEMS).cloned().collect();
+    let kept = SmartArtSpec { layout: spec.layout, items, colors: spec.colors }.sanitized();
+    let cut = kept != *spec;
+    (kept, cut)
+}
+
 /// The data part (`dgm:dataModel`) of `spec`; its drawing is the story part's relationship
 /// `drawing_rel`.
 pub fn data_xml(spec: &SmartArtSpec, drawing_rel: &str) -> String {
