@@ -497,18 +497,25 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
 pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
     let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
     let (id, blocks) = (part.0, part.1.blocks.clone());
-    // A page total in the footer is filled in after pagination, like the header's: it doesn't
-    // make the body lay out again.
-    let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (laid, ..) =
-        with_pin(ctx, id, sect, 1, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
-    let top = sect.page_h - sect.footer - laid.height;
-    let x = sect.margin_left + sect.gutter;
-    let frame = PageFrame { sect, margin_top: None, origin: (x, top), number: ctx.fields.page, mirror: ctx.mirror };
+    // Both passes are speculative: footer labels and equations must not advance body state.
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
     let fields = ctx.fields.clone();
+    let uses_totals = ctx.uses_totals;
+    // Footer totals are filled after pagination; only body totals request another pass.
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    let (laid, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
+        again(ctx, 0, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)))
+    });
+    let top = sect.page_h - sect.footer - laid.height;
+    let x = sect.margin_left + sect.gutter;
+    let frame = PageFrame { sect, margin_top: None, origin: (x, top), number: fields.page, mirror: ctx.mirror };
+    // Position the same story from the same numbering and box-budget baseline.
+    ctx.counters = Default::default();
+    ctx.boxes = Default::default();
+    ctx.chains = Default::default();
+    ctx.fields = fields.clone();
     let (positioned, _, _, pinned_wraps) = with_pin(ctx, id, sect, frame.number, None, |ctx| {
         again(ctx, 0, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))))
     });
@@ -516,6 +523,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
     ctx.boxes = boxes;
     ctx.chains = chains;
     ctx.fields = fields;
+    ctx.uses_totals = uses_totals;
     ctx.track_totals = track;
     let wrap_top = positioned
         .exclusions

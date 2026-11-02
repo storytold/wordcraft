@@ -9862,6 +9862,120 @@ fn relaid_paragraphs_keep_their_equation_numbers() {
     assert_eq!(equation_numbers(&l), ["(1)", "(2)", "(3)"]);
 }
 
+/// Measuring footer slots never consumes the body's shared list or automatic equation numbers.
+#[test]
+fn footer_probes_keep_body_numbers() {
+    #[derive(Clone, Copy, Debug)]
+    enum Slots {
+        Absent,
+        Fallback,
+        DistinctEven,
+        LaterSection,
+    }
+    for slots in [Slots::Absent, Slots::Fallback, Slots::DistinctEven, Slots::LaterSection] {
+        for even_odd in [false, true] {
+            for body_totals in [false, true] {
+                let mut doc = Document::new();
+                let num = doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+                let numbered = || {
+                    let mut p = Paragraph::new();
+                    p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+                    p.insert_object(
+                        0,
+                        InlineObject::Equation {
+                            linear: "a=b#".into(),
+                            display: true,
+                            math: wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear("a=b#"), ..Default::default() },
+                        },
+                        &Default::default(),
+                    )
+                    .unwrap();
+                    p
+                };
+                let total = |p: &mut Paragraph| {
+                    p.insert_object(
+                        p.len(),
+                        InlineObject::Field {
+                            instr: "NUMPAGES".into(),
+                            result: String::new(),
+                            locked: false,
+                            dirty: false,
+                            code: false,
+                            form: String::new(),
+                        },
+                        &Default::default(),
+                    )
+                    .unwrap();
+                };
+                doc.body = (0..4).map(|_| wordcraft_doc::para_block(numbered())).collect();
+                if body_totals {
+                    total(doc.para_mut(StoryRef::Body, &Path::top(3)).unwrap());
+                }
+                let mut first = doc.last_section.clone();
+                doc.last_section.start = wordcraft_doc::section::SectionStart::NextPage;
+                doc.settings.even_odd_headers = even_odd;
+                if !matches!(slots, Slots::Absent) {
+                    let mut p = numbered();
+                    total(&mut p);
+                    let default = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(p)]);
+                    first.footers.default = Some(default);
+                    if matches!(slots, Slots::DistinctEven | Slots::LaterSection) {
+                        let even = doc.add_part(
+                            wordcraft_doc::PartKind::Footer,
+                            vec![wordcraft_doc::para_block(numbered()), wordcraft_doc::para_block(numbered())],
+                        );
+                        first.footers.even = Some(even);
+                    }
+                    if matches!(slots, Slots::LaterSection) {
+                        let later = doc.add_part(wordcraft_doc::PartKind::Footer, (0..3).map(|_| wordcraft_doc::para_block(numbered())).collect());
+                        doc.last_section.footers.default = Some(later);
+                    }
+                }
+                let default = first.footers.default;
+                let second_footer = if even_odd {
+                    first.footers.even.or(doc.last_section.footers.default).or(default)
+                } else {
+                    doc.last_section.footers.default.or(default)
+                };
+                doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(first));
+                let mut cache = LayoutCache::new();
+                // Repeat with the same cache: cached equations still advance the live counter.
+                for _ in 0..2 {
+                    let laid = layout(&doc, &mut cache, &LayoutOptions::default());
+                    assert_eq!(laid.pages.len(), 2, "{slots:?}, even={even_odd}, totals={body_totals}");
+                    assert_eq!(equation_numbers(&laid), ["(1)", "(2)", "(3)", "(4)"], "{slots:?}, even={even_odd}");
+                    let labels: Vec<_> = laid
+                        .pages
+                        .iter()
+                        .flat_map(|p| &p.items)
+                        .filter_map(|it| {
+                            if let Placed::Lines { story: StoryRef::Body, para, .. } = it {
+                                para.label.as_ref().map(|l| l.text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    assert_eq!(labels, ["1.", "2.", "3.", "4."], "{slots:?}, even={even_odd}");
+                    if let Some(id) = second_footer {
+                        assert!(
+                            laid.pages[1].footer.iter().any(|it| matches!(it, Placed::Lines { story, .. } if *story == StoryRef::Part(id))),
+                            "the selected later/even footer is rendered"
+                        );
+                    }
+                    if let Some(id) = default {
+                        assert!(laid.pages[0].footer.iter().any(|it| matches!(it, Placed::Lines { story, para, .. } if *story == StoryRef::Part(id) && para.shown.iter().any(|(_, text, ..)| text == "2"))), "footer totals resolve after pagination");
+                    }
+                    if body_totals {
+                        let (shown, _) = shown_and_ranges(&laid, 3);
+                        assert_eq!(shown.into_iter().flatten().collect::<Vec<_>>(), ["2"], "body totals still resolve");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// #1116: a document of a top paragraph with `before` points of space before, filler lines, a
 /// paragraph of several lines (block `t`) with 6 pt after and, when `note`, a footnote on its last line.
 fn space_after_doc(before: f32, note: bool) -> (Document, usize, Option<u32>) {

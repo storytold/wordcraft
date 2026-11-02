@@ -239,8 +239,12 @@ fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps),
     let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
     let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
     let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
-    let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
-    let even_foot = if fixed || !ctx.doc.settings.even_odd_headers {
+    let first_foot = if fixed || !sect.title_page || feet.first == feet.default {
+        foot
+    } else {
+        with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first))
+    };
+    let even_foot = if fixed || !ctx.doc.settings.even_odd_headers || feet.even.or(feet.default) == feet.default {
         foot
     } else {
         let id = feet.even.or(feet.default);
@@ -276,7 +280,7 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     pb.foot_top = foot_top_for(ctx, prev, pf.default);
     let even_id = if ctx.doc.settings.even_odd_headers { pf.even.or(pf.default) } else { pf.default };
     let base = hf.defining_width(true, si - 1, even_id);
-    pb.even_foot_top = with_pct_base(ctx, base, |c| foot_top_for(c, prev, even_id));
+    pb.even_foot_top = if even_id == pf.default { pb.foot_top } else { with_pct_base(ctx, base, |c| foot_top_for(c, prev, even_id)) };
     pb.new_page(block, top);
 }
 
