@@ -197,6 +197,17 @@ fn column_rows(s: &Session) -> Option<Vec<(Pos, Pos)>> {
 
 /// Apply a change to the selection (or the pending caret formatting).
 pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
+    apply_to(s, target, f)
+}
+
+/// The selection only, not the word at a caret: what highlighting formats (#4086).
+fn selection(s: &Session) -> Option<(Pos, Pos)> {
+    let (a, b) = s.sel.ordered();
+    (a != b).then_some((a, b))
+}
+
+/// [`apply`], with `target` choosing what a non-column selection formats.
+fn apply_to(s: &mut Session, target: fn(&Session) -> Option<(Pos, Pos)>, f: &dyn Fn(&mut CharProps)) -> CmdResult {
     // A column selection formats each row's piece.
     if let Some(rows) = column_rows(s) {
         for (a, b) in rows {
@@ -211,6 +222,12 @@ pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
     match selected_text_box(s).or_else(|| target(s)) {
         Some((a, b)) => {
             s.doc.format_range(&a, &b, f)?;
+            // The word at a caret took the change: so does formatting waiting for typing (#4086).
+            if s.sel.is_collapsed()
+                && let Some(pend) = s.pending.as_mut()
+            {
+                f(pend);
+            }
         }
         None => {
             let mut pend = s.typing_props();
@@ -354,26 +371,59 @@ fn current_size(s: &Session) -> f32 {
 }
 
 fn step_size(s: &mut Session, dir: i32) -> CmdResult {
-    let cur = current_size(s);
-    let next = if dir > 0 {
-        SIZES.iter().copied().find(|x| *x > cur + 0.01).unwrap_or(((cur / 10.0).floor() + 1.0) * 10.0)
-    } else {
-        SIZES.iter().rev().copied().find(|x| *x < cur - 0.01).unwrap_or(1.0)
-    };
-    let next = next.clamp(1.0, 1638.0);
-    // Each run steps from its own size when the selection mixes sizes.
-    apply(s, &|c| {
-        c.size = Some(next);
-        c.size_cs = Some(next);
+    resize(s, &|cur| {
+        if dir > 0 {
+            SIZES.iter().copied().find(|x| *x > cur + 0.01).unwrap_or(((cur / 10.0).floor() + 1.0) * 10.0)
+        } else {
+            SIZES.iter().rev().copied().find(|x| *x < cur - 0.01).unwrap_or(1.0)
+        }
     })
 }
 
 fn nudge_size(s: &mut Session, d: f32) -> CmdResult {
-    let next = (current_size(s) + d).clamp(1.0, 1638.0);
-    apply(s, &|c| {
-        c.size = Some(next);
-        c.size_cs = Some(next);
-    })
+    resize(s, &|cur| cur + d)
+}
+
+/// Relative commands transform each run's effective size, including inherited sizes. Keep
+/// `apply`'s targets and the existing explicit override of both normal and complex-script size.
+fn resize(s: &mut Session, next: &dyn Fn(f32) -> f32) -> CmdResult {
+    let set = |c: &mut CharProps, size: f32| {
+        let size = next(size).clamp(1.0, 1638.0);
+        c.size = Some(size);
+        c.size_cs = Some(size);
+    };
+    let ranges = column_rows(s).or_else(|| selected_text_box(s).or_else(|| target(s)).map(|range| vec![range]));
+    let Some(ranges) = ranges else {
+        // Pending typing props and an empty paragraph's mark get the same single change.
+        let size = current_size(s);
+        return apply(s, &|c| set(c, size));
+    };
+    // Resolve against one immutable snapshot while formatting splits and normalizes runs.
+    let styles = s.doc.styles.clone();
+    for (a, b) in ranges {
+        for path in s.doc.paths_between(&a, &b) {
+            let p = s.doc.para_mut(a.story, &path)?;
+            let style = p.props.style.clone();
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { p.len() };
+            let format = |c: &mut CharProps| set(c, styles.resolve_char(style.as_deref(), c).size);
+            // Avoid format_range here: its path walk would repeat a paragraph-prefix scan.
+            p.format(from, to, &format)?;
+            // Keep format_range's paragraph-mark rule, including filtering linked marks.
+            if to == p.len() && (from == 0 || path != a.path) {
+                let style = p.mark.style.clone();
+                format(&mut p.mark);
+                if p.mark.link.take().is_some() {
+                    p.mark.style = style.filter(|s| s != "Hyperlink");
+                }
+            }
+        }
+        // An empty selected cell has only its paragraph mark, which needs a new layout too.
+        if a == b {
+            s.doc.para_mut(a.story, &a.path)?.touch();
+        }
+    }
+    sel_result(s)
 }
 
 fn color(s: &mut Session, v: &Value) -> CmdResult {
@@ -401,49 +451,62 @@ fn target_has_highlight(s: &Session, h: Highlight) -> bool {
     if let Some(rows) = column_rows(s) {
         for (a, b) in rows {
             let Some(p) = s.doc.para_at(&a) else { continue };
-            if a == b || (a.off == 0 && b.off == p.len()) {
-                seen = true;
-                if !matches(p.props.style.as_deref(), &p.mark) {
-                    return false;
-                }
-            }
-            for (r, c) in p.run_ranges() {
-                if r.end > a.off && r.start < b.off {
-                    seen = true;
-                    if !matches(p.props.style.as_deref(), c) {
-                        return false;
-                    }
-                }
+            let mark = a == b || (a.off == 0 && b.off == p.len());
+            if !span_matches(p, mark, a.off, b.off, &matches, &mut seen) {
+                return false;
             }
         }
         if seen {
             return true;
         }
     }
-    if let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) {
+    if let Some((a, b)) = selected_text_box(s).or_else(|| selection(s)) {
         for path in s.doc.paths_between(&a, &b) {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
             let from = if path == a.path { a.off } else { 0 };
             let to = if path == b.path { b.off } else { p.len() };
             // Match format_range: fully selected paragraphs include their mark.
-            if to == p.len() && (from == 0 || path != a.path) {
-                seen = true;
-                if !matches(p.props.style.as_deref(), &p.mark) {
-                    return false;
-                }
-            }
-            for (r, c) in p.run_ranges() {
-                if r.end > from && r.start < to {
-                    seen = true;
-                    if !matches(p.props.style.as_deref(), c) {
-                        return false;
-                    }
-                }
+            let mark = to == p.len() && (from == 0 || path != a.path);
+            if !span_matches(p, mark, from, to, &matches, &mut seen) {
+                return false;
             }
         }
     }
-    // No runs: retain the caret/pending and empty text-box paragraph-mark rules.
+    // No runs: retain the caret/pending and empty text-box paragraph-mark rules. A caret checks
+    // what is typed next, not the word it's in (#4086).
+    if selected_text_box(s).or_else(|| selection(s)).is_none() {
+        let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
+        return seen || matches(style, &s.typing_props());
+    }
     seen || resolved(s).iter().all(|r| r.highlight == h.rgb())
+}
+
+/// Whether the paragraph's mark (when `mark`) and the runs overlapping `from..to` all match
+/// `matches`; `seen` records that something was checked.
+fn span_matches(
+    p: &wordcraft_doc::Paragraph,
+    mark: bool,
+    from: usize,
+    to: usize,
+    matches: &impl Fn(Option<&str>, &CharProps) -> bool,
+    seen: &mut bool,
+) -> bool {
+    let style = p.props.style.as_deref();
+    if mark {
+        *seen = true;
+        if !matches(style, &p.mark) {
+            return false;
+        }
+    }
+    for (r, c) in p.run_ranges() {
+        if r.end > from && r.start < to {
+            *seen = true;
+            if !matches(style, c) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Explicit palette/automation colours set highlighting; the shortcut (no colour) toggles
@@ -464,7 +527,8 @@ fn highlight(s: &mut Session, v: &Value) -> CmdResult {
     };
     let remove = color.is_none() && target_has_highlight(s, h);
     let value = if remove { Highlight::None } else { h };
-    let result = apply(s, &|x| x.highlight = Some(value))?;
+    // A caret highlights what is typed next, not the word it's in, as in Word (#4086).
+    let result = apply_to(s, selection, &|x| x.highlight = Some(value))?;
     s.last_highlight = h;
     Ok(result)
 }

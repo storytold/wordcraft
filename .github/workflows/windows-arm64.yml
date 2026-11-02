@@ -31,3 +31,5 @@ jobs:
     with:
       app-name: wordcraft
       app-dir: WordCraft
+      install-relative-path: Programs/ArtCraft/WordCraft
+      install-scope: perUser
