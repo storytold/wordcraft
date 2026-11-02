@@ -295,11 +295,18 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
-                // The level's own tab stop after the number, when it comes first.
-                match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
-                    Some(p) if p < t => p,
-                    _ => t,
+                // Word's numbering tab (w:tab val="num", the list dialog's "Add tab stop at") is
+                // the destination after the label: it wins over the default stops, which Word
+                // only resumes once the label has overflowed past it. A real stop before it — an
+                // explicit paragraph tab, or the hanging-indent position when the level hangs —
+                // still catches the tab first.
+                let blocked = |p: f32| {
+                    self.rp.tabs.iter().any(|tb| tb.pos > end + 0.01 && tb.pos < p - 0.01)
+                        || self.hanging_at.is_some_and(|h| h > end + 0.01 && h < p - 0.01)
+                };
+                match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01 && *p <= self.base_right) {
+                    Some(p) if !blocked(p) => p,
+                    _ => next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos,
                 }
             }
             LevelSuffix::Space => end + pl.styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),

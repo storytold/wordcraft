@@ -1763,6 +1763,25 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn a_numbering_num_tab_after_the_label_is_the_text_destination() {
+    // A patent list: label at the margin, w:tab val="num" pos=1080 (54 pt) behind the default
+    // stops. Word puts the text at the num tab (measured against Word 2010 PDF output); a label
+    // that overflows past it resumes the default stops.
+    let mk = |tab: f32| {
+        let mut d = Document::from_text("first");
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        if let Some(a) = d.numbering.abstracts.first_mut() {
+            a.levels[0] = wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
+        }
+        lay(&d).caret(&Pos::body(0, 0)).unwrap().x
+    };
+    assert!((mk(54.0) - 126.0).abs() < 0.5, "num tab beats an earlier default stop");
+    assert!((mk(8.0) - 108.0).abs() < 0.5, "an overflowing label resumes the default stops");
+    assert!((mk(9999.0) - 108.0).abs() < 0.5, "a tab beyond the right boundary is ignored, as in Word");
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
