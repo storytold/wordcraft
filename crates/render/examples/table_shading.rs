@@ -112,6 +112,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for case in [ReviewCase::Spacing, ReviewCase::Partial, ReviewCase::Widow, ReviewCase::Cell, ReviewCase::Equal, ReviewCase::Closing] {
         let doc = case.document();
         let layout = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+        let mut fonts: Vec<&[u8]> = Vec::new();
+        let mut families = Vec::new();
+        for item in layout.pages.iter().flat_map(|page| &page.items) {
+            let wordcraft_layout::Placed::Lines { para, .. } = item else { continue };
+            for style in &para.styles {
+                let face = style.face.get();
+                let data = face.data();
+                let index = match fonts.iter().position(|bytes| *bytes == data) {
+                    Some(index) => index,
+                    None => {
+                        let index = fonts.len();
+                        std::fs::write(output.join(format!("{}-font-{index}.bin", case.name())), data)?;
+                        fonts.push(data);
+                        index
+                    }
+                };
+                if !families.contains(&(index, face.family.as_str())) {
+                    println!("{}-font-{index}.bin family={:?}", case.name(), face.family);
+                    families.push((index, face.family.as_str()));
+                }
+            }
+        }
         for (index, page) in layout.pages.iter().enumerate() {
             let image = wordcraft_render::render_page(&doc, page, 2.0, &Default::default());
             std::fs::write(output.join(format!("{}-{}.png", case.name(), index + 1)), image.to_png())?;
