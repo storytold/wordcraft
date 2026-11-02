@@ -89,6 +89,8 @@ pub(crate) struct PendingPaste {
     settle: u8,
     /// The text egui read, claimed from the raw input ([`claim`]), pasted next frame.
     text: Option<String>,
+    /// The document the Paste was chosen in: the text goes there or nowhere.
+    document: u64,
 }
 
 /// When the host can't open the system clipboard at all (GNOME's Wayland has no data-control
@@ -103,7 +105,14 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
     }
     let ctx = app.ctx.clone()?;
     log::debug!("{id}: the system clipboard can't be opened; reading the text through egui");
-    app.pending_paste = Some(PendingPaste { id: id.to_string(), params: params.clone(), since: None, settle: PASTE_SETTLE_FRAMES, text: None });
+    app.pending_paste = Some(PendingPaste {
+        id: id.to_string(),
+        params: params.clone(),
+        since: None,
+        settle: PASTE_SETTLE_FRAMES,
+        text: None,
+        document: app.session.document_id(),
+    });
     ctx.request_repaint();
     Some(Ok(serde_json::json!({"pending": "paste"})))
 }
@@ -123,11 +132,18 @@ pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
     }
 }
 
-/// Run the waiting Paste with the text egui read. `false` when nothing was waiting.
+/// Run the waiting Paste with the text egui read. `false` when nothing was waiting. Another
+/// document shown since the Paste was chosen (another window brought forward, a document opened)
+/// cancels it rather than pasting there.
 fn deliver(app: &mut WordApp, text: &str) -> bool {
-    let Some(PendingPaste { id, mut params, .. }) = app.pending_paste.take() else {
+    let Some(PendingPaste { id, mut params, document, .. }) = app.pending_paste.take() else {
         return false;
     };
+    if app.session.document_id() != document {
+        log::debug!("{id}: another document is shown; the paste is cancelled");
+        app.status("the paste was cancelled: another document is shown".to_string());
+        return true;
+    }
     log::debug!("{id}: egui read {} bytes of text", text.len());
     if let Some(o) = params.as_object_mut() {
         o.insert("text".into(), Value::String(text.to_string()));
@@ -449,6 +465,29 @@ mod tests {
         let (_, left) = frame(&mut a, &ctx, 0.2, vec![paste("again")]);
         assert_eq!(left.len(), 1, "a later paste event is Ctrl+V's own");
         assert_eq!(first_para(&a), "from another program");
+    }
+
+    /// The text goes to the document the Paste was chosen in: with another one shown by the time
+    /// it comes, the paste is cancelled with a message, and neither document changes.
+    #[test]
+    fn a_paste_is_cancelled_when_another_document_is_shown() {
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        let first = a.session.document_id();
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        a.run("file.new", json!({})).unwrap();
+        let second = a.session.document_id();
+        assert_ne!(first, second);
+        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("meant for the first")]);
+        assert!(left.is_empty(), "the text was the menu Paste's, not a new Ctrl+V");
+        assert!(a.pending_paste.is_none());
+        assert_eq!(first_para(&a), "", "not pasted into the document shown now");
+        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some("the paste was cancelled: another document is shown"));
+        a.session.switch_document(first).unwrap();
+        assert_eq!(first_para(&a), "", "nor into the one it was meant for, unseen");
     }
 
     /// Keep Text Only and Merge Formatting wait the same way and run as themselves.
