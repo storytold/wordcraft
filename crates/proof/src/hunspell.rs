@@ -218,13 +218,23 @@ fn decode_high(bytes: &[u8], high: &str) -> String {
 /// (UTF-8 when there is none; ISO 8859-2 is the other one Polish dictionaries use, ISO 8859-1 the
 /// one the original Portuguese VERO uses, ISO 8859-9 the one older Turkish dictionaries use, KOI8-R
 /// and Windows-1251 the ones older Russian dictionaries use).
+///
+/// Under a UTF-8 `SET` with single-byte flags (no `FLAG` line, or `FLAG DEFAULT`), flags are bytes,
+/// as in Hunspell: the Hungarian dictionary writes its affix flags and flag aliases as bytes above
+/// 0x7F that aren't UTF-8. Those fields are read byte by byte (each byte becomes U+0000..U+00FF,
+/// one flag per byte); the words, affixes and conditions around them are UTF-8. With any other
+/// `FLAG` (`UTF-8`, `num`, `long`) flags are text and the whole file is UTF-8: `SFX 1234` keeps
+/// its number (the Turkish dictionary's `FLAG num`).
 pub fn decode(aff: &[u8], dic: &[u8]) -> Result<(String, String), String> {
-    let head = String::from_utf8_lossy(aff.get(..aff.len().min(8192)).unwrap_or_default()).to_string();
-    let set = head.lines().find_map(|l| l.trim_start_matches('\u{feff}').strip_prefix("SET ")).map(str::trim).unwrap_or("UTF-8").to_ascii_uppercase();
+    let (set, flag) = directives(aff);
+    let set = set.unwrap_or_else(|| "UTF-8".into());
     match set.as_str() {
         "UTF-8" | "UTF8" => {
-            let text = |b: &[u8], what: &str| String::from_utf8(b.to_vec()).map_err(|e| format!("{what}: not UTF-8: {e}"));
-            Ok((text(aff, ".aff")?, text(dic, ".dic")?))
+            if flag.as_deref().is_some_and(|f| f != "DEFAULT") {
+                let text = |b: &[u8], what: &str| String::from_utf8(b.to_vec()).map_err(|e| format!("{what}: not UTF-8: {e}"));
+                return Ok((text(aff, ".aff")?, text(dic, ".dic")?));
+            }
+            Ok((decode_utf8_aff(aff)?, decode_utf8_dic(dic)?))
         }
         "ISO8859-1" | "ISO-8859-1" => Ok((decode_latin1(aff), decode_latin1(dic))),
         "ISO8859-2" | "ISO-8859-2" => Ok((decode_latin2(aff), decode_latin2(dic))),
@@ -233,6 +243,225 @@ pub fn decode(aff: &[u8], dic: &[u8]) -> Result<(String, String), String> {
         "CP1251" | "WINDOWS-1251" | "MICROSOFT-CP1251" => Ok((decode_high(aff, CP1251_HIGH), decode_high(dic, CP1251_HIGH))),
         other => Err(format!("unsupported encoding {other}")),
     }
+}
+
+/// The first arguments of the `.aff`'s first `SET` and `FLAG` lines, in capitals, found in one pass
+/// over the whole file: a `FLAG UTF-8` after the rules still decides how the `.dic` flags are read,
+/// as in Hunspell. Only the first argument counts: `FLAG UTF-8 # Unicode flags` is UTF-8.
+fn directives(aff: &[u8]) -> (Option<String>, Option<String>) {
+    let (mut set, mut flag) = (None, None);
+    for l in aff.split(|&b| b == b'\n') {
+        if set.is_some() && flag.is_some() {
+            break;
+        }
+        let l = l.strip_prefix("\u{feff}".as_bytes()).unwrap_or(l);
+        let slot = match l.first() {
+            Some(b'S') if set.is_none() => (&mut set, &b"SET"[..]),
+            Some(b'F') if flag.is_none() => (&mut flag, &b"FLAG"[..]),
+            _ => continue,
+        };
+        let arg = l
+            .strip_prefix(slot.1)
+            .filter(|rest| rest.first().is_some_and(|b| matches!(b, b' ' | b'\t')))
+            .and_then(|rest| rest.split(|b| matches!(b, b' ' | b'\t' | b'\r')).find(|f| !f.is_empty()));
+        if let Some(a) = arg {
+            *slot.0 = Some(String::from_utf8_lossy(a).to_ascii_uppercase());
+        }
+    }
+    (set, flag)
+}
+
+/// Directives whose one argument is a flag.
+const FLAG_DIRECTIVES: &[&str] = &[
+    "CIRCUMFIX",
+    "COMPOUNDBEGIN",
+    "COMPOUNDEND",
+    "COMPOUNDFLAG",
+    "COMPOUNDFORBIDFLAG",
+    "COMPOUNDLAST",
+    "COMPOUNDFIRST",
+    "COMPOUNDMIDDLE",
+    "COMPOUNDPERMITFLAG",
+    "COMPOUNDROOT",
+    "FORBIDDENWORD",
+    "FORCEUCASE",
+    "GENERATE",
+    "HU_KOTOHANGZO",
+    "KEEPCASE",
+    "LEMMA_PRESENT",
+    "NEEDAFFIX",
+    "NOSUGGEST",
+    "ONLYINCOMPOUND",
+    "ONLYROOT",
+    "PSEUDOROOT",
+    "SUBSTANDARD",
+    "WARN",
+];
+
+/// Directives that only describe the dictionary; a non-UTF-8 byte in them (the Hungarian
+/// dictionary's `NAME` is ISO 8859-2) is replaced instead of failing the load.
+const METADATA_DIRECTIVES: &[&str] = &["NAME", "HOME", "VERSION", "LANG", "AM"];
+
+/// `text/flags`: the text as UTF-8 and the flags byte by byte (`\/` is a literal slash). `what`
+/// names the line in an error.
+fn text_and_flags(field: &[u8], what: impl Fn() -> String) -> Result<String, String> {
+    let mut slash = None;
+    let mut i = 0;
+    while let Some(&b) = field.get(i) {
+        if b == b'\\' && field.get(i + 1) == Some(&b'/') {
+            i += 2;
+            continue;
+        }
+        if b == b'/' {
+            slash = Some(i);
+            break;
+        }
+        i += 1;
+    }
+    let (text, flags) = match slash {
+        Some(k) => (field.get(..k).unwrap_or_default(), field.get(k..).unwrap_or_default()),
+        None => (field, &[][..]),
+    };
+    let mut out = std::str::from_utf8(text).map_err(|e| format!("{}: not UTF-8: {e}", what()))?.to_string();
+    out.push_str(&decode_latin1(flags));
+    Ok(out)
+}
+
+/// Split a line into fields on spaces and tabs, keeping the separators (so a line rebuilt from
+/// its parts is the original).
+fn fields(line: &[u8]) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut in_sep = line.first().is_some_and(|b| matches!(b, b' ' | b'\t'));
+    for (i, b) in line.iter().enumerate() {
+        let sep = matches!(b, b' ' | b'\t');
+        if sep != in_sep {
+            out.push(line.get(start..i).unwrap_or_default());
+            start = i;
+            in_sep = sep;
+        }
+    }
+    out.push(line.get(start..).unwrap_or_default());
+    out
+}
+
+/// A UTF-8 `.aff` with single-byte flags (see [`decode`]).
+fn decode_utf8_aff(aff: &[u8]) -> Result<String, String> {
+    let mut out = String::with_capacity(aff.len());
+    for (n, line) in aff.split(|&b| b == b'\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        if let Ok(s) = std::str::from_utf8(line)
+            && s.is_ascii()
+        {
+            out.push_str(s);
+            continue;
+        }
+        let parts = fields(line);
+        // Field index among the non-separator parts.
+        let words: Vec<usize> =
+            parts.iter().enumerate().filter(|(_, p)| !p.first().is_some_and(|b| matches!(b, b' ' | b'\t'))).map(|(i, _)| i).collect();
+        let dir = words
+            .first()
+            .and_then(|&i| parts.get(i))
+            .map(|p| String::from_utf8_lossy(p).trim_start_matches('\u{feff}').to_string())
+            .unwrap_or_default();
+        let what = || format!(".aff line {}", n + 1);
+        if dir.starts_with('#') || METADATA_DIRECTIVES.contains(&dir.as_str()) {
+            out.push_str(&String::from_utf8_lossy(line));
+            continue;
+        }
+        // A trailing `# comment` (the Hungarian `AF` lines number themselves) is never a word or
+        // a flag; from there on the line is kept as text. It can only start after the directive's
+        // own fields, since a field such as an affix condition may itself begin with `#`.
+        let field_text = |k: usize| words.get(k).and_then(|&w| parts.get(w)).map(|p| String::from_utf8_lossy(p).into_owned());
+        let first_free = comment_field(&dir, field_text);
+        let comment_at = words.iter().skip(first_free).position(|&w| parts.get(w).is_some_and(|f| f.first() == Some(&b'#'))).map(|k| k + first_free);
+        // The field index of the next non-separator part.
+        let mut next_field = 0;
+        for (i, p) in parts.iter().enumerate() {
+            let field = (!p.first().is_some_and(|b| matches!(b, b' ' | b'\t'))).then(|| {
+                next_field += 1;
+                next_field - 1
+            });
+            let in_comment = comment_at.is_some_and(|c| words.get(c).is_some_and(|&w| i >= w));
+            let decoded = match (dir.as_str(), field) {
+                _ if in_comment => String::from_utf8_lossy(p).into_owned(),
+                ("AF" | "COMPOUNDRULE" | "SYLLABLENUM", Some(1)) => decode_latin1(p),
+                ("PFX" | "SFX", Some(3)) | ("CHECKCOMPOUNDPATTERN", Some(1 | 2)) => text_and_flags(p, what)?,
+                // A field that names one flag keeps its first byte, as Hunspell's `decode_flag`
+                // does: `SFX é` is the flag 0xC3, the first of the two flags `kert/é` carries.
+                ("PFX" | "SFX", Some(1)) => decode_latin1(p.get(..1).unwrap_or_default()),
+                (d, Some(1)) if FLAG_DIRECTIVES.contains(&d) => decode_latin1(p.get(..1).unwrap_or_default()),
+                _ => std::str::from_utf8(p).map_err(|e| format!("{}: not UTF-8: {e}", what()))?.to_string(),
+            };
+            out.push_str(&decoded);
+        }
+    }
+    Ok(out)
+}
+
+/// The first field of an `.aff` line where a trailing `# comment` may start: after the
+/// directive's own fields. A table's count line (`REP 12`, `PFX A Y 3`) has fewer fields than its
+/// rows (`REP a b`, `PFX A 0 x .`). `field(k)` is the line's `k`-th field.
+fn comment_field(dir: &str, field: impl Fn(usize) -> Option<String>) -> usize {
+    let number = |k: usize| field(k).is_some_and(|f| f.parse::<usize>().is_ok());
+    match dir {
+        "PFX" | "SFX" if field(2).is_some_and(|f| f == "Y" || f == "N") && number(3) => 4,
+        "PFX" | "SFX" => 5,
+        "REP" | "ICONV" | "OCONV" | "PHONE" | "MAP" | "BREAK" | "AF" | "AM" | "COMPOUNDRULE" | "CHECKCOMPOUNDPATTERN"
+            if number(1) && field(2).is_none_or(|f| f.starts_with('#')) =>
+        {
+            2
+        }
+        "REP" | "ICONV" | "OCONV" | "PHONE" => 3,
+        "CHECKCOMPOUNDPATTERN" => 4,
+        _ => 2,
+    }
+}
+
+/// Where the `word/flags` entry of a `.dic` line ends, as Hunspell reads it: at a tab or at the
+/// first morphological field (a space or tab, two characters and `:`, as in ` po:noun`), whichever
+/// comes first, so an entry may hold spaces (`ad hoc`); with neither, at the end of the line
+/// (`kot/B 12` has the flags `B 12`, as in Hunspell).
+pub(crate) fn dic_entry_end(line: &[u8]) -> usize {
+    let blank = |b: &u8| matches!(b, b' ' | b'\t');
+    let morph = line.windows(4).position(|w| matches!(w, [a, b, c, b':'] if blank(a) && !blank(b) && !blank(c)));
+    let tab = line.iter().position(|&b| b == b'\t');
+    let end = match (morph, tab) {
+        (Some(m), Some(t)) => m.min(t),
+        (m, t) => match m.or(t) {
+            Some(e) => e,
+            None => line.len(),
+        },
+    };
+    // Blanks before the morphological field or the line end aren't part of the entry.
+    line.get(..end).map_or(end, |e| e.iter().rposition(|b| !blank(b)).map_or(0, |k| k + 1))
+}
+
+/// A UTF-8 `.dic` with single-byte flags: the word is UTF-8, the flags after `/` are bytes.
+fn decode_utf8_dic(dic: &[u8]) -> Result<String, String> {
+    let mut out = String::with_capacity(dic.len());
+    for (n, line) in dic.split(|&b| b == b'\n').enumerate() {
+        if n > 0 {
+            out.push('\n');
+        }
+        if let Ok(s) = std::str::from_utf8(line)
+            && s.split_once('/').is_none_or(|(_, flags)| flags.is_ascii())
+        {
+            out.push_str(s);
+            continue;
+        }
+        let what = || format!(".dic line {}", n + 1);
+        // The first field is `word/flags` (it may hold spaces, see [`dic_entry_end`]);
+        // morphological fields after it are UTF-8 text.
+        let end = dic_entry_end(line);
+        out.push_str(&text_and_flags(line.get(..end).unwrap_or_default(), what)?);
+        let rest = line.get(end..).unwrap_or_default();
+        out.push_str(std::str::from_utf8(rest).map_err(|e| format!("{}: not UTF-8: {e}", what()))?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -281,6 +510,78 @@ mod tests {
     }
 
     #[test]
+    fn utf8_dictionaries_keep_single_byte_flags() {
+        // The Hungarian dictionary is `SET UTF-8` but writes flags as single bytes above 0x7F,
+        // which aren't UTF-8; each byte is one flag. Its `NAME` line is ISO 8859-2.
+        let aff = b"SET UTF-8\nNAME Magyar helyes\xedr\xe1si\nAF 2\nAF \xd5a # 1\nAF \xe9 # 2\nSFX \xd5 Y 1\nSFX \xd5 0 ok/2 . 7\nSFX \xe9 Y 1\nSFX \xe9 0 ban .\nSFX a Y 1\nSFX a 0 at .\n";
+        let dic = "2\nház/1\t1\nkert/\u{e9}\n".as_bytes();
+        let (a, d) = decode(aff, dic).unwrap();
+        assert!(a.contains("AF \u{d5}a # 1") && a.contains("AF \u{e9} # 2") && a.contains("SFX \u{d5} 0 ok/2 . 7"));
+        assert!(d.contains("kert/\u{c3}\u{a9}"), "a UTF-8 é in the flags is two one-byte flags");
+        let dict = crate::affix::AffixDict::from_hunspell(&a, &d, &[]).unwrap();
+        assert!(dict.check("ház") && dict.check("házok") && dict.check("házokban") && dict.check("házat"));
+        assert!(!dict.check("házban"));
+        // `FLAG UTF-8` keeps the whole file UTF-8, and words must still be UTF-8.
+        let (_, d) = decode(b"SET UTF-8\nFLAG UTF-8\n", "kert/\u{e9}\n".as_bytes()).unwrap();
+        assert_eq!(d, "kert/\u{e9}\n");
+        assert!(decode(b"SET UTF-8\nSFX a Y 1\nSFX a 0 \xe9 .\n", b"").is_err(), "an affix must be UTF-8");
+        assert!(decode(b"SET UTF-8\n", b"1\nh\xe1z/a\n").is_err(), "a stem must be UTF-8");
+    }
+
+    #[test]
+    fn single_flag_fields_keep_their_first_byte() {
+        // Without `FLAG UTF-8`, a UTF-8 `é` (0xC3 0xA9) in a field that names one flag is the
+        // flag 0xC3; in a `.dic` flag list it is the two flags 0xC3 and 0xA9.
+        let aff = "SET UTF-8\nKEEPCASE é\nSFX é Y 1\nSFX é 0 ok .\nSYLLABLENUM é\n".as_bytes();
+        let (a, d) = decode(aff, "2\nkert/é\nNATO/é\n".as_bytes()).unwrap();
+        assert!(a.contains("KEEPCASE \u{c3}\n") && a.contains("SFX \u{c3} Y 1") && a.contains("SFX \u{c3} 0 ok ."), "{a}");
+        assert!(a.contains("SYLLABLENUM \u{c3}\u{a9}"), "SYLLABLENUM lists flags: {a}");
+        assert!(d.contains("kert/\u{c3}\u{a9}"));
+        let dict = crate::affix::AffixDict::from_hunspell(&a, &d, &[]).unwrap();
+        assert!(dict.check("kert") && dict.check("kertok"));
+        assert!(dict.check("NATO") && !dict.check("Nato"), "KEEPCASE é reaches NATO/é");
+    }
+
+    #[test]
+    fn numeric_and_long_flags_stay_text() {
+        // `FLAG num` (the Turkish dictionary) and `FLAG long`: no byte-wise flag reading, so a
+        // number with a non-ASCII rule or comment keeps every digit.
+        let aff = "SET UTF-8\nFLAG num\nFORBIDDENWORD 6000 # tiltott ő\nSFX 1234 Y 1\nSFX 1234 0 ları .\n";
+        let (a, d) = decode(aff.as_bytes(), "1\nkitap/1234\n".as_bytes()).unwrap();
+        assert_eq!(a, aff);
+        assert_eq!(d, "1\nkitap/1234\n");
+        let tr = crate::tr::dict::TrDict::from_hunspell(&a, &d).unwrap();
+        assert!(tr.contains("kitapları") && tr.contains("kitap"));
+        let long = "SET UTF-8\nFLAG long\nSFX Aa Y 1\nSFX Aa 0 ős .\n";
+        assert_eq!(decode(long.as_bytes(), "1\nkő/Aa\n".as_bytes()).unwrap().0, long);
+        assert!(decode(b"SET UTF-8\nFLAG num\n", b"1\nh\xe1z/1\n").is_err(), "the .dic must be UTF-8");
+        // `FLAG DEFAULT` is the single-byte default.
+        let (_, d) = decode(b"SET UTF-8\nFLAG default\n", b"1\nkert/\xe9\n").unwrap();
+        assert_eq!(d, "1\nkert/\u{e9}\n");
+    }
+
+    #[test]
+    fn flag_utf8_counts_anywhere_in_the_aff() {
+        // A `FLAG UTF-8` after a long rule table still makes the `.dic` flags Unicode.
+        let mut aff = b"SET UTF-8\nSFX a Y 400\n".to_vec();
+        for _ in 0..400 {
+            aff.extend_from_slice(b"SFX a 0 aaaaaaaaaaaaaaaaaaaaaaaa .\n");
+        }
+        aff.extend_from_slice(b"FLAG UTF-8\r\n");
+        assert!(aff.len() > 8192);
+        let (_, d) = decode(&aff, "kert/\u{e9}\n".as_bytes()).unwrap();
+        assert_eq!(d, "kert/\u{e9}\n");
+    }
+
+    #[test]
+    fn a_comment_after_flag_utf8_keeps_unicode_flags() {
+        let (_, d) = decode(b"SET UTF-8\nFLAG UTF-8 # Unicode flags\n", "kert/\u{e9}\n".as_bytes()).unwrap();
+        assert_eq!(d, "kert/\u{e9}\n");
+        let (_, d) = decode(b"SET\tUTF-8  # comment\nFLAG\t\tUTF-8\n", "kert/\u{e9}\n".as_bytes()).unwrap();
+        assert_eq!(d, "kert/\u{e9}\n", "repeated spaces and tabs separate the argument");
+    }
+
+    #[test]
     fn decodes_russian_single_byte_encodings() {
         // `ёлка` in KOI8-R (0xA3 0xCC 0xCB 0xC1) and in Windows-1251 (0xB8 0xEB 0xEA 0xE0).
         let (a, d) = decode(b"SET KOI8-R\nTRY \xcf\xc5\n", b"1\n\xa3\xcc\xcb\xc1/A\n").unwrap();
@@ -289,6 +590,41 @@ mod tests {
         let (_, d) = decode(b"SET microsoft-cp1251\n", b"1\n\xb8\xeb\xea\xe0 \xc4\xee\xec\n").unwrap();
         assert_eq!(d, "1\nёлка Дом\n");
         assert_eq!(decode_high(&[0x98], CP1251_HIGH), "\u{fffd}");
+    }
+
+    #[test]
+    fn comments_start_after_the_directive_fields() {
+        let f = |line: &'static str| move |k: usize| line.split_whitespace().nth(k).map(str::to_string);
+        assert_eq!(comment_field("PFX", f("PFX A Y 3 # count")), 4);
+        assert_eq!(comment_field("SFX", f("SFX A 0 # .")), 5, "a rule's condition may be `#`");
+        assert_eq!(comment_field("AF", f("AF 1234 # aliases")), 2);
+        assert_eq!(comment_field("AF", f("AF Aa # 1")), 2);
+        assert_eq!(comment_field("REP", f("REP 12")), 2);
+        assert_eq!(comment_field("REP", f("REP # x")), 3);
+        assert_eq!(comment_field("CHECKCOMPOUNDPATTERN", f("CHECKCOMPOUNDPATTERN a b c")), 4);
+        assert_eq!(comment_field("KEEPCASE", f("KEEPCASE k")), 2);
+        // A byte flag after an append text that begins with `#` stays a flag, not a comment.
+        let (a, _) = decode(b"SET UTF-8\nSFX \xd5 Y 1 # header\nSFX \xd5 0 #/\xe9 . # rule\n", b"").unwrap();
+        assert!(a.contains("SFX \u{d5} 0 #/\u{e9} . # rule"), "{a}");
+    }
+
+    #[test]
+    fn dic_entries_end_where_hunspell_ends_them() {
+        let end = |l: &str| l.get(..dic_entry_end(l.as_bytes())).unwrap().to_string();
+        assert_eq!(end("word/A po:noun\tts:x"), "word/A", "the morphological field comes before the tab");
+        assert_eq!(end("ad hoc/B\tpo:adv"), "ad hoc/B", "a tab ends a phrase");
+        assert_eq!(end("ad hoc/B po:adv"), "ad hoc/B");
+        assert_eq!(end("word/A 123"), "word/A 123", "neither: the whole line, as in Hunspell");
+        assert_eq!(end("ad hoc/B  "), "ad hoc/B");
+        assert_eq!(end("word"), "word");
+        assert_eq!(end("a:b/A"), "a:b/A", "a colon inside the word isn't a field");
+        // Single-byte flags of a phrase entry are read byte by byte, then the UTF-8 morphology.
+        let (_, d) = decode(b"SET UTF-8\n", b"1\nad hoc/\xe9\tpo:adv\n").unwrap();
+        assert_eq!(d, "1\nad hoc/\u{e9}\tpo:adv\n");
+        // Without a tab or a morphological field the whole line is the entry: its byte flags
+        // don't fail the load (the Hungarian dictionary has such lines: `tök jó/396`).
+        let (_, d) = decode(b"SET UTF-8\n", b"1\nad hoc/\xe9\n").unwrap();
+        assert_eq!(d, "1\nad hoc/\u{e9}\n");
     }
 
     #[test]
