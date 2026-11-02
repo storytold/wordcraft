@@ -57,6 +57,21 @@ fn the_shading_button_shows_the_last_picked_colour() {
     assert!(!ribbon_bars(&h, "FFF2CC"), "and not the old one");
 }
 
+/// #2601: Dropped / In margin send just the position and `keep`, so every selected paragraph keeps
+/// its own lines, distance and font; None sends only the position.
+#[test]
+fn drop_cap_menu_keeps_the_options() {
+    use super::insert::drop_cap_payload;
+    assert_eq!(drop_cap_payload("dropped"), json!({"position": "dropped", "keep": true}));
+    assert_eq!(drop_cap_payload("margin"), json!({"position": "margin", "keep": true}));
+    assert_eq!(drop_cap_payload("none"), json!({"position": "none"}), "None takes it all away");
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Once")), crate::Services::default());
+    app.run("insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"})).unwrap();
+    app.run("insert.dropCap", drop_cap_payload("margin")).unwrap();
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
+    assert_eq!((state.position, state.lines, state.distance, state.font.as_deref()), ("margin", 5, 7.0, Some("Liberation Mono")));
+}
+
 /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
 #[test]
 fn double_click_on_format_painter_makes_it_sticky() {

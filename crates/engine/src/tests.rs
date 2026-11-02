@@ -11697,6 +11697,10 @@ fn drop_cap_keep_leaves_each_paragraphs_options() {
     run(&mut s, "insert.dropCap", json!({"position": "dropped", "keep": true, "lines": 4}));
     assert_eq!(caps(&s).iter().map(|c| c.0).collect::<Vec<_>>(), vec![Some(4); 3]);
     assert_eq!(caps(&s).first().map(|c| (c.2, c.3.clone())), Some((Some(7.0), Some("Liberation Mono".to_string()))), "distance and font still kept");
+    // A blank font given with `keep` clears the kept font (the text's own again).
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "keep": true, "font": " "}));
+    assert_eq!(caps(&s).first().map(|c| c.3.clone()), Some(None), "blank font clears the kept one");
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"}));
     run(&mut s, "insert.dropCap", json!({"position": "margin", "keep": "yes"}));
     assert_eq!(caps(&s), vec![(Some(3), Some(true), None, None); 3], "junk keep: reset what isn't given");
     // None ignores keep.
