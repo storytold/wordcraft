@@ -13,7 +13,7 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
     c[3] = c[3].min(0.95 - c[1]);
     let size = |k: &str| p::f32(v, k).map(|x| x.clamp(1.0, 4000.0));
     let (nw, nh) = (size("width"), size("height"));
-    with_obj(s, |o| {
+    let out = with_obj(s, |o| {
         if let InlineObject::Image { crop, w, h, float, .. } = o {
             // The source's full size at the new display size (the visible part is 1-lo-hi of it).
             let full = |len: f32, lo: f32, hi: f32| len / (1.0 - lo - hi).max(0.05);
@@ -33,7 +33,13 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
             }
             *crop = c;
         }
-    })
+    })?;
+    // A border drawn on the bitmap is drawn again along what the crop leaves (#5298). A picture
+    // too large to draw on is still cropped.
+    match look(s) {
+        Some(l) if l.border.is_some() => relook(s, |_| {}).or(Ok(out)),
+        _ => Ok(out),
+    }
 }
 
 /// A picture's original size: its image's pixels at 96 ppi (the size Insert › Pictures gives it)
@@ -221,18 +227,20 @@ pub struct PictureLook {
     pub drawn: std::sync::Arc<Vec<u8>>,
 }
 
+/// The look drawn on the selected picture's bitmap, if it has one.
+fn look(s: &Session) -> Option<PictureLook> {
+    let (_, InlineObject::Image { media, .. }) = selected(s)? else { return None };
+    let cur = s.doc.media.get(&media)?;
+    s.picture_looks.get(&media).filter(|l| std::sync::Arc::ptr_eq(cur, &l.drawn) && s.doc.media.contains_key(&l.base)).cloned()
+}
+
 /// Change the selected picture's effect, style or border and draw it again from the bitmap
-/// under them (effect, then style, then border).
+/// under them (effect, then style, then border). The border goes round what the picture's crop
+/// leaves visible, as well as round the whole bitmap.
 pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    let cur = s.doc.media.get(&media).cloned();
-    let mut look = s
-        .picture_looks
-        .get(&media)
-        .filter(|l| cur.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(c, &l.drawn)) && s.doc.media.contains_key(&l.base))
-        .cloned()
-        .unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
+    let InlineObject::Image { media, crop, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    let mut look = look(s).unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
     change(&mut look);
     if look.effect.is_none() && look.style.is_none() && look.border.is_none() {
         // Nothing left on it: the bitmap as it was.
@@ -254,6 +262,7 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
         }
         if let Some((c, w)) = l.border {
             img = frame(img, w, [c.0, c.1, c.2, 255])?;
+            outline_crop(&mut img, crop, w, [c.0, c.1, c.2, 255]);
         }
         Ok(img)
     })?;
@@ -425,6 +434,35 @@ fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image:
     let mut out = canvas(w, h, color)?;
     image::imageops::overlay(&mut out, &img.to_rgba8(), border as i64, border as i64);
     Ok(image::DynamicImage::ImageRgba8(out))
+}
+
+/// A `border` pixels wide line of `color` just inside the part of `img` that `crop` (left, top,
+/// right, bottom fractions) leaves visible, so a cropped picture keeps its border. The pixel rows
+/// and columns the crop cuts through count as visible. Nothing for an uncropped picture: its
+/// border is the frame round the bitmap.
+fn outline_crop(img: &mut image::DynamicImage, crop: [f32; 4], border: u32, color: [u8; 4]) {
+    if crop.iter().all(|c| *c <= 0.0) {
+        return;
+    }
+    let mut rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    // The visible span along a side `len` long, in whole pixels.
+    let span = |len: u32, lo: f32, hi: f32| {
+        let side = |f: f32| if f.is_finite() { f.clamp(0.0, 1.0) } else { 0.0 };
+        let a = ((len as f32 * side(lo)).floor() as u32).min(len);
+        let b = ((len as f32 * (1.0 - side(hi))).ceil() as u32).clamp(a, len);
+        (a, b)
+    };
+    let ((x0, x1), (y0, y1)) = (span(w, crop[0], crop[2]), span(h, crop[1], crop[3]));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let near = |p: u32, a: u32, b: u32| p < a.saturating_add(border) || p.saturating_add(border) >= b;
+            if near(x, x0, x1) || near(y, y0, y1) {
+                rgba.put_pixel(x, y, image::Rgba(color));
+            }
+        }
+    }
+    *img = image::DynamicImage::ImageRgba8(rgba);
 }
 
 pub(super) fn picture_style(img: image::DynamicImage, style: &str) -> Result<image::DynamicImage, CmdError> {

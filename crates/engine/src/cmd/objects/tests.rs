@@ -891,6 +891,46 @@ fn picture_crop_with_size_is_one_undo_step() {
     assert!(h >= 1.0, "{h}");
 }
 
+/// #5298: a picture's border stays round what a crop leaves of it, whichever comes first; one
+/// undo takes the crop and its border back, and an uncropped picture has only the outer border.
+#[test]
+fn a_picture_border_goes_round_what_the_crop_leaves() {
+    let blue = image::Rgba([0, 0, 255, 255]);
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(40, 20))})).unwrap();
+    let bitmap = |s: &Session| {
+        let Some((_, InlineObject::Image { media, .. })) = selected(s) else { panic!("a picture") };
+        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+    };
+    s.run("picture.border", &json!({"color": "0000FF", "width": 2})).unwrap();
+    let uncropped = bitmap(&s);
+    // 44 × 24 with the border; a quarter off each side leaves columns 11–32 and rows 6–17.
+    let window = |b: &image::RgbaImage| {
+        assert_eq!(b.dimensions(), (44, 24));
+        for (x, y) in [(11, 12), (12, 12), (32, 12), (31, 12), (22, 6), (22, 7), (22, 17), (22, 16)] {
+            assert_eq!(*b.get_pixel(x, y), blue, "border at ({x}, {y})");
+        }
+        for (x, y) in [(13, 12), (30, 12), (22, 8), (22, 15)] {
+            assert_ne!(*b.get_pixel(x, y), blue, "picture at ({x}, {y})");
+        }
+    };
+    let quarter = json!({"left": 0.25, "top": 0.25, "right": 0.25, "bottom": 0.25});
+    s.run("picture.crop", &quarter).unwrap();
+    window(&bitmap(&s));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(bitmap(&s), uncropped, "undo takes back the crop and its border");
+    s.run("picture.crop", &quarter).unwrap();
+    s.run("picture.crop", &json!({})).unwrap();
+    assert_eq!(bitmap(&s), uncropped, "uncropped, only the outer border");
+
+    // Cropped first, then given a border.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(40, 20))})).unwrap();
+    s.run("picture.crop", &quarter).unwrap();
+    s.run("picture.border", &json!({"color": "0000FF", "width": 2})).unwrap();
+    window(&bitmap(&s));
+}
+
 /// #3135: a picture can be cropped to any part of itself, not just its middle. A side goes to
 /// 0.95 (5% stays, as the renderer draws), and the two sides of an axis keep their 5%.
 #[test]
