@@ -379,7 +379,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-29 | trivial | #15 narrowed: a Word bibliography source with a corporate author keeps it (read, saved, cited and listed whole), and Create Source has the Corporate Author box (#4848) |
 | 2026-10-29 | trivial | Table Properties: row, column and cell settings apply to the selected rows, columns and cells, not only the caret's (#4857); no gap entry tracked it |
 | 2026-10-28 | trivial | Gap 19 narrowed: RTF reads and writes WMF and EMF pictures, chosen by their bytes (#4259); ranking unchanged |
-| 2026-10-31 | trivial | Ribbon tab clicks match Word for Mac: one click on a tab other than File restores a collapsed ribbon, and a minimized ribbon has no active tab (#4884); no ranked gap changes |
+| 2026-10-31 | trivial | Ribbon tab clicks match Word for Mac: one click on a tab other than File restores a collapsed ribbon, and a minimized ribbon has no active tab (#4884); Word for Windows shows a clicked tab's ribbon temporarily with a pin, which is not implemented (WordCraft pins, as Word for Mac and GridCraft do); no ranked gap changes |
 
 ## Layout validation fonts
 
