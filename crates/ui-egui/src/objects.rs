@@ -270,7 +270,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         });
         return true;
     }
-    let grabbed = grab_at(app, layout, pages, scale, at).or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
+    let front = grab_at(app, layout, pages, scale, at);
+    // A Behind Text object reached only for dragging lies under the text: text over it keeps its click.
+    let hit = front.is_some();
+    let grabbed = front.or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
     let Some((object, grab)) = grabbed else { return false };
     // Double-click a SmartArt graphic (selected by the first click) to edit its text.
     if resp.double_clicked() && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
@@ -279,6 +282,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     }
     // Ctrl/⌘+click on a linked picture or shape follows its link, as on linked text (#5267).
     if pressed
+        && hit
         && grab == Grab::Move
         && ui.input(|i| i.modifiers.command && !i.modifiers.shift)
         && let Some(link) = object_link(app, &object)

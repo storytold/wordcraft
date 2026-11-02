@@ -129,6 +129,12 @@ impl Reader<'_> {
         Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
     }
 
+    /// [`Self::drawing_link`] for native ink or an Office 2016 chart kept with its fallback
+    /// (`mc:AlternateContent`): the link on its choice's drawing, else on its fallback's.
+    pub(super) fn alternate_link(ac: &El, rels: &Rels) -> Option<String> {
+        ac.els().filter(|e| matches!(e.name.as_str(), "mc:Choice" | "mc:Fallback")).filter_map(|e| e.child("w:drawing")).find_map(|d| Self::drawing_link(d, rels))
+    }
+
     /// Keep the selected native-ink branch and its picture fallback as one object. Reading only
     /// the fallback flattens the ink; reading only the choice loses its preview on the next save.
     pub(super) fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
