@@ -205,6 +205,84 @@ fn body_of(app: &WordApp) -> String {
     app.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
 }
 
+/// Tab goes from OK to Cancel, as the buttons read (Word on Windows: OK, then Cancel; macOS has
+/// Cancel first), and Shift+Tab comes back. A right-to-left layout adds its right button first,
+/// and Tab follows the order buttons are added, so Tab used to reach Cancel before OK.
+#[test]
+fn tab_goes_through_ok_and_cancel_as_they_read() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("One");
+    let _ = app.run("ui.dialog", json!({"name": "font"}));
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    let (first, second) = if cfg!(target_os = "macos") { ("Cancel", "OK") } else { ("OK", "Cancel") };
+    let (left, right) = (h.get_by_role_and_label(Role::Button, first).rect(), h.get_by_role_and_label(Role::Button, second).rect());
+    assert!(left.max.x <= right.min.x, "{first} is left of {second}, apart: {left:?} {right:?}");
+    h.get_by_role_and_label(Role::Button, first).focus();
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, second).is_focused(), "Tab from {first} reaches {second}");
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, first).is_focused(), "Shift+Tab comes back to {first}");
+}
+
+/// Paragraph › Spacing: Tab goes Before, After, then Line spacing beside them, as in Word (it went
+/// Before, Line spacing, After: a grid's Tab order is row by row).
+#[test]
+fn paragraph_spacing_tabs_in_words_order() {
+    use egui_kittest::kittest::NodeT;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with("One");
+    let _ = app.run("ui.dialog", json!({"name": "paragraph"}));
+    let mut h = app_harness(app);
+    h.run_steps(3);
+    h.query_all_by_label("Before:").find(|n| n.accesskit_node().role() == egui::accesskit::Role::SpinButton).expect("Before box").focus();
+    h.run_steps(2);
+    for next in ["After:", "Line spacing:"] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.query_all_by_label(next).any(|n| n.is_focused()), "Tab reaches {next}");
+    }
+}
+
+/// Tab from a dialog's last box reaches OK, then Cancel, as they read (macOS: Cancel, then OK),
+/// from the first press after the dialog opens, and Shift+Tab goes back to the box. The right
+/// button's place takes its size from the frame before, which a dialog's first frame doesn't
+/// have: that frame is egui's sizing pass of the new window, drawn invisible and disabled, so
+/// nothing in it can have the keyboard yet, and Tab is first read in the next one. Opened again,
+/// the window has no sizing pass, and the size is already known.
+#[test]
+fn tab_from_the_last_box_reaches_ok_then_cancel_from_the_first_press() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let focused = |h: &egui_kittest::Harness<'static, WordApp>| h.query_by(|n| n.is_focused()).and_then(|n| n.accesskit_node().label());
+    // Rename Document: its name box takes the keyboard as it opens; its OK is "Rename".
+    let order = if cfg!(target_os = "macos") { ["Cancel", "Rename"] } else { ["Rename", "Cancel"] };
+    let mut h = app_harness(app_with("One"));
+    h.run_steps(2);
+    for opening in ["first opening", "opened again"] {
+        h.state_mut().run("ui.dialog", json!({"name": "renameDocument"})).unwrap();
+        // One frame: the dialog's first.
+        h.step();
+        assert!(h.ctx.memory(|m| m.focused()).is_some(), "{opening}: the name box has the keyboard");
+        for want in order {
+            h.key_press(egui::Key::Tab);
+            h.step();
+            assert_eq!(focused(&h).as_deref(), Some(want), "{opening}: Tab reaches {want}, in the order {order:?}");
+        }
+        for _ in order {
+            h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+            h.run_steps(2);
+        }
+        assert_eq!(focused(&h).as_deref(), Some("Document name"), "{opening}: Shift+Tab goes back to the box");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "{opening}: Escape closes it");
+    }
+}
+
 fn app_with(text: &str) -> WordApp {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     let _ = app.run("document.setText", json!({"text": text}));
