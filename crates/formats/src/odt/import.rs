@@ -663,7 +663,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     doc.settings.page_color = page_doc.page_color;
     // Laid out as LibreOffice lays it out: a line of only pictures is as tall as they are.
-    doc.settings.object_lines_fit_objects = true;
+    doc.settings.odf_layout = true;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
     if let Some((bytes, fill)) = page_image
         && let Some(ext) = model::sniff_image(&bytes)
@@ -781,6 +781,7 @@ struct Layout {
     /// Its background picture: package path and fill (see [`PageDoc::page_image`]).
     image: Option<(String, &'static str)>,
     columns: Option<Columns>,
+    column_specs: Vec<super::styles::ColumnSpec>,
     header: Band,
     footer: Band,
 }
@@ -849,6 +850,16 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                     l.columns = Some(columns_of(&a));
                 }
             }
+            "column" if q.starts_with("style:") => {
+                if let Some(l) = cur
+                    .as_ref()
+                    .and_then(|n| layouts.get_mut(n))
+                    .filter(|l| l.columns.is_some() && l.column_specs.len() < super::styles::MAX_COLUMN_SPECS)
+                    && let Some(spec) = super::styles::column_spec(&a)
+                {
+                    l.column_specs.push(spec);
+                }
+            }
             "column-sep" => {
                 if let Some(c) = cur.as_ref().and_then(|n| layouts.get_mut(n)).and_then(|l| l.columns.as_mut()) {
                     c.separator = column_sep(&a);
@@ -884,7 +895,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     });
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
-        let Some(Layout { attrs: a, columns: cols, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
+        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
         // What a layout leaves unsaid: the default paper, and LibreOffice's 2 cm margins.
         let mut sec = SectionProps {
             page_w: paper.0,
@@ -919,7 +930,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
         }
         // A one-column layout keeps the default columns (and their gap).
         if let Some(c) = cols.as_ref().filter(|c| c.count > 1) {
-            sec.columns = c.clone();
+            sec.columns = super::styles::with_widths(c.clone(), column_specs, sec.text_width());
         }
         if pages.first.is_none() {
             pages.first = Some(sec.clone());

@@ -306,12 +306,16 @@ pub(in crate::odt) fn odf_name(id: &str) -> String {
 /// `fo:border-*` and `fo:padding-*` attributes for paragraph borders `b`, when a side shows.
 pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
     let mut p = String::new();
-    let Some(b) = b.filter(|b| b.any_visible()) else { return p };
+    // A side without a line may still hold padding (read from ODF), which keeps its room.
+    let padded = |l: &Border| !l.is_visible() && l.space.is_finite() && l.space > 0.0;
+    let Some(b) = b.filter(|b| b.any_visible() || [b.top, b.left, b.bottom, b.right].iter().flatten().any(padded)) else { return p };
     for (side, line) in [("top", b.top), ("left", b.left), ("bottom", b.bottom), ("right", b.right)] {
         let shown = line.filter(|l| l.is_visible());
         p.push_str(&format!(" fo:border-{side}=\"{}\"", odf_border(shown)));
         if let Some(l) = shown {
             p.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.clamp(0.0, 31.0))));
+        } else if let Some(l) = line.filter(padded) {
+            p.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.min(1584.0))));
         }
     }
     p

@@ -1231,3 +1231,46 @@ fn an_empty_paragraph_keeps_its_marks_size() {
     let p = back.body[1].as_para().unwrap();
     assert_eq!(p.runs[0].props.size, Some(6.0));
 }
+
+#[test]
+fn unequal_columns_keep_their_widths_and_columns_without_a_gap_have_none() {
+    // LibreOffice's one-page résumé: a narrow first column and a wide second one (shares of the
+    // width, `style:rel-width`), written back as shares (and without a gap, which would make
+    // LibreOffice ignore them on a page).
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="p"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" fo:margin-left="1in" fo:margin-right="1in" fo:margin-top="1in" fo:margin-bottom="1in"><style:columns fo:column-count="2"><style:column style:rel-width="1*" fo:start-indent="0in" fo:end-indent="0.1in"/><style:column style:rel-width="2*" fo:start-indent="0.1in" fo:end-indent="0in"/></style:columns></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="p"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    let widths =
+        |d: &Document| d.last_section.columns.widths.iter().map(|(w, a)| ((w * 10.0).round() / 10.0, (a * 10.0).round() / 10.0)).collect::<Vec<_>>();
+    // 6.5 in of text: 2.1667 in less 0.1 in, then 4.3333 in less 0.1 in; 0.2 in between.
+    assert_eq!(widths(&doc), [(148.8, 14.4), (304.8, 0.0)]);
+    let out = entry(&export(&doc).unwrap(), "styles.xml");
+    assert!(out.contains(r#"<style:columns fo:column-count="2"><style:column style:rel-width"#), "{out}");
+    assert_eq!(widths(&import(&export(&doc).unwrap()).unwrap()), [(148.8, 14.4), (304.8, 0.0)]);
+    // Equal shares: equal columns with their gap. No gap stated and no shares: none.
+    let equal = styles.replace(r#"rel-width="2*""#, r#"rel-width="1*""#);
+    let c = import(&package(&content, Some(&equal))).unwrap().last_section.columns;
+    assert!(c.widths.is_empty() && (c.space - 14.4).abs() < 0.01, "{c:?}");
+    let bare = styles.replace(r#"<style:column style:rel-width="1*" fo:start-indent="0in" fo:end-indent="0.1in"/><style:column style:rel-width="2*" fo:start-indent="0.1in" fo:end-indent="0in"/>"#, "");
+    let c = import(&package(&content, Some(&bare))).unwrap().last_section.columns;
+    assert_eq!((c.count, c.space, c.widths.len()), (2, 0.0, 0));
+}
+
+#[test]
+fn a_paragraph_starting_a_column_starts_with_a_column_break() {
+    // LibreOffice's résumé: "Education" starts the second column (`fo:break-before="column"`),
+    // Word's column break before it, written back on the paragraph.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="C" style:family="paragraph"><style:paragraph-properties fo:break-before="column"/></style:style></office:automatic-styles><office:body><office:text><text:p>Side</text:p><text:p text:style-name="C">Education</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let text = |d: &Document| d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>();
+    assert_eq!(text(&doc), ["Side", "\u{e}Education"]);
+    let out = content_of(&export(&doc).unwrap());
+    assert!(out.contains(r#"fo:break-before="column""#) && !out.contains('\u{e}'), "{out}");
+    assert_eq!(text(&import(&export(&doc).unwrap()).unwrap()), ["Side", "\u{e}Education"]);
+}

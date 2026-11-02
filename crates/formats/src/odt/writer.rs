@@ -91,6 +91,11 @@ pub(super) const FRAME_PARENT: &str = "\u{0}frame";
 /// LibreOffice doesn't show a floating picture inside a text box.
 pub(super) const GRAPHICS_PARENT: &str = "\u{0}graphics";
 
+/// Paragraph `p` begins with a column break (Word's), which ODF states on the paragraph.
+fn starts_column(p: &Para) -> bool {
+    matches!(p.inlines.first(), Some(Inline::Text(t, _)) if t.starts_with(wordcraft_doc::para::COLUMN_BREAK))
+}
+
 pub(super) fn pt(v: f32) -> String {
     let s = format!("{:.2}", v);
     format!("{}pt", s.trim_end_matches('0').trim_end_matches('.'))
@@ -256,6 +261,9 @@ impl Writer {
         // The master page starts the page itself: no page break besides.
         if p.page_break && start.is_none() {
             props.push_str(" fo:break-before=\"page\"");
+        } else if !p.page_break && starts_column(p) {
+            // A column break first (dropped from the text): the paragraph starts a column.
+            props.push_str(" fo:break-before=\"column\"");
         }
         if let Some(n) = start.and_then(|(_, n)| *n) {
             props.push_str(&format!(" style:page-number=\"{n}\""));

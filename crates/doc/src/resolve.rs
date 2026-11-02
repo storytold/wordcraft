@@ -182,6 +182,9 @@ pub struct ResolvedPara {
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
+    /// Padding on the sides without a line (top, left, bottom, right), points: ODF's, which
+    /// LibreOffice's layout keeps (`Settings::odf_layout`); Word drops it.
+    pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,
     /// The drop cap hangs in the margin (see `ParaProps::drop_cap_margin`).
@@ -269,6 +272,10 @@ impl ResolvedPara {
             tabs,
             shading: p.shading,
             borders: p.borders.filter(Borders::any_visible),
+            padding: p.borders.map_or([0.0; 4], |b| {
+                [b.top, b.left, b.bottom, b.right]
+                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+            }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),

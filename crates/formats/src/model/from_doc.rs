@@ -406,7 +406,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
     let list = flow_list(kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
-    let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
+    let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
     let mut out = Para {
         kind,
         list,

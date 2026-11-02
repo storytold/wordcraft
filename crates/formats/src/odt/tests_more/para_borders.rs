@@ -28,10 +28,30 @@ fn borders_padding_and_background_are_read() {
     let top = b.top.expect("top");
     assert_eq!((top.style, top.width, top.color, top.space), (BorderStyle::Single, 1.0, Some(Rgb(0, 0, 0x80)), 2.0));
     assert!(b.bottom.is_some_and(|x| x.is_visible()));
-    assert!(!b.left.is_some_and(|x| x.is_visible()) && b.right.is_none());
+    assert!(!b.left.is_some_and(|x| x.is_visible()));
+    // The right side has no line but keeps its padding (LibreOffice gives it room).
+    let right = b.right.expect("the right side's padding");
+    assert_eq!((right.is_visible(), right.space), (false, 2.0));
     assert_eq!(p.shading, Some(Rgb(0xee, 0xee, 0xee)));
     // A transparent background is none.
     assert_eq!(props(&open(r#"fo:background-color="transparent""#, "x")).shading, None);
+}
+
+#[test]
+fn padding_without_a_border_keeps_its_room() {
+    // LibreOffice's report templates: padding on a side without a line still takes room
+    // (measured: 0.5 in of padding and no border moves the text 0.5 in in and down).
+    let d = open(r#"fo:padding="0.5in""#, "Padded");
+    let p = props(&d);
+    let b = p.borders.expect("the padding");
+    assert!(!b.any_visible() && b.takes_room());
+    assert_eq!(d.styles.resolve_para(&p).padding, [36.0; 4]);
+    assert!(d.settings.odf_layout);
+    // Written back as padding.
+    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    assert!(out.contains(r#"fo:border-top="none" fo:padding-top="36pt""#), "{out}");
+    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    assert_eq!(back.styles.resolve_para(&props(&back)).padding, [36.0; 4]);
 }
 
 #[test]

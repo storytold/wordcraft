@@ -4,7 +4,23 @@ use super::{Columns, Cursor, Document, FBlock, Meta, SectionProps, SectionStart,
 /// `style:columns` (ODF 1.3 §17.12) of equal columns with their gap and, when on, the line between.
 fn columns_xml(c: &Columns) -> String {
     let sep = if c.separator { "<style:column-sep style:width=\"0.5pt\" style:style=\"solid\" style:color=\"#000000\"/>" } else { "" };
-    format!("<style:columns fo:column-count=\"{}\" fo:column-gap=\"{}\">{sep}</style:columns>", c.count.clamp(1, 45), pt(c.space))
+    let count = c.count.clamp(1, 45);
+    // Unequal columns (§17.12): each one's share of the width with the half gaps beside it as
+    // its indents, as LibreOffice writes them.
+    let mut each = String::new();
+    if c.widths.len() == count as usize && count > 1 {
+        let clean = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
+        let mut start = 0.0;
+        for (w, after) in &c.widths {
+            let end = clean(*after) / 2.0;
+            let rel = ((clean(*w) + start + end) * 100.0).round().max(1.0) as u32;
+            each.push_str(&format!("<style:column style:rel-width=\"{rel}*\" fo:start-indent=\"{}\" fo:end-indent=\"{}\"/>", pt(start), pt(end)));
+            start = end;
+        }
+    }
+    // LibreOffice ignores a page's column widths beside a gap: the gaps are in the indents.
+    let gap = if each.is_empty() { format!(" fo:column-gap=\"{}\"", pt(c.space)) } else { String::new() };
+    format!("<style:columns fo:column-count=\"{count}\"{gap}>{sep}{each}</style:columns>")
 }
 
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…

@@ -100,7 +100,20 @@ fn paragraph_props(p: &Paragraph, env: &ParaEnv) -> ResolvedPara {
         rp.set_char_unit(doc.styles.resolve_char_in(p.props.style.as_deref(), env.table.map(|t| &t.chr), &p.mark).size);
     }
     list_indents(&mut rp, p, env);
+    if doc.settings.odf_layout {
+        odf_padding(&mut rp);
+    }
     rp
+}
+
+/// LibreOffice keeps a paragraph's padding on a side without a border (Word drops it): the room
+/// it takes is added to the spacing above or below, or to the indent beside.
+fn odf_padding(rp: &mut ResolvedPara) {
+    let [top, left, bottom, right] = rp.padding;
+    rp.space_before += top;
+    rp.space_after += bottom;
+    rp.indent_left += left;
+    rp.indent_right += right;
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,

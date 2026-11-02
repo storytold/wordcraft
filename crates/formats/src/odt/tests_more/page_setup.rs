@@ -156,7 +156,7 @@ fn a_document_without_a_page_layout_has_libreoffices_default_page() {
     assert_eq!((s.page_w, s.page_h), (595.3, 841.9));
     let cm2 = 2.0 * 72.0 / 2.54;
     assert!([s.margin_top, s.margin_bottom, s.margin_left, s.margin_right].iter().all(|m| (m - cm2).abs() < 0.01), "{s:?}");
-    assert!(d.settings.object_lines_fit_objects);
+    assert!(d.settings.odf_layout);
 }
 
 #[test]

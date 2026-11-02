@@ -470,6 +470,10 @@ impl Body<'_> {
             pb = true;
         }
         let mut p = Para { kind, align, page_break: pb, keep_next, spacing: look.spacing, ..Default::default() };
+        // A paragraph starting a column (`fo:break-before="column"`): Word's column break first.
+        if look.column_break && !pb {
+            p.inlines.push(Inline::Text(wordcraft_doc::para::COLUMN_BREAK.to_string(), model::Fmt::default()));
+        }
         p.borders = look.borders;
         if let Some(n) = look.named {
             // The ODF name for now; import makes it the document style's id.
@@ -894,7 +898,7 @@ impl Body<'_> {
                 if self.cols_at.is_none()
                     && self.in_body()
                     && let Some(columns) = get(a, "text:style-name")
-                        .and_then(|s| self.styles.columns(s))
+                        .and_then(|s| self.styles.columns(s, self.page.text_width()))
                         // A section whose columns match the open section's (a plain one-column
                         // section in a one-column page) is no new section.
                         .filter(|c| c.count != self.sec.columns.count || (c.count > 1 && *c != self.sec.columns))

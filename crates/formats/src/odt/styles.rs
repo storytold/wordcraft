@@ -218,6 +218,8 @@ struct StyleInfo {
     fmt: FmtDelta,
     align: Option<Align>,
     page_break: bool,
+    /// `fo:break-before="column"`: its paragraphs start a column.
+    column_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
     outline: Option<u8>,
@@ -251,6 +253,8 @@ struct StyleInfo {
     page_number: Option<Option<u32>>,
     /// `style:columns` of a section style.
     columns: Option<Columns>,
+    /// The section style's `style:column`s, as [`with_widths`] gives them widths.
+    column_specs: Vec<ColumnSpec>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
     spacing: Spacing,
     /// `style:family` (paragraph, text, table…).
@@ -389,6 +393,8 @@ pub(super) struct ParaLook {
     pub(super) kind: Kind,
     pub(super) align: Option<Align>,
     pub(super) page_break: bool,
+    /// It starts a column (`fo:break-before="column"`).
+    pub(super) column_break: bool,
     pub(super) rule: bool,
     pub(super) keep_next: bool,
     pub(super) fmt: Fmt,
@@ -616,6 +622,11 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
         }
         "table-cell-properties" => table_cell_properties(a, s),
         "columns" if q.starts_with("style:") => s.columns = Some(columns_of(a)),
+        "column" if q.starts_with("style:") && s.columns.is_some() => {
+            if let Some(spec) = column_spec(a).filter(|_| s.column_specs.len() < MAX_COLUMN_SPECS) {
+                s.column_specs.push(spec);
+            }
+        }
         "column-sep" => {
             if let Some(c) = &mut s.columns {
                 c.separator = column_sep(a);
@@ -680,12 +691,54 @@ fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
 /// Columns of a `style:columns` element (ODF 1.3 §17.12): count and gap, clamped as the RTF and
 /// DOCX readers do; equal widths only (`style:column` widths are not read).
 pub(super) fn columns_of(a: &Attrs) -> Columns {
-    let mut c = Columns::default();
+    // Without `fo:column-gap` the columns stand side by side (no gap, unlike Word's default).
+    let mut c = Columns { space: 0.0, ..Columns::default() };
     if let Some(n) = get(a, "fo:column-count").and_then(|v| v.trim().parse::<u64>().ok()) {
         c.count = n.clamp(1, 45) as u32;
     }
     if let Some(g) = get(a, "fo:column-gap").and_then(length).filter(|v| *v >= 0.0) {
         c.space = g.min(1584.0);
+    }
+    c
+}
+
+/// A `style:column` (ODF 1.3 §17.12): its relative width (`style:rel-width`, a share of the
+/// columns' total) and its space before and after (`fo:start-indent`, `fo:end-indent`), points.
+pub(super) type ColumnSpec = (f32, f32, f32);
+
+/// Most `style:column`s read for one set of columns (as many as Word's 45 columns).
+pub(super) const MAX_COLUMN_SPECS: usize = 45;
+
+pub(super) fn column_spec(a: &Attrs) -> Option<ColumnSpec> {
+    let rel = get(a, "style:rel-width")?.trim().trim_end_matches('*').trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+    let len = |k: &str| get(a, k).and_then(length).filter(|v| v.is_finite()).map_or(0.0, |v| v.clamp(0.0, 1584.0));
+    Some((rel.min(1.0e9), len("fo:start-indent"), len("fo:end-indent")))
+}
+
+/// `c` with the widths its `style:column`s give, in a text `tw` points wide: each column's
+/// share of the width less its indents, and the space after it its end indent with the next
+/// column's start indent. Equal columns keep equal widths and take the gap between them.
+pub(super) fn with_widths(mut c: Columns, specs: &[ColumnSpec], tw: f32) -> Columns {
+    let total: f32 = specs.iter().map(|s| s.0).sum();
+    if c.count < 2 || specs.len() != c.count as usize || !(total.is_finite() && total > 0.0) || !(tw.is_finite() && tw > 0.0) {
+        return c;
+    }
+    let boxes: Vec<(f32, f32)> = specs
+        .iter()
+        .enumerate()
+        .map(|(i, (rel, start, end))| {
+            let next_start = specs.get(i + 1).map_or(0.0, |s| s.1);
+            let after = if i + 1 < specs.len() { end + next_start } else { 0.0 };
+            ((rel / total * tw - start - end).max(18.0), after)
+        })
+        .collect();
+    let (w0, gap) = boxes.first().copied().unwrap_or_default();
+    let equal = boxes.iter().all(|(w, _)| (w - w0).abs() < 0.5) && boxes.iter().rev().skip(1).all(|(_, a)| (a - gap).abs() < 0.5);
+    if equal {
+        c.space = gap;
+        c.widths.clear();
+    } else {
+        c.widths = boxes;
     }
     c
 }
@@ -782,6 +835,9 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
         Some("start") | Some("left") => Some(Align::Left),
         _ => s.align,
     };
+    if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("column")) {
+        s.column_break = true;
+    }
     if get(a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
         s.page_break = true;
     }
@@ -828,15 +884,23 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     }
 }
 
+/// The most padding a side without a line keeps, points (22 inches).
+const MAX_PADDING: f32 = 1584.0;
+
 /// `fo:border`, `fo:border-top`… of `a` (a side's own value wins over the shorthand), each side's
-/// `fo:padding*` as its distance from the text; `None` when none is stated.
+/// `fo:padding*` as its distance from the text (Word's 31 pt at most beside a line); a side
+/// with padding and no line is an invisible border holding it. `None` when none is stated.
 fn border_sides(a: &Attrs) -> Option<Borders> {
     let all = get(a, "fo:border").and_then(parse_border);
     let pad_all = get(a, "fo:padding").and_then(length);
     let side = |b: &str, p: &str| {
-        let mut line = get(a, b).and_then(parse_border).or(all)?;
-        if let Some(sp) = get(a, p).and_then(length).or(pad_all).filter(|v| v.is_finite()) {
-            line.space = sp.clamp(0.0, 31.0);
+        let pad = get(a, p).and_then(length).or(pad_all).filter(|v| v.is_finite() && *v > 0.0);
+        // Padding without a line still takes room (LibreOffice): a side with no line holds it.
+        let Some(mut line) = get(a, b).and_then(parse_border).or(all) else {
+            return pad.map(|sp| Border { style: BorderStyle::None, width: 0.0, color: None, space: sp.min(MAX_PADDING) });
+        };
+        if let Some(sp) = pad {
+            line.space = if line.is_visible() { sp.min(31.0) } else { sp.min(MAX_PADDING) };
         }
         Some(line)
     };
@@ -1189,8 +1253,9 @@ impl Styles {
     }
 
     /// Columns of a section style (whole chain).
-    pub(super) fn columns(&self, name: &str) -> Option<Columns> {
-        self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
+    /// A section style's columns in a text `tw` points wide (whole chain).
+    pub(super) fn columns(&self, name: &str, tw: f32) -> Option<Columns> {
+        self.chain(name).iter().find_map(|(_, s)| s.columns.clone().map(|c| with_widths(c, &s.column_specs, tw)))
     }
 
     /// Width in points of a table-column style (whole chain).
@@ -1350,7 +1415,7 @@ impl Styles {
             fmt,
             spacing: s.spacing,
             tabs: s.tabs.clone(),
-            borders: s.para_borders.filter(|b| b.any_visible()),
+            borders: s.para_borders.filter(|b| b.takes_room()),
             shading: s.para_shading.flatten(),
             contextual: s.contextual,
             rtl: s.rtl,
@@ -1400,6 +1465,7 @@ impl Styles {
         let kind_at = named_at.unwrap_or(kind_at);
         let align = if named.is_some() { chain.iter().take(kind_at).find_map(|(_, s)| s.align) } else { chain.iter().find_map(|(_, s)| s.align) };
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
+        let column_break = !pb && chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.column_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
         let mut spacing = Spacing::default();
@@ -1413,7 +1479,7 @@ impl Styles {
         let tabs = chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard").find_map(|(_, s)| s.tabs.clone());
         // Borders and background: the nearest in the chain, the kind's style and Standard aside.
         let own = || chain.iter().take(kind_at).filter(|(n, s)| s.auto || *n != "Standard");
-        let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.any_visible());
+        let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);
@@ -1430,6 +1496,7 @@ impl Styles {
             kind,
             align,
             page_break: pb,
+            column_break,
             rule,
             keep_next,
             fmt: f,
