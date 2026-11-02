@@ -115,6 +115,7 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
 fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
+    wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(|e| format!("ODT: {e}"))?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
