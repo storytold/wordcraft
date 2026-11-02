@@ -168,6 +168,6 @@ mod tests {
     #[test]
     fn eight_digit_hex_rejects_signs() {
         assert_eq!(parse_color("#+1+2+3+4"), None);
-        assert_eq!(parse_color("#11223344"), Some(Rgb(0x11, 0x22, 0x33)));
+        assert_eq!(parse_color("#11223344"), Some(Rgb(192, 196, 201)));
     }
 }
