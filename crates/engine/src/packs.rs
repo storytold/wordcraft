@@ -293,8 +293,12 @@ pub fn install(locale: &str, cancel: &Cancel, progress: &mut dyn FnMut(u64, u64)
 /// Remove the installed pack for `locale`.
 pub fn remove(locale: &str) -> Result<(), String> {
     let b = backend().ok_or_else(no_store)?;
-    if jobs().installs.iter().any(|(l, ..)| l == locale) {
-        return Err(format!("the {locale} pack is being installed: cancel it first"));
+    if let Some(job) = jobs().installs.iter().find(|j| j.locale == locale) {
+        return Err(if job.stopping() {
+            format!("the {locale} pack's cancelled install is still stopping: try again in a moment")
+        } else {
+            format!("the {locale} pack is being installed: cancel it first")
+        });
     }
     if !b.installed().iter().any(|p| p.locale == locale) {
         return Err(format!("no language pack is installed for {locale}"));
@@ -315,11 +319,33 @@ pub type Notify = Arc<dyn Fn() + Send + Sync>;
 
 static BACKGROUND: RwLock<Option<Notify>> = RwLock::new(None);
 
+/// An install running on a thread.
+struct InstallJob {
+    locale: String,
+    /// Bytes done.
+    done: u64,
+    /// Bytes in all.
+    total: u64,
+    /// Stops this run. A cancelled job stays listed (hidden from [`installing`]) until its thread
+    /// notices and ends, so two downloads of a locale never write its folder at once.
+    cancel: Cancel,
+    /// Install was asked again after a cancel, before the cancelled run ended: the thread starts
+    /// over (with the fresh `cancel`) instead of ending.
+    restart: bool,
+}
+
+impl InstallJob {
+    /// Cancelled, and its thread hasn't ended yet.
+    fn stopping(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+}
+
 /// Installs and fetches running on a thread, and how the finished ones ended.
 #[derive(Default)]
 struct Jobs {
-    /// Running installs by locale: (bytes done, bytes in all, its Cancel).
-    installs: Vec<(String, u64, u64, Cancel)>,
+    /// Running installs, one per locale.
+    installs: Vec<InstallJob>,
     fetching: bool,
     /// The last failure of each locale's install ("" for the list), until it is tried again.
     errors: Vec<(String, String)>,
@@ -358,9 +384,9 @@ pub struct Progress {
     pub total: u64,
 }
 
-/// The installs running now.
+/// The installs running now (not the cancelled ones still stopping).
 pub fn installing() -> Vec<Progress> {
-    jobs().installs.iter().map(|(l, d, t, _)| Progress { locale: l.clone(), done: *d, total: *t }).collect()
+    jobs().installs.iter().filter(|j| !j.stopping()).map(|j| Progress { locale: j.locale.clone(), done: j.done, total: j.total }).collect()
 }
 
 /// Whether the list is being fetched.
@@ -383,10 +409,12 @@ pub fn finished() -> u64 {
     jobs().finished
 }
 
-/// Stop `locale`'s running install.
+/// Stop `locale`'s running install. The person's own choice: it ends without an error, and
+/// [`installing`] stops listing it at once (Install shows again).
 pub fn cancel(locale: &str) {
-    if let Some((_, _, _, c)) = jobs().installs.iter().find(|(l, ..)| l == locale) {
-        c.cancel();
+    if let Some(job) = jobs().installs.iter_mut().find(|j| j.locale == locale) {
+        job.restart = false;
+        job.cancel.cancel();
     }
 }
 
@@ -400,7 +428,9 @@ fn set_error(locale: &str, e: Option<String>) {
 
 /// Start installing `locale` ([`install`]): on a thread when [`runs_in_background`], else now.
 /// What's wrong up front (no pack, downloading off, outside the write root) is an error at once.
-/// Returns whether it is still running (`false`: done, or it already was running).
+/// Returns whether it is still running (`false`: done). Asked again while it runs, it carries on;
+/// right after a cancel, before the cancelled download has stopped, it starts over once that
+/// one ends (never two downloads of a pack at once).
 pub fn start_install(locale: &str) -> Result<bool, String> {
     let b = backend().ok_or_else(no_store)?;
     let pack = find(locale).ok_or_else(|| format!("there is no language pack for {locale}"))?;
@@ -418,34 +448,55 @@ pub fn start_install(locale: &str) -> Result<bool, String> {
     let cancel = Cancel::new();
     {
         let mut j = jobs();
-        if j.installs.iter().any(|(l, ..)| l == locale) {
+        j.errors.retain(|(l, _)| l != locale);
+        if let Some(job) = j.installs.iter_mut().find(|j| j.locale == locale) {
+            if job.stopping() {
+                // Cancelled and not ended yet: its thread starts over when it does.
+                job.done = 0;
+                job.total = pack.size;
+                job.cancel = cancel;
+                job.restart = true;
+            }
             return Ok(true);
         }
-        j.installs.push((locale.to_string(), 0, pack.size, cancel.clone()));
-        j.errors.retain(|(l, _)| l != locale);
+        j.installs.push(InstallJob { locale: locale.to_string(), done: 0, total: pack.size, cancel: cancel.clone(), restart: false });
     }
     let key = locale.to_string();
     let locale = locale.to_string();
     let started = spawn(move || {
-        let progress_notify = notify.clone();
-        let r = install(&locale, &cancel, &mut |done, total| {
-            if let Some(job) = jobs().installs.iter_mut().find(|(l, ..)| *l == locale) {
-                job.1 = done;
-                job.2 = total;
+        let mut cancel = cancel;
+        loop {
+            let progress_notify = notify.clone();
+            let r = install(&locale, &cancel, &mut |done, total| {
+                if let Some(job) = jobs().installs.iter_mut().find(|j| j.locale == locale) {
+                    job.done = done;
+                    job.total = total;
+                }
+                progress_notify();
+            });
+            let mut j = jobs();
+            if let Some(job) = j.installs.iter_mut().find(|j| j.locale == locale && j.restart) {
+                job.restart = false;
+                cancel = job.cancel.clone();
+                drop(j);
+                notify();
+                continue;
             }
-            progress_notify();
-        });
-        let mut j = jobs();
-        j.installs.retain(|(l, ..)| *l != locale);
-        if let Err(e) = r {
-            j.errors.push((locale, e));
+            j.installs.retain(|j| j.locale != locale);
+            // The person's own cancel isn't a failure: nothing to show.
+            if let Err(e) = r
+                && !cancel.is_cancelled()
+            {
+                j.errors.push((locale, e));
+            }
+            j.finished = j.finished.wrapping_add(1);
+            drop(j);
+            notify();
+            break;
         }
-        j.finished = j.finished.wrapping_add(1);
-        drop(j);
-        notify();
     });
     if let Err(e) = started {
-        jobs().installs.retain(|(l, ..)| *l != key);
+        jobs().installs.retain(|j| j.locale != key);
         return Err(e);
     }
     Ok(true)
