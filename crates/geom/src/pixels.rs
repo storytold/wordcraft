@@ -18,9 +18,18 @@ pub fn rgba_fits(w: u32, h: u32, budget: u64) -> bool {
 }
 
 /// Whether decoding a `w`×`h` picture fits `budget` bytes at its peak: the decoder's buffer and
-/// the RGBA conversion (or its premultiplied copy) are alive together, so two RGBA buffers.
+/// the RGBA conversion (or its premultiplied copy) are alive together, so two RGBA buffers. For a
+/// decoder whose buffer isn't four bytes a pixel, see [`decode_peak_fits`].
 pub fn decode_fits(w: u32, h: u32, budget: u64) -> bool {
-    w > 0 && h > 0 && rgba_bytes(w, h).and_then(|b| b.checked_mul(2)).is_some_and(|b| b <= budget)
+    decode_peak_fits(w, h, 4, budget)
+}
+
+/// [`decode_fits`] for a decoder that hands back `native` bytes a pixel (8 for 16-bit RGBA, 16 for
+/// float RGBA): its buffer lives alongside the RGBA8 conversion, then the conversion alongside its
+/// premultiplied copy, so the peak is the larger of `native + 4` and `8` bytes a pixel.
+pub fn decode_peak_fits(w: u32, h: u32, native: u64, budget: u64) -> bool {
+    let per_pixel = native.saturating_add(4).max(8);
+    w > 0 && h > 0 && (w as u64).checked_mul(h as u64).and_then(|p| p.checked_mul(per_pixel)).is_some_and(|b| b <= budget)
 }
 
 /// `w`×`h` shrunk (aspect kept, each side at least 1) until it holds at most `max_pixels`.
@@ -51,6 +60,18 @@ mod tests {
         assert!(decode_fits(16, 8, 1024));
         assert!(!decode_fits(16, 8, 1023), "decode + conversion hold two buffers");
         assert!(!decode_fits(0, 8, u64::MAX));
+    }
+
+    /// A 16-bit RGBA decode (8 bytes a pixel) lives alongside its 4-byte RGBA8 conversion: 12 bytes
+    /// a pixel at the peak, not the 8 two RGBA8 buffers take.
+    #[test]
+    fn wide_decoder_buffers_are_charged_at_their_size() {
+        assert!(decode_peak_fits(16, 8, 4, 1024), "RGBA8: two RGBA8 buffers");
+        assert!(decode_peak_fits(16, 8, 1, 1024), "grey: the premultiplied copy is the peak");
+        assert!(!decode_peak_fits(16, 8, 8, 1024), "RGBA16 needs 1536 bytes");
+        assert!(decode_peak_fits(16, 8, 8, 1536));
+        assert!(!decode_peak_fits(16, 8, 16, 2559), "RGBA32F: 20 bytes a pixel");
+        assert!(!decode_peak_fits(u32::MAX, u32::MAX, u64::MAX, u64::MAX), "overflow is refused");
     }
 
     #[test]

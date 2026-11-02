@@ -61,6 +61,34 @@ Word's "Field" in the file.)
 - Zotero's document transfer (Export/Import Document) isn't needed and isn't supported.
 - The web version can't reach Zotero (browsers can't open the socket).
 
+## Who can drive the document
+
+Zotero's protocol has no handshake that proves the program on port 23116 is Zotero, and that
+program can read the citations and edit the open document. WordCraft limits who that can be.
+In short: **every system** gets the loopback rule; **only Linux** also checks that the listener
+isn't another user's. On Windows and macOS (and the BSDs) the loopback rule is the only check.
+
+- Every system: it only connects to this computer (a loopback address such as `127.0.0.1`);
+  any other address is refused before connecting.
+- Linux only: it checks, in the kernel's socket table (`/proc/net/tcp`, `/proc/net/tcp6`), that the
+  program listening on the port runs as the same user as WordCraft, before sending anything. If
+  another account on a shared machine took the port while Zotero wasn't running, WordCraft
+  refuses with an error and the document isn't touched. When the table doesn't show the
+  listener (WSL2 mirrored networking with Zotero running on Windows, a local proxy), its owner
+  is unknown and only the loopback rule applies, as below. That holds only when the tables were
+  read in full: a read error, or an open error other than "not found", **refuses**. Sandboxes
+  that deny `/proc/net/tcp` (some AppArmor or Snap profiles, for example) are therefore refused.
+- Windows, macOS and the BSDs: **no same-user check.** They have no such table to read
+  without OS calls WordCraft doesn't make (it uses no `unsafe` code), so only the loopback rule
+  applies there (and on Linux when the listener isn't in the table). Remaining risk: on a
+  computer shared with other accounts, a program another user leaves on port 23116 while
+  Zotero is closed would be taken for Zotero. An owner check for these systems is tracked in
+  #3831. A program running as you is trusted on every system; it could change your documents
+  anyway.
+- `wordcraft-cli zotero` prints Zotero's messages (and `--trace` lines) with control
+  characters, line breaks and backslashes shown as escapes (`\n`, `\u{1b}`, `\\`), so a peer
+  can't forge other output or drive the terminal.
+
 ## How it works
 
 `crates/zotero` implements Zotero's published word-processor wire protocol (port 23116):
