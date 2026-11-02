@@ -101,6 +101,7 @@ impl WordApp {
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
+            packs_rt: Default::default(),
             control_rx: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
@@ -217,6 +218,7 @@ impl WordApp {
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
         updates_ui::tick(self, ctx);
+        crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // New documents are written in the interface's language when WordCraft can proof it

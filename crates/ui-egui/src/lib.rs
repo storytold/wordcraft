@@ -52,6 +52,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub(crate) mod language_packs;
 mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
@@ -496,6 +497,8 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// Language pack installs, the missing-pack bar ([`language_packs`]).
+    pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
