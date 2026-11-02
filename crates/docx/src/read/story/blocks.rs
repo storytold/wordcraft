@@ -1,6 +1,8 @@
+use wordcraft_doc::bookmark::{BookmarkAttrs, BookmarkContainer, BookmarkPlace};
+
 use super::{
     Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, PB, Paragraph, Phase, PropChange,
-    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, last_para_mut, para_block,
+    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, edge_para_mut, para_block,
     placeholder_of, sectpr, tcpr, trpr,
 };
 
@@ -66,7 +68,7 @@ impl Reader<'_> {
                 }
                 "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd" => {
                     if let Some(o) = self.marker(e) {
-                        sc.pending.push(o);
+                        sc.pending.push((o, sc.tables));
                     }
                 }
                 "w:moveFromRangeStart" | "w:moveFromRangeEnd" | "w:moveToRangeStart" | "w:moveToRangeEnd" => self.move_range(e),
@@ -120,31 +122,84 @@ impl Reader<'_> {
     /// Markers left over at the end of a story go to its last paragraph (after a final table:
     /// the last paragraph of its last cell, so a bookmark around the table keeps its end).
     pub fn flush_pending(&mut self, sc: &mut StoryCtx, out: &mut Blocks) {
-        if sc.pending.is_empty() {
+        self.attach_bookmarks(out, sc.pending.drain(..).map(|(o, _)| o).collect(), BookmarkContainer::Block, true);
+    }
+
+    fn attach_bookmarks(&mut self, blocks: &mut Blocks, marks: Vec<InlineObject>, container: BookmarkContainer, after: bool) {
+        if marks.is_empty() {
             return;
         }
-        if let Some(p) = last_para_mut(out, 0) {
-            for o in sc.pending.drain(..) {
+        let Some((p, tables)) = edge_para_mut(blocks, after, 0) else { return };
+        for o in &marks {
+            self.bookmark_place(o, BookmarkPlace { container, after, tables });
+        }
+        if after {
+            for o in marks {
                 let props = p.runs.last().map(|r| r.props.clone()).unwrap_or_default();
                 p.text.push(wordcraft_doc::para::OBJ);
                 p.objects.push(o);
                 p.runs.push(Run { len: wordcraft_doc::para::OBJ.len_utf8(), props });
             }
             p.normalize();
+        } else {
+            let props = p.props_of_char(0).clone();
+            let len = marks.len().saturating_mul(wordcraft_doc::para::OBJ.len_utf8());
+            let mut text = wordcraft_doc::para::OBJ.to_string().repeat(marks.len());
+            text.push_str(&p.text);
+            p.text = text;
+            let mut objects = marks;
+            objects.append(&mut p.objects);
+            p.objects = objects;
+            p.runs.insert(0, Run { len, props });
+            p.normalize();
         }
-        sc.pending.clear();
+    }
+
+    fn bookmark_place(&mut self, o: &InlineObject, place: BookmarkPlace) {
+        let (name, end) = match o {
+            InlineObject::BookmarkStart { name } => (name, false),
+            InlineObject::BookmarkEnd { name } => (name, true),
+            _ => return,
+        };
+        let Some(attrs) = Arc::make_mut(&mut self.doc.bookmark_attrs).get_mut(name) else { return };
+        if end {
+            attrs.end = Some(place);
+        } else {
+            attrs.start = Some(place);
+        }
+    }
+
+    /// Markers are read in order with their rows/cells. Ends can follow the preceding
+    /// child; a pending start and its subsequent markers stay together before the next child.
+    fn boundary_bookmark(&mut self, e: &El, previous: Option<&mut Blocks>, lead: &mut Vec<InlineObject>, container: BookmarkContainer) {
+        let Some(o) = self.marker(e) else { return };
+        if matches!(o, InlineObject::BookmarkEnd { .. })
+            && lead.is_empty()
+            && let Some(previous) = previous
+        {
+            self.attach_bookmarks(previous, vec![o], container, true);
+        } else {
+            lead.push(o);
+        }
     }
 
     pub(super) fn marker(&mut self, e: &El) -> Option<InlineObject> {
         let id = e.attr("w:id").map(str::trim).unwrap_or("").to_string();
         match e.name.as_str() {
             "w:bookmarkStart" => {
-                if self.bookmarks.len() >= 100_000 {
+                if self.bookmarks.len() >= 100_000 || self.doc.bookmark_attrs.len() >= 100_000 {
                     return None;
                 }
                 let name = e.attr("w:name").map(str::trim).unwrap_or("").to_string();
                 if name.is_empty() || name.len() > 256 {
                     return None;
+                }
+                let attr = |a| e.attr(a).filter(|v| v.len() <= 256).map(str::to_string);
+                if id.len() <= 256 {
+                    Arc::make_mut(&mut self.doc.bookmark_attrs).insert(
+                        name.clone(),
+                        BookmarkAttrs { id: id.clone(), col_first: attr("w:colFirst"), col_last: attr("w:colLast"), ..Default::default() },
+                    );
                 }
                 self.bookmarks.insert(id, name.clone());
                 Some(InlineObject::BookmarkStart { name })
@@ -189,7 +244,8 @@ impl Reader<'_> {
         let mut para = Paragraph::new();
         let mut mark_moves: [Option<&El>; 2] = [None, None];
         self.moves.closed_here = [None, None];
-        for o in std::mem::take(&mut sc.pending) {
+        for (o, tables) in std::mem::take(&mut sc.pending) {
+            self.bookmark_place(&o, BookmarkPlace { container: BookmarkContainer::Block, after: false, tables: sc.tables.saturating_sub(tables) });
             pb.push_obj(o, &CharProps::default());
         }
         if let Some(ppr) = e.child("w:pPr") {
@@ -309,7 +365,17 @@ impl Reader<'_> {
         }
         let mut rows = Vec::new();
         collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
-        for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
+        let mut row_lead = Vec::new();
+        sc.tables = sc.tables.saturating_add(1);
+        for (tr, row_controls) in rows {
+            if matches!(tr.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
+                let previous = table.rows.last_mut().and_then(|r: &mut Row| r.cells.last_mut()).map(|c| &mut c.blocks);
+                self.boundary_bookmark(tr, previous, &mut row_lead, BookmarkContainer::Row);
+                continue;
+            }
+            if table.rows.len() >= MAX_ROWS {
+                continue;
+            }
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
             if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
@@ -318,7 +384,16 @@ impl Reader<'_> {
             }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
-            for (tc, cell_controls) in tcs.into_iter().take(MAX_COLS) {
+            let mut cell_lead = Vec::new();
+            for (tc, cell_controls) in tcs {
+                if matches!(tc.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
+                    let previous = row.cells.last_mut().map(|c| &mut c.blocks);
+                    self.boundary_bookmark(tc, previous, &mut cell_lead, BookmarkContainer::Cell);
+                    continue;
+                }
+                if row.cells.len() >= MAX_COLS {
+                    continue;
+                }
                 let (mut props, hcont) = tc
                     .child("w:tcPr")
                     .map(|p| tcpr(&self.pc, p))
@@ -334,12 +409,21 @@ impl Reader<'_> {
                 let mut blocks = Blocks::new();
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
+                self.attach_bookmarks(&mut blocks, std::mem::take(&mut cell_lead), BookmarkContainer::Cell, false);
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
-            if !row.cells.is_empty() {
+            if let Some(cell) = row.cells.last_mut() {
+                self.attach_bookmarks(&mut cell.blocks, cell_lead, BookmarkContainer::Cell, true);
+            }
+            if let Some(cell) = row.cells.first_mut() {
+                self.attach_bookmarks(&mut cell.blocks, std::mem::take(&mut row_lead), BookmarkContainer::Row, false);
                 table.rows.push(row);
             }
         }
+        if let Some(cell) = table.rows.last_mut().and_then(|r| r.cells.last_mut()) {
+            self.attach_bookmarks(&mut cell.blocks, row_lead, BookmarkContainer::Row, true);
+        }
+        sc.tables = sc.tables.saturating_sub(1);
         if table.rows.is_empty() {
             return None;
         }

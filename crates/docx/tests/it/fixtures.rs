@@ -2366,12 +2366,20 @@ fn bookmark_around_final_table_keeps_its_end() {
     let body = r#"<w:bookmarkStart w:id="7" w:name="TableRange"/><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:bookmarkEnd w:id="7"/><w:sectPr/>"#;
     let d = read_body(body);
     let marks = |d: &Document| {
-        let Block::Table(t) = &*d.body[0] else { panic!("{:?}", d.body[0]) };
-        t.rows[0].cells[0].blocks[0].as_para().unwrap().objects.clone()
+        d.para_paths(wordcraft_doc::StoryRef::Body)
+            .into_iter()
+            .filter_map(|path| d.para(wordcraft_doc::StoryRef::Body, &path))
+            .flat_map(|p| p.objects.iter().cloned())
+            .collect::<Vec<_>>()
     };
     let want = vec![InlineObject::BookmarkStart { name: "TableRange".into() }, InlineObject::BookmarkEnd { name: "TableRange".into() }];
     assert_eq!(marks(&d), want);
-    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let mut package = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut package.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"</w:tbl><w:bookmarkEnd w:id="7"/>"#));
+    let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(marks(&again), want);
     assert_eq!(again.bookmarks().len(), 1);
 }

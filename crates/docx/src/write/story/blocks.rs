@@ -1,5 +1,38 @@
+use wordcraft_doc::bookmark::{BookmarkContainer, BookmarkPlace};
+use wordcraft_doc::para::OBJ;
+
 use super::toc::written_toc_span;
-use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+use super::{Block, Blocks, CharProps, InlineObject, MAX_DEPTH, Paragraph, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+
+/// Find an edge paragraph, counting tables entered so a marker is lifted only to its
+/// source container, including when the bordering cell itself starts/ends with a table.
+fn edge_para(bl: &[std::sync::Arc<Block>], after: bool, depth: usize) -> Option<(&Paragraph, u8)> {
+    let b = if after { bl.last() } else { bl.first() }?;
+    match &**b {
+        Block::Para(p) => Some((p, 0)),
+        Block::Table(t) if depth < MAX_DEPTH => {
+            let row = if after { t.rows.last() } else { t.rows.first() }?;
+            let cell = if after { row.cells.last() } else { row.cells.first() }?;
+            edge_para(&cell.blocks, after, depth + 1).map(|(p, tables)| (p, tables.saturating_add(1)))
+        }
+        Block::Table(_) => None,
+    }
+}
+
+fn edge_markers(p: &Paragraph, after: bool) -> &[InlineObject] {
+    let count = if after { p.text.chars().rev().take_while(|c| *c == OBJ).count() } else { p.text.chars().take_while(|c| *c == OBJ).count() };
+    let count = count.min(p.objects.len());
+    // A visible object is content too: a marker moved behind a picture stays inline.
+    if after {
+        let suffix = p.objects.get(p.objects.len() - count..).unwrap_or(&[]);
+        let n = suffix.iter().rev().take_while(|o| o.is_marker()).count();
+        suffix.get(suffix.len() - n..).unwrap_or(&[])
+    } else {
+        let prefix = p.objects.get(..count).unwrap_or(&[]);
+        let n = prefix.iter().take_while(|o| o.is_marker()).count();
+        prefix.get(..n).unwrap_or(&[])
+    }
+}
 
 impl Writer<'_> {
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
@@ -30,6 +63,10 @@ impl Writer<'_> {
                 crate::write::sdt::open(w, c);
             }
             self.update_toc_before_block(i, toc, toc_field_open, w);
+            let one = std::slice::from_ref(b);
+            let before = self.lift_bookmarks(edge_para(one, false, depth), BookmarkContainer::Block, false);
+            let after = self.lift_bookmarks(edge_para(one, true, depth), BookmarkContainer::Block, true);
+            self.write_bookmarks(w, &before);
             match &**b {
                 Block::Para(p) => {
                     self.inline_controls = plan.inline_in(i);
@@ -37,6 +74,7 @@ impl Writer<'_> {
                 }
                 Block::Table(t) => self.table(w, t, rels, depth),
             }
+            self.write_bookmarks(w, &after);
             self.update_toc_after_block(i, toc, &mut toc_field_open, w);
             for _ in 0..plan.closes.get(i).copied().unwrap_or(0) {
                 crate::write::sdt::close(w);
@@ -47,6 +85,35 @@ impl Writer<'_> {
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
             self.write_trailing_para(w, depth);
+        }
+    }
+
+    fn lift_bookmarks(&mut self, edge: Option<(&Paragraph, u8)>, container: BookmarkContainer, after: bool) -> Vec<(String, bool)> {
+        if self.doc.bookmark_attrs.is_empty() {
+            return Vec::new();
+        }
+        let Some((p, tables)) = edge else { return Vec::new() };
+        let place = Some(BookmarkPlace { container, after, tables });
+        let mut out = Vec::new();
+        for o in edge_markers(p, after) {
+            let (name, end) = match o {
+                InlineObject::BookmarkStart { name } => (name, false),
+                InlineObject::BookmarkEnd { name } => (name, true),
+                _ => continue,
+            };
+            let Some(attrs) = self.doc.bookmark_attrs.get(name) else { continue };
+            if (if end { attrs.end } else { attrs.start }) == place {
+                let n = self.lifted_bookmarks.entry((name.clone(), end)).or_insert(0);
+                *n = n.saturating_add(1);
+                out.push((name.clone(), end));
+            }
+        }
+        out
+    }
+
+    fn write_bookmarks(&mut self, w: &mut W, marks: &[(String, bool)]) {
+        for (name, end) in marks {
+            self.bookmark(w, name, *end);
         }
     }
 
@@ -107,6 +174,9 @@ impl Writer<'_> {
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
         for r in rows {
+            let before = self.lift_bookmarks(r.cells.first().and_then(|c| edge_para(&c.blocks, false, depth)), BookmarkContainer::Row, false);
+            let after = self.lift_bookmarks(r.cells.last().and_then(|c| edge_para(&c.blocks, true, depth)), BookmarkContainer::Row, true);
+            self.write_bookmarks(w, &before);
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
@@ -116,6 +186,9 @@ impl Writer<'_> {
             trpr(w, &r.props, chg.as_ref());
             let mut open_cells = 0u32;
             for c in &r.cells {
+                let before = self.lift_bookmarks(edge_para(&c.blocks, false, depth), BookmarkContainer::Cell, false);
+                let after = self.lift_bookmarks(edge_para(&c.blocks, true, depth), BookmarkContainer::Cell, true);
+                self.write_bookmarks(w, &before);
                 for ctl in &c.controls.open {
                     crate::write::sdt::open(w, ctl);
                     open_cells += 1;
@@ -130,6 +203,7 @@ impl Writer<'_> {
                     crate::write::sdt::close(w);
                 }
                 open_cells -= n;
+                self.write_bookmarks(w, &after);
             }
             for _ in 0..open_cells {
                 crate::write::sdt::close(w);
@@ -140,6 +214,7 @@ impl Writer<'_> {
                 crate::write::sdt::close(w);
             }
             open_rows -= n;
+            self.write_bookmarks(w, &after);
         }
         for _ in 0..open_rows {
             crate::write::sdt::close(w);

@@ -70,6 +70,7 @@ impl Document {
             core: CoreProps::default(),
             sources: Vec::new(),
             custom_props: Vec::new(),
+            bookmark_attrs: Arc::new(BTreeMap::new()),
             footnote_separators: NoteSeparators::default(),
             endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
@@ -146,6 +147,7 @@ impl Document {
             core,
             sources,
             custom_props,
+            bookmark_attrs,
             footnote_separators,
             endnote_separators,
             media,
@@ -165,6 +167,7 @@ impl Document {
             core: other_core,
             sources: other_sources,
             custom_props: other_props,
+            bookmark_attrs: other_bookmark_attrs,
             footnote_separators: other_footnotes,
             endnote_separators: other_endnotes,
             media: other_media,
@@ -183,6 +186,7 @@ impl Document {
             && core == other_core
             && sources == other_sources
             && custom_props == other_props
+            && (Arc::ptr_eq(bookmark_attrs, other_bookmark_attrs) || bookmark_attrs == other_bookmark_attrs)
             && footnote_separators == other_footnotes
             && endnote_separators == other_endnotes
             && same_bytes(media, other_media)

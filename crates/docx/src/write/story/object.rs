@@ -4,17 +4,37 @@ use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
+    pub(super) fn bookmark(&mut self, w: &mut W, name: &str, end: bool) {
+        let id = self.bookmark_id(name);
+        if end {
+            w.empty("w:bookmarkEnd", &[("w:id", &id)]);
+            return;
+        }
+        let mut attrs = vec![("w:id", id.as_str()), ("w:name", name)];
+        if let Some(source) = self.doc.bookmark_attrs.get(name) {
+            if let Some(first) = source.col_first.as_deref() {
+                attrs.push(("w:colFirst", first));
+            }
+            if let Some(last) = source.col_last.as_deref() {
+                attrs.push(("w:colLast", last));
+            }
+        }
+        w.empty("w:bookmarkStart", &attrs);
+    }
+
     pub(super) fn object(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         match o {
             // Written by `para_content` (inline) or `blocks` (around paragraphs).
             InlineObject::ControlStart { .. } | InlineObject::ControlEnd => {}
-            InlineObject::BookmarkStart { name } => {
-                let id = self.bookmark_id(name);
-                w.empty("w:bookmarkStart", &[("w:id", &id), ("w:name", name)]);
-            }
-            InlineObject::BookmarkEnd { name } => {
-                let id = self.bookmark_id(name);
-                w.empty("w:bookmarkEnd", &[("w:id", &id)]);
+            InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } => {
+                let end = matches!(o, InlineObject::BookmarkEnd { .. });
+                if let Some(n) = self.lifted_bookmarks.get_mut(&(name.clone(), end))
+                    && *n > 0
+                {
+                    *n -= 1;
+                } else {
+                    self.bookmark(w, name, end);
+                }
             }
             InlineObject::PermStart { id, group, editor } => {
                 let id = id.to_string();

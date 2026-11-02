@@ -88,7 +88,11 @@ pub(crate) struct Writer<'d> {
     pub(crate) eq_number: u32,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
-    bookmarks: HashMap<String, u32>,
+    bookmarks: HashMap<String, String>,
+    bookmark_ids: std::collections::HashSet<String>,
+    next_bookmark_id: u64,
+    /// Structural markers to skip once where their canonical inline objects occur.
+    lifted_bookmarks: HashMap<(String, bool), usize>,
     next_rev_id: u32,
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
     open_moves: Vec<(u32, String, bool)>,
@@ -185,8 +189,17 @@ impl Writer<'_> {
     }
 
     fn bookmark_id(&mut self, name: &str) -> String {
-        let n = self.bookmarks.len() as u32;
-        self.bookmarks.entry(name.to_string()).or_insert(n).to_string()
+        if let Some(id) = self.bookmarks.get(name) {
+            return id.clone();
+        }
+        let mut id = self.next_bookmark_id.to_string();
+        while !self.bookmark_ids.insert(id.clone()) {
+            self.next_bookmark_id = self.next_bookmark_id.saturating_add(1);
+            id = self.next_bookmark_id.to_string();
+        }
+        self.next_bookmark_id = self.next_bookmark_id.saturating_add(1);
+        self.bookmarks.insert(name.to_string(), id.clone());
+        id
     }
 
     fn note_id(&mut self, part: u32, foot: bool) -> String {

@@ -25,7 +25,15 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
-        bookmarks: HashMap::new(),
+        bookmarks: doc
+            .bookmark_attrs
+            .iter()
+            .filter(|(_, attrs)| !attrs.id.is_empty())
+            .map(|(name, attrs)| (name.clone(), attrs.id.clone()))
+            .collect(),
+        bookmark_ids: doc.bookmark_attrs.values().filter(|attrs| !attrs.id.is_empty()).map(|attrs| attrs.id.clone()).collect(),
+        next_bookmark_id: 0,
+        lifted_bookmarks: HashMap::new(),
         next_rev_id: 0,
         open_moves: Vec::new(),
         // Fresh drawing ids start past the shapes' own (connectors refer to those).

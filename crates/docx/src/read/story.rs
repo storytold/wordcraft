@@ -85,10 +85,15 @@ struct FieldState {
 
 /// The last paragraph of a block list: its last block, or inside a final table the last
 /// paragraph of its last cell (nested tables to [`MAX_TABLE_DEPTH`]).
-fn last_para_mut(out: &mut Blocks, depth: usize) -> Option<&mut Paragraph> {
-    match Arc::make_mut(out.last_mut()?) {
-        Block::Para(p) => Some(p),
-        Block::Table(t) if depth < MAX_TABLE_DEPTH => last_para_mut(&mut t.rows.last_mut()?.cells.last_mut()?.blocks, depth + 1),
+fn edge_para_mut(out: &mut Blocks, last: bool, depth: usize) -> Option<(&mut Paragraph, u8)> {
+    let b = if last { out.last_mut() } else { out.first_mut() }?;
+    match Arc::make_mut(b) {
+        Block::Para(p) => Some((p, 0)),
+        Block::Table(t) if depth < MAX_TABLE_DEPTH => {
+            let row = if last { t.rows.last_mut() } else { t.rows.first_mut() }?;
+            let cell = if last { row.cells.last_mut() } else { row.cells.first_mut() }?;
+            edge_para_mut(&mut cell.blocks, last, depth + 1).map(|(p, tables)| (p, tables.saturating_add(1)))
+        }
         Block::Table(_) => None,
     }
 }
@@ -108,7 +113,9 @@ fn sink(sc: &mut StoryCtx) -> Option<&mut FieldState> {
 pub struct StoryCtx {
     fields: Vec<FieldState>,
     ignored_begins: usize,
-    pending: Vec<InlineObject>,
+    pending: Vec<(InlineObject, u8)>,
+    /// Current table nesting, so a story-level marker can be written outside the same tables.
+    tables: u8,
     /// Text-box nesting depth.
     pub story_depth: usize,
     /// Reading a header or footer (not a text box inside one): where Word keeps its watermark.
@@ -176,6 +183,8 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
     for k in e.els() {
         if k.name == name {
             out.push((k, ControlWrap { open: std::mem::take(pending), close: 0 }));
+        } else if matches!(k.name.as_str(), "w:bookmarkStart" | "w:bookmarkEnd") {
+            out.push((k, ControlWrap::default()));
         } else if k.name == "w:sdt" {
             if let Some(c) = k.child("w:sdtContent") {
                 let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), true);
@@ -184,7 +193,7 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pend
                 pending.push(ctl);
                 collect(c, name, out, pending, depth + 1);
                 let grew = out.len() > before;
-                match out.last_mut() {
+                match out.iter_mut().skip(before).rev().find(|(e, _)| e.name == name) {
                     Some((_, w)) if grew => w.close = w.close.saturating_add(1),
                     // Nothing inside: the control goes (as before).
                     _ => {
