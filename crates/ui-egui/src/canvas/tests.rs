@@ -4866,6 +4866,36 @@ fn field_shading_rects_include_simple_fields() {
     assert!(!rects(FieldShading::WhenSelected, &Selection::caret(inside)).is_empty(), "caret in the field: shaded");
 }
 
+/// #4290: the cached canvas scan reuses the field ranges until the document changes, then
+/// follows the new revision — Always shading must not walk every paragraph every paint.
+#[test]
+fn field_shading_reuses_its_scan_until_the_document_changes() {
+    use wordcraft_engine::{FieldShading, Selection};
+    let mut session = wordcraft_engine::Session::new(citation_document());
+    let canvas = CanvasState::default();
+    let sel = Selection::caret(Pos::body(0, 0));
+    let first = {
+        let layout = session.layout();
+        field_shading_rects_cached(&canvas, &layout, &session, FieldShading::Always, &sel, session.page_hint, &[])
+    };
+    assert!(!first.is_empty(), "Always shades the citation field");
+    let rev = session.rev();
+    assert_eq!(canvas.field_cache.borrow().as_ref().map(|(r, _)| *r), Some(rev), "the scan is cached by revision");
+    let again = {
+        let layout = session.layout();
+        field_shading_rects_cached(&canvas, &layout, &session, FieldShading::Always, &sel, session.page_hint, &[])
+    };
+    assert_eq!(again, first, "the same revision reuses the scan");
+    session.run("text.insert", &serde_json::json!({"text": "x"})).unwrap();
+    assert_ne!(session.rev(), rev, "the document changed");
+    let after = {
+        let layout = session.layout();
+        field_shading_rects_cached(&canvas, &layout, &session, FieldShading::Always, &sel, session.page_hint, &[])
+    };
+    assert_ne!(after, first, "the fresh scan follows the edit: the field moved with the text");
+    assert_eq!(canvas.field_cache.borrow().as_ref().map(|(r, _)| *r), Some(session.rev()), "the cache followed the revision");
+}
+
 /// #4290: a simple field showing its code is not a result; the overlay leaves it alone.
 #[test]
 fn field_shading_skips_a_simple_field_showing_its_code() {

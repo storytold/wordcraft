@@ -97,6 +97,9 @@ pub struct CanvasState {
     /// Whether the document has tracked formatting changes, moves and deletions, by document
     /// revision: finding out walks every paragraph, too slow for every frame (#811).
     markup_facts: std::cell::Cell<Option<((u64, u64), [bool; 3])>>,
+    /// Field shading (#4290): the shaded field ranges of every story, by document revision —
+    /// finding them walks every paragraph and sorts them, too slow for every paint.
+    field_cache: std::cell::RefCell<Option<(u64, Vec<(Pos, Pos)>)>>,
     pub scroll_to_caret: bool,
     /// Set while a command runs for a mouse drag on a table: the pointer is already
     /// on the target, so the view stays put instead of following the caret (#1738).
@@ -342,6 +345,7 @@ impl Default for CanvasState {
             tiles: HashMap::new(),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
+            field_cache: std::cell::RefCell::new(None),
             scroll_to_caret: true,
             keep_view: false,
             nav_to_caret: false,
@@ -971,9 +975,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // page are measured; scrolling a long citation-heavy document stays cheap.
         if !app.session.view.field_codes && preview_sel(app).is_none() {
             let visible_pages: Vec<bool> = rects.iter().map(|r| r.intersects(ui.clip_rect())).collect();
-            for (pi, r) in
-                field_shading_rects(&layout, &app.session, app.session.view.field_shading, &app.session.sel, app.session.page_hint, &visible_pages)
-            {
+            for (pi, r) in field_shading_rects_cached(
+                &app.canvas,
+                &layout,
+                &app.session,
+                app.session.view.field_shading,
+                &app.session.sel,
+                app.session.page_hint,
+                &visible_pages,
+            ) {
                 if let Some(pr) = rects.get(pi) {
                     let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
                     let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
@@ -1468,12 +1478,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Screen rectangles for field results shaded by File › Options › Advanced › Field shading
-/// (#4290). `Always` shades every field in every story; `When selected` only those in the
-/// selection's story whose bounds hold the caret or overlap the selection; `Never` none. Both
-/// range fields (Zotero citations, cross-references) and simple fields (PAGE, NUMPAGES) count.
-/// Pure, so the tests drive the choice without a window. The field-code view draws its own
-/// shading.
+/// The uncached form, for tests: the canvas itself paints through [`field_shading_rects_cached`].
+#[cfg(test)]
 pub(crate) fn field_shading_rects(
     layout: &DocLayout,
     session: &wordcraft_engine::Session,
@@ -1482,20 +1488,39 @@ pub(crate) fn field_shading_rects(
     page_hint: usize,
     visible_pages: &[bool],
 ) -> Vec<(usize, wordcraft_geom::Rect)> {
-    use wordcraft_engine::FieldShading;
+    shade_fields(layout, &session.doc, shading, sel, page_hint, visible_pages, &collect_fields(session))
+}
+
+/// [`field_shading_rects`] with the document's field scan cached by revision (#4290): the
+/// Always setting would otherwise walk every paragraph of every story, and sort them, on each
+/// paint of a long citation-heavy document. The cached ranges are every story's, so switching
+/// the selection (When selected) only changes the shade decision, not the scan.
+pub(crate) fn field_shading_rects_cached(
+    canvas: &CanvasState,
+    layout: &DocLayout,
+    session: &wordcraft_engine::Session,
+    shading: wordcraft_engine::FieldShading,
+    sel: &wordcraft_engine::Selection,
+    page_hint: usize,
+    visible_pages: &[bool],
+) -> Vec<(usize, wordcraft_geom::Rect)> {
+    let mut cache = canvas.field_cache.borrow_mut();
+    let rev = session.rev();
+    if cache.as_ref().is_none_or(|(r, _)| *r != rev) {
+        *cache = Some((rev, collect_fields(session)));
+    }
+    let fields = cache.as_ref().map(|(_, f)| f.as_slice()).unwrap_or(&[]);
+    shade_fields(layout, &session.doc, shading, sel, page_hint, visible_pages, fields)
+}
+
+/// Every field of the document whose result the shading can cover (#4290): a simple field
+/// showing its code is not showing a result, and field-code view shades those itself.
+pub(crate) fn collect_fields(session: &wordcraft_engine::Session) -> Vec<(Pos, Pos)> {
     let doc = &session.doc;
-    let (a, b) = sel.ordered();
-    let stories: Vec<StoryRef> = match shading {
-        FieldShading::Never => return Vec::new(),
-        // Only one story can hold the selection, so When selected never needs the others.
-        FieldShading::WhenSelected => vec![a.story],
-        FieldShading::Always => std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect(),
-    };
-    let mut fields: Vec<(Pos, Pos)> = Vec::new();
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k)));
+    let mut fields = Vec::new();
     for story in stories {
         for field in wordcraft_engine::cmd::fields::story_fields(session, story) {
-            // A simple field showing its code is not showing its result; field-code view already
-            // shades the code itself (#4290).
             if field.end.is_none() && field.code {
                 continue;
             }
@@ -1503,19 +1528,43 @@ pub(crate) fn field_shading_rects(
             fields.push((field.at, end));
         }
     }
+    fields
+}
+
+/// The visible-page shading rects of `fields` under `shading` and `sel` (#4290). Only fields on
+/// a visible page are measured; scrolling a long citation-heavy document stays cheap.
+fn shade_fields(
+    layout: &DocLayout,
+    doc: &wordcraft_doc::Document,
+    shading: wordcraft_engine::FieldShading,
+    sel: &wordcraft_engine::Selection,
+    page_hint: usize,
+    visible_pages: &[bool],
+    fields: &[(Pos, Pos)],
+) -> Vec<(usize, wordcraft_geom::Rect)> {
+    use wordcraft_engine::FieldShading;
+    if matches!(shading, FieldShading::Never) {
+        return Vec::new();
+    }
+    let (a, b) = sel.ordered();
     let visible: Vec<usize> = visible_pages.iter().enumerate().filter_map(|(pi, seen)| seen.then_some(pi)).collect();
     let mut out = Vec::new();
     for (start, end) in fields {
+        // Only one story can hold the selection, so When selected never shades another story's
+        // field, however `Pos` orders stories.
+        if matches!(shading, FieldShading::WhenSelected) && start.story != a.story {
+            continue;
+        }
         let shade = match shading {
             FieldShading::Never => false,
             FieldShading::Always => true,
             FieldShading::WhenSelected => {
                 if a == b {
-                    start <= a && a <= end
+                    *start <= a && a <= *end
                 } else {
                     // A selection reaching into the result; one that merely stops at the field's
                     // first marker or starts at its end marker does not intersect it.
-                    start < b && a < end
+                    *start < b && a < *end
                 }
             }
         };
@@ -1523,16 +1572,13 @@ pub(crate) fn field_shading_rects(
             if start.story == StoryRef::Body {
                 // Body pieces are all on the layout; keep only those whose page is visible.
                 out.extend(
-                    layout
-                        .selection_rects(doc, &start, &end, page_hint)
-                        .into_iter()
-                        .filter(|(pi, _)| visible_pages.get(*pi).copied().unwrap_or(true)),
+                    layout.selection_rects(doc, start, end, page_hint).into_iter().filter(|(pi, _)| visible_pages.get(*pi).copied().unwrap_or(true)),
                 );
             } else {
                 // A header, footer or note can be shown on many pages; `selection_rects` gives one
                 // placement per hint, so ask for each visible page (CodeRabbit #4290).
                 for pi in &visible {
-                    out.extend(layout.selection_rects(doc, &start, &end, *pi).into_iter().filter(|(p, _)| p == pi));
+                    out.extend(layout.selection_rects(doc, start, end, *pi).into_iter().filter(|(p, _)| p == pi));
                 }
             }
         }
