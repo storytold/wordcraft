@@ -660,11 +660,12 @@ fn recent_context_menu_shows_in_folder() {
             ..Default::default()
         },
     );
-    app.ui.recent = vec![RecentDocument { path: "/tmp/report.docx".into(), last_opened: wordcraft_engine::cmd::now_iso(), modified: String::new() }];
+    app.ui.recent = vec![RecentDocument { path: "/tmp/report.docx".into(), last_opened: String::new(), modified: String::new() }];
     app.ui.backstage = true;
     app.ui.backstage_page = "home".into();
     let mut h = a11y_harness(app);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Date modified: Unknown").click_secondary();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "report.docx, /tmp/report.docx, Last opened: Unknown, Last edited: Unknown")
+        .click_secondary();
     h.run_steps(2);
     assert!(h.query_by_label("Show in folder").is_some());
     h.get_by_label("Show in folder").click();

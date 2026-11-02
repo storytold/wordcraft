@@ -306,6 +306,14 @@ fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
         command
     };
     let status = command.status().map_err(|error| format!("couldn't show the file in its folder: {error}"))?;
+    #[cfg(target_os = "windows")]
+    {
+        // Explorer can successfully launch the folder window while returning a non-zero
+        // process status. The launch itself is the meaningful result on Windows.
+        let _ = status;
+        return Ok(());
+    }
+    #[cfg(not(target_os = "windows"))]
     if status.success() { Ok(()) } else { Err(format!("couldn't show the file in its folder ({status})")) }
 }
 
