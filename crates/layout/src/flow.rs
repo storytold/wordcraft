@@ -12,8 +12,10 @@ use super::{
 #[cfg(test)]
 use crate::WRAP_RELAYS;
 
-/// A closing mark before a continuous section takes no room after content. An otherwise empty
-/// section starting a new page retains its paragraph line.
+/// A closing mark before a continuous section takes no room after content, unless it holds an
+/// object of its own: what such a mark draws keeps its room, so the next paragraph starts below
+/// it rather than over it. An otherwise empty section starting a new page retains its
+/// paragraph line.
 pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
@@ -38,7 +40,11 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         place_para_in_flow(ctx, pb, p, block, body_top);
         pb.bottom = bottom;
         if (pb.pages.len(), pb.col) == at {
-            (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
+            // A mark that draws something of its own, such as a picture, is not empty: the room it
+            // drew stays, so the paragraph after starts below it (#5288).
+            if p.objects.is_empty() {
+                (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
+            }
             if let Some(page) = pb.page() {
                 strip_mark(page, drawn, true);
             }

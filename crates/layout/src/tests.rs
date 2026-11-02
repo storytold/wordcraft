@@ -9121,6 +9121,44 @@ fn an_empty_continuous_section_mark_takes_no_room() {
     assert_eq!(new_page[1].0, 1, "a next-page section starts a page: {new_page:?}");
 }
 
+/// A hidden mark closing a section is quiet when it holds no text, but when it holds an object
+/// of its own — a picture in the report — the room it draws stays: the section after starts
+/// below it, not over it (#5288).
+#[test]
+fn a_hidden_mark_holding_an_object_keeps_the_room_it_draws() {
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let mut d = Document::from_text("Pa\n\nPb");
+    let closer = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    closer.mark.hidden = Some(true);
+    closer.section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::Continuous;
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(1, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let shape_bottom = l
+        .pages[0]
+        .items
+        .iter()
+        .find_map(|it| if let Placed::Shape { rect, .. } = it { Some(rect.bottom()) } else { None })
+        .expect("the shape is drawn");
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert_eq!(after.page, 0, "the continuous section stays on the page");
+    assert!(after.top >= shape_bottom - 0.01, "Pb starts below the shape: {after:?} vs {shape_bottom}");
+}
+
 /// Empty marks closing continuous sections one after another each keep their line while it
 /// fits; only one right after text is quiet. Past the page's bottom they stay there, so the text
 /// after the run starts the next page. Measured in Word (#3907): "Start", N such marks, "End":
