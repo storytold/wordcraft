@@ -974,6 +974,66 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
+    /// Header codes accept only the default keyword or six hexadecimal RGB digits.
+    #[test]
+    fn header_colour_codes() {
+        use super::HeaderColour;
+        for (code, rgb, canonical) in [
+            ("default", None, "default"),
+            (" DeFaUlT ", None, "default"),
+            ("#a1B2c3", Some([0xA1, 0xB2, 0xC3]), "#A1B2C3"),
+            (" #000000 ", Some([0, 0, 0]), "#000000"),
+            ("#FFFFFF", Some([255, 255, 255]), "#FFFFFF"),
+        ] {
+            let colour = HeaderColour::from_code(code).unwrap();
+            assert_eq!(colour.rgb(), rgb, "{code:?}");
+            assert_eq!(colour.code(), canonical, "{code:?}");
+        }
+        for code in ["", "#", "123456", "#12345", "#1234567", "#12345678", "#+12345", "#-12345", "#12 456", "#12345G", "#é1234", "defaults"] {
+            assert_eq!(HeaderColour::from_code(code), None, "reject {code:?}");
+        }
+    }
+
+    /// The neutral colours on either side of the ink switch choose the stronger contrast.
+    #[test]
+    fn header_ink_switch() {
+        use egui::Color32;
+        const MIN_CONTRAST: f32 = 4.5;
+        assert_eq!(super::header_ink([117; 3]), Color32::WHITE);
+        assert_eq!(super::header_ink([118; 3]), Color32::BLACK);
+        for value in 0..=u8::MAX {
+            let background = Color32::from_gray(value);
+            let ink = super::header_ink([value; 3]);
+            assert!(matches!(ink, Color32::BLACK | Color32::WHITE));
+            let chosen = contrast(ink, background);
+            assert!(chosen >= MIN_CONTRAST, "gray={value}: {chosen}");
+            assert!(chosen >= contrast(Color32::BLACK, background));
+            assert!(chosen >= contrast(Color32::WHITE, background));
+        }
+    }
+
+    /// Header and filled-button hover states retain readable ink around the switch.
+    #[test]
+    fn header_hover_contrast() {
+        use super::{HeaderColour, Tokens};
+        const MIN_CONTRAST: f32 = 4.5;
+        for rgb in (0..=u8::MAX).map(|value| [value; 3]).chain([[246, 191, 211], [16, 24, 32], [255, 0, 0], [0, 255, 0], [0, 0, 255]]) {
+            let colour = HeaderColour(Some(rgb));
+            for tokens in [Tokens::light(), Tokens::dark()] {
+                let header = tokens.header(colour);
+                let (button, hover, ink) = tokens.header_buttons(colour);
+                assert_ne!(header.hover, header.title_bar, "visible header hover for {rgb:?}");
+                assert_ne!(hover, button, "visible button hover for {rgb:?}");
+                for (foreground, background) in
+                    [(header.text, header.title_bar), (header.icon, header.title_bar), (header.text, header.hover), (ink, button), (ink, hover)]
+                {
+                    let ratio = contrast(foreground, background);
+                    assert!(ratio >= MIN_CONTRAST, "{rgb:?}: {background:?} contrast={ratio}");
+                }
+            }
+        }
+    }
+
     /// #1885: the ✕ on a window's close box reads on its hover and pressed reds in both themes.
     #[test]
     fn close_box_glyph_reads_on_its_reds() {
