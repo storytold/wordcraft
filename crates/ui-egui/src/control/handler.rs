@@ -186,7 +186,11 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
     match req.method.as_str() {
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
-            let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            let params = match p.get("params") {
+                None => json!({}),
+                Some(Value::Null) if id != "ui.headerColour" => json!({}),
+                Some(value) => value.clone(),
+            };
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
             }
@@ -354,5 +358,46 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
                 Err(e) => err(e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command_reply(app: &mut WordApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+        let (request, _) = ControlRequest::new(method, params);
+        let Outcome::Done(reply) = handle(app, ctx, &request) else { panic!("command must reply synchronously") };
+        reply
+    }
+
+    #[test]
+    fn header_colour_null_params() {
+        const METHODS: [&str; 2] = ["engine.execute", "command"];
+        const COMMAND: &str = "ui.headerColour";
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Preserved")), crate::Services::default());
+        let ctx = egui::Context::default();
+        let document = app.session.doc.clone();
+        let revision = app.session.rev();
+        for method in METHODS {
+            let set = command_reply(&mut app, &ctx, method, json!({"command": COMMAND, "params": {"value": "#a1b2c3"}}));
+            assert_eq!(set, json!({"ok": true, "result": {"value": "#A1B2C3"}}));
+            assert_eq!(command_reply(&mut app, &ctx, method, json!({"command": COMMAND})), set);
+            assert_eq!(command_reply(&mut app, &ctx, method, json!({"command": COMMAND, "params": {}})), set);
+            assert_eq!(
+                command_reply(&mut app, &ctx, method, json!({"command": COMMAND, "params": null})),
+                json!({"ok": false, "error": "parameters must be an object"})
+            );
+            assert_eq!(command_reply(&mut app, &ctx, method, json!({"command": COMMAND})), set, "rejection preserves the colour");
+            assert_eq!(
+                command_reply(&mut app, &ctx, method, json!({"command": COMMAND, "params": {"value": false}})),
+                json!({"ok": false, "error": "use #RRGGBB or default for the header colour"})
+            );
+            let theme = command_reply(&mut app, &ctx, method, json!({"command": "ui.theme"}));
+            assert_eq!(theme["ok"], true);
+            assert_eq!(command_reply(&mut app, &ctx, method, json!({"command": "ui.theme", "params": null})), theme);
+        }
+        assert_eq!(app.session.doc, document);
+        assert_eq!(app.session.rev(), revision);
     }
 }

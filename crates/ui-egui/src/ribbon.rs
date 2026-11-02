@@ -189,11 +189,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(6.0);
                         let track = app.session.doc.settings.track_changes;
-                        let mode = if plan.buttons == 0 {
-                            crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
-                        } else {
-                            crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
-                        };
+                        let mode = crate::widgets::header_icon_button(
+                            ui,
+                            "pencil",
+                            editing_label,
+                            regular(12.0),
+                            if plan.buttons == 0 { crate::widgets::HeaderButton::Menu } else { crate::widgets::HeaderButton::IconMenu },
+                            app.ui.header_colour,
+                        );
                         egui::Popup::menu(&mode).show(|ui| {
                             if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
                                 let _ = app.run("review.trackChanges", json!({"value": false}));
@@ -205,11 +208,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                         });
                         ui.add_space(4.0);
-                        let comments_button = if plan.buttons == 0 {
-                            crate::widgets::icon_text_button(ui, "comment", comments, regular(12.0))
-                        } else {
-                            crate::widgets::icon_only_button(ui, "comment", comments, regular(12.0), false)
-                        };
+                        let comments_button = crate::widgets::header_icon_button(
+                            ui,
+                            "comment",
+                            comments,
+                            regular(12.0),
+                            if plan.buttons == 0 { crate::widgets::HeaderButton::Text } else { crate::widgets::HeaderButton::Icon },
+                            app.ui.header_colour,
+                        );
                         if comments_button.clicked() {
                             let _ = app.run("view.commentsPane", json!({}));
                         }
