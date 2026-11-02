@@ -301,7 +301,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-25 | trivial | Header-cell pins and header-table obstacles share the rendered body-top override (#2485); model positioning and overlap controls, no new native comparison. |
 | 2026-10-19 | trivial | Header body-boundary adjustment applies only to the Margin anchor. TopMargin and InsideMargin keep their declared extent; synthetic alignment countercontrols are prepared, not yet executed. |
 | 2026-11-02 | trivial | Guarded optional PDF TOC refresh preserves admission limits and PAGEREF page labels. |
-| 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. |
+| 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. PNG export excludes tracked deletions from pagination and ink when Print Markup is off, includes them when on, and preserves the live document. |
 | 2026-10-29 | trivial | Port existing transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
 | 2026-10-29 | trivial | Port existing guarded PDF TOC and transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
 | 2026-10-25 | trivial | #2473: wrapped REF navigation keeps atomic source positions with snapshot-owned visual hints. Pointer hits resolve on the final layout after typing; reflow rejects old owners. Synthetic controls only; readiness unchanged. |
