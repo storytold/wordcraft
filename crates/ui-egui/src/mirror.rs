@@ -324,7 +324,7 @@ pub fn active(ctx: &Context) -> bool {
 /// the document canvas with its rulers when it is on screen, `anchored` the area ids of popups
 /// placed from it, with how each is mirrored, and `overlays` cards painted over it in a layer
 /// egui doesn't size by them (floating comments). Call once per frame, after the interface is
-/// laid out.
+/// laid out. A frame that changes the direction is drawn again.
 pub fn configure(ctx: &Context, on: bool, canvas: Option<Rect>, anchored: &[(Id, Anchor)], overlays: &[Rect]) {
     if ctx.plugin_opt::<Mirror>().is_none() {
         ctx.add_plugin(Mirror::default());
@@ -332,6 +332,11 @@ pub fn configure(ctx: &Context, on: bool, canvas: Option<Rect>, anchored: &[(Id,
     if let Some(handle) = ctx.plugin_opt::<Mirror>() {
         let mut m = handle.lock();
         let view = m.views.entry(ctx.viewport_id()).or_default();
+        // What this frame drew before now (icons that keep their direction) asked the old
+        // direction: draw the frame again rather than show it.
+        if view.on != on {
+            ctx.request_discard("the interface changed direction");
+        }
         view.on = on;
         view.canvas = canvas;
         view.anchored = anchored.to_vec();
@@ -961,6 +966,28 @@ mod tests {
         assert!(matches!(root.events[0], Event::PointerMoved(p) if p == pos2(155.0, 10.0)), "the root window flips about its own centre");
         assert!(matches!(inner.events[0], Event::PointerMoved(p) if p == pos2(5.0, 10.0)), "the other window, on its page: shifted");
         assert_eq!(m.views[&ViewportId::ROOT].span, Some((0.0, 200.0)));
+    }
+
+    /// The frame that switches the interface to right to left is drawn again, so an icon that
+    /// keeps its direction, drawn before the switch, comes out as in every later frame.
+    #[test]
+    fn icons_keep_their_direction_on_the_frame_the_interface_turns_right_to_left() {
+        let ctx = Context::default();
+        let frame = |on: bool| {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                let r = Rect::from_min_size(pos2(20.0, 20.0), egui::vec2(16.0, 16.0));
+                crate::icons::paint(ui.painter(), r, "subscript", Color32::BLACK, Color32::BLUE);
+                // As the app does, once the interface is laid out.
+                configure(ui.ctx(), on, None, &[], &[]);
+            });
+            out.textures_delta.clear();
+            format!("{:?}", out.shapes)
+        };
+        frame(false);
+        let switched = frame(true);
+        let after = frame(true);
+        assert_eq!(switched, after, "the icon drawn on the frame of the switch points as it does after");
     }
 
     /// A check box's tick only moves: flipped, it would point the wrong way.
