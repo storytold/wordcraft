@@ -169,7 +169,17 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
     let (roots, _) = automation_roots("mcp", &args(&["--automation-read-root", &read, &format!("--automation-read-root={write}")])).unwrap();
     let roots = roots.unwrap();
     assert_eq!(roots.read_roots().len(), 2);
-    assert_eq!(roots.check(&format!("{write}/x.docx"), wordcraft_engine::file_access::Access::Read), Ok(()));
+    for dir in [&read, &write] {
+        assert_eq!(roots.check(&format!("{dir}/x.docx"), wordcraft_engine::file_access::Access::Read), Ok(()), "{dir}");
+    }
+    // The write flag too: both folders take saves, and neither is readable without a read root.
+    let (roots, _) = automation_roots("mcp", &args(&["--automation-write-root", &write, &format!("--automation-write-root={read}")])).unwrap();
+    let roots = roots.unwrap();
+    assert_eq!(roots.write_roots().len(), 2);
+    for dir in [&write, &read] {
+        assert_eq!(roots.check(&format!("{dir}/x.docx"), wordcraft_engine::file_access::Access::Write), Ok(()), "{dir}");
+    }
+    assert!(roots.check(&format!("{read}/x.docx"), wordcraft_engine::file_access::Access::Read).unwrap_err().contains("read authority is absent"));
 
     // No flags: nothing is confined and the arguments pass through.
     let (roots, left) = automation_roots("mcp", &args(&["--connect", "127.0.0.1:9"])).unwrap();
