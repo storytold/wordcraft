@@ -6,8 +6,8 @@ use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
-    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, SectionProps, StoryRef, TableFloat,
-    TextDirection, Wrap, WrapText, para, table,
+    Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
+    Wrap, WrapText, para, table,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -281,7 +281,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                         continue;
                     }
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
-                        let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
+                        let page =
+                            PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
@@ -460,15 +461,22 @@ fn box_float_table_rect(
             _ => None,
         }
     };
-    let page_y = |s: &SectionProps| match f.v_rel {
-        Anchor::Page => Some((0.0, s.page_h)),
-        Anchor::Margin => Some((s.margin_top, s.text_height())),
-        _ => None,
+    let page_y = |fr: &PageFrame| {
+        let s = fr.sect;
+        match f.v_rel {
+            Anchor::Page => Some((0.0, s.page_h)),
+            Anchor::Margin => {
+                let mut reference = s.clone();
+                reference.margin_top = fr.margin_top.unwrap_or(s.margin_top);
+                Some((reference.margin_top, reference.text_height()))
+            }
+            _ => None,
+        }
     };
     let h_area = frame.and_then(|fr| page_x(&fr).map(|(a, e)| (a - fr.origin.0, e))).unwrap_or((0.0, width));
     // In a cell an offset from the page or margin has nothing to measure from: the table stands
     // where the text is.
-    let (v_area, y_off) = match frame.and_then(|fr| page_y(fr.sect).map(|(a, e)| (a - fr.origin.1, e))) {
+    let (v_area, y_off) = match frame.and_then(|fr| page_y(&fr).map(|(a, e)| (a - fr.origin.1, e))) {
         Some(area) => (area, f.y),
         None if matches!(f.v_rel, Anchor::Page | Anchor::Margin) => ((y, 0.0), 0.0),
         None => ((y, 0.0), f.y),
@@ -621,15 +629,17 @@ pub(crate) fn push_para(
     let left = x + li;
     let right = x + width - ri;
     let (top, bottom) = (y - e.top - e.up, y + h + e.bottom);
+    // The outer edges of the side borders.
+    let sides = pl.rp.borders.unwrap_or_default();
+    let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
-        items.push(Placed::Fill { rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top), color: c });
+        let (sl, sr) = (lx.min(left - pad), rx.max(right + pad));
+        items.push(Placed::Fill { rect: Rect::new(sl, top, sr - sl, bottom - top), color: c });
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
-        let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
-        let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
-        // The top and bottom lines lie beyond their distance from the text.
+        // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
             items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
@@ -639,10 +649,12 @@ pub(crate) fn push_para(
             items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: lx, y0: top, x1: lx, y1: bottom, border: t });
+            let bx = lx + t.width / 2.0;
+            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
         if let Some(t) = b.right.filter(Border::is_visible) {
-            items.push(Placed::Rule { x0: rx, y0: top, x1: rx, y1: bottom, border: t });
+            let bx = rx - t.width / 2.0;
+            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
     }
     y + h

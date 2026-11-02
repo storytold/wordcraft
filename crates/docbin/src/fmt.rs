@@ -20,7 +20,9 @@ const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
 const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
-const C_FTC0: u16 = 0x4A4F; // font index
+const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
+const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
+const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
 
@@ -254,6 +256,16 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.font = Some(name.clone());
             }
         }
+        C_FTC1 => {
+            if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
+                p.font_ea = Some(name.clone());
+            }
+        }
+        C_FTC_BI => {
+            if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
+                p.font_cs = Some(name.clone());
+            }
+        }
         C_HIGHLIGHT => {
             if let Some(h) = HL.get(prl.operand.first().copied().unwrap_or(0) as usize) {
                 p.highlight = Some(*h);
@@ -417,10 +429,15 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
 
 /// Build the model stylesheet: resolve each raw style's chain (base → this) and the ids we
 /// reference from paragraphs.
-pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String]) -> StyleSheet {
+pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standard: crate::stsh::StandardFonts) -> StyleSheet {
     let mut sheet = StyleSheet::empty();
-    // Word's base character properties: font index 0 of the table, 10 pt ([MS-DOC] sprmCHps).
-    sheet.default_chr.font = fonts.first().cloned();
+    // Word's base character properties: the stylesheet's standard fonts (Aptos in a Word 365
+    // file, whose font table still starts with Times New Roman, #5066), else font index 0 of the
+    // table; 10 pt ([MS-DOC] sprmCHps).
+    let font = |i: Option<u16>| i.and_then(|i| fonts.get(usize::from(i))).cloned();
+    sheet.default_chr.font = font(standard.ascii).or_else(|| fonts.first().cloned());
+    sheet.default_chr.font_ea = font(standard.east_asian);
+    sheet.default_chr.font_cs = font(standard.bidi);
     if sheet.default_chr.size.is_none() {
         sheet.default_chr.size = Some(10.0);
     }
