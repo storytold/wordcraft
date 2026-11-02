@@ -47,22 +47,22 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
 
 # text / rendering / formats
-skrifa = "0.47"
-harfrust = "0.13"
+skrifa = "0.49"
+harfrust = "0.15"
 # WOFF / WOFF2 web fonts added by the user (#582): pure Rust (MIT); its brotli and zlib decoders
 # (brotli-decompressor, flate2) are already in the tree.
 wuff = "0.2.9"
 # WOFF2's brotli stream, decoded ahead of wuff so its glyph point counts are checked first (#3703).
 # The same crate and version wuff already decodes it with (no new code in the build): pure Rust,
 # `forbid(unsafe_code)` in its default build, no_std-capable (builds for wasm), BSD-3-Clause/MIT.
-brotli-decompressor = "5"
-vello_cpu = "0.2"
+brotli-decompressor = "6"
+vello_cpu = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", version = "=0.1.0", default-features = false, features = ["write"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
-quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
@@ -77,7 +77,7 @@ sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
 base64 = "0.23"
-getrandom = "0.3"
+getrandom = "0.4"
 zeroize = "1"
 # Unix open flags (O_NONBLOCK for the engine's checked file reads, #3666); already in the lock as a
 # dependency of other crates.
