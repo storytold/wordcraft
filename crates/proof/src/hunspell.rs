@@ -146,6 +146,11 @@ pub fn find_in(dir: &Path, names: &[&str]) -> Option<(PathBuf, PathBuf)> {
 pub(crate) fn read_capped(p: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let err = |e: std::io::Error| format!("{}: {e}", p.display());
+    // Windows won't open a directory at all ("access denied"), so its metadata is read first; the
+    // open file's own metadata below still decides, should the path change in between.
+    if std::fs::metadata(p).is_ok_and(|m| !m.is_file()) {
+        return Err(format!("{}: not a regular file", p.display()));
+    }
     let f = std::fs::File::open(p).map_err(err)?;
     let meta = f.metadata().map_err(err)?;
     if !meta.is_file() {
