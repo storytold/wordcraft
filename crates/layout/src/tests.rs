@@ -2911,6 +2911,44 @@ fn sections_land_on_the_side_their_break_and_numbering_ask_for() {
 }
 
 #[test]
+fn a_section_starting_a_page_flushes_the_page_before_with_its_own_margins() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Section one ends its last page with a footnote pending; section two starts a new page
+    // with a wider left margin. The footnotes on the page before keep section one's margin,
+    // whichever way the new page starts (#5289).
+    let note_x = |start: SectionStart| {
+        let mut d = Document::from_text("Section one text.\nTwo");
+        let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default());
+        let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+        d.insert_object(
+            &Pos::body(0, 5),
+            InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d.last_section.margin_left = 144.0;
+        let l = lay(&d);
+        let x = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(n), x, .. } if *n == id => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the footnote is placed ({start:?})"));
+        (x, l.pages.len())
+    };
+    for start in [SectionStart::NextPage, SectionStart::EvenPage, SectionStart::OddPage] {
+        let (x, pages) = note_x(start);
+        assert!((x - 72.0).abs() < 0.01, "{start:?}: the footnote sits at section one's margin, not {x}");
+        assert!(pages >= 2, "{start:?}: the section starts a page");
+    }
+}
+
+#[test]
 fn paragraph_marks_sit_past_text_running_the_other_way() {
     // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
     // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
