@@ -87,6 +87,13 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
             }
             prev = Some(g);
         }
+        if kinsoku {
+            opps.retain(|&i| {
+                let (Some(p), Some(n)) = (prev_char(i), next_char(i)) else { return true };
+                !(matches!(p, ')' | ']' | '}' | '%' | '‰' | '」' | '』' | '）' | '〉' | '》' | '】' | '〕' | '〗' | '〙' | '〛' | '］' | '｝')
+                    && is_hangul(n))
+            });
+        }
     }
     // Never split a conjoining Hangul Jamo syllable across lines, regardless of kinsoku/word_wrap.
     opps.retain(|&i| !prev_char(i).zip(next_char(i)).is_some_and(|(p, n)| splits_conjoining_jamo(p, n)));
@@ -94,13 +101,15 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     opps.dedup();
 }
 
-/// A Hangul or non-East-Asian word character (letters, digits and combining marks/joiners).
+/// A Hangul or non-East-Asian word character (letters, digits and combining marks/joiners,
+/// excluding U+200B zero-width space so explicit break opportunities stay intact).
 fn is_non_ea_word_char(c: char) -> bool {
     is_hangul(c)
         || (!is_east_asian(c)
             && (c.is_alphanumeric()
                 || (!c.is_ascii()
                     && !c.is_control()
+                    && c != '\u{200B}'
                     && matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::NSM | unicode_bidi::BidiClass::BN))))
 }
 
@@ -235,5 +244,13 @@ mod tests {
         }
         assert_eq!(breaks("안녕 「한글」을 읽다", true, true), ["「", "읽"]);
         assert_eq!(breaks("안녕 『한국어』가 좋다", true, true), ["『", "좋"]);
+        // With `word_wrap = false` and `kinsoku = true`, inter-syllable breaks remain permitted
+        // while closing-bracket + Hangul particle boundaries stay protected.
+        assert_eq!(breaks("「조항」을", true, false), ["항"]);
+        assert!(breaks("「조항」을", false, false).contains(&"을".to_string()));
+        // Explicit U+200B zero-width space keeps its break opportunity under `word_wrap = true`,
+        // whereas U+2060 word joiner suppresses breaking.
+        assert_eq!(breaks("한국어\u{200B}단어", true, true), ["단"]);
+        assert!(breaks("한국어\u{2060}단어", true, true).is_empty());
     }
 }
