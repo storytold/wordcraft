@@ -159,7 +159,7 @@ fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: 
         None => y,
     };
     let float = frame_float(&fr);
-    let mut page = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    let mut page = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
     let mut r = float_rect(Some(page), (col_x, col_w), pb.y, fw, h, &float);
     // Like a floating table (#534), a frame that doesn't fit below the text before it moves to the
     // next page with its paragraphs: one placed relative to the paragraph when it would run off
@@ -174,7 +174,7 @@ fn place_framed_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: 
         };
         if moves {
             pb.advance(block, body_top);
-            page = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+            page = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
             r = float_rect(Some(page), (pb.col_x(), pb.col_w()), pb.y, fw, h, &float);
         }
     }
@@ -640,7 +640,7 @@ impl<'a> Flow<'a> {
         pb.para_end = Some((pb.pages.len(), pb.col, end));
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
-            page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
+            page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
             col: (x, self.width),
             para_y: if pb.web { y } else { self.anchor_y },
             table_chr: None,
@@ -937,7 +937,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
     let mut items = Vec::new();
     push_para(&mut items, (StoryRef::Body, &[block as u32]), &pl, (0, l1), (x, y), width, edges);
     let at = ObjFrame {
-        page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
+        page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
         col: (x, width),
         para_y: y,
         table_chr: None,
