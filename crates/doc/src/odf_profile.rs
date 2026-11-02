@@ -91,6 +91,11 @@ pub struct OdfProfile {
     /// A line holding only in-line pictures is as tall as they are (`true`), else as tall as
     /// its text would be too (the standard defines no line-height algorithm).
     pub picture_lines_fit_pictures: bool,
+    /// A columned section that doesn't say whether its columns are balanced (§20.428
+    /// `text:dont-balance-text-columns` has no default, and its value descriptions contradict
+    /// its name) ends with balanced columns at the end of the document too (`true`), else only
+    /// when text follows on the same page, as in Word.
+    pub balance_section_columns: bool,
 }
 
 impl Default for OdfProfile {
@@ -116,6 +121,7 @@ impl OdfProfile {
             page_frame_paragraph_is_page: false,
             inline_invalid_relation_is_baseline: false,
             picture_lines_fit_pictures: false,
+            balance_section_columns: false,
         }
     }
 
@@ -135,6 +141,7 @@ impl OdfProfile {
             page_frame_paragraph_is_page: true,
             inline_invalid_relation_is_baseline: true,
             picture_lines_fit_pictures: true,
+            balance_section_columns: true,
         }
     }
 

@@ -112,3 +112,33 @@ fn only_rows_set_to_repeat_are_written_as_header_rows() {
     let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows.iter().map(|r| r.props.header).collect::<Vec<_>>(), [true, false, false]);
 }
+
+#[test]
+fn a_table_styles_look_is_written_into_its_cells() {
+    // A WordCraft table in a built-in style (blue header row, banded rows, bold header text):
+    // ODF has no table styles of that kind, so each cell gets what the style gives it, and
+    // LibreOffice (and WordCraft, reopening it) draws the same table.
+    let mut d = Document::new();
+    let mut t = wordcraft_doc::Table::new(3, 2, 288.0);
+    t.props.style = Some("GridTable4AccentBlue".into());
+    t.props.look.header_row = true;
+    t.props.look.banded_rows = true;
+    for (ri, row) in t.rows.iter_mut().enumerate() {
+        for (ci, cell) in row.cells.iter_mut().enumerate() {
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("r{ri}c{ci}"), Default::default()))];
+        }
+    }
+    d.body = vec![std::sync::Arc::new(Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::default())];
+    let st = d.styles.table_style("GridTable4AccentBlue").unwrap().parts;
+    let back = import(&export(&d).unwrap()).unwrap();
+    let c = cells(&back);
+    assert_eq!(c[0].shading, st.header_fill, "the header row's fill");
+    assert_eq!(c[2].shading, st.band_fill, "the first band's fill");
+    assert_eq!(c[4].shading, None, "the second band is unfilled");
+    assert!(side(c[2].borders, |b| b.left).is_some(), "the style's cell borders");
+    let t = back.body.iter().find_map(|b| if let Block::Table(t) = &**b { Some(t.clone()) } else { None }).unwrap();
+    let first = t.rows[0].cells[0].blocks[0].as_para().unwrap();
+    assert_eq!(first.runs[0].props.bold, Some(true), "the header row's bold text");
+    let body = t.rows[1].cells[1].blocks[0].as_para().unwrap();
+    assert_ne!(body.runs[0].props.bold, Some(true));
+}

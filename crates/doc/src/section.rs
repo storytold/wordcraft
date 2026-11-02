@@ -778,6 +778,11 @@ pub struct SectionProps {
     pub footnote_pr: NoteProps,
     #[serde(skip_serializing_if = "NoteProps::is_empty")]
     pub endnote_pr: NoteProps,
+    /// Whether its columns end balanced (an ODF section's `text:dont-balance-text-columns`):
+    /// `None` is Word's rule, balanced when a continuous section follows; `Some(true)` also at
+    /// the end of the document, `Some(false)` never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance_columns: Option<bool>,
 }
 
 impl Default for SectionProps {
@@ -815,6 +820,7 @@ impl Default for SectionProps {
             doc_grid: None,
             footnote_pr: NoteProps::default(),
             endnote_pr: NoteProps::default(),
+            balance_columns: None,
         }
     }
 }

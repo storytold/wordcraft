@@ -629,8 +629,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         if wrapped {
             w.close_ins(&mut body);
             let n = w.section_styles.len() + 1;
+            // Whether its columns end balanced, said so every reader does the same: as WordCraft
+            // lays it out (balanced when text follows on the page, or when the section says).
+            let next_continuous = sections.get(k + 1).is_some_and(|(s, _)| s.start == SectionStart::Continuous);
+            let balanced = match sec.balance_columns {
+                Some(b) => b && (next_continuous || k + 1 == sections.len()),
+                None => next_continuous,
+            };
             w.section_styles.push(format!(
-                "<style:style style:name=\"Sect{n}\" style:family=\"section\"><style:section-properties>{}</style:section-properties></style:style>",
+                "<style:style style:name=\"Sect{n}\" style:family=\"section\"><style:section-properties text:dont-balance-text-columns=\"{}\">{}</style:section-properties></style:style>",
+                !balanced,
                 columns_xml(&sec.columns)
             ));
             body.push_str(&format!("<text:section text:style-name=\"Sect{n}\" text:name=\"Section{n}\">"));

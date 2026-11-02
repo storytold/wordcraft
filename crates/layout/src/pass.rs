@@ -303,7 +303,13 @@ fn continue_page(pb: &mut PageBuilder, sect: &SectionProps) {
 /// again from the start of the block that reaches it, with shorter columns.
 fn prepare_section_end(pb: &mut PageBuilder, sections: &[(usize, &SectionProps)], (si, web): (usize, bool)) -> bool {
     let next = sections.get(si + 1).map(|(_, s)| s.start);
-    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && next == Some(SectionStart::Continuous);
+    // An ODF section may ask for balanced columns at the end of the document too, or for none.
+    let follows = match pb.sect.balance_columns {
+        None => next == Some(SectionStart::Continuous),
+        Some(true) => next.is_none() || next == Some(SectionStart::Continuous),
+        Some(false) => false,
+    };
+    let balance = !web && pb.cols.len() > 1 && pb.sect.valign == wordcraft_doc::section::PageVAlign::Top && follows;
     pb.col_break_page = None;
     pb.next_starts_page = !web && next.is_some_and(|s| s != SectionStart::Continuous);
     balance

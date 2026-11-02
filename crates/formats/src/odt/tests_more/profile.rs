@@ -67,3 +67,29 @@ fn values_a_file_states_are_kept_under_every_preset() {
         assert_eq!(shape, Some((Some(Rgb(0x11, 0x22, 0x33)), Some(Rgb(0x44, 0x55, 0x66)), 2.0)), "{:?}", profile.preset);
     }
 }
+
+#[test]
+fn a_sections_column_balance_is_its_own_else_the_profiles_and_is_written() {
+    // §20.428 `text:dont-balance-text-columns`: read as its name says; unstated, the profile's
+    // (LibreOffice balances; WordCraft, as Word, only when text follows on the page).
+    let doc = |props: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="S" style:family="section"><style:section-properties {props}><style:columns fo:column-count="2" fo:column-gap="0.5cm"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>a</text:p><text:section text:name="S1" text:style-name="S"><text:p>b</text:p></text:section></office:text></office:body></office:document-content>"#
+        );
+        crate::odt::tests::package(&content, None)
+    };
+    let balance = |props: &str, profile: &OdfProfile| import_as(&doc(props), profile).last_section.balance_columns;
+    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+        assert_eq!(balance(r#"text:dont-balance-text-columns="true""#, &p), Some(false));
+        assert_eq!(balance(r#"text:dont-balance-text-columns="false""#, &p), Some(true));
+    }
+    assert_eq!(balance("", &OdfProfile::libreoffice()), Some(true));
+    assert_eq!(balance("", &OdfProfile::wordcraft()), None);
+    // Written as WordCraft lays it out, so every reader balances it the same.
+    for (props, written) in [("", "true"), (r#"text:dont-balance-text-columns="false""#, "false")] {
+        let d = import_as(&doc(props), &OdfProfile::wordcraft());
+        let saved = crate::odt::export(&d).unwrap();
+        let content = crate::odt::tests::entry(&saved, "content.xml");
+        assert!(content.contains(&format!(r#"text:dont-balance-text-columns="{written}""#)), "{props}: {content}");
+    }
+}

@@ -924,7 +924,19 @@ impl Body<'_> {
                         // section in a one-column page) is no new section.
                         .filter(|c| c.count != self.sec.columns.count || (c.count > 1 && *c != self.sec.columns))
                 {
-                    let next = SectionProps { start: SectionStart::Continuous, page_num_start: None, columns, ..self.page.clone() };
+                    let balance = get(a, "text:style-name").and_then(|s| self.styles.section_balance(s)).or(self
+                        .styles
+                        .defs
+                        .profile
+                        .balance_section_columns
+                        .then_some(true));
+                    let next = SectionProps {
+                        start: SectionStart::Continuous,
+                        page_num_start: None,
+                        columns,
+                        balance_columns: balance,
+                        ..self.page.clone()
+                    };
                     self.break_section(next);
                     self.cols_at = Some(self.depth);
                 }

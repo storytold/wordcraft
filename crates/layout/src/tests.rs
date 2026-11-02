@@ -8049,6 +8049,32 @@ fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     assert!(br > bl + 50.0 && after >= br - 0.5, "columns end at {bl} and {br}, next section at {after}");
 }
 
+#[test]
+fn an_odf_section_says_whether_its_columns_are_balanced() {
+    use wordcraft_doc::section::SectionStart;
+    // The document's last section in two columns: Word's rule leaves it unbalanced (nothing
+    // follows); an ODF section asking for balance gets it there too.
+    let text: Vec<String> = (0..10).map(|i| format!("Short paragraph {i}")).collect();
+    let left_count = |balance: Option<bool>| {
+        let mut d = Document::from_text(&text.join("\n"));
+        d.last_section.columns.count = 2;
+        d.last_section.balance_columns = balance;
+        let b = para_boxes(&lay(&d));
+        let x0 = b[0].1;
+        b.iter().filter(|e| (e.1 - x0).abs() < 1.0).count()
+    };
+    assert_eq!(left_count(None), 10);
+    let n = left_count(Some(true));
+    assert!(n == 5 || n == 6, "{n} in the left column");
+    // A section saying no stays unbalanced even before a continuous break.
+    let mut d = two_column_section(SectionStart::Continuous, vec![]);
+    if let Some(s) = d.para_mut(StoryRef::Body, &Path::top(9)).unwrap().section.as_mut() {
+        s.balance_columns = Some(false);
+    }
+    let (nl, _, nr, _, _) = column_bottoms(&lay(&d));
+    assert_eq!((nl, nr), (10, 0));
+}
+
 /// The glyphs of each note reference mark in the body, by note id.
 fn note_marks(l: &DocLayout) -> HashMap<u32, Vec<u32>> {
     let mut marks = HashMap::new();

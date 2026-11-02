@@ -257,6 +257,8 @@ struct StyleInfo {
     column_specs: Vec<ColumnSpec>,
     /// Its `style:columns` states its gap (else the profile's, see [`Styles::columns`]).
     column_gap_stated: bool,
+    /// `text:dont-balance-text-columns` of `style:section-properties`, as stated.
+    dont_balance: Option<bool>,
     /// Margins, first-line indent and line spacing of `style:paragraph-properties`.
     spacing: Spacing,
     /// `style:family` (paragraph, text, table…).
@@ -623,6 +625,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "table-cell-properties" => table_cell_properties(a, s),
+        "section-properties" => {
+            s.dont_balance = get(a, "text:dont-balance-text-columns").map(|v| v.trim() == "true");
+        }
         "columns" if q.starts_with("style:") => {
             s.columns = Some(columns_of(a, 0.0));
             s.column_gap_stated = get(a, "fo:column-gap").is_some();
@@ -1265,6 +1270,13 @@ impl Styles {
             let gap = if s.column_gap_stated { None } else { Some(self.defs.profile.column_gap) };
             s.columns.clone().map(|c| with_widths(Columns { space: gap.unwrap_or(c.space), ..c }, &s.column_specs, tw))
         })
+    }
+
+    /// Whether a section style's columns are balanced at its end, when it says (the attribute's
+    /// name, `text:dont-balance-text-columns`, read as it reads; §20.428's value descriptions
+    /// say the opposite).
+    pub(super) fn section_balance(&self, name: &str) -> Option<bool> {
+        self.chain(name).iter().find_map(|(_, s)| s.dont_balance).map(|d| !d)
     }
 
     /// Styles to be read, filling in what the standard leaves open as `profile` says.

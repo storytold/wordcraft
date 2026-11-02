@@ -110,3 +110,45 @@ fn hostile_groups_do_not_panic() {
         let _ = export(&d).unwrap();
     }
 }
+
+#[test]
+fn a_diagram_is_saved_as_a_group_of_its_drawing() {
+    // A SmartArt diagram (ODF has none): saved as a group of its shapes and its text in text
+    // boxes, so every reader draws it; WordCraft opens it back as a group.
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let blue = Rgb(0x15, 0x60, 0x82);
+    let graphic = Graphic {
+        kind: GraphicKind::Diagram,
+        items: vec![
+            GraphicItem::Shape { rect: [0.0, 0.0, 72.0, 36.0], kind: ShapeKind::RoundedRectangle, fill: Some(blue), stroke: None, stroke_width: 0.0 },
+            GraphicItem::Text {
+                rect: [0.0, 0.0, 72.0, 36.0],
+                text: "Plan".into(),
+                size: 12.0,
+                color: Rgb::WHITE,
+                bold: false,
+                align: TextAlign::Center,
+                font: None,
+            },
+            GraphicItem::Shape { rect: [90.0, 9.0, 18.0, 18.0], kind: ShapeKind::Arrow, fill: Some(blue), stroke: None, stroke_width: 0.0 },
+        ],
+        w: 108.0,
+        h: 36.0,
+        ..Graphic::default()
+    };
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = InlineObject::Graphic { w: 216.0, h: 72.0, alt: "Steps".into(), float: Default::default(), graphic: std::sync::Arc::new(graphic) };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let saved = export(&d).unwrap();
+    assert!(content_of(&saved).contains("<draw:g"), "{}", content_of(&saved));
+    let g = groups(&import(&saved).unwrap());
+    assert_eq!(g.len(), 1);
+    let ((w, h), _, _, members) = &g[0];
+    assert_eq!((*w, *h), (216.0, 72.0), "drawn at the object's size: twice the graphic's");
+    let kinds: Vec<ShapeKind> = members.iter().map(|m| m.0).collect();
+    assert!(kinds.contains(&ShapeKind::RoundedRectangle) && kinds.contains(&ShapeKind::Arrow), "{kinds:?}");
+    assert!(members.iter().any(|m| m.4 == "Plan"), "its text: {members:?}");
+}

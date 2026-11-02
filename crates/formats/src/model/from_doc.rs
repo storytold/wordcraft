@@ -520,19 +520,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
-                    // An editable chart, for formats that keep charts (ODT).
-                    if let Some(spec) = graphic.chart.as_ref().filter(|_| opts.boxes) {
-                        out.inlines.push(Inline::Chart(crate::model::Chart {
-                            spec: spec.clone(),
-                            w: *w,
-                            h: *h,
-                            alt: alt.clone(),
-                            float: kept_float(float).filter(|_| opts.paras),
-                            source: graphic.source.as_deref().and_then(|e| super::odf_object::load(doc, e)),
-                        }));
-                    } else if !alt.trim().is_empty() {
-                        out.inlines.push(Inline::Figure(alt.clone()));
-                    }
+                    out.inlines.extend(graphic_inline(doc, (alt, *w, *h), float, graphic, opts));
                 }
                 Some(InlineObject::Equation { linear, display, math }) => {
                     if !buf.is_empty() {
@@ -589,6 +577,122 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     out.mark = empty_mark(&out, p, opts);
     done.push(out);
     done
+}
+
+/// A chart or diagram in a flow: an editable chart for formats that keep charts (ODT), a
+/// diagram's drawing as a group for formats that keep shapes, else its alt text.
+fn graphic_inline(
+    doc: &Document,
+    (alt, w, h): (&str, f32, f32),
+    float: &wordcraft_doc::para::Float,
+    graphic: &wordcraft_doc::graphic::Graphic,
+    opts: FlowOpts,
+) -> Option<Inline> {
+    if let Some(spec) = graphic.chart.as_ref().filter(|_| opts.boxes) {
+        return Some(Inline::Chart(crate::model::Chart {
+            spec: spec.clone(),
+            w,
+            h,
+            alt: alt.to_string(),
+            float: kept_float(float).filter(|_| opts.paras),
+            source: graphic.source.as_deref().and_then(|e| super::odf_object::load(doc, e)),
+        }));
+    }
+    // A diagram (SmartArt) for formats without one: its drawing as a group of shapes, text boxes
+    // and pictures every reader draws.
+    if opts.boxes
+        && let Some(group) = graphic_group(doc, (w, h), float, graphic)
+    {
+        return Some(group);
+    }
+    (!alt.trim().is_empty()).then(|| Inline::Figure(alt.to_string()))
+}
+
+/// A graphic's drawing items ([`wordcraft_doc::graphic::GraphicItem`]) as a group `w` × `h`
+/// points: its shapes as shapes, its text as borderless text boxes centred on their places, its
+/// pictures as pictures. `None` when nothing in it can be drawn so (paths are left out).
+fn graphic_group(
+    doc: &Document,
+    (w, h): (f32, f32),
+    float: &wordcraft_doc::para::Float,
+    graphic: &wordcraft_doc::graphic::Graphic,
+) -> Option<Inline> {
+    use wordcraft_doc::graphic::{GraphicItem, TextAlign};
+    use wordcraft_doc::para::ShapeKind;
+    let ratio = |outer: f32, inner: f32| {
+        let r = outer / inner;
+        if r.is_finite() && r > 0.0 { r } else { 1.0 }
+    };
+    let (sx, sy) = (ratio(w, graphic.w), ratio(h, graphic.h));
+    let finite = |r: &[f32; 4]| r.iter().all(|v| v.is_finite()) && r[2] >= 0.0 && r[3] >= 0.0;
+    let plain = BoxLook { fill: None, line: None, inset: Some([0.0; 4]), ..BoxLook::default() };
+    let members: Vec<Member> = graphic
+        .items
+        .iter()
+        .take(10_000)
+        .filter_map(|item| match item {
+            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width } if finite(rect) => {
+                let look = BoxLook {
+                    fill: fill.map(wordcraft_doc::fill::Fill::solid).filter(|_| *kind != ShapeKind::Line),
+                    line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
+                    ..plain.clone()
+                };
+                let inline = Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
+                Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
+            }
+            GraphicItem::Text { rect, text, size, color, bold, align, font } if finite(rect) && !text.trim().is_empty() => {
+                let size = if size.is_finite() { size.clamp(1.0, 400.0) } else { 11.0 };
+                // One line, centred vertically in its place as the graphic draws it.
+                let line = size * 1.2;
+                let (bw, bh) = (rect[2] * sx, line.max(1.0));
+                let y = rect[1] * sy + (rect[3] * sy - bh) / 2.0;
+                let fmt = Fmt { bold: *bold, color: Some(*color), size: Some(size), font: font.as_deref().map(Arc::from), ..Fmt::default() };
+                let para = Para {
+                    align: Some(match align {
+                        TextAlign::Left => wordcraft_doc::Align::Left,
+                        TextAlign::Right => wordcraft_doc::Align::Right,
+                        _ => wordcraft_doc::Align::Center,
+                    }),
+                    inlines: vec![Inline::Text(text.clone(), fmt)],
+                    spacing: Spacing { before: Some(0.0), after: Some(0.0), ..Spacing::default() },
+                    ..Para::default()
+                };
+                let inline = Inline::Shape {
+                    kind: ShapeKind::Rectangle,
+                    w: bw,
+                    h: bh,
+                    float: None,
+                    blocks: vec![FBlock::Para(para)],
+                    look: plain.clone(),
+                    path: None,
+                };
+                Some(Member { x: rect[0] * sx, y, inline })
+            }
+            GraphicItem::Image { rect, media } if finite(rect) => {
+                let data = doc.media.get(media)?;
+                let img = Img {
+                    data: data.clone(),
+                    ext: media_ext(media, data),
+                    w: rect[2] * sx,
+                    h: rect[3] * sy,
+                    alt: String::new(),
+                    float: None,
+                    object: None,
+                    crop: [0.0; 4],
+                };
+                Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline: Inline::Image(img) })
+            }
+            _ => None,
+        })
+        .collect();
+    if members.is_empty() {
+        return None;
+    }
+    // A group is as big as its members together (ODF 1.3 §10.3.15): an invisible rectangle the
+    // size of the graphic keeps the room around its drawing.
+    let frame = Inline::Shape { kind: ShapeKind::Rectangle, w, h, float: None, blocks: Vec::new(), look: plain, path: None };
+    let all = std::iter::once(Member { x: 0.0, y: 0.0, inline: frame }).chain(members).collect();
+    Some(Inline::Group { w, h, float: kept_float(float), members: all })
 }
 
 /// The mark formatting of `out`, the last piece of `p`, when it holds no text (its height, its
@@ -705,12 +809,135 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
 /// Word's default cell margins (top, left, bottom, right), points.
 const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
 
+/// What a table's style and borders give one cell, worked out as the layout does, for formats
+/// that keep cell formatting (ODT) but have no table styles of Word's kind: its shading, its four
+/// edges (a side without a line is a "none" border), its vertical alignment, and its text's
+/// character formatting and alignment.
+struct StyledCell {
+    fill: Option<wordcraft_doc::props::Rgb>,
+    borders: wordcraft_doc::props::Borders,
+    v_align: Option<wordcraft_doc::props::VAlign>,
+    chr: CharProps,
+    align: Option<wordcraft_doc::Align>,
+    /// The style's paragraph formatting (spacing, line spacing) under each paragraph's own.
+    para: ParaProps,
+}
+
+fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>, (ri, ci): (usize, usize), ncols: usize) -> Option<StyledCell> {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    use wordcraft_doc::styles::{PartSet, TablePart};
+    let row = t.rows.get(ri)?;
+    let cell = row.cells.get(ci)?;
+    let nrows = t.rows.len();
+    let g = t.grid_col(ri, ci);
+    let span = cell.span();
+    let mut out = StyledCell {
+        fill: None,
+        borders: Borders::default(),
+        v_align: None,
+        chr: CharProps::default(),
+        align: None,
+        para: style.map(|s| s.para.clone()).unwrap_or_default(),
+    };
+    let mut part_borders = Vec::new();
+    if let Some(st) = style {
+        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+        for part in PartSet::of_cell(&t.props.look, sizes, (ri, nrows), (g, span, ncols)).iter() {
+            let f = st.part(part);
+            out.fill = f.fill.or(out.fill);
+            out.v_align = f.v_align.or(out.v_align);
+            out.chr.overlay(&f.chr);
+            out.align = f.align.or(out.align);
+            if part != TablePart::WholeTable
+                && let Some(b) = f.borders
+            {
+                part_borders.push((part, b));
+            }
+        }
+    }
+    let mut tb = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tb.overlay(&own);
+    }
+    let cb = cell.props.borders.unwrap_or_default();
+    let rowb = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
+    let (first_g, last_g) = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
+    let rb = wordcraft_doc::styles::part_borders(&part_borders, (ri, nrows), (first_g, last_g));
+    let edge = |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
+    let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let top = edge(cb.top.or(if ri == 0 { rowb.top } else { rowb.between }).or(rb.top), ri == 0, tb.top, tb.between);
+    let bottom = edge(cb.bottom.or(if ri + 1 == nrows { rowb.bottom } else { rowb.between }).or(rb.bottom), ri + 1 == nrows, tb.bottom, tb.between);
+    let left = edge(
+        cb.left.or(if first_g { rowb.left } else { rowb.inside_v }).or(if first_g { rb.left } else { rb.inside_v }),
+        first_g,
+        tb.left,
+        tb.inside_v,
+    );
+    let right = edge(
+        cb.right.or(if last_g { rowb.right } else { rowb.inside_v }).or(if last_g { rb.right } else { rb.inside_v }),
+        last_g,
+        tb.right,
+        tb.inside_v,
+    );
+    out.borders = Borders {
+        top: top.or(Some(none)),
+        bottom: bottom.or(Some(none)),
+        left: left.or(Some(none)),
+        right: right.or(Some(none)),
+        between: None,
+        inside_v: None,
+    };
+    Some(out)
+}
+
+/// `blocks` with what a table style's character and paragraph formatting changes (see
+/// [`wordcraft_doc::styles::StyleSheet::table_para_patch`]) stated on each paragraph and run.
+fn with_cell_text(doc: &Document, blocks: &Blocks, chr: &CharProps, align: Option<wordcraft_doc::Align>, para: &ParaProps) -> Blocks {
+    if chr.is_empty() && align.is_none() && para.is_empty() {
+        return blocks.clone();
+    }
+    blocks
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => {
+                let mut p = p.clone();
+                let pstyle = p.props.style.clone();
+                if !chr.is_empty() {
+                    for r in &mut p.runs {
+                        let mut props = doc.styles.table_char_patch(pstyle.as_deref(), r.props.style.as_deref(), chr);
+                        props.overlay(&r.props);
+                        r.props = props;
+                    }
+                    let mut mark = doc.styles.table_char_patch(pstyle.as_deref(), p.mark.style.as_deref(), chr);
+                    mark.overlay(&p.mark);
+                    p.mark = mark;
+                }
+                // A part's alignment is table style paragraph formatting too, under the paragraph's styles.
+                let table = ParaProps { align: align.or(para.align), ..para.clone() };
+                if !table.is_empty() {
+                    let mut props = doc.styles.table_para_patch(&p.props, &table);
+                    props.overlay(&p.props);
+                    p.props = props;
+                }
+                Arc::new(Block::Para(p))
+            }
+            _ => b.clone(),
+        })
+        .collect()
+}
+
 fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTable {
     let mut rows = Vec::new();
+    // Formats that keep cell formatting get the table style's and the table's borders cell by cell.
+    let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+    let bake = tracked.paras;
+    let ncols =
+        t.rows.iter().map(|r| r.first_grid() + r.cells.iter().map(|c| c.span()).sum::<usize>() + r.grid_after()).max().unwrap_or(0).max(t.grid.len());
     for (ri, r) in t.rows.iter().enumerate() {
         let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
         for (ci, c) in r.cells.iter().enumerate() {
+            let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
             if c.props.vmerge == VMerge::Restart {
                 let g = t.grid_col(ri, ci);
@@ -722,15 +949,19 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     rowspan += 1;
                 }
             }
+            let blocks = match &styled {
+                Some(st) => flow_blocks(doc, &with_cell_text(doc, &c.blocks, &st.chr, st.align, &st.para), depth + 1, tracked),
+                None => flow_blocks(doc, &c.blocks, depth + 1, tracked),
+            };
             cells.push(Cell {
-                blocks: flow_blocks(doc, &c.blocks, depth + 1, tracked),
+                blocks,
                 colspan: c.span() as u32,
                 rowspan,
                 covered: c.props.vmerge == VMerge::Continue,
                 header,
-                shading: c.props.shading,
-                borders: c.props.borders,
-                valign: c.props.valign,
+                shading: c.props.shading.or(styled.as_ref().and_then(|s| s.fill)),
+                borders: styled.as_ref().map(|s| s.borders).or(c.props.borders),
+                valign: c.props.valign.or(styled.as_ref().and_then(|s| s.v_align)),
                 // Formats that keep cell padding get each cell's, its table's or Word's default.
                 margins: tracked.paras.then(|| c.props.resolved_margins(t.props.cell_margins.unwrap_or(WORD_CELL_MARGINS))),
                 direction: c.props.text_direction,

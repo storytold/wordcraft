@@ -766,7 +766,9 @@ impl<'a> Builder<'a> {
         // to `rows.len()` would allocate a full rows × cols cell grid only to clear it, which a
         // tall table (many rows, wide from merged cells) turns into a large transient spike.
         let mut tb = Table::new(1, cols, width);
-        if t.borderless {
+        // A table from a format that keeps cell formatting (ODT) has its cells' own borders and no
+        // table style of Word's kind: Table Grid's single spacing would change its text.
+        if t.borderless || t.extra.is_some() {
             tb.props.style = None;
         }
         if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
