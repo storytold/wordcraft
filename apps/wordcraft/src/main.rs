@@ -449,7 +449,8 @@ fn main() -> eframe::Result {
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
-    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652).
+    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652). An x86_64
+    // build under Rosetta on Apple silicon keeps them (#5199).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
