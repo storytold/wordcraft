@@ -76,7 +76,9 @@ config works across the suite) keep the agent to the folders you give it:
 - Every file a command writes must lie inside the **write root**: `save_document`, `file.save`,
   `file.saveAs`, `file.rename` (the file and its new name), `file.exportPdf`, `file.exportPng`, `file.printPdf`,
   `file.saveTemplate`, and `mailings.finish` with a `path`. `font.add` and `font.remove` change the
-  user font folder, so they are refused when it is outside the write root (#3692). A save replaces
+  user font folder, so they are refused when it is outside the write root (#3692), and so are
+  `proof.installPack` and `proof.removePack`, which change the font store's `language-packs`
+  folder. A save replaces
   the name it is given, so that name must be inside the write root as well as what it leads to:
   a link outside the root pointing in is refused (#3735).
 - Read and write access are separate. Give the same folder twice for both; a root left out grants
@@ -109,6 +111,38 @@ touching the file system on their own.
 The checks hold for every thread of the server process. A path is checked, then opened: another
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
+
+## Language packs
+
+Spelling and hyphenation for languages other than English come as Language packs, installed into
+the suite's font store (see [installing languages](spelling-dictionaries.md#language-packs)):
+
+| Command | Params | Returns |
+|---|---|---|
+| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
+| `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was); with `--connect`, `{"locale", "started": true}` |
+| `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
+
+None opens anything. Downloading is the font store's single consent setting: an agent can install
+only while the person has turned it on in the app (File › Options › Language: Install or Show
+available languages), and can never turn it on itself; otherwise `proof.installPack` fails with
+*downloading is turned off*. `refresh` likewise needs it on. Every archive is checked against the
+sha256 in the pinned index before it is unpacked. With `--connect` the commands act on the running
+app's packs, and an install or a `refresh` runs in the background so the window keeps working: the
+command returns `"started": true` at once, and `proof.packs` shows it under `installing` (or
+`refreshing`), then under `installed`, or its failure under `errors`. A removal waits until that
+pack's install ends. Headless, they act on the same font store folder and return when done. The
+web build has no packs.
+
+A click or key sent with `click`/`key` on Install, Show available languages or Refresh never turns
+downloading on either: only the person's own click does; the app shows why instead.
+
+Installing works once language-packs-1 is published and its index pinned. Until then, for testing
+packs before they are published, set `CRAFT_LANGUAGE_PACK_INDEX` to another index (a URL or a path
+to an `index.json`) when starting WordCraft or `wordcraft-cli`. That index isn't pinned, so the
+sha256 of each archive only matches what that index says: it catches a broken download, not a
+changed pack. `proof.packs` then returns `"index_override": "<url or path>"`, and the app shows the
+test source in File › Options › Language and on the bar's Install.
 
 ## Tools
 

@@ -1,6 +1,6 @@
-# Installing spelling dictionaries
+# Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-02 · **Change:** minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -14,6 +14,39 @@ size limit, a parse error), the language isn't checked either, and the status ba
 **File › Options › Proofing** lists the same reason next to the file.
 
 Install a dictionary once, restart WordCraft, and the language is checked as you type.
+
+## Language packs
+
+The easiest way to proof another language is its **Language pack**: the language's spelling
+dictionary, hyphenation patterns and licence texts, installed and removed together. English is
+built in; every other language is a pack.
+
+> Language packs can be installed once the first set (language-packs-1) is published. Until then
+> the list of languages stays empty, unless WordCraft was started with a test list
+> (`CRAFT_LANGUAGE_PACK_INDEX`, for testing packs before they are published).
+
+- **File › Options › Language › Language packs** lists the packs, each with its size, its licence
+  and a link to where it comes from. Click **Install** next to a language; **Remove** takes it out
+  again. The first time, click **Show available languages** to get the list.
+- When a document has text in a language whose pack isn't installed, a bar under the ribbon says
+  *Dutch proofing isn't installed.* with an **Install** button showing the download size. ✕ hides
+  it for that document. It never shows for a language that has no pack.
+- Installing needs **downloading** on: the same single setting as WordCraft's font downloads
+  (the font store). Clicking Install, Show available languages or Refresh turns it on; nothing is
+  downloaded before. Each pack is checked against the sha256 in WordCraft's pinned list before it
+  is used.
+- Text in that language is checked and hyphenated as soon as the pack is installed: no restart.
+- **Help › About › Language data** shows the full licence text of the built-in English data and
+  of every installed pack.
+- Packs live in the font store's folder, under `language-packs/<language>/`, so every Craft app
+  uses the same ones.
+- Agents and scripts use the commands `proof.packs`, `proof.installPack {"locale": "nl"}` and
+  `proof.removePack {"locale": "nl"}` (see [MCP](mcp.md#language-packs)). They install only while
+  downloading is on; only you can turn it on, with your own click in the app.
+- The web version has no Language packs; it proofs English.
+
+A dictionary you install yourself (below) still wins: WordCraft looks in the dictionaries folder,
+then the installed pack, then the system's dictionaries.
 
 ## Which files each language needs
 
@@ -55,14 +88,22 @@ The first folder holding a matching pair wins:
 1. The folder set in **File › Options › Proofing › Dictionaries folder**. This is the easiest
    way on every system, and it works for an app started from the Start menu, Finder or the Dock.
    The same pane lists the dictionary file each language found.
-2. The folder in the `WORDCRAFT_DICTIONARIES` environment variable.
-3. The system's usual places:
+2. The folder in the `WORDCRAFT_DICTIONARIES` environment variable, and WordCraft's own
+   `dictionaries` folder (the first row of each system below).
+3. An installed [Language pack](#language-packs) for the language.
+4. The system's usual places:
 
 | System | Folders |
 |---|---|
 | Windows | `%LOCALAPPDATA%\WordCraft\dictionaries`, `%LOCALAPPDATA%\hunspell`, `%APPDATA%\WordCraft\dictionaries`, `%APPDATA%\hunspell`, LibreOffice's `share\extensions\dict-*` under `Program Files` (on any drive) |
-| macOS | `~/Library/Spelling`, `/Library/Spelling`, `/opt/homebrew/share/hunspell`, `/usr/local/share/hunspell`, `/Applications/LibreOffice.app/Contents/Resources/extensions/dict-*` |
-| Linux and BSD | `~/.local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell`, `/usr/share/myspell/dicts`, `/usr/local/share/hunspell`, `/usr/local/share/myspell`, LibreOffice's `share/extensions/dict-*` under `/usr/lib/libreoffice` or `/opt/libreoffice` |
+| macOS | `~/Library/Application Support/WordCraft/dictionaries`, `~/Library/Spelling`, `/Library/Spelling`, `/opt/homebrew/share/hunspell`, `/usr/local/share/hunspell`, `/Applications/LibreOffice.app/Contents/Resources/extensions/dict-*` |
+| Linux and BSD | `$XDG_DATA_HOME/wordcraft/dictionaries` (default `~/.local/share/wordcraft/dictionaries`), `~/.local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell`, `/usr/share/myspell/dicts`, `/usr/local/share/hunspell`, `/usr/local/share/myspell`, LibreOffice's `share/extensions/dict-*` under `/usr/lib/libreoffice` or `/opt/libreoffice` |
+
+The Flatpak runs in a sandbox: its `$XDG_DATA_HOME` is
+`~/.var/app/ai.storyteller.wordcraft/data`, so its own folder is
+`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`, and it can't see the host's
+`/usr/share/hunspell` or `~/.local/share/hunspell` (the paths above are for the other builds).
+Put dictionaries in that folder.
 
 The web version can't read these folders, so these languages aren't spell-checked there.
 
@@ -140,8 +181,11 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
+| 2026-11-01 | minor | Language packs (CP4.3): installing a language from File › Options › Language or the missing-pack bar, the download consent, About › Language data, the commands; an installed pack is searched after the dictionaries folders and before the system's |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
+| 2026-11-01 | trivial | WordCraft's own `dictionaries` folder under the user's application data is searched on macOS (`~/Library/Application Support/WordCraft/dictionaries`) and Linux/BSD (`$XDG_DATA_HOME/wordcraft/dictionaries`) too, before the system folders, as it was on Windows (craft-proof; ported from storytold/craft-libs#31 by brzuchal) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |
 | 2026-10-18 | trivial | ISO 8859-1 (`SET ISO8859-1`) dictionaries are read, so the original VERO `pt_BR` works without converting it to UTF-8 (#2824) |
 | 2026-10-18 | minor | An installed dictionary that can't be read shows **(dictionary unreadable)** in the status bar, with the file and reason in its tooltip and in File › Options › Proofing (#2830) |

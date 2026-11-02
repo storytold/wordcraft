@@ -64,7 +64,7 @@ fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Valu
     json!({
         "start": pos_json(a), "end": pos_json(b), "text": word,
         "kind": if i.kind == wordcraft_proof::IssueKind::Spelling { "spelling" } else { "grammar" },
-        "message": i.message, "suggestions": sugg, "lang": i.lang.code(),
+        "message": i.message, "suggestions": sugg, "lang": i.lang.tag(),
     })
 }
 
