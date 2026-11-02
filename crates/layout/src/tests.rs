@@ -1355,6 +1355,99 @@ fn an_empty_section_mark_stays_on_a_full_page() {
     assert_eq!(pages(false), 3);
 }
 
+/// #3974's document: A4 with 56.7 pt margins, Arial 11 pt at Word's 1.08 line spacing (259/240)
+/// with 8 pt after; "Intro" with a footnote (single-spaced, no space after), "Fill" pushed down
+/// by `before` points of space before (none after), the paragraphs `items` (a numbered list if
+/// `listed`), then the empty paragraph closing the section before a next-page one, and "CCC".
+/// Without `mark`, "CCC" starts the next page by a page break before it instead. Returns the
+/// document, its footnote and the index of the mark (or of "CCC").
+fn section_mark_note_doc(before: f32, items: &[&str], listed: bool, mark: bool) -> (Document, u32, usize) {
+    use wordcraft_doc::props::{LineSpacing, NumRef};
+    let mut text = vec!["Intro", "Fill"];
+    text.extend_from_slice(items);
+    let at = text.len();
+    if mark {
+        text.push("");
+    }
+    text.push("CCC");
+    let mut d = Document::from_text(&text.join("\n"));
+    let s = &mut d.last_section;
+    (s.page_w, s.page_h) = (595.3, 841.9);
+    (s.margin_top, s.margin_bottom, s.margin_left, s.margin_right) = (56.7, 56.7, 56.7, 56.7);
+    d.styles.default_chr.font = Some("Arial".into());
+    d.styles.default_chr.size = Some(11.0);
+    d.styles.default_para.space_after = Some(8.0);
+    d.styles.default_para.line_spacing = Some(LineSpacing::Multiple(259.0 / 240.0));
+    let fill = para_props(&mut d, 1);
+    (fill.space_before, fill.space_after) = (Some(before), Some(0.0));
+    if listed {
+        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        for i in 2..at {
+            para_props(&mut d, i).numbering = Some(NumRef { num, level: 0 });
+        }
+    }
+    if mark {
+        let section = Box::new(d.last_section.clone());
+        d.para_mut(StoryRef::Body, &Path::top(at)).unwrap().section = Some(section);
+    } else {
+        para_props(&mut d, at).page_break_before = Some(true);
+    }
+    let id = footnote(&mut d, &Pos::body(0, 5), "Note");
+    let note = &mut d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap().props;
+    (note.space_after, note.line_spacing) = (Some(0.0), Some(LineSpacing::Multiple(1.0)));
+    (d, id, at)
+}
+
+/// Sweeps #3974's document over "Fill"'s space before. On every step the note sits where it does
+/// without the mark and ends above the bottom margin; on the steps where the mark stays on the
+/// page reaching into the separator's area above the note, the mark makes no page of its own.
+fn assert_footnote_stays_put_below_the_mark(items: &[&str], listed: bool) {
+    let mut without_room = 0;
+    for before in (400..=700).map(|b| b as f32) {
+        let (d, id, at) = section_mark_note_doc(before, items, listed, true);
+        let l = lay(&d);
+        let note = note_pieces(&l, id);
+        let (plain, plain_id, _) = section_mark_note_doc(before, items, listed, false);
+        assert_eq!(note, note_pieces(&lay(&plain), plain_id), "space before {before}: the mark moved the note");
+        let margin = d.last_section.page_h - d.last_section.margin_bottom;
+        let note_bottom = l
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), para, l0, l1, y, .. } if *s == id => item_bottom(*y, para, *l0, *l1),
+                _ => None,
+            })
+            .fold(0.0f32, f32::max);
+        assert!(note_bottom <= margin + 0.01, "space before {before}: the note ends at {note_bottom}, past the bottom margin at {margin}");
+        let (mark, _) = para_pieces(&l, at);
+        if let (Some(&(0, _, _, mark_bottom)), Some(&(0, _, _, note_top))) = (mark.first(), note.first())
+            && mark_bottom > note_top - NOTE_SEP + 0.01
+        {
+            without_room += 1;
+            assert_eq!(l.pages.len(), 2, "space before {before}: the mark makes no page of its own");
+        }
+    }
+    assert!(without_room > 0, "the sweep leaves the mark no room above the note");
+}
+
+#[test]
+fn footnotes_stay_put_below_an_empty_section_mark_without_room() {
+    // #3974, the issue's document: the empty mark closing the section stays on the full page
+    // (`an_empty_section_mark_stays_on_a_full_page`) without room above the footnote. The issue
+    // reports that Word then leaves the note where it would be without the mark (separator at
+    // 767.7 pt, note 774.5-785.5 pt, the bottom margin at 785.2 pt); WordCraft started it below
+    // the mark, past the margin (separator at 775.6 pt, note 783.6-794.6 pt).
+    assert_footnote_stays_put_below_the_mark(&["AAA"], false);
+}
+
+#[test]
+fn footnotes_stay_put_below_an_empty_section_mark_after_list_items() {
+    // #3974's list variant: two list items before the empty mark (the issue: with 630 pt of space
+    // before, the note at 783.2 pt in WordCraft, 774.5 pt in Word).
+    assert_footnote_stays_put_below_the_mark(&["One", "Two"], true);
+}
+
 #[test]
 fn a_bookmark_after_a_page_break_takes_no_line() {
     // "Before", a page break, then a bookmark start (Word writes the next heading's TOC bookmark
