@@ -26,6 +26,20 @@ pub struct TrDict {
     max_suffix_len: usize,
 }
 
+impl crate::slot::Dictionary for TrDict {
+    fn load(aff: &std::path::Path, dic: &std::path::Path) -> Result<Self, String> {
+        super::load(aff, dic)
+    }
+
+    fn parse(aff: &str, dic: &str) -> Result<Self, String> {
+        TrDict::from_hunspell(aff, dic)
+    }
+
+    fn is_empty(&self) -> bool {
+        TrDict::is_empty(self)
+    }
+}
+
 impl TrDict {
     /// Returns true if empty (no dictionary loaded).
     pub fn is_empty(&self) -> bool {
@@ -87,7 +101,8 @@ impl TrDict {
 
     /// Check if word is correct (stem or affixed).
     pub fn contains(&self, word: &str) -> bool {
-        if self.is_empty() || word.is_empty() {
+        // Longer input is never a dictionary word, and isn't scanned (#3625).
+        if self.is_empty() || word.is_empty() || word.len() > crate::affix::MAX_WORD_BYTES {
             return false;
         }
 

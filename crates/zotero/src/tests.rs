@@ -10,6 +10,8 @@ use crate::fields;
 use crate::wire::{self, Call, Frame};
 use crate::{Bridge, Command, Headless, ZoteroError};
 
+mod limits;
+
 const CITE: &str = r#"ITEM CSL_CITATION {"citationID":"k1","properties":{"formattedCitation":"(Doe, 2020)"},"citationItems":[{"id":7}]}"#;
 const BIBL: &str = r#"BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY"#;
 const PREFS: &str = r#"<data data-version="3" zotero-version="7.0"><session id="s1"/><style id="http://www.zotero.org/styles/apa" hasBibliography="1" bibliographyStyleHasBeenSet="1"/><prefs><pref name="fieldType" value="ReferenceMark"/></prefs></data>"#;
