@@ -429,7 +429,13 @@ fn length_fields_follow_the_region() {
     h.run_steps(4);
     assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
     assert_eq!(length(72.0), "2,54 cm");
-    assert_eq!(h.query_all_by_value("2,54 cm").count(), 4, "four margins in centimetres with a decimal comma");
+    // The first margin has had the keyboard since the dialog opened: it shows the number it edits.
+    assert_eq!(h.query_all_by_value("2,54 cm").count(), 3, "the other margins in centimetres with a decimal comma");
+    {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let top = h.query_by(|n| n.is_focused() && n.label().as_deref() == Some("Top:"));
+        assert_eq!(top.and_then(|n| n.accesskit_node().value()).as_deref(), Some("2,54"), "and the first with a decimal comma");
+    }
 
     h.state_mut().run("file.options", json!({"units": "inches"})).unwrap();
     h.run_steps(4);
@@ -463,7 +469,13 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
     assert_eq!(length(72.0), "2,54 см");
-    assert_eq!(h.query_all_by_value("2,54 см").count(), 4, "four margins in centimetres, named in Russian");
+    // The first margin has had the keyboard since the dialog opened: it shows the number it edits.
+    assert_eq!(h.query_all_by_value("2,54 см").count(), 3, "the other margins in centimetres, named in Russian");
+    {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let top = h.query_by(|n| n.is_focused());
+        assert_eq!(top.and_then(|n| n.accesskit_node().value()).as_deref(), Some("2,54"), "and the first with a decimal comma");
+    }
     assert_eq!(h.query_all_by_value("2,54 cm").count(), 0);
     assert_eq!(parse_length("3 см", Unit::Centimeters), Some(3.0));
     assert_eq!(parse_length("3cm", Unit::Centimeters), Some(3.0));

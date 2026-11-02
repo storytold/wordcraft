@@ -6510,10 +6510,10 @@ fn render_and_screenshot_without_a_path_reply_with_the_png() {
 }
 
 /// #821: Shift+F10 opens the page's context menu below the caret, like right-clicking there
-/// (Word's keyboard way to it; the Menu key isn't passed on by the windowing layer); Escape
-/// closes it and typing goes on.
+/// (Word's keyboard way to it), and so does the Menu (Applications) key (#4977); Escape closes it
+/// and typing goes on.
 #[test]
-fn shift_f10_opens_the_context_menu_at_the_caret() {
+fn shift_f10_and_the_menu_key_open_the_context_menu_at_the_caret() {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -6544,6 +6544,16 @@ fn shift_f10_opens_the_context_menu_at_the_caret() {
     h.step();
     h.step();
     assert!(!h.state().canvas.context_menu_open, "Escape closes it");
+    h.event(key(egui::Key::Menu, egui::Modifiers::NONE));
+    h.step();
+    h.step();
+    assert!(h.state().canvas.context_menu_open, "the Menu key opened it");
+    let at = h.state().canvas.context_menu_at.unwrap();
+    assert!((at.x - caret.0.x).abs() < 1.0 && at.y > caret.0.y, "below the caret too: {at:?} vs {caret:?}");
+    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.step();
+    h.step();
+    assert!(!h.state().canvas.context_menu_open);
     // Scripts and agents open it too.
     h.state_mut().run("ui.contextMenu", json!({})).unwrap();
     h.step();

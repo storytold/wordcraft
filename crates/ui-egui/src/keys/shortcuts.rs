@@ -166,10 +166,10 @@ pub(super) fn is_shift_delete(key: Key, m: Modifiers) -> bool {
     key == Key::Delete && m.shift && !m.command && !m.ctrl && !m.alt && !m.mac_cmd
 }
 
-/// Shift+F10 opens the context menu, as the Menu key does (#821). (The Menu key itself doesn't
-/// reach the app: the windowing layer drops it.)
+/// Shift+F10 and the Menu (Applications) key open the context menu (#821, #4977). The windowing
+/// layer passes the Menu key on since egui 0.37; before, Shift+F10 was the only way.
 pub(super) fn is_context_menu_key(key: Key, m: Modifiers) -> bool {
-    key == Key::F10 && m.shift && !m.command && !m.alt && !m.ctrl
+    ((key == Key::F10 && m.shift) || key == Key::Menu) && !m.command && !m.alt && !m.ctrl
 }
 
 /// F1–F12: shortcuts on these work without the canvas focused.

@@ -250,12 +250,16 @@ fn shift_delete_is_only_shift_and_delete() {
 }
 
 #[test]
-fn shift_f10_is_the_context_menu_key() {
+fn shift_f10_and_the_menu_key_are_the_context_menu_keys() {
     let m = |shift, ctrl, alt| egui::Modifiers { shift, ctrl, command: ctrl, alt, ..Default::default() };
     assert!(is_context_menu_key(Key::F10, m(true, false, false)));
     assert!(!is_context_menu_key(Key::F10, m(false, false, false)), "F10 alone shows keytips");
     assert!(!is_context_menu_key(Key::F10, m(true, true, false)), "Ctrl+Shift+F10");
     assert!(!is_context_menu_key(Key::F9, m(true, false, false)), "Shift+F9 is a field key");
+    assert!(is_context_menu_key(Key::Menu, m(false, false, false)), "the Menu (Applications) key");
+    assert!(is_context_menu_key(Key::Menu, m(true, false, false)), "Shift+Menu");
+    assert!(!is_context_menu_key(Key::Menu, m(false, true, false)), "Ctrl+Menu");
+    assert!(!is_context_menu_key(Key::Menu, m(false, false, true)), "Alt+Menu");
 }
 
 #[test]

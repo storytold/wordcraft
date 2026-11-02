@@ -708,6 +708,10 @@ fn size_dialog_typed_height_applies_on_ok_in_proportion() {
     // The Size section's Height (the Scale section has one too, after it).
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
     h.run_steps(2);
+    // The field has had the keyboard since the dialog opened (its first control): the click only
+    // puts the caret in it, as in any field, so its value is selected to type over it.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
@@ -768,6 +772,10 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     h.run_steps(4);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
     h.run_steps(2);
+    // The field has had the keyboard since the dialog opened (its first control): the click only
+    // puts the caret in it, as in any field, so its value is selected to type over it.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
     h.run_steps(2);
     let ok = h.get_by_role_and_label(Role::Button, "OK").rect().center();
@@ -786,6 +794,10 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     h.run_steps(4);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("the height field").click();
     h.run_steps(2);
+    // The field has had the keyboard since the dialog opened (its first control): the click only
+    // puts the caret in it, as in any field, so its value is selected to type over it.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
     h.get_all_by_role_and_label(Role::SpinButton, "Height:").next().expect("editing").type_text("60 px");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);

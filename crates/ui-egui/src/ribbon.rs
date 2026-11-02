@@ -30,7 +30,7 @@ mod view;
 
 #[cfg(test)]
 use arrange::align_menu;
-pub(crate) use arrange::wrap_text_items;
+pub(crate) use arrange::{WRAP_STYLES, wrap_text_items};
 use charts::{chart_design, smart_art_design};
 pub(crate) use common::mi;
 #[cfg(test)]
