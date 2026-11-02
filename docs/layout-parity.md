@@ -22,7 +22,6 @@ Exact line spacing keeps the run font baseline around tall equations; automatic 
 
 | Feature | State | Evidence / gap | Hours |
 |---|---|---|---|
-| 2026-11-02 | trivial | Nested display fractions retain argument size unless `m:smallFrac` requests reduction; DOCX preserves the setting. Native font/corpus parity and mixed-size/root-width gaps remain (#2708). |
 | 2026-10-16 | trivial | Split-cell content retains its resolved top margin and border band on continuation pages, matching original Word Mac16.113.2 controls. Synthetic regressions cover margins, borders, line spacing and image frames. |
 | Hint-reliant CJK glyph outlines (DFKai-SB / 標楷體) | 🟡 | Required TrueType interpreter runs at units-per-em size; local Windows glyph-bounds regression and synthetic DOCX page/window comparison pass. Other platforms and hint-reliant families remain unmeasured; no native Word comparison. A font asking for a twilight zone over 1,024 points or a stack over 4,096 values, or a glyph past 256 KiB of hinting buffer, is drawn unhinted; on desktop, once at least three of a face's hinted draws have taken over 50 ms and those slow draws are at least 1/16 of its hinted draws, its later glyphs are drawn unhinted (#3692). | — |
 | Subpoint table grid columns | 🟡 | Preserve positive grid widths rather than imposing a text-box minimum; ECMA-376 §17.4.16. Native Word for Mac 16.113.2 build26092012 confirms narrow trailing grid units. `layout::tests::subpoint_grid_keeps_widths`, `tiny_grid_scales_to_width`. Tiny totals normalize without overflowing the scale factor. Zero and invalid widths retain their fallback. Border painting remains separate. | n/a |
@@ -280,6 +279,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Nested display fractions retain argument size unless `m:smallFrac` requests reduction; DOCX preserves the setting. Native font/corpus parity and mixed-size/root-width gaps remain (#2708). |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
 | 2026-10-31 | trivial | A table row that would leave a cell empty on a page that already holds something (its inline picture or first line runs past the room) moves on whole instead of leaving the other cells' text beside the empty cell; an at-least row grown by its picture no longer splits off the picture (#4272) |
 | 2026-11-01 | trivial | A cell aligned to the middle or bottom of a row split across pages is aligned within the part left on the page when its text fits there, and starts at the top of the cell otherwise, as measured in Word |
