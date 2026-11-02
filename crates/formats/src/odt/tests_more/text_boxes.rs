@@ -283,3 +283,25 @@ fn boxes_of(d: &Document) -> usize {
         .filter(|o| matches!(o, InlineObject::Shape { kind: ShapeKind::TextBox, .. }))
         .count()
 }
+
+#[test]
+fn a_custom_style_only_in_a_text_box_is_kept() {
+    // LibreOffice's fax template: "Frame contents" (centred) names only paragraphs in a text box.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Before<draw:frame svg:width="2in" svg:height="1in" text:anchor-type="paragraph"><draw:text-box><text:p text:style-name="Frame_20_contents">Important!</text:p></draw:text-box></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Standard" style:family="paragraph"/><style:style style:name="Frame_20_contents" style:display-name="Frame contents" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:text-align="center"/></style:style></office:styles></office:document-styles>"#
+    );
+    let centred = |d: &Document| {
+        let part = d.parts.values().find(|p| p.kind == PartKind::TextBox).expect("the box's story");
+        let p = part.blocks[0].as_para().unwrap();
+        let style = p.props.style.clone().expect("a style");
+        assert!(d.styles.get(&style).is_some(), "{style} is defined");
+        d.styles.resolve_para(&p.props).align
+    };
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(centred(&d), wordcraft_doc::props::Align::Center);
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(centred(&back), wordcraft_doc::props::Align::Center);
+}

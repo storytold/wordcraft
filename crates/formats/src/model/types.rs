@@ -652,6 +652,10 @@ pub struct Para {
     /// Paragraph formatting beyond the fields above, for formats that keep it (ODT): its own
     /// tab stops. Only flows asked for it ([`FlowOpts::paras`]) hold it.
     pub extra: Option<Box<wordcraft_doc::props::ParaProps>>,
+    /// The paragraph mark's direct formatting (its size sets an empty paragraph's height), for
+    /// formats that keep it (ODT): only flows asked for paragraph formatting
+    /// ([`FlowOpts::paras`]) hold it, and only for paragraphs without text.
+    pub mark: Option<Box<wordcraft_doc::props::CharProps>>,
 }
 
 impl Para {

@@ -280,12 +280,16 @@ fn styles_xml(
         first: Some(normal.indent_first),
     };
     let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
+    // Normal's font size (Standard, written empty, takes the default style's).
+    let size = doc.styles.resolve_char(None, &Default::default()).size;
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\" style:letter-kerning=\"{kern}\"{scripts}/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:letter-kerning=\"{kern}\"{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
+        size = pt(size),
         tab = pt(tab),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));

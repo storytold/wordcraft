@@ -57,6 +57,25 @@ fn wrap_modes_and_offsets() {
 }
 
 #[test]
+fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
+    // LibreOffice's letter templates: a page-anchored frame "from the paragraph" is placed from
+    // the page's edge, "from the paragraph's content" from its text area.
+    let f = float(&open(
+        r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph" style:vertical-pos="from-top" style:vertical-rel="paragraph""#,
+        r#"text:anchor-type="page" svg:x="2cm" svg:y="2cm""#,
+    ));
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Page, Anchor::Page));
+    let f = float(&open(
+        r#"style:wrap="run-through" style:horizontal-pos="from-left" style:horizontal-rel="paragraph-content" style:vertical-rel="char""#,
+        r#"text:anchor-type="page" svg:x="2cm""#,
+    ));
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Page));
+    // Anchored to a paragraph, they stay the paragraph's.
+    let f = float(&open(r#"style:horizontal-rel="paragraph-content" style:vertical-rel="char""#, r#"text:anchor-type="char""#));
+    assert_eq!((f.h_rel, f.v_rel), (Anchor::Column, Anchor::Line));
+}
+
+#[test]
 fn floating_pictures_round_trip() {
     for (graphic, frame) in [
         (

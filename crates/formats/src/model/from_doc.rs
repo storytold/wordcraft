@@ -421,6 +421,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         mark_del: None,
         fmt_change: None,
         extra: None,
+        mark: None,
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -458,6 +459,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_del: None,
                         fmt_change: None,
                         extra: None,
+                        mark: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -581,8 +583,16 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     }
     // The paragraph that ends a section carries its properties (the last piece of it does).
     out.section.clone_from(&p.section);
+    out.mark = empty_mark(&out, p, opts);
     done.push(out);
     done
+}
+
+/// The mark formatting of `out`, the last piece of `p`, when it holds no text (its height), for
+/// formats that keep it (flows asked for paragraph formatting).
+fn empty_mark(out: &Para, p: &Paragraph, opts: FlowOpts) -> Option<Box<CharProps>> {
+    let m = CharProps { ins: None, del: None, fmt_change: None, ..p.mark.clone() };
+    (opts.paras && out.inlines.is_empty() && !m.is_empty()).then(|| Box::new(m))
 }
 
 /// The drawings from `from` on (just added) raised by their run's position `raise` (points): a

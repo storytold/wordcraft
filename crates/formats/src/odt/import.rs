@@ -113,11 +113,7 @@ fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) 
             FBlock::Para(p) => {
                 f(p);
                 for i in &mut p.inlines {
-                    match i {
-                        model::Inline::Note { blocks, .. } => each_para(blocks, depth + 1, f),
-                        model::Inline::Comment { comment, .. } => each_para(&mut comment.blocks, depth + 1, f),
-                        _ => {}
-                    }
+                    each_inline_para(i, depth + 1, f);
                 }
             }
             FBlock::Table(t) => {
@@ -126,6 +122,24 @@ fn each_para(blocks: &mut [FBlock], depth: usize, f: &mut dyn FnMut(&mut Para)) 
                 }
             }
         }
+    }
+}
+
+/// [`each_para`] in the paragraphs `i` holds: a note's, a comment's, a text box's, or those of
+/// the text boxes in a group.
+fn each_inline_para(i: &mut model::Inline, depth: usize, f: &mut dyn FnMut(&mut Para)) {
+    if depth > model::MAX_DEPTH {
+        return;
+    }
+    match i {
+        model::Inline::Note { blocks, .. } | model::Inline::Shape { blocks, .. } => each_para(blocks, depth, f),
+        model::Inline::Comment { comment, .. } => each_para(&mut comment.blocks, depth, f),
+        model::Inline::Group { members, .. } => {
+            for m in members {
+                each_inline_para(&mut m.inline, depth + 1, f);
+            }
+        }
+        _ => {}
     }
 }
 

@@ -1068,7 +1068,6 @@ impl Styles {
         });
     }
 
-    /// The document's default font: the Standard paragraph style's, else the default style's.
     /// The document's default font size: the Standard paragraph style's (the document's
     /// defaults, as for [`Styles::doc_font`]), else the default style's.
     pub(super) fn doc_size(&self) -> Option<f32> {
@@ -1081,6 +1080,7 @@ impl Styles {
             .map(|v| v.min(1638.0))
     }
 
+    /// The document's default font: the Standard paragraph style's, else the default style's.
     pub(super) fn doc_font(&self) -> Option<String> {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }

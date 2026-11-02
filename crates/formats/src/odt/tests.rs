@@ -1185,6 +1185,16 @@ fn the_default_styles_font_size_is_the_documents() {
     // Written back as the default style's.
     let s = entry(&export(&doc).unwrap(), "styles.xml");
     assert!(s.contains(r#"fo:font-size="10pt""#), "{s}");
+    // Standard's 11 pt too: LibreOffice's letters grew a page at 12 pt.
+    let s = entry(&export(&d).unwrap(), "styles.xml");
+    assert!(
+        s.contains(r#"<style:text-properties fo:font-family="'Liberation Serif'" fo:font-size="11pt""#)
+            || s.contains(r#"fo:font-size="11pt" style:letter-kerning"#),
+        "{s}"
+    );
+    let back = import(&export(&d).unwrap()).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    assert_eq!(back.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
 }
 
 #[test]
@@ -1201,4 +1211,23 @@ fn a_style_with_no_parent_takes_the_default_styles_size() {
     let sizes: Vec<f32> =
         d.body.iter().filter_map(|b| b.as_para()).map(|p| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size).collect();
     assert_eq!(sizes, [12.0, 11.0]);
+}
+
+#[test]
+fn an_empty_paragraph_keeps_its_marks_size() {
+    // LibreOffice's fax template: an empty 6 pt line above "Important!". Its size is the mark's,
+    // the paragraph's height, and is written back on the paragraph's style.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:text-properties fo:font-size="6pt"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1"/><text:p text:style-name="P1">Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let marks = |d: &Document| d.body.iter().filter_map(|b| b.as_para()).map(|p| p.mark.size).collect::<Vec<_>>();
+    // Only the empty paragraph's: the other's text has the size itself.
+    assert_eq!(marks(&doc), [Some(6.0), None]);
+    let s = entry(&export(&doc).unwrap(), "content.xml");
+    assert!(s.contains(r#"fo:font-size="6pt""#), "{s}");
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert_eq!(marks(&back), [Some(6.0), None]);
+    let p = back.body[1].as_para().unwrap();
+    assert_eq!(p.runs[0].props.size, Some(6.0));
 }

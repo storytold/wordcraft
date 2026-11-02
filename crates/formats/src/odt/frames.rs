@@ -305,18 +305,24 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("page-start-margin") => Anchor::LeftMargin,
         Some("page-end-margin") => Anchor::RightMargin,
         Some("page-content") => Anchor::Margin,
+        // A page has no paragraph: LibreOffice measures a page-anchored frame's paragraph
+        // relations from the page, its content relations from the page's text area.
+        Some("paragraph-content") if page => Anchor::Margin,
+        Some("paragraph-start-margin") if page => Anchor::LeftMargin,
+        Some("paragraph-end-margin") if page => Anchor::RightMargin,
         Some("paragraph-content") => Anchor::Column,
-        Some("char") => Anchor::Character,
+        Some("char") if !page => Anchor::Character,
+        Some(_) | None if page => Anchor::Page,
         Some(_) => Anchor::Paragraph,
-        None if page => Anchor::Page,
         None => Anchor::Paragraph,
     };
     let v_rel = match g.vrel.as_deref() {
         Some("page") => Anchor::Page,
         Some("page-content") => Anchor::Margin,
-        Some("line") | Some("char") | Some("text") | Some("baseline") => Anchor::Line,
+        Some("paragraph-content") if page => Anchor::Margin,
+        Some("line") | Some("char") | Some("text") | Some("baseline") if !page => Anchor::Line,
+        Some(_) | None if page => Anchor::Page,
         Some(_) => Anchor::Paragraph,
-        None if page => Anchor::Page,
         None => Anchor::Paragraph,
     };
     let h_align = match g.hpos.as_deref() {

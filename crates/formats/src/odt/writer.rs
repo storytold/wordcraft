@@ -299,8 +299,14 @@ impl Writer {
             props.push('\u{1}');
             props.push_str(&children);
         }
-        if p.extra.as_ref().and_then(|x| x.suppress_hyphens) == Some(false) {
+        // An empty paragraph's mark formatting, its size giving its height.
+        let mark = p.mark.as_deref().filter(|_| p.inlines.is_empty()).map(super::writer::props::props_text).unwrap_or_default();
+        let hyphenate = p.extra.as_ref().and_then(|x| x.suppress_hyphens) == Some(false);
+        if hyphenate || !mark.is_empty() {
             props.push('\u{2}');
+            props.push_str(&mark);
+        }
+        if hyphenate {
             props.push_str(" fo:hyphenate=\"true\"");
         }
         let master = start.map(|(m, _)| m.clone()).unwrap_or_default();

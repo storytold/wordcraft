@@ -597,6 +597,9 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        if let Some(m) = p.mark.as_deref().filter(|_| out.text.is_empty()) {
+            out.mark = self.budget(CharProps { ins: None, del: None, fmt_change: None, ..m.clone() });
+        }
         out.mark.ins = p.mark_ins.as_deref().map(|m| self.revision(RevisionKind::Insert, m));
         out.mark.del = p.mark_del.as_deref().map(|m| self.revision(RevisionKind::Delete, m));
         out.normalize();

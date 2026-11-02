@@ -546,7 +546,13 @@ impl Body<'_> {
         self.index_marks.clear();
         let Some(mut p) = self.para.take() else { return };
         self.glue_connectors(&mut p);
-        self.fmt.pop();
+        // An empty paragraph's own text formatting is its mark's: its size is its height.
+        if let Some(base) = self.fmt.pop()
+            && p.inlines.is_empty()
+            && base != model::Fmt::default()
+        {
+            p.mark = Some(Box::new(crate::model::char_props(&base)));
+        }
         // A paragraph ending inside an open insertion has an inserted mark. (Paragraphs that
         // `place_deletion` splits off keep only the marks read inside their region.)
         if p.mark_ins.is_none() {
