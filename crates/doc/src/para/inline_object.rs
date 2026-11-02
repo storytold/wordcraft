@@ -351,6 +351,12 @@ impl InlineObject {
                 | InlineObject::ControlEnd
         )
     }
+    /// A zero-width marker that a word runs through, as in Word: Ctrl+arrows don't stop at a
+    /// bookmark, comment anchor, editable range or field edge inside a word, while a content
+    /// control's edge ends one.
+    pub fn joins_words(&self) -> bool {
+        self.is_marker() && !matches!(self, InlineObject::ControlStart { .. } | InlineObject::ControlEnd)
+    }
     /// A drawing's description (alternative text), wherever it is kept.
     pub fn alt_text(&self) -> &str {
         match self {
