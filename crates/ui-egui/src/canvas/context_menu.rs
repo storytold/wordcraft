@@ -63,7 +63,7 @@ fn keyboard(app: &mut WordApp, ui: &Ui) {
     // A menu the mouse opened: egui keeps the keyboard only on a widget, and the menu's own node
     // would lose it in the next frame. So a widget of no size with the menu's role has it, and a
     // screen reader says "menu", until the first Down or Up.
-    let head = ui.id().with("context_menu_head");
+    let head = ui.scope_id().with("context_menu_head");
     if app.canvas.context_menu_focus_menu || ui.memory(|m| m.has_focus(head)) {
         let rect = egui::Rect::from_min_size(ui.cursor().min, egui::Vec2::ZERO);
         let r = ui.interact(rect, head, egui::Sense::focusable_noninteractive());
