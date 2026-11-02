@@ -275,6 +275,9 @@ impl MacTitleBar {
     }
 }
 
+const TITLE_BAR: f32 = 38.0;
+const STATUS_BAR: f32 = 26.0;
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -286,7 +289,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     let left = if mac { bar.content_left as i8 } else { 8 };
     let control_h = if mac { 22.0 } else { 26.0 };
     egui::Panel::top("title_bar")
-        .exact_size(if mac { bar.height } else { 38.0 })
+        .exact_size(if mac { bar.height } else { TITLE_BAR })
         .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -413,15 +416,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("file.rename", json!({}));
                 }
 
-                paint_text(
-                    ui.painter(),
-                    pos2(cx - w / 2.0, full.center().y - TypeRung::Chrome.line_height() / 2.0),
-                    Align2::LEFT_TOP,
-                    &shown,
-                    &font,
-                    track,
-                    t.text,
-                );
+                paint_text(ui.painter(), pos2(cx - w / 2.0, full.center().y), Align2::LEFT_CENTER, &shown, &font, track, t.text);
             }
         });
 }
@@ -437,15 +432,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(
-        ui.painter(),
-        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-        Align2::LEFT_TOP,
-        ph,
-        &pfont,
-        ptrack,
-        t.text_dim,
-    );
+    paint_text(ui.painter(), pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, ph, &pfont, ptrack, t.text_dim);
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
@@ -543,7 +530,7 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
-        .exact_size(26.0)
+        .exact_size(STATUS_BAR)
         .frame(
             egui::Frame::NONE
                 .fill(t.status_bar)
@@ -571,7 +558,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let track = TypeRung::Caption.tracking();
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                     let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                    paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
+                    paint_text(ui.painter(), r.left_center(), Align2::LEFT_CENTER, s, &font, track, t.text_dim);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
                     resp
                 };
@@ -641,7 +628,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     // left don't shift as the percentage gains or loses digits (#1975).
                     let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
                     let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                    paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
+                    paint_text(ui.painter(), zr.right_center() - vec2(1.0, 0.0), Align2::RIGHT_CENTER, &ztxt, &zfont, ztrack, t.text_dim);
                     if zresp.clicked() && !reading {
                         let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
                     }
@@ -704,15 +691,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
                     let ffont = TypeRung::Caption.regular();
                     let ftrack = TypeRung::Caption.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 22.0, r.center().y - TypeRung::Caption.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        focus,
-                        &ffont,
-                        ftrack,
-                        t.text_dim,
-                    );
+                    paint_text(ui.painter(), pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, focus, &ffont, ftrack, t.text_dim);
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, focus));
                     if resp.clicked() {
                         let _ = app.run("view.focus", json!({}));
@@ -728,11 +707,12 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let msg_shown = fit_text(ui.painter(), msg, &font, track, t.accent_text, room);
                     if !msg_shown.is_empty() {
                         let w = text_width(ui.painter(), &msg_shown, &font, track, t.accent_text);
-                        let rect = Rect::from_min_size(msg_at, vec2(w + 1.0, TypeRung::Caption.line_height()));
+                        let size = vec2(w + 1.0, TypeRung::Caption.line_height());
+                        let rect = Rect::from_center_size(pos2(msg_at.x + size.x / 2.0, ui.max_rect().center().y), size);
                         // The whole message is in the tooltip; the bar only has room for the
                         // beginning of it (#2402).
                         let _ = ui.interact(rect, status_message_id(), Sense::hover()).on_hover_text(msg.clone());
-                        paint_text(ui.painter(), rect.min, Align2::LEFT_TOP, &msg_shown, &font, track, t.accent_text);
+                        paint_text(ui.painter(), rect.left_center(), Align2::LEFT_CENTER, &msg_shown, &font, track, t.accent_text);
                         ui.allocate_space(vec2(w + 1.0, TypeRung::Caption.line_height()));
                     }
                 }
