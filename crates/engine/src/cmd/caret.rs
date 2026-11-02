@@ -456,11 +456,10 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let story = super::story_param(s, v);
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        for (i, _) in p.text.match_indices(needle) {
+        for (start, end) in super::find_pattern::canonical_match_ranges(&p.text, needle) {
             count += 1;
             if count == n {
-                s.sel =
-                    Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                s.sel = Selection { anchor: Pos { story, path: path.clone(), off: start }, focus: Pos { story, path: path.clone(), off: end } };
                 return sel_result(s);
             }
         }
