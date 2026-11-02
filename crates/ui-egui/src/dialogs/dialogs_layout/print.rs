@@ -29,21 +29,29 @@ impl EnvelopeForm {
 }
 
 pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm) -> bool {
-    ui.label(tl!("Delivery address:"));
-    ui.add(egui::TextEdit::multiline(&mut f.delivery).desired_rows(4).desired_width(340.0));
+    let name = ui.label(tl!("Delivery address:"));
+    ui.add(egui::TextEdit::multiline(&mut f.delivery).desired_rows(4).desired_width(340.0)).labelled_by(name.id);
+    let name = ui
+        .horizontal(|ui| {
+            let name = ui.label(tl!("Return address:"));
+            ui.checkbox(&mut f.omit_return, tl!("Omit"));
+            name
+        })
+        .inner;
+    ui.add_enabled(!f.omit_return, egui::TextEdit::multiline(&mut f.ret).desired_rows(3).desired_width(340.0)).labelled_by(name.id);
     ui.horizontal(|ui| {
-        ui.label(tl!("Return address:"));
-        ui.checkbox(&mut f.omit_return, tl!("Omit"));
-    });
-    ui.add_enabled(!f.omit_return, egui::TextEdit::multiline(&mut f.ret).desired_rows(3).desired_width(340.0));
-    ui.horizontal(|ui| {
-        ui.label(tl!("Envelope size:"));
+        let name = ui.label(tl!("Envelope size:"));
         let label = |i: usize| ENVELOPE_SIZES.get(i).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap_or_default();
-        craft_ui::ComboBox::from_id_salt("env_size").selected_text(label(f.size)).width(220.0).show_ui(ui, |ui| {
-            for i in 0..ENVELOPE_SIZES.len() {
-                ui.selectable_value(&mut f.size, i, label(i));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("env_size")
+            .selected_text(label(f.size))
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for i in 0..ENVELOPE_SIZES.len() {
+                    ui.selectable_value(&mut f.size, i, label(i));
+                }
+            })
+            .response
+            .labelled_by(name.id);
     });
     let ready = !f.delivery.trim().is_empty();
     ui.add_space(8.0);
@@ -151,16 +159,21 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
         ui.checkbox(&mut f.recipients, tl!("One label per recipient"));
     }
     ui.add_enabled_ui(!(has_recipients && f.recipients && !f.single), |ui| {
-        ui.label(tl!("Address:"));
-        ui.add(egui::TextEdit::multiline(&mut f.text).desired_rows(4).desired_width(340.0));
+        let name = ui.label(tl!("Address:"));
+        ui.add(egui::TextEdit::multiline(&mut f.text).desired_rows(4).desired_width(340.0)).labelled_by(name.id);
     });
     ui.horizontal(|ui| {
-        ui.label(tl!("Label:"));
-        craft_ui::ComboBox::from_id_salt("label_product").selected_text(product_label(f.product)).width(300.0).show_ui(ui, |ui| {
-            for i in 0..LABEL_PRODUCTS.len() {
-                ui.selectable_value(&mut f.product, i, product_label(i));
-            }
-        });
+        let name = ui.label(tl!("Label:"));
+        craft_ui::ComboBox::from_id_salt("label_product")
+            .selected_text(product_label(f.product))
+            .width(300.0)
+            .show_ui(ui, |ui| {
+                for i in 0..LABEL_PRODUCTS.len() {
+                    ui.selectable_value(&mut f.product, i, product_label(i));
+                }
+            })
+            .response
+            .labelled_by(name.id);
     });
     let (rows, cols) = LABEL_PRODUCTS.get(f.product).map_or((1, 1), |p| (p.rows, p.cols));
     heading(ui, "Print");
@@ -168,10 +181,10 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.single, true, tl!("Single label"));
         ui.add_enabled_ui(f.single, |ui| {
-            ui.label(tl!("Row:"));
-            ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
-            ui.label(tl!("Column:"));
-            ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+            let name = ui.label(tl!("Row:"));
+            ui.add(egui::DragValue::new(&mut f.row).range(1..=rows)).labelled_by(name.id);
+            let name = ui.label(tl!("Column:"));
+            ui.add(egui::DragValue::new(&mut f.col).range(1..=cols)).labelled_by(name.id);
         });
     });
     f.row = f.row.clamp(1, rows.max(1));

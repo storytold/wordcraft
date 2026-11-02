@@ -269,13 +269,18 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
         ui.vertical(|ui| {
             ui.set_width(200.0);
             ui.label(egui::RichText::new(tl!("Pick a field from the list")).font(semibold(12.5)));
-            ui.label(tl!("Categories:"));
+            let label = ui.label(tl!("Categories:"));
             let shown = tl!(f.category.as_str()).to_string();
-            craft_ui::ComboBox::from_id_salt("field_category").selected_text(shown).width(190.0).show_ui(ui, |ui| {
-                for c in FIELD_CATEGORIES {
-                    ui.selectable_value(&mut f.category, (*c).to_string(), tl!(c));
-                }
-            });
+            craft_ui::ComboBox::from_id_salt("field_category")
+                .selected_text(shown)
+                .width(190.0)
+                .show_ui(ui, |ui| {
+                    for c in FIELD_CATEGORIES {
+                        ui.selectable_value(&mut f.category, (*c).to_string(), tl!(c));
+                    }
+                })
+                .response
+                .labelled_by(label.id);
             ui.label(tl!("Field names:"));
             let mut picked = None;
             egui::Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(2.0).show(ui, |ui| {
@@ -300,8 +305,9 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
             }
             ui.add_space(4.0);
             if f.codes {
-                ui.label(tl!("Field codes:"));
-                ui.add(egui::TextEdit::multiline(&mut f.code).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
+                let label = ui.label(tl!("Field codes:"));
+                ui.add(egui::TextEdit::multiline(&mut f.code).desired_rows(3).desired_width(f32::INFINITY).font(egui::TextStyle::Monospace))
+                    .labelled_by(label.id);
                 ui.label(egui::RichText::new(tl!("Type the field's name and its switches, for example PAGE \\* roman.")).small().color(t.text_dim));
             } else {
                 field_options(ui, f, &t);
@@ -335,8 +341,8 @@ pub(super) fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> boo
 fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
     match field_kind(&f.name) {
         FieldKind::Date => {
-            ui.label(tl!("Date formats:"));
-            ui.add(egui::TextEdit::singleline(&mut f.date_format).desired_width(f32::INFINITY));
+            let label = ui.label(tl!("Date formats:"));
+            ui.add(egui::TextEdit::singleline(&mut f.date_format).desired_width(f32::INFINITY)).labelled_by(label.id);
             egui::Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(2.0).show(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("field_dates").max_height(170.0).auto_shrink([false, false]).show(ui, |ui| {
                     for pic in DATE_FORMATS {
@@ -350,36 +356,43 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
         }
         FieldKind::Number | FieldKind::Sequence => {
             if field_kind(&f.name) == FieldKind::Sequence {
-                ui.label(tl!("Sequence name:"));
-                ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0));
+                let label = ui.label(tl!("Sequence name:"));
+                ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0)).labelled_by(label.id);
             }
-            ui.label(tl!("Format:"));
+            let label = ui.label(tl!("Format:"));
             let shown = NUMBER_FORMATS.iter().find(|(v, _)| *v == f.number_format).map(|(_, l)| *l).unwrap_or("(none)");
-            craft_ui::ComboBox::from_id_salt("field_number").selected_text(if shown == "(none)" { tl!(shown) } else { shown }).width(200.0).show_ui(
-                ui,
-                |ui| {
+            craft_ui::ComboBox::from_id_salt("field_number")
+                .selected_text(if shown == "(none)" { tl!(shown) } else { shown })
+                .width(200.0)
+                .show_ui(ui, |ui| {
                     for (v, l) in NUMBER_FORMATS {
                         ui.selectable_value(&mut f.number_format, (*v).to_string(), if *l == "(none)" { tl!(l) } else { l });
                     }
-                },
-            );
+                })
+                .response
+                .labelled_by(label.id);
         }
         FieldKind::Bookmark => {
-            ui.label(tl!("Bookmark name:"));
+            let label = ui.label(tl!("Bookmark name:"));
             if f.bookmarks.is_empty() {
-                ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0));
+                ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0)).labelled_by(label.id);
                 ui.label(egui::RichText::new(tl!("The document has no bookmarks yet.")).small().color(t.text_dim));
             } else {
-                craft_ui::ComboBox::from_id_salt("field_bookmark").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
-                    for b in &f.bookmarks {
-                        ui.selectable_value(&mut f.target, b.clone(), b);
-                    }
-                });
+                craft_ui::ComboBox::from_id_salt("field_bookmark")
+                    .selected_text(f.target.clone())
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for b in &f.bookmarks {
+                            ui.selectable_value(&mut f.target, b.clone(), b);
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
             }
         }
         FieldKind::Merge => {
-            ui.label(tl!("Field name:"));
-            ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0));
+            let label = ui.label(tl!("Field name:"));
+            ui.add(egui::TextEdit::singleline(&mut f.target).desired_width(200.0)).labelled_by(label.id);
             if !f.merge_fields.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for m in f.merge_fields.clone() {
@@ -391,12 +404,17 @@ fn field_options(ui: &mut Ui, f: &mut FieldForm, t: &Tokens) {
             }
         }
         FieldKind::Style => {
-            ui.label(tl!("Style name:"));
-            craft_ui::ComboBox::from_id_salt("field_style").selected_text(f.target.clone()).width(200.0).show_ui(ui, |ui| {
-                for n in &f.styles {
-                    ui.selectable_value(&mut f.target, n.clone(), n);
-                }
-            });
+            let label = ui.label(tl!("Style name:"));
+            craft_ui::ComboBox::from_id_salt("field_style")
+                .selected_text(f.target.clone())
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for n in &f.styles {
+                        ui.selectable_value(&mut f.target, n.clone(), n);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
             ui.add_space(4.0);
             for (c, label) in STYLEREF_SWITCHES {
                 let mut on = f.style_switches.contains(*c);

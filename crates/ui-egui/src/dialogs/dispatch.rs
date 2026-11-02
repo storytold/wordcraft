@@ -480,8 +480,8 @@ fn enclose_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(6.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
-            ui.label(tl!("Text:"));
-            ui.add(egui::TextEdit::singleline(text).desired_width(110.0).char_limit(2));
+            let label = ui.label(tl!("Text:"));
+            ui.add(egui::TextEdit::singleline(text).desired_width(110.0).char_limit(2)).labelled_by(label.id);
             ui.add_space(6.0);
             enclose_preview(ui, style, text, shape);
         });
@@ -681,12 +681,13 @@ fn link_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     ui.add_space(4.0);
     egui::Grid::new("lnk").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Text to display:"));
-        ui.text_edit_singleline(text);
+        let label = ui.label(tl!("Text to display:"));
+        ui.text_edit_singleline(text).labelled_by(label.id);
         ui.end_row();
         if !*place {
-            ui.label(tl!("Address:"));
+            let label = ui.label(tl!("Address:"));
             let mut out = egui::TextEdit::singleline(url).id(egui::Id::unique("link_address")).show(ui);
+            (*out.response).clone().labelled_by(label.id);
             if std::mem::take(focus) {
                 out.response.request_focus();
                 let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(url.chars().count()));
@@ -798,7 +799,11 @@ fn zoom_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     // Logarithmic like the status bar slider, and wide enough to aim: the default 100 pt
     // linear slider jumped from 100% to 480% within a short drag (issue #67).
     ui.spacing_mut().slider_width = 220.0;
-    ui.add(egui::Slider::new(percent, 10.0..=500.0).logarithmic(true).step_by(1.0).suffix("%"));
+    // The slider and its number box are both the zoom, by name: neither had one.
+    ui.horizontal(|ui| {
+        ui.add(egui::Slider::new(percent, 10.0..=500.0).logarithmic(true).step_by(1.0).show_value(false)).accessible_name(tl!("Zoom"));
+        ui.add(egui::DragValue::new(percent).range(10.0..=500.0).suffix("%")).accessible_name(tl!("Zoom"));
+    });
     let mut fit = None;
     ui.horizontal(|ui| {
         if ui.button(tl!("Page width")).clicked() {
@@ -827,8 +832,8 @@ fn watermark_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     ui.horizontal(|ui| {
-        ui.label(tl!("Text:"));
-        ui.text_edit_singleline(text);
+        let label = ui.label(tl!("Text:"));
+        ui.text_edit_singleline(text).labelled_by(label.id);
     });
     ui.horizontal(|ui| {
         ui.radio_value(diagonal, true, tl!("Diagonal"));
@@ -901,11 +906,11 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     egui::Grid::new("ns").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Name:"));
-        ui.text_edit_singleline(name);
+        let label = ui.label(tl!("Name:"));
+        ui.text_edit_singleline(name).labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Style based on:"));
-        ui.text_edit_singleline(based_on);
+        let label = ui.label(tl!("Style based on:"));
+        ui.text_edit_singleline(based_on).labelled_by(label.id);
         ui.end_row();
     });
     ui.label(egui::RichText::new(tl!("The new style takes the formatting of the current paragraph.")).small().weak());
@@ -1198,8 +1203,8 @@ fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> 
         });
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Field:"));
-        ui.text_edit_singleline(field);
+        let label = ui.label(tl!("Field:"));
+        ui.text_edit_singleline(field).labelled_by(label.id);
     });
     let (ok, cancel) = buttons(ui, tl!("Insert"));
     if ok && !field.trim().is_empty() {
@@ -1365,8 +1370,8 @@ fn find_recipient_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool
         return false;
     };
     ui.horizontal(|ui| {
-        ui.label(tl!("Find:"));
-        ui.text_edit_singleline(text);
+        let label = ui.label(tl!("Find:"));
+        ui.text_edit_singleline(text).labelled_by(label.id);
     });
     if !message.is_empty() {
         ui.label(egui::RichText::new(message.as_str()).small().weak());
@@ -1437,26 +1442,31 @@ fn merge_rule_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }));
     ui.add_space(4.0);
     egui::Grid::new("merge_rule").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Field:"));
+        let label = ui.label(tl!("Field:"));
         if fields.is_empty() {
-            ui.text_edit_singleline(field);
+            ui.text_edit_singleline(field).labelled_by(label.id);
         } else {
-            craft_ui::ComboBox::from_id_salt("merge_rule_field").selected_text(field.as_str()).width(200.0).show_ui(ui, |ui| {
-                for f in fields.iter() {
-                    ui.selectable_value(field, f.clone(), f);
-                }
-            });
+            craft_ui::ComboBox::from_id_salt("merge_rule_field")
+                .selected_text(field.as_str())
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for f in fields.iter() {
+                        ui.selectable_value(field, f.clone(), f);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
         }
         ui.end_row();
-        ui.label(tl!("Equals:"));
-        ui.text_edit_singleline(value);
+        let label = ui.label(tl!("Equals:"));
+        ui.text_edit_singleline(value).labelled_by(label.id);
         ui.end_row();
         if !skip {
-            ui.label(tl!("Then insert:"));
-            ui.text_edit_singleline(then);
+            let label = ui.label(tl!("Then insert:"));
+            ui.text_edit_singleline(then).labelled_by(label.id);
             ui.end_row();
-            ui.label(tl!("Otherwise insert:"));
-            ui.text_edit_singleline(els);
+            let label = ui.label(tl!("Otherwise insert:"));
+            ui.text_edit_singleline(els).labelled_by(label.id);
             ui.end_row();
         }
     });

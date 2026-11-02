@@ -261,7 +261,11 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 ui.add_sized([CELL_W, ROW_H - 4.0], egui::Label::new(egui::RichText::new(tl!("Categories")).strong()));
                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                 for (j, n) in f.names.iter_mut().enumerate() {
-                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name")));
+                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(n).hint_text(tl!("Series name"))).accessible_name(format!(
+                        "{} {}",
+                        tl!("Series name"),
+                        j + 1
+                    ));
                     let x = ui
                         .add_enabled_ui(can_remove_series, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
                         .inner
@@ -272,12 +276,21 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                 }
             });
             ui.separator();
+            // A screen reader names each box by its place in the grid, as a spreadsheet's cells:
+            // a category by its row, a value by its category and series.
+            let series = grid_headers(&f.names, tl!("Series name"), tl!("Series"));
+            let categories = grid_headers(&f.categories, tl!("Category"), tl!("Category"));
             let rows = f.categories.len();
             egui::ScrollArea::vertical().id_salt("chart_data_v").max_height(280.0).show_rows(ui, ROW_H, rows, |ui, range| {
                 for i in range {
                     ui.horizontal(|ui| {
+                        let category = categories.get(i).map_or("", String::as_str);
                         if let Some(c) = f.categories.get_mut(i) {
-                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c));
+                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c)).accessible_name(format!(
+                                "{} {}",
+                                tl!("Category"),
+                                i + 1
+                            ));
                         }
                         let x = ui
                             .add_enabled_ui(can_remove_row, |ui| ui.add_sized([X_W, ROW_H - 4.0], egui::Button::new("×")))
@@ -287,8 +300,9 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                             remove_row = Some(i);
                         }
                         if let Some(row) = f.cells.get_mut(i) {
-                            for cell in row.iter_mut() {
-                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell));
+                            for (j, cell) in row.iter_mut().enumerate() {
+                                let name = format!("{category}, {}", series.get(j).map_or("", String::as_str));
+                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell)).accessible_name(name);
                                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                             }
                         }
@@ -335,6 +349,30 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
             false
         }
     }
+}
+
+/// The names a screen reader hears for a row or column of the Edit Data grid, never two alike, so
+/// no two value cells share a name: each header's text, or `blank` and its number when empty
+/// ("Category 2"); a name two headers would share gets `numbered` and its number ("Q1 (Category
+/// 3)"); and if one still repeats (a header typed as another's name), every name gets its number,
+/// which no two places share.
+fn grid_headers(texts: &[String], blank: &str, numbered: &str) -> Vec<String> {
+    let numbered_all = |names: &[String]| names.iter().enumerate().map(|(i, n)| format!("{n} ({numbered} {})", i + 1)).collect::<Vec<_>>();
+    let base: Vec<String> =
+        texts.iter().enumerate().map(|(i, t)| if t.trim().is_empty() { format!("{blank} {}", i + 1) } else { t.trim().to_string() }).collect();
+    // Counted once, not compared pair by pair: a chart has up to MAX_POINTS categories, and this
+    // runs every frame.
+    let mut counts = std::collections::HashMap::with_capacity(base.len());
+    for name in &base {
+        *counts.entry(name.as_str()).or_insert(0usize) += 1;
+    }
+    let names: Vec<String> = base
+        .iter()
+        .enumerate()
+        .map(|(i, n)| if counts.get(n.as_str()).is_some_and(|c| *c > 1) { format!("{n} ({numbered} {})", i + 1) } else { n.clone() })
+        .collect();
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    if names.iter().any(|n| !seen.insert(n.as_str())) { numbered_all(&base) } else { names }
 }
 
 /// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
@@ -401,6 +439,28 @@ mod tests {
         assert!(category.starts_with("الفئة") && series.starts_with("السلسلة"), "{category:?} {series:?}");
         for name in [category, series] {
             assert!(!name.chars().any(|c| ('\u{2066}'..='\u{2069}').contains(&c)), "{name:?}");
+        }
+    }
+
+    /// #3172: Edit Data's boxes are named by their row and column; a header text two rows (or two
+    /// series) share gets its number, so no two value cells have one name.
+    #[test]
+    fn grid_headers_never_repeat_a_name() {
+        let texts = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert_eq!(grid_headers(&texts(&["Q1", "", "Q2"]), "Category", "Category"), ["Q1", "Category 2", "Q2"]);
+        assert_eq!(grid_headers(&texts(&["Q1", "Q2", " Q1 "]), "Category", "Category"), ["Q1 (Category 1)", "Q2", "Q1 (Category 3)"]);
+        assert_eq!(grid_headers(&texts(&["Sales", "Sales"]), "Series name", "Series"), ["Sales (Series 1)", "Sales (Series 2)"]);
+        // A header typed as the name a blank one gets.
+        assert_eq!(grid_headers(&texts(&["Category 2", ""]), "Category", "Category"), ["Category 2 (Category 1)", "Category 2 (Category 2)"]);
+        // And one typed as the name a repeated one gets: then every name has its number.
+        assert_eq!(
+            grid_headers(&texts(&["Q1", "Q1", "Q1 (Category 1)"]), "Category", "Category"),
+            ["Q1 (Category 1)", "Q1 (Category 2)", "Q1 (Category 1) (Category 3)"]
+        );
+        for list in [&["", "Category 1", "Category 1 (Category 1)", ""][..], &["A", "A (Category 2)", "A", "", "Category 4"]] {
+            let names = grid_headers(&texts(list), "Category", "Category");
+            let unique: std::collections::HashSet<&String> = names.iter().collect();
+            assert_eq!(unique.len(), names.len(), "{list:?} gives {names:?}");
         }
     }
 }

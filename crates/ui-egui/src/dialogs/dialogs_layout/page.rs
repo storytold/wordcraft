@@ -259,18 +259,23 @@ impl PageNumbersForm {
 pub(super) fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> bool {
     f.follow(app);
     ui.add_space(4.0);
-    ui.label(tl!("Number format"));
+    let name = ui.label(tl!("Number format"));
     let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
-        for (v, l) in crate::dialogs_notes::FORMATS {
-            ui.selectable_value(&mut f.format, v.to_string(), l);
-        }
-    });
+    craft_ui::ComboBox::from_id_salt("pnum_format")
+        .selected_text(label)
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for (v, l) in crate::dialogs_notes::FORMATS {
+                ui.selectable_value(&mut f.format, v.to_string(), l);
+            }
+        })
+        .response
+        .labelled_by(name.id);
     heading(ui, "Page numbering");
     ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
     ui.horizontal(|ui| {
-        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+        let name = ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000)).labelled_by(name.id);
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {

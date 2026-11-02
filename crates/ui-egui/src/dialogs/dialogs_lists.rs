@@ -190,64 +190,80 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
     let Some(l) = f.levels.get_mut(i) else { return true };
     heading(ui, "Number format");
     egui::Grid::new("mll_number").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Enter formatting for number:"));
-        ui.text_edit_singleline(&mut l.text);
+        let label = ui.label(tl!("Enter formatting for number:"));
+        ui.text_edit_singleline(&mut l.text).labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Number style for this level:"));
+        let label = ui.label(tl!("Number style for this level:"));
         let current = STYLES.iter().find(|(k, _)| *k == l.format).map(|(_, s)| *s).unwrap_or("");
-        craft_ui::ComboBox::from_id_salt("mll_style").selected_text(style_label(current)).show_ui(ui, |ui| {
-            for (k, s) in STYLES {
-                if ui.selectable_label(l.format == k, style_label(s)).clicked() {
-                    // A new style puts this level's number in the text if it had none (a bullet
-                    // its character).
-                    if k == "bullet" {
-                        l.text = "•".into();
-                    } else if l.format == "bullet" || !l.text.contains('%') {
-                        l.text = format!("%{}.", i + 1);
+        craft_ui::ComboBox::from_id_salt("mll_style")
+            .selected_text(style_label(current))
+            .show_ui(ui, |ui| {
+                for (k, s) in STYLES {
+                    if ui.selectable_label(l.format == k, style_label(s)).clicked() {
+                        // A new style puts this level's number in the text if it had none (a bullet
+                        // its character).
+                        if k == "bullet" {
+                            l.text = "•".into();
+                        } else if l.format == "bullet" || !l.text.contains('%') {
+                            l.text = format!("%{}.", i + 1);
+                        }
+                        l.format = k.to_string();
                     }
-                    l.format = k.to_string();
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
         if i > 0 {
-            ui.label(tl!("Include level number from:"));
-            craft_ui::ComboBox::from_id_salt("mll_include").selected_text("").show_ui(ui, |ui| {
-                for k in 0..i {
-                    if ui.selectable_label(false, crate::i18n::fmt(tl!("Level {n}"), &[("n", &(k + 1).to_string())])).clicked() {
-                        l.text.push_str(&format!("%{}", k + 1));
+            let label = ui.label(tl!("Include level number from:"));
+            craft_ui::ComboBox::from_id_salt("mll_include")
+                .selected_text("")
+                .show_ui(ui, |ui| {
+                    for k in 0..i {
+                        if ui.selectable_label(false, crate::i18n::fmt(tl!("Level {n}"), &[("n", &(k + 1).to_string())])).clicked() {
+                            l.text.push_str(&format!("%{}", k + 1));
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .labelled_by(label.id);
             ui.end_row();
         }
-        ui.label(tl!("Start at:"));
-        ui.add(egui::DragValue::new(&mut l.start).range(0..=32_767));
+        let label = ui.label(tl!("Start at:"));
+        ui.add(egui::DragValue::new(&mut l.start).range(0..=32_767)).labelled_by(label.id);
         ui.end_row();
         if i > 0 {
-            ui.checkbox(&mut l.restart, tl!("Restart list after:"));
+            let label = ui.checkbox(&mut l.restart, tl!("Restart list after:"));
             ui.add_enabled_ui(l.restart, |ui| {
                 let shown = crate::i18n::fmt(tl!("Level {n}"), &[("n", &l.restart_after.clamp(1, i as u8).to_string())]);
-                craft_ui::ComboBox::from_id_salt("mll_restart").selected_text(shown).show_ui(ui, |ui| {
-                    for k in 1..=i as u8 {
-                        ui.selectable_value(&mut l.restart_after, k, crate::i18n::fmt(tl!("Level {n}"), &[("n", &k.to_string())]));
-                    }
-                });
+                craft_ui::ComboBox::from_id_salt("mll_restart")
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for k in 1..=i as u8 {
+                            ui.selectable_value(&mut l.restart_after, k, crate::i18n::fmt(tl!("Level {n}"), &[("n", &k.to_string())]));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
             });
             ui.end_row();
         }
-        ui.label(tl!("Link level to style:"));
+        let label = ui.label(tl!("Link level to style:"));
         let shown = styles.iter().find(|(id, _)| *id == l.style).map(|(_, n)| n.clone()).unwrap_or_else(|| tl!("(no style)").to_string());
-        craft_ui::ComboBox::from_id_salt("mll_link").selected_text(shown).show_ui(ui, |ui| {
-            ui.selectable_value(&mut l.style, String::new(), tl!("(no style)"));
-            for (id, name) in &styles {
-                ui.selectable_value(&mut l.style, id.clone(), name);
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("mll_link")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut l.style, String::new(), tl!("(no style)"));
+                for (id, name) in &styles {
+                    ui.selectable_value(&mut l.style, id.clone(), name);
+                }
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Font:"));
+        let label = ui.label(tl!("Font:"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0));
+            ui.add(egui::TextEdit::singleline(&mut l.font).desired_width(110.0)).labelled_by(label.id);
             ui.checkbox(&mut l.bold, tl!("Bold"));
             ui.checkbox(&mut l.italic, tl!("Italic"));
         });
@@ -271,17 +287,21 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         ui.label(tl!("Text indent at:"));
         ui.add(len(&mut l.indent_at, unit));
         ui.end_row();
-        ui.label(tl!("Follow number with:"));
+        let label = ui.label(tl!("Follow number with:"));
         let follow = |k: &str| match k {
             "space" => tl!("Space"),
             "nothing" => tl!("Nothing"),
             _ => tl!("Tab character"),
         };
-        craft_ui::ComboBox::from_id_salt("mll_follow").selected_text(follow(&l.follow)).show_ui(ui, |ui| {
-            for k in ["tab", "space", "nothing"] {
-                ui.selectable_value(&mut l.follow, k.to_string(), follow(k));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("mll_follow")
+            .selected_text(follow(&l.follow))
+            .show_ui(ui, |ui| {
+                for k in ["tab", "space", "nothing"] {
+                    ui.selectable_value(&mut l.follow, k.to_string(), follow(k));
+                }
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
         ui.add_enabled(l.follow == "tab", egui::Checkbox::new(&mut l.tab_on, tl!("Add tab stop at:")));
         ui.add_enabled(l.follow == "tab" && l.tab_on, len(&mut l.tab_at, unit));
@@ -420,14 +440,19 @@ impl TrackForm {
     }
 }
 
-/// A choice from `options` ((value, label)) in a drop-down.
-fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)]) {
+/// A choice from `options` ((value, label)) in a drop-down, named by `name` (its row's label).
+fn choice(ui: &mut Ui, id: &str, value: &mut String, options: &[(&str, &str)], name: &egui::Response) {
     let label = |k: &str| options.iter().find(|(v, _)| *v == k).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
-    craft_ui::ComboBox::from_id_salt(id).selected_text(label(value)).width(150.0).show_ui(ui, |ui| {
-        for (v, l) in options {
-            ui.selectable_value(value, v.to_string(), tl!(l));
-        }
-    });
+    craft_ui::ComboBox::from_id_salt(id)
+        .selected_text(label(value))
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for (v, l) in options {
+                ui.selectable_value(value, v.to_string(), tl!(l));
+            }
+        })
+        .response
+        .labelled_by(name.id);
 }
 
 /// A colour: `none_label` (by author, or `auto` when given) or a colour from the grid. `value` is
@@ -532,32 +557,33 @@ pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool 
     }
     heading(ui, "Advanced");
     egui::Grid::new("tco_advanced").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Insertions:"));
-        choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
+        let label = ui.label(tl!("Insertions:"));
+        choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS, &label);
         color(ui, &theme, &mut f.insert_color, "By author", None);
         ui.end_row();
-        ui.label(tl!("Deletions:"));
-        choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
+        let label = ui.label(tl!("Deletions:"));
+        choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS, &label);
         color(ui, &theme, &mut f.delete_color, "By author", None);
         ui.end_row();
-        ui.label(tl!("Changed lines:"));
+        let label = ui.label(tl!("Changed lines:"));
         choice(
             ui,
             "tco_bar",
             &mut f.changed_lines,
             &[("outside", "Outside border"), ("left", "Left border"), ("right", "Right border"), ("none", "None")],
+            &label,
         );
         color(ui, &theme, &mut f.changed_lines_color, "Automatic", Some(wordcraft_layout::display::CHANGE_BAR));
         ui.end_row();
     });
     heading(ui, "Moves");
     egui::Grid::new("tco_moves").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Moved from:"));
-        choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
+        let label = ui.label(tl!("Moved from:"));
+        choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS, &label);
         ui.push_id("tco_move_from_color", |ui| color(ui, &theme, &mut f.move_from_color, "By author", None));
         ui.end_row();
-        ui.label(tl!("Moved to:"));
-        choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
+        let label = ui.label(tl!("Moved to:"));
+        choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS, &label);
         ui.push_id("tco_move_to_color", |ui| color(ui, &theme, &mut f.move_to_color, "By author", None));
         ui.end_row();
     });
