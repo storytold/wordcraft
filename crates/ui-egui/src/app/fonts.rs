@@ -170,7 +170,15 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), lang.prefers_hant(), system_cjk, &faces, self.canvas.ime_face);
+            theme::install_fonts_language_extra(
+                ctx,
+                lang.prefers_hans(),
+                lang.prefers_korean(),
+                lang.prefers_hant(),
+                system_cjk,
+                &faces,
+                self.canvas.ime_face,
+            );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_hant = lang.prefers_hant();

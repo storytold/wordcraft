@@ -4,7 +4,7 @@ use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
 use super::{
     Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, Page, ParaLayout, Paragraph, Path, Point, Rect,
-    SectionProps, Spin, StoryRef, Wrap, WrapText, contour, display, para, textbox,
+    Spin, StoryRef, Wrap, WrapText, contour, display, para, textbox,
 };
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
