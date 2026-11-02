@@ -117,6 +117,7 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 /// the document's default font, the header and footer parts and the notes and comments the flow
 /// model has no place for.
 fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts, Extras), String> {
+    wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(|e| format!("ODT: {e}"))?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
