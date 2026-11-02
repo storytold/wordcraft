@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use wordcraft_doc::Document;
 
-use crate::package::{EMBEDDED_PARTS, EmbeddedManifest, FONT_TABLE_PART};
+use crate::package::{EMBEDDED_PARTS, EmbeddedManifest};
 
 /// Most font files taken from one document.
 const MAX_FONTS: usize = 64;
@@ -41,11 +41,15 @@ pub fn embedded_fonts(doc: &Document) -> Vec<EmbeddedFont> {
 /// [`embedded_fonts`], copying at most `budget` bytes of font files.
 fn fonts_within(doc: &Document, mut budget: u64) -> Vec<EmbeddedFont> {
     let budget_total = budget;
-    let Some(table) = doc.passthrough.get(FONT_TABLE_PART).and_then(|b| crate::xml::parse(b).ok()) else {
+    let manifest = doc.passthrough.get(EMBEDDED_PARTS).map(|m| EmbeddedManifest::parse(m)).unwrap_or_default();
+    // The table is kept under the spelling the package stores it as (#3872).
+    let Some(key) = crate::package::font_table_key(&doc.passthrough) else {
         return Vec::new();
     };
-    let manifest = doc.passthrough.get(EMBEDDED_PARTS).map(|m| EmbeddedManifest::parse(m)).unwrap_or_default();
-    let Some(part) = manifest.parts.get(FONT_TABLE_PART) else {
+    let Some(table) = doc.passthrough.get(key).and_then(|b| crate::xml::parse(b).ok()) else {
+        return Vec::new();
+    };
+    let Some(part) = manifest.parts.get(key) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -118,6 +122,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::package::FONT_TABLE_PART;
 
     /// A document whose font table makes `refs` references (`(font name, part)`) to font parts
     /// `parts` (`(name, size)`).
