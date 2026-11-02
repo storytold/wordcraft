@@ -144,7 +144,7 @@ impl Reader<'_> {
         sc.in_hf = true;
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
-        self.read_blocks(&mut sc, &root, &rels, &mut blocks, 0);
+        self.read_blocks(&mut sc, &root, &rels, &mut blocks, self.chunks.depth);
         self.hf_depth = self.hf_depth.saturating_sub(1);
         self.flush_pending(&mut sc, &mut blocks);
         if let Some(p) = self.doc.parts.get_mut(&id)
