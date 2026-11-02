@@ -1,6 +1,6 @@
 use super::common::{mi, stack};
 use super::language::mi_check;
-use super::*;
+use super::{CONTENT_H, Rect, Sense, Stroke, Target, Tokens, Ui, WordApp, big, big_toggle, group, icons, json, menu_button, pos2, split, vec2};
 
 pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_doc::freeform::InkTool;
@@ -25,7 +25,7 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
         for (i, pen) in pens.iter().enumerate() {
             gallery_pen(ui, app, i, *pen, custom == Some(i));
         }
-        menu_button(ui, app, "addPen", Some("Add\nPen"), "Add Pen", true, "", |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("addPen", Some("Add\nPen"), "Add Pen", true, ""), |ui, app| {
             for (label, kind) in [("Pen", InkTool::Pen), ("Pencil", InkTool::Pencil), ("Highlighter", InkTool::Highlighter)] {
                 // A new pen starts as that kind's current colour and thickness.
                 let cur = app.session.view.draw.settings(kind);
@@ -34,7 +34,7 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             let sw = Some(crate::theme::c32(set.color));
-            split(ui, app, "fontcolor", "Color", pen_command(tool), json!({}), false, sw, |ui, app| {
+            split(ui, app, "fontcolor", "Color", crate::widgets::ButtonAction::new(pen_command(tool), json!({}), false), sw, |ui, app| {
                 let theme = app.session.doc.settings.theme_colors.clone();
                 // With ink lasso-selected the colour goes to the selection, else to the pen.
                 let cmd = if lasso_on { "draw.lassoColor" } else { pen_command(tool) };
@@ -43,7 +43,7 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
                     update_gallery_pen(app, custom, tool);
                 }
             });
-            menu_button(ui, app, "thickness", None, "Thickness", false, "draw.pen", |ui, app| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("thickness", None, "Thickness", false, "draw.pen"), |ui, app| {
                 let widths: &[f32] = if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
                 for w in widths {
                     let label = crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]);

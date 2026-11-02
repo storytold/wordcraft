@@ -1,4 +1,4 @@
-use super::*;
+use super::{LineNumberRestart, NoteProps, PartRels, SectionProps, SectionStart, W, Writer, borders, n, open_change, twips};
 
 impl Writer<'_> {
     /// The section's headers, plus the header holding only the watermark in each slot the

@@ -1,5 +1,5 @@
 use super::state::{SavedDock, labels, move_before, open, pane_state};
-use super::*;
+use super::{Edge, Pane, PaneHost, PaneRequest, PaneState, Place, SidePolicy, Stroke, Tokens, Ui, Value, WordApp, json};
 
 pub(super) struct Content<'a> {
     pub(super) app: &'a mut WordApp,
@@ -151,6 +151,7 @@ fn close(app: &mut WordApp, pane: Pane) {
         Some(id) => {
             let _ = app.run(id, json!({"value": false}));
         }
+        None if pane == Pane::Proofing => app.spelling_review = None,
         None => app.restrict.open = false,
     }
 }

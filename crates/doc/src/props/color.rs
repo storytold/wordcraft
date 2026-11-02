@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// An sRGB colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Default)]

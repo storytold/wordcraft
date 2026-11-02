@@ -1,4 +1,16 @@
-use super::*;
+use super::{
+    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
+    left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
+};
+
+/// How a run of glyphs is painted: its colour, opacity and synthetic bold and italic.
+#[derive(Clone, Copy)]
+pub(super) struct GlyphPaint {
+    pub color: Rgb,
+    pub alpha: f32,
+    pub bold: bool,
+    pub italic: bool,
+}
 
 impl Exporter<'_> {
     /// Unicode text for each glyph: (text, per-glyph byte range). Glyphs and the run's text are
@@ -66,20 +78,16 @@ impl Exporter<'_> {
         (text.to_string(), ranges)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn glyphs(
         &mut self,
         s: &mut Surface,
         face: &FaceRef,
         size: f32,
         glyphs: &[(u32, f32, f32)],
-        color: Rgb,
-        alpha: f32,
-        bold: bool,
-        italic: bool,
-        text: &str,
-        known: &[std::ops::Range<usize>],
+        style: GlyphPaint,
+        (text, known): (&str, &[std::ops::Range<usize>]),
     ) {
+        let GlyphPaint { color, alpha, bold, italic } = style;
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
             return;
         }
@@ -118,7 +126,7 @@ impl Exporter<'_> {
                     Some((_, nx, _, _)) => (nx - x) / size,
                     None => face.advance(*g) as f32 / upem,
                 };
-                KrillaGlyph::new(GlyphId::new(*g), adv, 0.0, (y0 - y) / size, 0.0, r.clone(), None)
+                KrillaGlyph::new(glyph_id(*g), adv, 0.0, (y0 - y) / size, 0.0, r.clone(), None)
             })
             .collect();
         let pushed = italic;
@@ -208,7 +216,7 @@ impl Exporter<'_> {
                             None => g.x_advance as f32 / upem,
                         };
                         let dy = lay.glyphs.get(i).map_or(0.0, |p| ((lay.baseline - p.1) / lay.em) as f32);
-                        KrillaGlyph::new(GlyphId::new(g.gid), adv, 0.0, dy, 0.0, start..end, None)
+                        KrillaGlyph::new(glyph_id(g.gid), adv, 0.0, dy, 0.0, start..end, None)
                     })
                     .collect();
                 let x0 = lay.glyphs.first().map_or(0.0, |p| p.0) as f32;

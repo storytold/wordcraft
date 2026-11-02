@@ -1,7 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::face::HINT_STRIKE;
 use super::face::{BUNDLED, FALLBACK_FAMILY, FontBytes, FontFace, NEXT_ID};
-use super::*;
+use super::{Arc, FileRef, Location, MetadataProvider, Ordering, Size, StringId};
 
 /// Is `f` an East Asian (Chinese, Japanese or Korean) font: do its OS/2 code pages say so
 /// (Shift-JIS, GB2312, Wansung, Big5, Johab), or, without them, does it map common ideographs?

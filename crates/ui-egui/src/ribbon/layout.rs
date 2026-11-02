@@ -1,7 +1,7 @@
 use super::arrange::{align_menu, group_menu, rotate_menu, wrap_menu};
 use super::common::{mi, size_menu, stack};
 use super::language::mi_check;
-use super::*;
+use super::{MeasureExt, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
 // Layout › Margins, Orientation, Size and Columns: the caret section's setting has a check
 // mark, as Text Direction's does (#1206).
@@ -52,20 +52,32 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
         // Text Direction works on what the caret is in: table cells, a text box, else the section.
         let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-        menu_button(ui, app, "textDirection", Some("Text\nDirection"), "Text Direction", true, "layout.textDirection", |ui, app| {
-            use wordcraft_doc::props::TextDirection;
-            for (label, d) in
-                [("Horizontal", TextDirection::Horizontal), ("Rotate all text 90°", TextDirection::Down), ("Rotate all text 270°", TextDirection::Up)]
-            {
-                mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
-            }
-        });
-        menu_button(ui, app, "margins", Some("Margins"), "Margins", true, "layout.margins", margins_items);
-        menu_button(ui, app, "orientation", Some("Orientation"), "Orientation", true, "layout.orientation", orientation_items);
-        menu_button(ui, app, "size", Some("Size"), "Size", true, "layout.size", size_menu);
-        menu_button(ui, app, "columns", Some("Columns"), "Columns", true, "layout.columns", columns_items);
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("textDirection", Some("Text\nDirection"), "Text Direction", true, "layout.textDirection"),
+            |ui, app| {
+                use wordcraft_doc::props::TextDirection;
+                for (label, d) in [
+                    ("Horizontal", TextDirection::Horizontal),
+                    ("Rotate all text 90°", TextDirection::Down),
+                    ("Rotate all text 270°", TextDirection::Up),
+                ] {
+                    mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
+                }
+            },
+        );
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("margins", Some("Margins"), "Margins", true, "layout.margins"), margins_items);
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("orientation", Some("Orientation"), "Orientation", true, "layout.orientation"),
+            orientation_items,
+        );
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("size", Some("Size"), "Size", true, "layout.size"), size_menu);
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("columns", Some("Columns"), "Columns", true, "layout.columns"), columns_items);
         stack(ui, |ui| {
-            menu_button(ui, app, "breaks", Some("Breaks"), "Breaks", false, "layout.break", |ui, app| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("breaks", Some("Breaks"), "Breaks", false, "layout.break"), |ui, app| {
                 ui.label(egui::RichText::new(tl!("Page Breaks")).strong());
                 mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
                 mi(ui, app, "Column", "layout.break", json!({"kind": "column"}));
@@ -76,23 +88,36 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
                 mi(ui, app, "Odd Page", "layout.break", json!({"kind": "oddPage"}));
             });
-            menu_button(ui, app, "lineNumbers", Some("Line Numbers"), "Line Numbers", false, "layout.lineNumbers", |ui, app| {
-                for (l, v) in
-                    [("None", "none"), ("Continuous", "continuous"), ("Restart Each Page", "restartPage"), ("Restart Each Section", "restartSection")]
-                {
-                    mi(ui, app, l, "layout.lineNumbers", json!({"value": v}));
-                }
-                ui.separator();
-                mi(ui, app, "Line Numbering Options…", "ui.dialog", json!({"name": "lineNumbers"}));
-            });
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("lineNumbers", Some("Line Numbers"), "Line Numbers", false, "layout.lineNumbers"),
+                |ui, app| {
+                    for (l, v) in [
+                        ("None", "none"),
+                        ("Continuous", "continuous"),
+                        ("Restart Each Page", "restartPage"),
+                        ("Restart Each Section", "restartSection"),
+                    ] {
+                        mi(ui, app, l, "layout.lineNumbers", json!({"value": v}));
+                    }
+                    ui.separator();
+                    mi(ui, app, "Line Numbering Options…", "ui.dialog", json!({"name": "lineNumbers"}));
+                },
+            );
             let hy = app.session.doc.settings.auto_hyphenation;
-            menu_button(ui, app, "hyphenation", Some("Hyphenation"), "Hyphenation", false, "layout.hyphenation", |ui, app| {
-                mi(ui, app, if hy { "✓ Automatic" } else { "Automatic" }, "layout.hyphenation", json!({"value": true}));
-                mi(ui, app, if hy { "None" } else { "✓ None" }, "layout.hyphenation", json!({"value": false}));
-                mi(ui, app, "Manual…", "ui.dialog", json!({"name": "manualHyphenation"}));
-                ui.separator();
-                mi(ui, app, "Hyphenation Options…", "ui.dialog", json!({"name": "hyphenation"}));
-            });
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("hyphenation", Some("Hyphenation"), "Hyphenation", false, "layout.hyphenation"),
+                |ui, app| {
+                    mi(ui, app, if hy { "✓ Automatic" } else { "Automatic" }, "layout.hyphenation", json!({"value": true}));
+                    mi(ui, app, if hy { "None" } else { "✓ None" }, "layout.hyphenation", json!({"value": false}));
+                    mi(ui, app, "Manual…", "ui.dialog", json!({"name": "manualHyphenation"}));
+                    ui.separator();
+                    mi(ui, app, "Hyphenation Options…", "ui.dialog", json!({"name": "hyphenation"}));
+                },
+            );
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
@@ -147,9 +172,30 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         wrap_menu(ui, app);
         stack(ui, |ui| {
-            small(ui, app, "bringForward", Some("Bring Forward"), "Bring Forward", "arrange.bringForward", json!({}), false);
-            small(ui, app, "sendBackward", Some("Send Backward"), "Send Backward", "arrange.sendBackward", json!({}), false);
-            small(ui, app, "selectionPane", Some("Selection Pane"), "Selection Pane", "arrange.selectionPane", json!({}), false);
+            small(
+                ui,
+                app,
+                "bringForward",
+                Some("Bring Forward"),
+                "Bring Forward",
+                crate::widgets::ButtonAction::new("arrange.bringForward", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "sendBackward",
+                Some("Send Backward"),
+                "Send Backward",
+                crate::widgets::ButtonAction::new("arrange.sendBackward", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "selectionPane",
+                Some("Selection Pane"),
+                "Selection Pane",
+                crate::widgets::ButtonAction::new("arrange.selectionPane", json!({}), false),
+            );
         });
         stack(ui, |ui| {
             align_menu(ui, app, None);

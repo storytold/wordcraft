@@ -1,4 +1,4 @@
-use super::*;
+use super::{Ui, Value, WordApp, json, vec2};
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
 pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [

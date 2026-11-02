@@ -1,6 +1,6 @@
 use super::blocks::thematic_break;
-use super::inlines::within;
-use super::*;
+use super::inlines::{is_punct, within};
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, Inline, Kind, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -166,30 +166,43 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
         }
         let want: Vec<Mark> =
             [(f.bold, Mark::Bold), (f.italic, Mark::Italic), (f.strike, Mark::Strike)].iter().filter(|x| x.0).map(|x| x.1).collect();
+        let body = if f.code {
+            if in_table { code_span(&text.replace('|', "\\|")) } else { code_span(&text) }
+        } else {
+            escape(&text).replace('\n', "\\\n").replace('\t', "    ")
+        };
         // Close until the stack is a prefix of what we want.
+        let mut close = String::new();
         while let Some(pos) = stack.iter().position(|m| !want.contains(m)) {
             while stack.len() > pos {
                 if let Some(m) = stack.pop() {
-                    out.push_str(marker(m));
+                    close.push_str(marker(m));
                 }
             }
         }
+        let mut open = String::new();
         for m in want {
             if !stack.contains(&m) {
-                out.push_str(marker(m));
+                open.push_str(marker(m));
                 stack.push(m);
             }
         }
-        if f.code {
-            if in_table {
-                let t = text.replace('|', "\\|");
-                out.push_str(&code_span(&t));
-            } else {
-                out.push_str(&code_span(&text));
-            }
-        } else {
-            out.push_str(&escape(&text).replace('\n', "\\\n").replace('\t', "    "));
+        // CommonMark only reads a closing run after punctuation as closing when whitespace or
+        // punctuation follows it, and an opening run before punctuation as opening when whitespace
+        // or punctuation precedes it. Where a letter sits there instead, or an opening run would
+        // directly follow a closing run (the two would merge into one run), an empty HTML comment (which readers drop) supplies
+        // the punctuation.
+        let prev = out.chars().next_back();
+        let next = body.chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| !c.is_whitespace() && !is_punct(c));
+        out.push_str(&close);
+        let close_needs = !close.is_empty() && prev.is_some_and(is_punct) && (!open.is_empty() || word(next));
+        let open_needs = !open.is_empty() && next.is_some_and(is_punct) && (!close.is_empty() || word(prev));
+        if close_needs || open_needs {
+            out.push_str(EMPTY_COMMENT);
         }
+        out.push_str(&open);
+        out.push_str(&body);
     }
     close_all(&mut out, &mut stack);
     if let Some(l) = &link {
@@ -228,6 +241,9 @@ fn entity_like(rest: &str) -> bool {
     let body = body.strip_prefix('#').map_or(body, |n| n.strip_prefix(['x', 'X']).unwrap_or(n));
     !body.is_empty() && body.chars().all(|c| c.is_ascii_alphanumeric())
 }
+
+/// Inline HTML that Markdown readers drop, used to separate emphasis markers from letters.
+const EMPTY_COMMENT: &str = "<!-- -->";
 
 fn marker(m: Mark) -> &'static str {
     match m {
@@ -364,9 +380,16 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             // The bullet marker can turn a short run of hyphens into a rule.
                             if thematic_break(&format!("{marker} {body}")) { format!("\\{body}") } else { body }
                         };
-                        out.push(format!("{pad}{marker} {body}").trim_end().to_string());
+                        let line = format!("{pad}{marker} {body}").trim_end().to_string();
+                        // A list inside a block quote stays in it: every line of the item, its
+                        // continuation lines included, takes the quote marker.
+                        let line = if p.kind == Kind::Quote { format!("> {}", line.replace('\n', "\n> ")) } else { line };
+                        out.push(line);
                         prev_list = true;
-                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
+                        // A list going into or out of a block quote is a new block: without the
+                        // blank line, an unquoted item would be read back into the quote.
+                        let quoted = |k: Kind| k == Kind::Quote;
+                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some() && quoted(q.kind) == quoted(p.kind));
                         if !next_is_list {
                             out.push(String::new());
                         }

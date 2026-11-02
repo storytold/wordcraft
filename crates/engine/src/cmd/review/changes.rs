@@ -1,4 +1,4 @@
-use super::*;
+use super::{CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, fmt_revisions, json, p, pos_json, sel_result};
 
 /// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
 fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
@@ -27,15 +27,12 @@ fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, pro
 
 /// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
 /// the section break on it), `props` the paragraph's own formatting change.
-#[allow(clippy::too_many_arguments)]
 fn resolve_para(
     s: &mut Session,
     story: StoryRef,
     path: &wordcraft_doc::Path,
-    from: usize,
-    to: usize,
-    mark: bool,
-    props: bool,
+    (from, to): (usize, usize),
+    (mark, props): (bool, bool),
     accept: bool,
 ) -> Result<(), CmdError> {
     let para = s.doc.para_mut(story, path)?;
@@ -187,7 +184,7 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
-            resolve_para(s, st, &path, 0, len, true, true, accept)?;
+            resolve_para(s, st, &path, (0, len), (true, true), accept)?;
         }
     }
     // Tables, rows, cells and sections.
@@ -302,7 +299,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
-        resolve_para(s, a.story, &path, from, to, mark, props, accept)?;
+        resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;
         }

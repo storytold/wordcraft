@@ -1,9 +1,12 @@
 use super::glyphs::{Authors, upright_east_asian};
-use super::lines::lines;
-use super::objects::{effects_in, graphic_draws, object_draws, shape_draws, spun};
+use super::lines::{LineRender, lines};
+use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
-use super::*;
+use super::{
+    BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
+    Underline,
+};
 
 /// Colour of moved text (both ends of a tracked move).
 pub const MOVE_COLOR: Rgb = Rgb(0x1A, 0x7F, 0x37);
@@ -137,7 +140,7 @@ fn stories_display(
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(doc, &lines, *rect, warp, opts, authors, a, out);
+                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
                     }
                 }
                 _ => item(doc, it, opts, authors, a, out),
@@ -157,7 +160,9 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
-            Some((_, rect, warp)) if !lines.is_empty() => warped_text(doc, &lines, rect, &warp, opts, &authors, 1.0, &mut out),
+            Some((_, rect, warp)) if !lines.is_empty() => {
+                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
+            }
             _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut out)),
         }
     }
@@ -217,16 +222,18 @@ fn warped_boxes(doc: &Document, items: &[Placed]) -> Vec<(u32, Rect, wordcraft_d
 /// The text of a warped text box at `rect`: its lines' letters as outlines bent by `warp`, the
 /// box's text stretched over the frame inside its margins (as WordArt is). Underlines, marks and
 /// other decorations are left out; a warp that is drawn flat leaves the text as it is.
-fn warped_text(
-    doc: &Document,
-    lines: &[&Placed],
+struct WarpedText<'doc, 'opts, 'lines, 'placed, 'authors, 'author_doc> {
+    doc: &'doc Document,
+    lines: &'lines [&'placed Placed],
     rect: Rect,
-    warp: &wordcraft_doc::wordart::TextWarp,
-    opts: &DisplayOptions,
-    authors: &Authors,
+    warp: &'lines wordcraft_doc::wordart::TextWarp,
+    opts: &'opts DisplayOptions,
+    authors: &'authors Authors<'author_doc>,
     alpha: f32,
-    out: &mut Vec<Draw>,
-) {
+}
+
+fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
+    let WarpedText { doc, lines, rect, warp, opts, authors, alpha } = input;
     let mut raw = Vec::new();
     for it in lines {
         item(doc, it, opts, authors, alpha, &mut raw);
@@ -370,7 +377,20 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
             let mut items = Vec::new();
             let fx = effects_in(*effects, spin.within(outer));
-            shape_draws(*rect, *kind, fill.as_ref(), *stroke, *stroke_width, fx, freeform.as_deref(), extra, opts, &mut items);
+            shape_draws(
+                *rect,
+                &ShapeLook {
+                    kind: *kind,
+                    fill: fill.as_ref(),
+                    stroke: *stroke,
+                    stroke_width: *stroke_width,
+                    effects: fx,
+                    freeform: freeform.as_deref(),
+                    extra,
+                },
+                opts,
+                &mut items,
+            );
             spun(*spin, *rect, items, out)
         }
         Placed::Graphic { rect, graphic, spin, .. } => spun(*spin, *rect, graphic_draws(doc, graphic, *rect, alpha), out),
@@ -384,7 +404,21 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
-            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, authors, alpha, *turn == TextDirection::Down, &mut items);
+            lines(
+                LineRender {
+                    doc,
+                    story: *story,
+                    path,
+                    pl: para,
+                    range: *l0..*l1,
+                    origin: (0.0, 0.0),
+                    opts,
+                    authors,
+                    alpha,
+                    down: *turn == TextDirection::Down,
+                },
+                &mut items,
+            );
             // Link areas are axis-aligned page rectangles: turned text gets none.
             for d in &mut items {
                 if let Draw::Glyphs { link, .. } = d {
@@ -396,7 +430,9 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, authors, alpha, false, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
+            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
+        }
     }
 }
 

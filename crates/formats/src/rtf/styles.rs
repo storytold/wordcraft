@@ -1,6 +1,6 @@
 use super::export::HEAD_SIZES;
 use super::state::St;
-use super::*;
+use super::{Fmt, Kind, ListInfo, Para, Reader, model};
 
 impl Reader {
     pub(super) fn commit_style(&mut self) {
@@ -261,5 +261,13 @@ fn spacing(st: &St) -> model::Spacing {
     } else {
         Some(LineSpacing::AtLeast(pt(sl)))
     };
-    model::Spacing { before: gap(st.sb), after: gap(st.sa), line, left: st.li.map(pt), right: st.ri.map(pt), first: st.fi.map(pt) }
+    model::Spacing {
+        before: gap(st.sb),
+        after: gap(st.sa),
+        line,
+        left: st.li.map(pt),
+        right: st.ri.map(pt),
+        first: st.fi.map(pt),
+        ..Default::default()
+    }
 }

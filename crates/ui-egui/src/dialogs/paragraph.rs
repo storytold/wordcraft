@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeSet, Dialog, MeasureExt, Ui, Value, WordApp, json};
 
 /// The Paragraph dialog as one paragraph's formatting fills it, on page `tab`.
 pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialog {

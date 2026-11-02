@@ -1,5 +1,5 @@
+use super::ParaLayout;
 use super::model::{ClKind, Line, VisCl};
-use super::*;
 
 /// The bidi levels a piece of text is shaped by.
 #[derive(Clone, Copy)]

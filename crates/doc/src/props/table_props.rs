@@ -1,7 +1,7 @@
 use super::char_props::PropChange;
 use super::color::Rgb;
 use super::para_props::{Align, Borders};
-use super::*;
+use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

@@ -1,6 +1,6 @@
 use super::common::{LEADERS, choice, heading, leader_char, sample};
 use super::shell::{Next, go};
-use super::*;
+use super::{FieldCode, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Index and Mark Index Entry

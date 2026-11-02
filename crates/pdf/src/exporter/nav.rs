@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Annotation, ClKind, DocPath, Exporter, Fit, HashMap, LineEnd, LinkAnnotation, Outline, OutlineNode, Placed, Point, StoryRef, Target,
+    XyzDestination, krilla, write,
+};
 
 impl Exporter<'_> {
     /// Where a bookmark is: (output page, x, y) — the page and line its start lands on, which

@@ -1,6 +1,6 @@
 use super::common::{BUILT_IN_LABELS, choice};
 use super::shell::Next;
-use super::*;
+use super::{Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
 // Cross-reference

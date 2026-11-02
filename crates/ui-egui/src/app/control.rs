@@ -1,4 +1,4 @@
-use super::*;
+use super::WordApp;
 use crate::control;
 
 impl WordApp {

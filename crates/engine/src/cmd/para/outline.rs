@@ -1,5 +1,5 @@
 use super::lists::touch_all;
-use super::*;
+use super::{Block, CmdError, CmdResult, NumRef, ParaProps, Pos, Session, SortKey, Value, p, sel_result, sort_key};
 
 /// Move Paragraph Up / Down (Alt+Shift+Up/Down, ⌃⇧↑/↓ on macOS): the paragraphs the selection
 /// touches swap places with the paragraph above or below, in their own container (the story or

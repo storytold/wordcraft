@@ -1,5 +1,5 @@
 use super::autoformat::insert;
-use super::*;
+use super::{CmdError, CmdResult, Pos, Selection, Session, Value, p, sel_result, type_text};
 
 /// Toggle Unicode Character (Alt+X): the hex code before the caret (up to six digits, `U+`
 /// optional) or the selected code becomes its character; otherwise the character before the

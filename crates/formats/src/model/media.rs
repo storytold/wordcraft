@@ -1,5 +1,5 @@
+use super::Arc;
 use super::types::Img;
-use super::*;
 
 // ---------------------------------------------------------------------------------------------
 // Shared helpers
@@ -33,7 +33,14 @@ pub fn decode_bounded(data: &[u8]) -> Option<image::DynamicImage> {
 pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
     let data = data.into();
     let ext = sniff_image(&data)?;
-    let (pw, ph) = image_px(&data).map(|(a, b)| (a as f32 * 0.75, b as f32 * 0.75)).unwrap_or((72.0, 72.0));
+    let natural = image_px(&data).map(|(a, b)| (a as f32 * 0.75, b as f32 * 0.75));
+    Some(sized_img(data, ext, natural, w, h, alt))
+}
+
+/// A picture of a known format `ext` whose natural size (points) the caller knows, if at all: a
+/// metafile, which `image` can't measure. Sized like [`make_img`].
+pub fn sized_img(data: Arc<Vec<u8>>, ext: &str, natural: Option<(f32, f32)>, w: Option<f32>, h: Option<f32>, alt: &str) -> Img {
+    let (pw, ph) = natural.filter(|(a, b)| a.is_finite() && b.is_finite()).unwrap_or((72.0, 72.0));
     let (pw, ph) = (pw.max(1.0), ph.max(1.0));
     let (mut w, mut h) = match (w.filter(|v| v.is_finite() && *v > 0.0), h.filter(|v| v.is_finite() && *v > 0.0)) {
         (Some(w), Some(h)) => (w, h),
@@ -45,7 +52,7 @@ pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, a
         h *= 468.0 / w;
         w = 468.0;
     }
-    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
+    Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() }
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

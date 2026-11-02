@@ -54,7 +54,7 @@ mod table_flow;
 
 #[cfg(test)]
 use boxes::{BOX_INSET_X, BOX_INSET_Y};
-use boxes::{BoxContext, BoxLayout, Edges, fit_box, layout_box, push_para};
+use boxes::{BoxInput, BoxLayout, Edges, fit_box, layout_box, push_para};
 pub use cache::LayoutCache;
 use cache::{MAX_TOTAL_PASSES, Totals};
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Ui, WordApp, json};
 
 /// The spelling suggestions and synonyms the context menu offers for the selection or the word
 /// at the caret.

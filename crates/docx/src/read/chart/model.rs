@@ -1,4 +1,4 @@
-use super::*;
+use super::Rgb;
 
 /// A data label to draw once the chart is: the value at (`x`, `y`), centred there (`inside`, in
 /// white on the fill) or just beside it (above, or right of a horizontal bar's end).

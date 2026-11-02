@@ -1,5 +1,5 @@
 use super::cells::{cell, cell_at, grid_cols, row_ends, selected_cells};
-use super::*;
+use super::{CmdError, CmdResult, Paragraph, Path, Pos, Selection, Session, StoryRef, Value, sel_result};
 
 /// Ctrl+A in a table, as in Word: the cell, then its row, then the table. A nested table that
 /// is already fully selected grows to the cell around it. Returns `None` when the next step is

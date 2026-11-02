@@ -1,4 +1,4 @@
-use super::*;
+use super::{FaceRef, MItem, Rgb, Slot};
 
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
 /// cramped (superscripts lowered: inside radicals, denominators, subscripts).

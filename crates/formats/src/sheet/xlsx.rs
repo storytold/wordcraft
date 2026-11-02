@@ -1,5 +1,7 @@
 use super::date::{DateKind, builtin_date, custom_date, iso_datetime, serial_date};
-use super::*;
+use super::{
+    BTreeMap, Ev, Grid, HashMap, MAX_CELLS, MAX_COLS, MAX_ROWS, MAX_SHARED, MAX_SHEETS, MAX_XFS, Package, TextBudget, attr, push_capped, walk,
+};
 
 // ---------------------------------------------------------------------------------------------
 // SpreadsheetML

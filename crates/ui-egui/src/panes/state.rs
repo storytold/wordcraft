@@ -1,4 +1,4 @@
-use super::*;
+use super::{BTreeMap, Edge, Pane, PaneLabels, PaneState, Place, StylesPaneDock, Value, WordApp};
 
 /// Every pane in the order the user left them (`paneOrder` in `ui.json`), then the panes that
 /// list lacks in their default order. Each edge shows its panes in this order, the first outermost.
@@ -48,6 +48,7 @@ pub fn open(app: &WordApp) -> Vec<Pane> {
         (Pane::AltText, v.alt_text_pane),
         (Pane::FormatShape, v.format_shape_pane),
         (Pane::RestrictEditing, app.restrict.open),
+        (Pane::Proofing, app.spelling_review.is_some()),
         (Pane::Comments, v.comments_pane),
     ]
     .into_iter()

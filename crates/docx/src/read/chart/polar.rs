@@ -2,7 +2,7 @@ use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
 use super::format::format_value;
 use super::model::{DataLabel, Kind, Series};
 use super::plot::{Axes, has_values};
-use super::*;
+use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
 
 pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     let Some(s) = c.series.first() else { return };

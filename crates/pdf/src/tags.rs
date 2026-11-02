@@ -1,4 +1,4 @@
-use super::*;
+use super::{ArtifactType, Draw, GraphicKind, Node, TagKind};
 
 /// A chart's or diagram's alt text: its own, else what it is ("chart", "diagram").
 pub(crate) fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {

@@ -1,5 +1,5 @@
 use super::reading::place_read_pages;
-use super::*;
+use super::{CommentDisplay, DocLayout, GAP, PX_PER_PT, Pos2, Rect, StoryRef, WordApp, pos2, vec2};
 
 /// Page positions in content space (points), for the current zoom.
 pub struct Geometry {

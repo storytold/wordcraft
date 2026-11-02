@@ -4,7 +4,7 @@ use super::fallback_data::read_fallback_file;
 #[cfg(not(target_arch = "wasm32"))]
 use super::names::{CatalogEntry, MAX_FILE_FACES, enumerate_faces};
 use super::names::{base_style, last_resort_face, make_face, norm, style_italic, style_weight};
-use super::*;
+use super::{Arc, BezPath, FontDb, MetadataProvider};
 
 impl FontDb {
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to

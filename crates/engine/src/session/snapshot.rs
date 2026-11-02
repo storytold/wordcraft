@@ -1,6 +1,6 @@
 use super::doc_state::{MAX_UNDO, Selection, doc_bib_style};
 use super::snapshot_types::{EditSnapshot, SNAPSHOT_HEAD};
-use super::*;
+use super::{Document, Session, StoryRef, next_document_id};
 
 impl Session {
     /// Replace the document (open/new).

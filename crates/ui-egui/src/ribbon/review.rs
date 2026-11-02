@@ -1,13 +1,20 @@
 use super::common::{mi, stack};
 use super::language::language_menu;
-use super::*;
+use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small};
 
 pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Proofing", None, app, |ui, app| {
         big(ui, app, "spelling", "Spelling &\nGrammar", "review.spelling", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", "review.thesaurus", json!({}), false);
-            small(ui, app, "wordCount", Some("Word Count"), "Word Count", "ui.dialog", json!({"name": "wordCount"}), false);
+            small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", crate::widgets::ButtonAction::new("review.thesaurus", json!({}), false));
+            small(
+                ui,
+                app,
+                "wordCount",
+                Some("Word Count"),
+                "Word Count",
+                crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "wordCount"}), false),
+            );
         });
     });
     group(ui, "Speech", None, app, |ui, app| {
@@ -18,14 +25,28 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
-        menu_button(ui, app, "language", Some("Language"), "Language", true, "", language_menu);
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("language", Some("Language"), "Language", true, ""), language_menu);
     });
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "deleteComment", Some("Delete"), "Delete Comment", "review.deleteComment", json!({}), false);
-            small(ui, app, "prevComment", Some("Previous"), "Previous Comment", "review.previousComment", json!({}), false);
-            small(ui, app, "nextComment", Some("Next"), "Next Comment", "review.nextComment", json!({}), false);
+            small(
+                ui,
+                app,
+                "deleteComment",
+                Some("Delete"),
+                "Delete Comment",
+                crate::widgets::ButtonAction::new("review.deleteComment", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "prevComment",
+                Some("Previous"),
+                "Previous Comment",
+                crate::widgets::ButtonAction::new("review.previousComment", json!({}), false),
+            );
+            small(ui, app, "nextComment", Some("Next"), "Next Comment", crate::widgets::ButtonAction::new("review.nextComment", json!({}), false));
         });
         let shown = app.session.view.comments_pane;
         big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
@@ -38,35 +59,51 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
             menu_button(
                 ui,
                 app,
-                "markup",
-                Some(if app.session.view.show_markup { "All Markup" } else { "No Markup" }),
-                "Display for Review",
-                false,
-                "review.markup",
+                crate::widgets::MenuButtonOptions::new(
+                    "markup",
+                    Some(if app.session.view.show_markup { "All Markup" } else { "No Markup" }),
+                    "Display for Review",
+                    false,
+                    "review.markup",
+                ),
                 |ui, app| {
                     mi(ui, app, "All Markup", "review.markup", json!({"value": "all"}));
                     mi(ui, app, "No Markup", "review.markup", json!({"value": "noMarkup"}));
                 },
             );
-            small(ui, app, "reviewingPane", Some("Reviewing Pane"), "Reviewing Pane", "review.changes", json!({}), false);
+            small(
+                ui,
+                app,
+                "reviewingPane",
+                Some("Reviewing Pane"),
+                "Reviewing Pane",
+                crate::widgets::ButtonAction::new("review.changes", json!({}), false),
+            );
         });
     });
     group(ui, "Changes", None, app, |ui, app| {
-        menu_button(ui, app, "accept", Some("Accept"), "Accept", true, "review.accept", |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("accept", Some("Accept"), "Accept", true, "review.accept"), |ui, app| {
             mi(ui, app, "Accept and Move to Next", "review.accept", json!({"next": true}));
             mi(ui, app, "Accept This Change", "review.accept", json!({}));
             mi(ui, app, "Accept All Changes", "review.acceptAll", json!({}));
             mi(ui, app, "Accept All Changes and Stop Tracking", "review.acceptAll", json!({"stopTracking": true}));
         });
-        menu_button(ui, app, "reject", Some("Reject"), "Reject", true, "review.reject", |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("reject", Some("Reject"), "Reject", true, "review.reject"), |ui, app| {
             mi(ui, app, "Reject and Move to Next", "review.reject", json!({"next": true}));
             mi(ui, app, "Reject Change", "review.reject", json!({}));
             mi(ui, app, "Reject All Changes", "review.rejectAll", json!({}));
             mi(ui, app, "Reject All Changes and Stop Tracking", "review.rejectAll", json!({"stopTracking": true}));
         });
         stack(ui, |ui| {
-            small(ui, app, "prevChange", Some("Previous"), "Previous Change", "review.previousChange", json!({}), false);
-            small(ui, app, "nextChange", Some("Next"), "Next Change", "review.nextChange", json!({}), false);
+            small(
+                ui,
+                app,
+                "prevChange",
+                Some("Previous"),
+                "Previous Change",
+                crate::widgets::ButtonAction::new("review.previousChange", json!({}), false),
+            );
+            small(ui, app, "nextChange", Some("Next"), "Next Change", crate::widgets::ButtonAction::new("review.nextChange", json!({}), false));
         });
     });
     group(ui, "Compare", None, app, |ui, app| {
@@ -108,14 +145,28 @@ pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
             for row in rows {
                 crate::widgets::row(ui, |ui| {
                     for (icon, tip, id) in row {
-                        small(ui, app, icon, None, tip, id, json!({}), false);
+                        small(ui, app, icon, None, tip, crate::widgets::ButtonAction::new(id, json!({}), false));
                     }
                 });
             }
         });
         stack(ui, |ui| {
-            small(ui, app, "designMode", Some("Design Mode"), "Design Mode", "developer.designMode", json!({}), design);
-            small(ui, app, "properties", Some("Properties"), "Properties", "developer.properties", json!({}), false);
+            small(
+                ui,
+                app,
+                "designMode",
+                Some("Design Mode"),
+                "Design Mode",
+                crate::widgets::ButtonAction::new("developer.designMode", json!({}), design),
+            );
+            small(
+                ui,
+                app,
+                "properties",
+                Some("Properties"),
+                "Properties",
+                crate::widgets::ButtonAction::new("developer.properties", json!({}), false),
+            );
         });
     });
 }

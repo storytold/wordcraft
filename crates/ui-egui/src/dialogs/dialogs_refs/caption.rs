@@ -1,6 +1,6 @@
 use super::common::{BUILT_IN_LABELS, NUMBER_FORMATS, SEPARATORS, choice};
 use super::shell::{Next, go};
-use super::*;
+use super::{Block, RefsDialog, Serialize, Ui, Value, WordApp, buttons, json, vec2};
 
 /// The Caption dialog's fields.
 #[derive(Clone, Debug, PartialEq, Serialize)]

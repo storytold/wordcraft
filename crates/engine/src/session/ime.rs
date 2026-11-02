@@ -1,5 +1,5 @@
 use super::ime_state::{ImeCaretState, next_ime_state_revision};
-use super::*;
+use super::{CmdError, ImeEditOutcome, Session, Value};
 
 impl Session {
     /// The current command's explicit IME effect classification.

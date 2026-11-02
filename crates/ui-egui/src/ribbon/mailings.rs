@@ -1,6 +1,6 @@
 use super::common::{mi, stack};
 use super::language::mi_check;
-use super::*;
+use super::{Ui, WordApp, big, group, json, menu_button, small};
 
 pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Create", None, app, |ui, app| {
@@ -9,25 +9,35 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
         // The kinds of merge document the engine makes, the current one checked.
-        menu_button(ui, app, "mailMerge", Some("Start Mail\nMerge"), "Start Mail Merge", true, "mailings.start", |ui, app| {
-            let kind = app.session.merge.kind.clone();
-            for (label, k) in [
-                ("Letters", "letters"),
-                ("E-mail Messages", "emails"),
-                ("Envelopes", "envelopes"),
-                ("Labels", "labels"),
-                ("Directory", "directory"),
-                ("Normal Word Document", "normal"),
-            ] {
-                let current = kind == k || (k == "normal" && kind.is_empty());
-                mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
-            }
-        });
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("mailMerge", Some("Start Mail\nMerge"), "Start Mail Merge", true, "mailings.start"),
+            |ui, app| {
+                let kind = app.session.merge.kind.clone();
+                for (label, k) in [
+                    ("Letters", "letters"),
+                    ("E-mail Messages", "emails"),
+                    ("Envelopes", "envelopes"),
+                    ("Labels", "labels"),
+                    ("Directory", "directory"),
+                    ("Normal Word Document", "normal"),
+                ] {
+                    let current = kind == k || (k == "normal" && kind.is_empty());
+                    mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
+                }
+            },
+        );
         // The command needs data, so the button offers the two ways to give it (#240).
-        menu_button(ui, app, "recipients", Some("Select\nRecipients"), "Select Recipients", true, "mailings.recipients", |ui, app| {
-            mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
-            mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
-        });
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("recipients", Some("Select\nRecipients"), "Select Recipients", true, "mailings.recipients"),
+            |ui, app| {
+                mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
+                mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
+            },
+        );
         big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
     });
     group(ui, "Write & Insert Fields", None, app, |ui, app| {
@@ -37,34 +47,60 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "mergeField", "Insert Merge\nField", "mailings.insertField", json!({}), false);
         stack(ui, |ui| {
             // The merge rules the engine knows; If and Skip Record If ask for their condition.
-            menu_button(ui, app, "rules", Some("Rules"), "Rules", false, "mailings.rules", |ui, app| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("rules", Some("Rules"), "Rules", false, "mailings.rules"), |ui, app| {
                 mi(ui, app, "If…Then…Else…", "mailings.rules", json!({"rule": "IF"}));
                 mi(ui, app, "Merge Record #", "mailings.rules", json!({"rule": "MERGEREC"}));
                 mi(ui, app, "Next Record", "mailings.rules", json!({"rule": "NEXT"}));
                 mi(ui, app, "Skip Record If…", "mailings.rules", json!({"rule": "SKIPIF"}));
             });
-            small(ui, app, "matchFields", Some("Match Fields"), "Match Fields", "mailings.matchFields", json!({}), false);
+            small(
+                ui,
+                app,
+                "matchFields",
+                Some("Match Fields"),
+                "Match Fields",
+                crate::widgets::ButtonAction::new("mailings.matchFields", json!({}), false),
+            );
         });
     });
     group(ui, "Preview Results", None, app, |ui, app| {
         big(ui, app, "preview", "Preview\nResults", "mailings.preview", json!({}), false);
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "first", None, "First Record", "mailings.first", json!({}), false);
-                small(ui, app, "previous", None, "Previous Record", "mailings.previous", json!({}), false);
+                small(ui, app, "first", None, "First Record", crate::widgets::ButtonAction::new("mailings.first", json!({}), false));
+                small(ui, app, "previous", None, "Previous Record", crate::widgets::ButtonAction::new("mailings.previous", json!({}), false));
                 record_box(ui, app);
-                small(ui, app, "next", None, "Next Record", "mailings.next", json!({}), false);
-                small(ui, app, "last", None, "Last Record", "mailings.last", json!({}), false);
+                small(ui, app, "next", None, "Next Record", crate::widgets::ButtonAction::new("mailings.next", json!({}), false));
+                small(ui, app, "last", None, "Last Record", crate::widgets::ButtonAction::new("mailings.last", json!({}), false));
             });
-            small(ui, app, "find", Some("Find Recipient"), "Find Recipient", "mailings.findRecipient", json!({}), false);
-            small(ui, app, "checkErrors", Some("Check for Errors"), "Check for Errors", "mailings.checkErrors", json!({}), false);
+            small(
+                ui,
+                app,
+                "find",
+                Some("Find Recipient"),
+                "Find Recipient",
+                crate::widgets::ButtonAction::new("mailings.findRecipient", json!({}), false),
+            );
+            small(
+                ui,
+                app,
+                "checkErrors",
+                Some("Check for Errors"),
+                "Check for Errors",
+                crate::widgets::ButtonAction::new("mailings.checkErrors", json!({}), false),
+            );
         });
     });
     group(ui, "Finish", None, app, |ui, app| {
-        menu_button(ui, app, "finish", Some("Finish &\nMerge"), "Finish & Merge", true, "mailings.finish", |ui, app| {
-            mi(ui, app, "Edit Individual Documents…", "mailings.finish", json!({}));
-            mi(ui, app, "Print Documents…", "mailings.printDocuments", json!({}));
-        });
+        menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("finish", Some("Finish &\nMerge"), "Finish & Merge", true, "mailings.finish"),
+            |ui, app| {
+                mi(ui, app, "Edit Individual Documents…", "mailings.finish", json!({}));
+                mi(ui, app, "Print Documents…", "mailings.printDocuments", json!({}));
+            },
+        );
     });
 }
 
