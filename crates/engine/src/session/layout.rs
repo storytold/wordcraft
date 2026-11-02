@@ -162,9 +162,23 @@ impl Session {
     /// [`Session::export_layout`]; with `markup` (Print Markup) each page also has the markup
     /// area with the comments in balloons.
     pub fn export_layout_with(&self, markup: bool) -> Arc<DocLayout> {
+        self.output_layout(markup, false)
+    }
+
+    /// The layout a print job draws ([`Session::print_pdf`]): with `markup` as
+    /// [`Session::export_layout_with`]; without it the final text, as Word's "No Markup", so tracked
+    /// deletions, which the job doesn't draw, take no space either, whatever Track Changes
+    /// Options say. Page images keep [`Session::export_layout_with`]: they always show markup.
+    pub fn print_layout(&self, markup: bool) -> Arc<DocLayout> {
+        self.output_layout(markup, !markup)
+    }
+
+    /// The print-view layout for output; `final_text` leaves tracked deletions out.
+    fn output_layout(&self, markup: bool, final_text: bool) -> Arc<DocLayout> {
         let (fn_name, fn_path) = self.resolved_filenames();
         let opts = LayoutOptions {
             view: ViewMode::Print,
+            hide_deleted: final_text,
             comment_balloons: markup && self.prefs.markup.comments,
             // Deletions Track Changes Options mark Hidden take no space, as on screen.
             hide_marked: self.prefs.markup.hidden_deletions(),

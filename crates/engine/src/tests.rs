@@ -7279,6 +7279,24 @@ fn markup_pdf_takes_the_track_changes_option_colours() {
     assert_ne!(print(&s), printed_by_author, "file.printPdf ignores the tracking colours");
 }
 
+/// A print job without markup lays out the final text: tracked deletions, which it doesn't draw,
+/// take no space, whatever Track Changes Options mark them with (#5269 review).
+#[test]
+fn printing_without_markup_leaves_deletions_out_of_the_pages() {
+    let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the old text")).collect();
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&text.join("\n")));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Kept"})).unwrap();
+    let pages = |s: &Session, markup: bool| s.print_pdf(&json!({"markup": markup})).unwrap().1.chosen;
+    assert!(pages(&s, true) > 1, "the deleted lines show with markup");
+    assert_eq!(pages(&s, false), 1);
+    for mark in ["hidden", "strikethrough"] {
+        s.run("review.trackingOptions", &json!({"deleteMark": mark})).unwrap();
+        assert_eq!(pages(&s, false), 1, "{mark}");
+    }
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]

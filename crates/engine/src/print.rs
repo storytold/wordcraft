@@ -172,7 +172,7 @@ impl Session {
     fn print_pdf_with(&self, v: &Value, links: bool) -> Result<(Vec<u8>, PrintPlan), CmdError> {
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
-        let lay = self.export_layout_with(markup.markup);
+        let lay = self.print_layout(markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
         let paper = paper(v)?.map(|(_, w, h)| (w, h));
         let opts = wordcraft_pdf::PdfOptions {
