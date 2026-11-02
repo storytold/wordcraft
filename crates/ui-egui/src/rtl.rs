@@ -183,3 +183,168 @@ pub fn island<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 pub fn grid<R>(ui: &mut Ui, grid: egui::Grid, add: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
     island(ui, |ui| grid.show(ui, add))
 }
+
+/// A form of rows and cells. Where the interface is mirrored (`flows`), a row's cells run from the
+/// right edge, the first cell at the right, and every column is as wide as its widest cell, so the
+/// labels sit at the reading start with their fields after them, to their left. Elsewhere it is
+/// exactly an `egui::Grid` with the same id, columns and spacing. A `Grid` itself cannot be laid
+/// out from the right, which is why [`grid`] keeps its columns in order.
+pub struct Table {
+    id: &'static str,
+    columns: usize,
+    spacing: Option<egui::Vec2>,
+}
+
+impl Table {
+    pub fn new(id: &'static str) -> Self {
+        Self { id, columns: 2, spacing: None }
+    }
+
+    pub fn columns(mut self, columns: usize) -> Self {
+        self.columns = columns;
+        self
+    }
+
+    pub fn spacing(mut self, spacing: egui::Vec2) -> Self {
+        self.spacing = Some(spacing);
+        self
+    }
+
+    pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Rows) -> R) -> R {
+        if !flows(ui) {
+            let spec = egui::Grid::new(self.id).num_columns(self.columns);
+            let spec = match self.spacing {
+                Some(spacing) => spec.spacing(spacing),
+                None => spec,
+            };
+            return grid(ui, spec, |ui| add(&mut Rows { ui, mirror: None })).inner;
+        }
+        let key = ui.scope_id().with(("rtl_table_widths", self.id));
+        let prev = ui.data(|d| d.get_temp::<Vec<f32>>(key)).unwrap_or_default();
+        let spacing = self.spacing.unwrap_or(ui.spacing().item_spacing);
+        let gap = spacing.x;
+        let shown = ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = spacing.y;
+            let mut rows = Rows { ui, mirror: Some(Mirror { prev: prev.clone(), cur: Vec::new(), gap }) };
+            let out = add(&mut rows);
+            (out, rows.mirror.map(|m| m.cur).unwrap_or_default())
+        });
+        let (out, cur) = shown.inner;
+        let same = prev.len() == cur.len() && prev.iter().zip(&cur).all(|(a, b)| (a - b).abs() <= 0.5);
+        if !same {
+            ui.data_mut(|d| d.insert_temp(key, cur));
+            ui.ctx().request_repaint();
+        }
+        out
+    }
+}
+
+struct Mirror {
+    /// The width each column had last frame.
+    prev: Vec<f32>,
+    /// The width each column has now (the widest of its cells).
+    cur: Vec<f32>,
+    gap: f32,
+}
+
+/// The rows of a [`Table`].
+pub struct Rows<'a> {
+    ui: &'a mut Ui,
+    mirror: Option<Mirror>,
+}
+
+impl Rows<'_> {
+    /// One row: add its cells in reading order with [`Cells::cell`].
+    pub fn row<R>(&mut self, add: impl FnOnce(&mut Cells) -> R) -> R {
+        match &mut self.mirror {
+            None => {
+                let out = add(&mut Cells { ui: self.ui, mirror: None, col: 0, pending: 0.0 });
+                self.ui.end_row();
+                out
+            }
+            Some(mirror) => {
+                self.ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        add(&mut Cells { ui, mirror: Some(mirror), col: 0, pending: 0.0 })
+                    })
+                    .inner
+            }
+        }
+    }
+}
+
+/// The cells of one row of a [`Table`].
+pub struct Cells<'a> {
+    ui: &'a mut Ui,
+    mirror: Option<&'a mut Mirror>,
+    col: usize,
+    /// The space still to leave before the next cell: what its column is wider than the last cell.
+    pending: f32,
+}
+
+impl Cells<'_> {
+    /// The next cell of the row (its widgets, in the order they read).
+    pub fn cell<R>(&mut self, add: impl FnOnce(&mut Ui) -> R) -> R {
+        let Some(mirror) = self.mirror.as_deref_mut() else {
+            return add(self.ui);
+        };
+        if self.pending > 0.0 {
+            self.ui.add_space(self.pending);
+        }
+        let shown = self.ui.scope(add);
+        let width = shown.response.rect.width();
+        let width = if width.is_finite() { width.max(0.0) } else { 0.0 };
+        if mirror.cur.len() <= self.col {
+            mirror.cur.resize(self.col + 1, 0.0);
+        }
+        if let Some(w) = mirror.cur.get_mut(self.col) {
+            *w = w.max(width);
+        }
+        let column = mirror.prev.get(self.col).copied().unwrap_or(0.0);
+        self.pending = (column - width).max(0.0) + mirror.gap;
+        self.col += 1;
+        shown.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::{Lang, fixture_lang, set_current};
+
+    /// Where a two-cell row puts its label and its field, as the centres of their rectangles.
+    fn row_centres() -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let mut centres = (0.0, 0.0);
+        // The second frame has the column widths the first measured.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                root(ui, |ui| {
+                    Table::new("t").columns(2).show(ui, |t| {
+                        t.row(|r| {
+                            let label = r.cell(|ui| ui.label("Label:"));
+                            let field = r.cell(|ui| ui.add(egui::TextEdit::singleline(&mut String::new()).desired_width(80.0)));
+                            centres = (label.rect.center().x, field.rect.center().x);
+                        });
+                    });
+                });
+            });
+            out.textures_delta.clear();
+        }
+        centres
+    }
+
+    /// A form reads from the reading start: the label of a row first, its field after it, so in a
+    /// right-to-left interface the label is at the right and the field to its left.
+    #[test]
+    fn a_form_row_puts_the_label_at_the_reading_start() {
+        set_current(Lang::EN);
+        let (label, field) = row_centres();
+        assert!(label < field, "left to right: label {label}, field {field}");
+        set_current(fixture_lang("ar", "\tHome\tالرئيسية\n"));
+        let (label, field) = row_centres();
+        set_current(Lang::EN);
+        assert!(label > field, "right to left: label {label}, field {field}");
+    }
+}

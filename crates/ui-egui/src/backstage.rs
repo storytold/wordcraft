@@ -703,93 +703,108 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
+    // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
+    let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
     ui.columns(2, |cols| {
-        let ui = &mut cols[0];
-        ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
-        // The fields edit a copy of the document's properties that is read afresh every frame,
-        // so each change goes into the document as it is typed (#260): waiting for the field to
-        // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
-        // The keystrokes of one visit to a field are a single undo step.
-        let mut props = app.session.doc.core.clone();
-        let mut edited = None;
-        let mut focused = None;
-        crate::rtl::grid(ui, egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)), |ui| {
-            for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
-                let label = ui.label(tl!(l));
-                let r = ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id);
-                if r.changed() {
+        crate::rtl::root(&mut cols[first], |ui| info_properties(app, ui, &info));
+        crate::rtl::root(&mut cols[second], |ui| info_statistics(ui, &info));
+    });
+}
+
+fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
+    ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
+    // The fields edit a copy of the document's properties that is read afresh every frame,
+    // so each change goes into the document as it is typed (#260): waiting for the field to
+    // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
+    // The keystrokes of one visit to a field are a single undo step.
+    let mut props = app.session.doc.core.clone();
+    let mut edited = None;
+    let mut focused = None;
+    crate::rtl::Table::new("props").columns(2).spacing(vec2(12.0, 6.0)).show(ui, |t| {
+        for (l, v) in [
+            ("Title", &mut props.title),
+            ("Subject", &mut props.subject),
+            ("Author", &mut props.creator),
+            ("Keywords", &mut props.keywords),
+            ("Category", &mut props.category),
+        ] {
+            t.row(|r| {
+                let label = r.cell(|ui| ui.label(tl!(l)));
+                let field = r.cell(|ui| ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id));
+                if field.changed() {
                     edited = Some(l);
                 }
-                if r.has_focus() {
+                if field.has_focus() {
                     focused = Some(l);
                 }
-                ui.end_row();
-            }
-        });
-        if let Some(field) = edited {
-            if app.info_editing == Some((field, app.session.rev())) {
-                app.session.join_next_undo();
-            }
-            let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
-            app.info_editing = ok.then(|| (field, app.session.rev()));
+            });
         }
-        if focused != app.info_editing.map(|(f, _)| f) {
-            app.info_editing = None;
+    });
+    if let Some(field) = edited {
+        if app.info_editing == Some((field, app.session.rev())) {
+            app.session.join_next_undo();
         }
-        // Advanced Properties › Custom (#2982): view and edit the document's custom properties.
-        ui.add_space(6.0);
-        if ui
-            .button(egui::RichText::new(tl!("Advanced Properties…")).font(medium(13.5)))
-            .on_hover_text(tl!("View and edit the document's custom properties."))
-            .clicked()
-        {
-            let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+        let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
+        app.info_editing = ok.then(|| (field, app.session.rev()));
+    }
+    if focused != app.info_editing.map(|(f, _)| f) {
+        app.info_editing = None;
+    }
+    // Advanced Properties › Custom (#2982): view and edit the document's custom properties.
+    ui.add_space(6.0);
+    if ui
+        .button(egui::RichText::new(tl!("Advanced Properties…")).font(medium(13.5)))
+        .on_hover_text(tl!("View and edit the document's custom properties."))
+        .clicked()
+    {
+        let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+    }
+    // Protect Document › Encrypt with Password (#55).
+    ui.add_space(18.0);
+    ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
+    let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+    ui.label(if encrypted {
+        tl!("A password is required to open this document.")
+    } else {
+        tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
+    });
+    ui.horizontal(|ui| {
+        let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
+        if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
+            let _ = app.run("file.encrypt", json!({}));
         }
-        // Protect Document › Encrypt with Password (#55).
-        ui.add_space(18.0);
-        ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
-        let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
-        ui.label(if encrypted {
-            tl!("A password is required to open this document.")
-        } else {
-            tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
-        });
-        ui.horizontal(|ui| {
-            let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
-            if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
-                let _ = app.run("file.encrypt", json!({}));
-            }
-            if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
-                let _ = app.run("file.encrypt", json!({"password": null}));
-            }
-        });
-        let ui = &mut cols[1];
-        ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
-        for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
-            ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
+        if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
+            let _ = app.run("file.encrypt", json!({"password": null}));
         }
-        let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
-        // A path reads left to right whatever its folders are called, so it is a label of its own
-        // beside the words around it (one right-to-left line would swap its folders), and a long
-        // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
-        let shown = crate::i18n::isolate_path(path);
-        let template = tl!("Location: {path}");
-        let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
-        // The columns start left to right, so the row's own direction is set: the words before the
-        // path come first at the right edge, the path after them.
-        let row = if crate::rtl::on() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
-        ui.scope_builder(egui::UiBuilder::new().layout(row), |ui| {
-            if !before.trim().is_empty() {
-                ui.label(before.trim_end());
-            }
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
-            let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
-            ui.label(fitted).on_hover_text(&shown);
-            if !after.trim().is_empty() {
-                ui.label(after.trim_start());
-            }
-        });
+    });
+}
+
+fn info_statistics(ui: &mut Ui, info: &serde_json::Value) {
+    ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
+    for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
+        ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
+    }
+    let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
+    // A path reads left to right whatever its folders are called, so it is a label of its own
+    // beside the words around it (one right-to-left line would swap its folders), and a long
+    // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
+    let shown = crate::i18n::isolate_path(path);
+    let template = tl!("Location: {path}");
+    let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
+    // The columns start left to right, so the row's own direction is set: the words before the
+    // path come first at the right edge, the path after them.
+    let row = if crate::rtl::on() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.scope_builder(egui::UiBuilder::new().layout(row), |ui| {
+        if !before.trim().is_empty() {
+            ui.label(before.trim_end());
+        }
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
+        let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
+        ui.label(fitted).on_hover_text(&shown);
+        if !after.trim().is_empty() {
+            ui.label(after.trim_start());
+        }
     });
 }
 
