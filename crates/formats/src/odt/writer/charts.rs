@@ -197,13 +197,9 @@ impl Writer {
                 (n, link)
             }
         };
-        let (anchor, style) = match place {
-            Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
-            _ => {
-                let (anchor, props, xy) = placement(place, c.w, c.h);
-                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)))
-            }
-        };
+        // Always placed by a style (see `image_frame`).
+        let (anchor, props, xy) = placement(place, c.w, c.h);
+        let (anchor, style) = (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)));
         out.push_str(&format!(
             "<draw:frame draw:name=\"{}Chart{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
             self.prefix,

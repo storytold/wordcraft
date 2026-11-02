@@ -314,7 +314,7 @@ impl Body<'_> {
             let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
             crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g)
         } else {
-            crate::odt::frames::place(a, w, h, &g)
+            crate::odt::frames::place(a, w, h, &g, self.text_size())
         };
         (float.flip_h, float.flip_v) = (flip_h, flip_v);
         self.shape_flip = (false, false);

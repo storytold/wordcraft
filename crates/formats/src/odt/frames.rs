@@ -382,8 +382,9 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
 }
 
 /// Where a frame or shape `w` × `h` (points) sits: anchored as its `text:anchor-type` says, at
-/// its `svg:x`/`svg:y`, or turned and moved by its `draw:transform`, in graphic style `g`.
-pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
+/// its `svg:x`/`svg:y`, or turned and moved by its `draw:transform`, in graphic style `g`, in
+/// text `size` points tall.
+pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float {
     let turned = get(a, "draw:transform").and_then(|t| transform(t, w, h));
     let (x, y) = match turned {
         Some((x, y, _)) => (Some(pt(x)), Some(pt(y))),
@@ -394,7 +395,7 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
         f.rot = rot;
     }
     if f.wrap == Wrap::Inline {
-        f.y = inline_raise(g, y.as_deref().and_then(length), h);
+        f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
     }
     f
 }
@@ -403,14 +404,28 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic) -> Float {
 /// baseline (points, negative lowered; WordCraft keeps it in an inline [`Float`]'s `y`): its
 /// `style:vertical-pos` relative to the baseline (§20.387, §20.388; LibreOffice's placement
 /// when no `style:vertical-rel` is given) — `top` stands on it, `middle` is centred on it,
-/// `bottom` hangs from it, `from-top` has its top `svg:y` below it. Placement relative to the
-/// character or line stays on the baseline.
-fn inline_raise(g: &Graphic, y: Option<f32>, h: f32) -> f32 {
-    // Measured from the baseline; a relation an in-line frame can't have (a paragraph's, from
-    // a parent style for anchored frames) is the baseline too, as LibreOffice reads it.
-    if matches!(g.vrel.as_deref(), Some("char" | "line" | "text")) || !h.is_finite() {
+/// `bottom` hangs from it, `from-top` has its top `svg:y` below it. Relative to the text
+/// (`char`, `text`, in text `size` points tall), it is placed against the text's height, from
+/// its descent to its ascent (a serif face's, as LibreOffice's templates use): `middle` centred
+/// on it (measured in LibreOffice), `top` at its top, `bottom` at its bottom. Placement relative
+/// to the line stays on the baseline.
+fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32) -> f32 {
+    if !h.is_finite() || g.vrel.as_deref() == Some("line") {
         return 0.0;
     }
+    if matches!(g.vrel.as_deref(), Some("char" | "text")) {
+        let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+        let (ascent, descent) = (TEXT_ASCENT * size, TEXT_DESCENT * size);
+        let raise = match g.vpos.as_deref() {
+            Some("middle") => (ascent - descent) / 2.0 - h / 2.0,
+            Some("top") => ascent - h,
+            Some("bottom") => -descent,
+            _ => 0.0,
+        };
+        return raise.clamp(-MAX_RAISE, MAX_RAISE);
+    }
+    // Measured from the baseline; a relation an in-line frame can't have (a paragraph's, from
+    // a parent style for anchored frames) is the baseline too, as LibreOffice reads it.
     let raise = match g.vpos.as_deref() {
         Some("middle") => -h / 2.0,
         Some("bottom") => -h,
@@ -422,6 +437,11 @@ fn inline_raise(g: &Graphic, y: Option<f32>, h: f32) -> f32 {
 
 /// Most an inline frame is raised or lowered, points (22 inches).
 const MAX_RAISE: f32 = 1584.0;
+
+/// The text's height above and below the baseline, of its size (Liberation Serif's ascent and
+/// descent), for frames placed against the text.
+const TEXT_ASCENT: f32 = 0.891;
+const TEXT_DESCENT: f32 = 0.216;
 
 /// Most operations of a `draw:transform` read.
 const MAX_TRANSFORMS: usize = 16;

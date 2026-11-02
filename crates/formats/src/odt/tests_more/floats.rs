@@ -57,6 +57,50 @@ fn wrap_modes_and_offsets() {
 }
 
 #[test]
+fn an_inline_frame_placed_against_the_text_is_raised_from_its_size() {
+    // LibreOffice's style templates: a logo centred on the text (`middle` relative to `text`)
+    // stands with its middle at the text's (measured: half the text's ascent less its descent
+    // above the baseline), in the paragraph's 12 pt text.
+    let pic = {
+        let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    };
+    let raise = |vpos: &str, rel: &str| {
+        let content = format!(
+            r#"<office:document-content {NS} {NS_D}><office:automatic-styles><style:style style:name="P" style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:style><style:style style:name="g1" style:family="graphic"><style:graphic-properties style:vertical-pos="{vpos}" style:vertical-rel="{rel}"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P"><draw:frame draw:style-name="g1" text:anchor-type="as-char" svg:width="1in" svg:height="1in"><draw:image xlink:href="Pictures/p.png"/></draw:frame>Title</text:p></office:text></office:body></office:document-content>"#,
+            NS = NS_T
+        );
+        let doc = import(&zip_of(&[("content.xml", content.as_bytes()), ("Pictures/p.png", &pic)])).unwrap();
+        let p = doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        let (off, _) = p.objects_with_offsets().next().unwrap();
+        p.props_at(off + wordcraft_doc::para::OBJ.len_utf8()).position.map_or(0.0, |v| (v * 10.0).round() / 10.0)
+    };
+    // (0.891 - 0.216) / 2 × 12 − 36.
+    assert_eq!(raise("middle", "text"), -32.0);
+    assert_eq!(raise("middle", "char"), -32.0);
+    assert_eq!(raise("top", "text"), -61.3);
+    assert_eq!(raise("bottom", "text"), -2.6);
+    // Against the line: on the baseline.
+    assert_eq!(raise("middle", "line"), 0.0);
+}
+
+#[test]
+fn an_inline_picture_is_saved_standing_on_the_baseline() {
+    // LibreOffice puts an in-line frame without placement at the line's top (measured): a
+    // picture standing on the baseline, as in Word, says so.
+    let d = float_doc_inline();
+    let out = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(out.contains(r#"style:vertical-pos="top" style:vertical-rel="baseline""#), "{out}");
+}
+
+/// A document with one picture in line with its text.
+fn float_doc_inline() -> Document {
+    open("", r#"text:anchor-type="as-char""#)
+}
+
+#[test]
 fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
     // LibreOffice's elegant agenda: a rule raised 0.2 in above the baseline (its parent style's
     // `vertical-rel="paragraph"` is no in-line frame's, so the baseline's), in a 9 pt paragraph.

@@ -394,6 +394,11 @@ impl Body<'_> {
         self.fmt.last().cloned().unwrap_or_default()
     }
 
+    /// The size of the text being read, points (its own, else the document's).
+    pub(in crate::odt) fn text_size(&self) -> f32 {
+        self.cur_fmt().size.or_else(|| self.styles.doc_size()).unwrap_or(12.0)
+    }
+
     /// Reading the body itself, not a table cell or a frame.
     fn in_body(&self) -> bool {
         self.containers.len() == 1 && self.tables.is_empty() && self.frame.is_none()
@@ -884,7 +889,7 @@ impl Body<'_> {
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new(), None, None, None));
                 let g = get(a, "draw:style-name").map(|s| self.styles.graphic(s)).unwrap_or_default();
-                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g));
+                self.frame_float = Some(super::frames::place(a, w.unwrap_or(0.0), h.unwrap_or(0.0), &g, self.text_size()));
                 self.member_start(a, w.unwrap_or(0.0), h.unwrap_or(0.0), None);
                 // Without a height, a text box in it grows to its text (`fo:min-height` below).
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);

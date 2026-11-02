@@ -290,13 +290,11 @@ impl Writer {
     fn image_frame(&mut self, img: &model::Img, place: Place<'_>, inner: &str, out: &mut String) {
         let n = self.pictures.len();
         let clip = clip_attr(img);
-        let (anchor, style) = match place {
-            Place::Text(None) if clip.is_empty() => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
-            _ => {
-                let (anchor, props, xy) = placement(place, img.w, img.h);
-                (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{}{props}{clip}", super::GRAPHICS_PARENT))))
-            }
-        };
+        // Always placed by a style: in line, standing on the baseline (LibreOffice puts a frame
+        // with no placement at the line's top).
+        let (anchor, props, xy) = placement(place, img.w, img.h);
+        let (anchor, style) =
+            (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{}{props}{clip}", super::GRAPHICS_PARENT))));
         out.push_str(&format!(
             "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
             self.prefix,
