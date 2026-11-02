@@ -215,6 +215,7 @@ fn doc_with(spec: ChartSpec, float: bool) -> wordcraft_doc::Document {
                     float: float.then(|| {
                         Box::new(wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 10.0, ..Default::default() })
                     }),
+                    source: None,
                 }),
             ],
             ..Default::default()
@@ -282,10 +283,59 @@ fn a_flat_document_holds_its_chart_inline() {
         .flat_map(|p| p.objects.clone())
         .filter_map(|o| match o {
             wordcraft_doc::para::InlineObject::Graphic { graphic, w, h, alt, .. } => {
-                graphic.chart.clone().map(|spec| crate::model::Chart { spec, w, h, alt, float: None })
+                graphic.chart.clone().map(|spec| crate::model::Chart { spec, w, h, alt, float: None, source: None })
             }
             _ => None,
         })
         .collect();
     assert_eq!(back.first().map(|c| c.spec.kind), Some(ChartType::Pie));
+}
+
+#[test]
+fn an_unchanged_chart_is_written_back_as_it_was_and_an_edited_one_anew() {
+    // A chart keeps the look WordCraft doesn't model (its fonts, lines and colours) only if its
+    // object is written back whole; once edited, it's written from WordCraft's chart.
+    let original = chart_xml(
+        "chart:bar",
+        r#"chart:vertical="false""#,
+        "",
+        r#"<chart:title><text:p>Sales</text:p></chart:title>"#,
+        &series("chart:bar"),
+    )
+    .replace(
+        "</office:automatic-styles>",
+        r#"<style:style style:name="look" style:family="chart"><style:text-properties fo:font-size="18pt"/></style:style></office:automatic-styles>"#,
+    );
+    let frame = r#"<draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="5.9055in" svg:height="2.9528in"><draw:object xlink:href="./Object 1" xlink:type="simple"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>Before {frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = crate::odt::import(&zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", original.as_bytes())])).unwrap();
+    let chart_of = |bytes: &[u8]| {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let name = (0..z.len())
+            .filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string()))
+            .find(|n| n.ends_with("/content.xml") && n.starts_with("Object"))
+            .unwrap();
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(&name).unwrap(), &mut out).unwrap();
+        out
+    };
+    assert_eq!(chart_of(&crate::odt::export(&doc).unwrap()), original);
+    // Edited: a new title.
+    let mut edited = doc.clone();
+    for b in edited.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+            for o in &mut p.objects {
+                if let wordcraft_doc::para::InlineObject::Graphic { graphic, .. } = o {
+                    let g = Arc::make_mut(graphic);
+                    let mut spec = (**g.chart.as_ref().unwrap()).clone();
+                    spec.title = Some("Revenue".into());
+                    g.chart = Some(Arc::new(spec));
+                }
+            }
+        }
+    }
+    let out = chart_of(&crate::odt::export(&edited).unwrap());
+    assert!(out.contains("Revenue") && !out.contains(r#"fo:font-size="18pt""#), "{out}");
 }

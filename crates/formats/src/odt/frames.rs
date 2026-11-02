@@ -270,9 +270,20 @@ impl Graphic {
     /// The look of a text box in a frame of this style, growing to its text when `auto_fit`.
     /// What the styles leave unsaid is ODF's default: no line, no fill, no padding.
     pub(super) fn look(&self, auto_fit: bool, defs: &Defs) -> BoxLook {
+        // A frame's line is its border (`fo:border`); without one stated, a drawn stroke
+        // (`draw:stroke`, as LibreOffice's letter logo box has), a 0 width a hairline.
+        let stroke = || {
+            matches!(self.stroke.as_deref(), Some("solid" | "dash")).then(|| {
+                let width = self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE);
+                (self.stroke_color.unwrap_or(Rgb::BLACK), width)
+            })
+        };
         BoxLook {
             fill: self.fill_with(None, defs),
-            line: self.line.flatten(),
+            line: match self.line {
+                Some(line) => line,
+                None => stroke(),
+            },
             dash: LineDash::Solid,
             arrows: (false, false),
             inset: Some(self.padding.map(|p| p.unwrap_or(0.0))),

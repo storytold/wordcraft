@@ -305,3 +305,20 @@ fn a_custom_style_only_in_a_text_box_is_kept() {
     let back = import(&export(&d).unwrap()).unwrap();
     assert_eq!(centred(&back), wordcraft_doc::props::Align::Center);
 }
+
+#[test]
+fn a_frames_drawn_stroke_is_its_line_when_it_has_no_border() {
+    // LibreOffice's letter logo box: `draw:stroke="solid"` with a 0 width (a hairline) and no
+    // `fo:border`; an explicit "none" border still has no line.
+    let open_with = |props: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles><style:style style:name="g" style:family="graphic"><style:graphic-properties {props}/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="g" svg:width="2in" svg:height="1in" text:anchor-type="paragraph"><draw:text-box><text:p>Logo</text:p></draw:text-box></draw:frame></text:p></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, None)).unwrap()
+    };
+    let line = |d: &Document| looks(d).first().map(|l| l.1).expect("a box");
+    let stroke = r##"draw:stroke="solid" svg:stroke-width="0cm" svg:stroke-color="#000000""##;
+    assert_eq!(line(&open_with(stroke)), Some((wordcraft_doc::props::Rgb::BLACK, 0.5)));
+    assert_eq!(line(&open_with(&format!(r#"{stroke} fo:border="none""#))), None);
+    assert_eq!(line(&open_with("")), None);
+}

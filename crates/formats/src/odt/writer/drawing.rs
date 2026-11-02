@@ -218,9 +218,42 @@ impl Writer {
     /// picture (the one read, else the picture shown, `img`).
     fn kept_object(&mut self, o: &model::OdfObject, img: &model::Img) -> String {
         let (_, name) = self.object_name();
+        self.object_files(o, &name);
+        let replacement = format!("ObjectReplacements/{name}");
+        match &o.replacement {
+            Some(r) => self.replacement(&replacement, r),
+            None => self.pictures.push((replacement.clone(), img.data.clone(), mime_of(&img.ext).to_string())),
+        }
+        let el = if o.ole { "draw:object-ole" } else { "draw:object" };
+        format!(
+            "<{el} xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><draw:image xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+            x(&name),
+            x(&replacement)
+        )
+    }
+
+    /// Object `o` (a chart as read) in the package under the next object name, with its
+    /// replacement picture when it had one: its number, name and the frame's content linking it.
+    pub(in crate::odt) fn kept_object_files(&mut self, o: &model::OdfObject) -> (usize, String, String) {
+        let (n, name) = self.object_name();
+        self.object_files(o, &name);
+        let mut link = format!("<draw:object xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>", x(&name));
+        if let Some(r) = &o.replacement {
+            let replacement = format!("ObjectReplacements/{name}");
+            self.replacement(&replacement, r);
+            link.push_str(&format!(
+                "<draw:image xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+                x(&replacement)
+            ));
+        }
+        (n, name, link)
+    }
+
+    /// Object `o`'s files in the package under `name`.
+    fn object_files(&mut self, o: &model::OdfObject, name: &str) {
         if o.ole {
             if let Some((_, bytes)) = o.files.first() {
-                self.pictures.push((name.clone(), bytes.clone(), o.mime.clone()));
+                self.pictures.push((name.to_string(), bytes.clone(), o.mime.clone()));
             }
         } else {
             self.object_dirs.push((format!("{name}/"), o.mime.clone()));
@@ -235,21 +268,12 @@ impl Writer {
                 self.pictures.push((format!("{name}/{path}"), bytes.clone(), mime.to_string()));
             }
         }
-        let replacement = format!("ObjectReplacements/{name}");
-        match &o.replacement {
-            Some(r) => {
-                let mime =
-                    crate::model::sniff_image(r).map(mime_of).unwrap_or("application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\"");
-                self.pictures.push((replacement.clone(), r.clone(), mime.to_string()));
-            }
-            None => self.pictures.push((replacement.clone(), img.data.clone(), mime_of(&img.ext).to_string())),
-        }
-        let el = if o.ole { "draw:object-ole" } else { "draw:object" };
-        format!(
-            "<{el} xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><draw:image xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
-            x(&name),
-            x(&replacement)
-        )
+    }
+
+    /// A replacement picture `r` read with an object, at `path`.
+    fn replacement(&mut self, path: &str, r: &std::sync::Arc<Vec<u8>>) {
+        let mime = crate::model::sniff_image(r).map(mime_of).unwrap_or("application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\"");
+        self.pictures.push((path.to_string(), r.clone(), mime.to_string()));
     }
 
     pub(in crate::odt) fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {

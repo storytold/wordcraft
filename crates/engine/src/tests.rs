@@ -6628,6 +6628,23 @@ fn inserted_chart_is_saved_and_reopened_with_its_data() {
 }
 
 #[test]
+fn redrawing_a_chart_keeps_the_chart_as_read() {
+    // A chart read from a file keeps its original (`source`) through drawing it again (when it
+    // opens or is resized): saving writes that back while the chart is unchanged.
+    use std::sync::Arc;
+    use wordcraft_doc::graphic::{Embedded, Graphic, GraphicKind};
+    use wordcraft_doc::para::InlineObject;
+    let spec = wordcraft_doc::chart::ChartSpec::sample(wordcraft_doc::chart::ChartType::Column);
+    let source = Arc::new(Embedded { xml: format!("{} mime=\"x\" ole=\"false\"/>", Embedded::ODF_OBJECT), refs: Vec::new() });
+    let graphic = Graphic { kind: GraphicKind::Chart, chart: Some(Arc::new(spec)), source: Some(source.clone()), ..Default::default() };
+    let mut o = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    crate::cmd::chart::redraw(&mut o, &[]);
+    let InlineObject::Graphic { graphic, .. } = &o else { panic!() };
+    assert!(!graphic.items.is_empty(), "drawn");
+    assert_eq!(graphic.source.as_deref(), Some(&*source));
+}
+
+#[test]
 fn chart_edits_are_one_undo_step_each() {
     use wordcraft_doc::chart::{ChartType, LegendPos};
     let mut s = s();

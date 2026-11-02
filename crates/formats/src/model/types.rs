@@ -182,6 +182,9 @@ pub struct Chart {
     pub alt: String,
     /// How a floating chart is placed and wrapped; `None`: in line with the text.
     pub float: Option<Box<wordcraft_doc::para::Float>>,
+    /// The chart object as read (ODT), written back whole while the chart is unchanged, so it
+    /// keeps the look WordCraft doesn't model (its fonts, lines and colours).
+    pub source: Option<Arc<OdfObject>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

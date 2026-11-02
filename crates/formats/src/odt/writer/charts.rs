@@ -169,11 +169,34 @@ pub(in crate::odt) fn chart_xml(spec: &ChartSpec, w: f32, h: f32, accents: &[Rgb
     )
 }
 
+/// Chart object `o` (as read) still reads as chart `spec`: the chart hasn't been edited.
+fn unchanged(o: &model::OdfObject, spec: &ChartSpec) -> bool {
+    let Some((_, content)) = o.files.iter().find(|(p, _)| p == "content.xml") else { return false };
+    let Some(mut read) = super::super::chart::read_chart(content) else { return false };
+    read.sanitize();
+    let mut spec = spec.clone();
+    spec.sanitize();
+    read == spec
+}
+
 impl Writer {
     /// A chart: its frame here, placed as its float says, and its chart object in the package.
     pub(in crate::odt) fn chart(&mut self, c: &model::Chart, place: Place<'_>, out: &mut String) {
-        let (n, name) = self.object_name();
-        self.objects.push((name.clone(), chart_xml(&c.spec, c.w, c.h, &self.accents), "application/vnd.oasis.opendocument.chart"));
+        // Unchanged since it was read: the chart object as it was, with all its look.
+        let kept = c.source.as_deref().filter(|o| unchanged(o, &c.spec));
+        let (n, inner) = match kept {
+            Some(o) => {
+                let (n, _, link) = self.kept_object_files(o);
+                (n, link)
+            }
+            None => {
+                let (n, name) = self.object_name();
+                self.objects.push((name.clone(), chart_xml(&c.spec, c.w, c.h, &self.accents), "application/vnd.oasis.opendocument.chart"));
+                let link =
+                    format!("<draw:object xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>", x(&name));
+                (n, link)
+            }
+        };
         let (anchor, style) = match place {
             Place::Text(None) => (" text:anchor-type=\"as-char\"".to_string(), String::new()),
             _ => {
@@ -182,11 +205,10 @@ impl Writer {
             }
         };
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Chart{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\"><draw:object xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
+            "<draw:frame draw:name=\"{}Chart{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
             self.prefix,
             pt(c.w),
             pt(c.h),
-            x(&name)
         ));
         if !c.alt.is_empty() {
             out.push_str(&format!("<svg:desc>{}</svg:desc>", x(&c.alt)));

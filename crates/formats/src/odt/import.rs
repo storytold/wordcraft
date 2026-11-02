@@ -476,6 +476,9 @@ const EMPTY_CONTENT: &str = r#"<office:document-content xmlns:office="urn:oasis:
 /// The margin a page layout leaves unsaid (LibreOffice's page margins: 2 cm).
 const DEFAULT_MARGIN: f32 = 2.0 * 72.0 / 2.54;
 
+/// The height of a header or footer whose style doesn't state one: LibreOffice's 0.5 cm.
+const DEFAULT_BAND: f32 = 0.5 * 72.0 / 2.54;
+
 /// The page size of a page layout that states none: WordCraft's default page's.
 fn default_paper() -> (f32, f32) {
     let d = SectionProps::default();
@@ -765,13 +768,21 @@ fn line_numbering(a: &Attrs) -> Option<wordcraft_doc::section::LineNumbering> {
 
 /// A page layout's header or footer area (`style:header-style`/`style:footer-style`, ODF 1.3
 /// §16.6–16.7): its minimum height and its spacing from the text, in points.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Band {
     height: f32,
     spacing: f32,
     /// Content taller than the band takes its spacing first (§20.230 `style:dynamic-spacing`,
     /// as Word does), instead of keeping it below.
     dynamic: bool,
+}
+
+impl Default for Band {
+    /// A band whose style states nothing (or that has no style): LibreOffice's 0.5 cm, no
+    /// spacing.
+    fn default() -> Self {
+        Band { height: DEFAULT_BAND, spacing: 0.0, dynamic: false }
+    }
 }
 
 /// A page layout read from `styles.xml`: its properties, columns, and header and footer areas.
@@ -829,13 +840,15 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                     l.image = Some((href.trim_start_matches("./").to_string(), fill));
                 }
             }
+            // A band whose height isn't stated is LibreOffice's default, 0.5 cm (measured; see
+            // `Band::default`).
             "header-style" => in_footer = false,
             "footer-style" => in_footer = true,
             "header-footer-properties" => {
                 if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
                     let len = |k: &str| get(&a, k).and_then(length).filter(|v| *v >= 0.0).map(|v| v.min(1584.0));
                     let band = if in_footer { &mut l.footer } else { &mut l.header };
-                    band.height = len("fo:min-height").or_else(|| len("svg:height")).unwrap_or(0.0);
+                    band.height = len("fo:min-height").or_else(|| len("svg:height")).unwrap_or(DEFAULT_BAND);
                     band.spacing = len(if in_footer { "fo:margin-top" } else { "fo:margin-bottom" }).unwrap_or(0.0);
                     band.dynamic = get(&a, "style:dynamic-spacing").is_some_and(|v| v.trim() == "true");
                 }

@@ -162,6 +162,26 @@ fn a_headers_spacing_stays_below_content_taller_than_it() {
 }
 
 #[test]
+fn a_header_without_a_stated_height_is_half_a_centimetre() {
+    // LibreOffice's letter templates: a header style stating no height, or none at all, is
+    // LibreOffice's default 0.5 cm band (measured), not nothing.
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    for band in ["<style:header-style/>", "", r#"<style:header-style><style:header-footer-properties fo:margin-bottom="0cm"/></style:header-style>"#]
+    {
+        let styles = format!(
+            r#"<office:document-styles {}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/>{band}</style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>H</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#,
+            crate::odt::tests::NS_T
+        );
+        let s = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap().last_section;
+        assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{band}: {} {}", s.header, s.margin_top);
+    }
+}
+
+#[test]
 fn header_and_footer_distances_round_trip() {
     let mut d = Document::new();
     d.body = vec![text_para("Body", Default::default())];

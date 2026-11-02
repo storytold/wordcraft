@@ -363,11 +363,13 @@ impl<'a> Builder<'a> {
                 let (w, h) = (finite_or(c.w, 360.0).clamp(1.0, 1584.0), finite_or(c.h, 216.0).clamp(1.0, 1584.0));
                 let mut spec = (*c.spec).clone();
                 spec.sanitize();
+                let source = c.source.as_deref().and_then(|o| super::odf_object::store(self.doc, o));
                 let graphic = wordcraft_doc::graphic::Graphic {
                     kind: wordcraft_doc::graphic::GraphicKind::Chart,
                     w,
                     h,
                     chart: Some(Arc::new(spec)),
+                    source,
                     ..Default::default()
                 };
                 Some(InlineObject::Graphic {

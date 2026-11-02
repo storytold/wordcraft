@@ -526,6 +526,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                             h: *h,
                             alt: alt.clone(),
                             float: kept_float(float).filter(|_| opts.paras),
+                            source: graphic.source.as_deref().and_then(|e| super::odf_object::load(doc, e)),
                         }));
                     } else if !alt.trim().is_empty() {
                         out.inlines.push(Inline::Figure(alt.clone()));

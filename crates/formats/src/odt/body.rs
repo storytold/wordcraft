@@ -1014,7 +1014,8 @@ impl Body<'_> {
                     }
                 }
             }
-            if fr.4.is_none() && fr.5.is_none() {
+            // A chart is kept whole too, to be written back as it was while it is unchanged.
+            if fr.4.is_none() {
                 fr.6 = super::objects::gather(href, ole, self.entries, self.manifest, &mut *self.zip);
                 // A replacement picture read before the object.
                 if let Some(o) = &mut fr.6 {

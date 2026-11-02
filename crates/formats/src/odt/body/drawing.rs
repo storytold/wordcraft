@@ -123,6 +123,7 @@ impl Body<'_> {
                     h: h.unwrap_or(216.0),
                     alt: alt.trim().to_string(),
                     float: float.map(Box::new),
+                    source: object.map(std::sync::Arc::new),
                 })),
                 // An object kept whole: shown by its replacement picture when WordCraft can show
                 // it, else by a placeholder.
