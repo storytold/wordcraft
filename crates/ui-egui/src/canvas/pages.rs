@@ -41,19 +41,19 @@ fn page_content_key(page: &Page) -> u64 {
                     format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h);
                     source.hash(&mut h);
                 }
-                Placed::Image { rect, media, spin, story, path, .. } => {
+                Placed::Image { rect, media, spin, story, path, off, .. } => {
                     format!("{rect:?}{media}{spin:?}").hash(&mut h);
-                    (story, path).hash(&mut h);
+                    (story, path, off).hash(&mut h);
                 }
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, object, .. } => {
                     format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
                     freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
-                    object.as_ref().map(|pos| (pos.story, &pos.path)).hash(&mut h);
+                    object.as_ref().map(|pos| (pos.story, &pos.path, pos.off)).hash(&mut h);
                 }
-                Placed::Graphic { rect, graphic, spin, story, path, .. } => {
+                Placed::Graphic { rect, graphic, spin, story, path, off, .. } => {
                     (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
                     format!("{spin:?}").hash(&mut h);
-                    (story, path).hash(&mut h);
+                    (story, path, off).hash(&mut h);
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
                 Placed::Cell { rect, clip, story, table, row, cell, .. } => {
@@ -493,5 +493,123 @@ mod tests {
             assert_ne!(key, page_content_key(&changed), "object scope alone changes drawing clips");
         }
         assert_eq!(key, page_content_key(&original.clone()));
+    }
+
+    #[test]
+    fn drawing_offset_changes_paint() {
+        use wordcraft_doc::fill::Fill;
+        use wordcraft_doc::graphic::{Graphic, GraphicItem};
+        use wordcraft_doc::para::{ShapeKind, Wrap};
+        use wordcraft_doc::{Document, Path, Pos, Rgb};
+        use wordcraft_geom::{Point, Rect};
+        use wordcraft_layout::display::{DisplayOptions, Draw, ItemDisplay, page_display};
+
+        fn ink(draws: &[Draw]) -> Vec<(Rect, Option<Rect>)> {
+            let mut out = Vec::new();
+            for draw in draws {
+                match draw {
+                    Draw::Clip { rect, items } => {
+                        for (bounds, inner) in ink(items) {
+                            assert!(inner.is_none(), "the fixture has one cell clip");
+                            out.push((bounds, Some(*rect)));
+                        }
+                    }
+                    Draw::Figure { draws, .. } => out.extend(ink(draws)),
+                    Draw::Image { rect, .. } | Draw::Shape { rect, fill: Some(_), .. } => out.push((*rect, None)),
+                    _ => panic!("unexpected fixture draw: {draw:?}"),
+                }
+            }
+            out
+        }
+
+        let at = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+        let rect = Rect::new(200.0, 200.0, 100.0, 100.0);
+        let cell = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let drawings = [
+            Placed::Image {
+                rect,
+                media: "image".into(),
+                crop: [0.0; 4],
+                story: at.story,
+                path: at.path.clone(),
+                off: at.off,
+                spin: Default::default(),
+            },
+            Placed::Graphic {
+                rect,
+                graphic: std::sync::Arc::new(Graphic {
+                    w: rect.w,
+                    h: rect.h,
+                    items: vec![GraphicItem::Shape {
+                        rect: [0.0, 0.0, rect.w, rect.h],
+                        kind: ShapeKind::Rectangle,
+                        fill: Some(Rgb::BLACK),
+                        stroke: None,
+                        stroke_width: 0.0,
+                    }],
+                    ..Default::default()
+                }),
+                story: at.story,
+                path: at.path.clone(),
+                off: at.off,
+                spin: Default::default(),
+            },
+            Placed::Shape {
+                rect,
+                kind: ShapeKind::Rectangle,
+                fill: Some(Fill::solid(Rgb::BLACK)),
+                stroke: None,
+                stroke_width: 0.0,
+                freeform: None,
+                effects: Default::default(),
+                spin: Default::default(),
+                extra: Default::default(),
+                object: Some(at.clone()),
+                alt: String::new(),
+            },
+        ];
+        let doc = Document::new();
+        let opts = DisplayOptions::default();
+        for drawing in drawings {
+            // Both owners already exist. Their indices, source and geometry stay fixed.
+            let object = |off| Placed::Object {
+                rect,
+                spin: Default::default(),
+                story: at.story,
+                path: at.path.clone(),
+                off,
+                text_box: None,
+                wrap: Wrap::BehindText,
+                origin: Point::default(),
+            };
+            let original = Page {
+                items: vec![
+                    drawing,
+                    object(0),
+                    Placed::Cell { rect: cell, clip: true, covered: false, story: at.story, table: Path::top(0), row: 0, cell: 0 },
+                    object(3),
+                ],
+                ..Default::default()
+            };
+            let mut changed = original.clone();
+            match &mut changed.items[0] {
+                Placed::Image { off, .. } | Placed::Graphic { off, .. } => *off = 3,
+                Placed::Shape { object: Some(pos), .. } => pos.off = 3,
+                _ => panic!("drawing fixture"),
+            }
+            assert_eq!(format!("{:?}", &original.items[1..]), format!("{:?}", &changed.items[1..]), "owners and cell stay fixed");
+            for (before, after) in [
+                (page_display(&doc, &original, &opts), page_display(&doc, &changed, &opts)),
+                (
+                    ItemDisplay::new(&doc, &original).draws(&original.items[0], &opts),
+                    ItemDisplay::new(&doc, &changed).draws(&changed.items[0], &opts),
+                ),
+            ] {
+                assert_eq!(ink(&before), vec![(rect, Some(cell))], "offset0 selects the contained Object record");
+                assert_eq!(ink(&after), vec![(rect, None)], "offset3 selects the page-scoped Object record");
+            }
+            assert_ne!(page_content_key(&original), page_content_key(&changed), "drawing offset changes actual clipping and must invalidate paint");
+            assert_eq!(page_content_key(&original), page_content_key(&original.clone()), "unchanged binding keeps its key");
+        }
     }
 }
