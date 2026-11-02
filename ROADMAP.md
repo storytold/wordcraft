@@ -1,7 +1,6 @@
 # WordCraft roadmap
 
 > **Graphic work update:** 2026-10-28 · DOCX chart/SmartArt size variants spend the per-file work budget on input as well as output (#3728), retaining cached sizes and source parts. Readiness estimates unchanged.
-
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
