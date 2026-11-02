@@ -205,7 +205,12 @@ pub fn split(
     if !on {
         return;
     }
-    egui::Popup::menu(&aresp).show(|ui| {
+    // Anchor the dropdown to the complete split button, not only its arrow segment. This keeps
+    // every menu's top-left corner aligned with the parent's bottom-left corner.
+    let mut menu_anchor = aresp.clone();
+    menu_anchor.rect = r.union(ar);
+    menu_anchor.interact_rect = menu_anchor.rect.intersect(ui.clip_rect());
+    egui::Popup::menu(&menu_anchor).show(|ui| {
         ui.set_min_width(180.0);
         menu(ui, app);
     });

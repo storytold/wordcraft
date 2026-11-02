@@ -24,6 +24,14 @@ fn font_menu_entries_leave_installed_families_unloaded() {
     assert!(loaded.len() <= 2, "previewing loaded {loaded:?}");
 }
 
+#[test]
+fn long_font_names_are_scaled_to_keep_their_suffix() {
+    let db = wordcraft_fonts::FontDb::global();
+    let face = db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular");
+    let size = super::font_preview_size(&face, "A very long font family name with an identifying suffix");
+    assert!((8.0..14.0).contains(&size), "long names remain readable while being scaled: {size}");
+}
+
 /// A window whose Styles gallery lists `style` first: runs the gallery for a few frames and
 /// returns the painted shapes of the last one and every texture picture uploaded on the way.
 fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
