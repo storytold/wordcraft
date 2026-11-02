@@ -48,6 +48,76 @@ fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
 }
 
+/// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
+/// including where a table expects rows or cells (ECMA-376 Part 3).
+#[test]
+fn table_alternate_content_keeps_selected_rows_and_cells() {
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let row = |text: &str| format!("<w:tr>{}</w:tr>", cell(text));
+    let table =
+        |rows: &str, columns: usize| format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid>{rows}</w:tbl>"#, r#"<w:gridCol w:w="2400"/>"#.repeat(columns));
+    let alternate = |chosen: &str, fallback: &str, requires: &str| {
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="{requires}">{chosen}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    };
+    for (requires, use_choice) in [("wps", true), ("alias", true), ("unknown", false), ("wps unknown", false)] {
+        for cells in [false, true] {
+            let choice = if cells { cell("Chosen cell") } else { row("Chosen row") };
+            let fallback = if cells { cell("Fallback cell") } else { row("Fallback row") };
+            let selected = if use_choice { &choice } else { &fallback };
+            let middle = alternate(&choice, &fallback, requires);
+            let (actual, expected) = if cells {
+                (
+                    format!("<w:tr>{}{middle}{}</w:tr>", cell("Before"), cell("After")),
+                    format!("<w:tr>{}{selected}{}</w:tr>", cell("Before"), cell("After")),
+                )
+            } else {
+                (format!("{}{middle}{}", row("Before"), row("After")), format!("{}{selected}{}", row("Before"), row("After")))
+            };
+            let columns = if cells { 3 } else { 1 };
+            let expected = read_body(&table(&expected, columns));
+            let wrapped = format!(
+                r#"<w:customXml xmlns:alias="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:unknown="urn:original:unsupported">{}</w:customXml>"#,
+                table(&actual, columns)
+            );
+            let mut actual = read_body(&wrapped);
+            for round in 0..=2 {
+                assert_eq!(actual.body, expected.body, "requires={requires}, cells={cells}, round={round}");
+                if round < 2 {
+                    actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_alternate_content_keeps_nested_row_and_cell_controls() {
+    let wrap =
+        |tag: &str, content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+    let alternate =
+        |content: &str| format!(r#"<mc:AlternateContent><mc:Choice Requires="wps">{content}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#);
+    let cell = "<w:tc><w:p><w:r><w:t>Controlled cell</w:t></w:r></w:p></w:tc>";
+    let oracle_cell = wrap("cell", cell);
+    let actual_cell = alternate(&wrap("cell", &alternate(cell)));
+    let oracle_row = wrap("row", &format!("<w:tr>{oracle_cell}</w:tr>"));
+    let actual_row = wrap("row", &alternate(&format!("<w:tr>{actual_cell}</w:tr>")));
+    let expected = read_body(&format!("<w:tbl>{oracle_row}</w:tbl>"));
+    let mut actual = read_body(&format!("<w:tbl>{}</w:tbl>", alternate(&actual_row)));
+    for round in 0..=2 {
+        assert_eq!(actual.body, expected.body, "round={round}");
+        let table = actual.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].controls.open[0].tag, "row");
+        assert_eq!(table.rows[0].controls.close, 1);
+        assert_eq!(table.rows[0].cells[0].controls.open[0].tag, "cell");
+        assert_eq!(table.rows[0].cells[0].controls.close, 1);
+        if round < 2 {
+            actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn repeated_style_ids_use_last() {
     let styles = format!(
@@ -117,22 +187,17 @@ fn paragraph_default_presence_survives_repeated_saves() {
 #[test]
 fn zero_frame_keeps_normal_flow() {
     const ROUND_TRIPS: usize = 2;
-    const FRAME_STYLE: &str = "FrameInput";
     let zero = r#"<w:framePr w:w="0" w:h="0" w:xAlign="left" w:y="0" w:hRule="exact" w:vAnchor="margin"/>"#;
     let sized = r#"<w:framePr w:w="2400" w:h="1200" w:x="1440" w:y="2880" w:hAnchor="page" w:vAnchor="page" w:hRule="exact"/>"#;
-    for (frame, active) in [(zero, false), (sized, true)] {
+    for frame in [zero, sized] {
         let styles = format!(
             r#"<w:styles {W_NS}><w:docDefaults><w:pPrDefault><w:pPr>{frame}<w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
-            <w:style w:type="paragraph" w:styleId="{FRAME_STYLE}"><w:name w:val="{FRAME_STYLE}"/><w:pPr>{frame}</w:pPr></w:style>
             <w:style w:type="paragraph" w:styleId="Framed"><w:name w:val="Framed"/><w:pPr>{sized}</w:pPr></w:style></w:styles>"#
         );
-        let header = format!(
-            r#"<w:hdr {W_NS}><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Header alpha</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Header beta</w:t></w:r></w:p></w:hdr>"#
-        );
-        let footer =
-            format!(r#"<w:ftr {W_NS}><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Footer delta</w:t></w:r></w:p></w:ftr>"#);
+        let header = format!(r#"<w:hdr {W_NS}><w:p><w:r><w:t>Header alpha</w:t></w:r></w:p><w:p><w:r><w:t>Header beta</w:t></w:r></w:p></w:hdr>"#);
+        let footer = format!(r#"<w:ftr {W_NS}><w:p><w:r><w:t>Footer delta</w:t></w:r></w:p></w:ftr>"#);
         let body = format!(
-            r#"<w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Body one</w:t></w:r></w:p>
+            r#"<w:p><w:r><w:t>Body one</w:t></w:r></w:p>
             <w:p><w:pPr>{sized}</w:pPr><w:r><w:t>Direct frame</w:t></w:r></w:p>
             <w:p><w:pPr><w:pStyle w:val="Framed"/></w:pPr><w:r><w:t>Styled frame</w:t></w:r></w:p>
             <w:p><w:pPr><w:pStyle w:val="Framed"/>{zero}</w:pPr><w:r><w:t>Frame reset</w:t></w:r></w:p>
@@ -147,11 +212,10 @@ fn zero_frame_keeps_normal_flow() {
         for pass in 0..=ROUND_TRIPS {
             let body = paras(&document);
             let resolved = document.styles.resolve_para(&body[0].props);
-            assert_eq!(resolved.frame.is_some(), active);
-            // Main ignores document-default frames; a named style retains explicit dimensions.
+            assert!(resolved.frame.is_none(), "document defaults never create a frame");
             assert!(document.styles.default_para.frame.is_none());
-            let stored = document.styles.get(FRAME_STYLE).unwrap().para.frame.as_ref().unwrap();
-            assert_eq!((stored.w, stored.h), if active { (Some(120.0), Some(60.0)) } else { (Some(0.0), Some(0.0)) });
+            let reset = body[3].props.frame.as_ref().unwrap();
+            assert_eq!((reset.w, reset.h), (Some(0.0), Some(0.0)), "the direct reset survives saving");
             assert_eq!(resolved.space_after, 8.0);
             assert!(document.styles.resolve_para(&body[1].props).frame.is_some());
             assert!(document.styles.resolve_para(&body[2].props).frame.is_some());
@@ -159,12 +223,13 @@ fn zero_frame_keeps_normal_flow() {
             for id in [document.last_section.headers.default, document.last_section.footers.default] {
                 for block in &document.parts.get(&id.unwrap()).unwrap().blocks {
                     let paragraph = block.as_para().unwrap();
-                    assert_eq!(document.styles.resolve_para(&paragraph.props).frame.is_some(), active);
+                    assert!(document.styles.resolve_para(&paragraph.props).frame.is_none(), "defaults do not frame headers or footers");
                 }
             }
-            if pass < ROUND_TRIPS {
-                document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+            if pass == ROUND_TRIPS {
+                break;
             }
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
         }
     }
 }
@@ -562,6 +627,12 @@ fn styles_numbering_settings_notes_comments_from_parts() {
         ("docProps/core.xml", core.as_bytes()),
     ]);
     let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_imported_styles(&d);
+    assert_imported_numbering_and_settings(&d);
+    assert_imported_body_and_metadata(&d);
+}
+
+fn assert_imported_styles(d: &Document) {
     // Styles: localized default id renamed to Normal; display names mapped.
     let h = d.styles.get("1").unwrap();
     assert_eq!(h.name, "Heading 1");
@@ -578,6 +649,9 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(g.header_chr.bold, Some(true));
     assert_eq!(d.settings.theme_colors[4], wordcraft_doc::Rgb(0x44, 0x72, 0xC4));
     assert_eq!(d.settings.major_font, "Major Face");
+}
+
+fn assert_imported_numbering_and_settings(d: &Document) {
     // Numbering.
     let lv = d.numbering.level(2, 0).unwrap();
     assert_eq!((lv.start, lv.text.as_str(), lv.indent, lv.hanging, lv.align), (3, "%1)", 36.0, 18.0, Align::Right));
@@ -592,8 +666,11 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     // A hostile start is clamped, an unknown position left out.
     let fp = d.settings.footnote_pr;
     assert_eq!((fp.pos, fp.num_start, fp.num_restart), (None, Some(1), Some(wordcraft_doc::section::NoteRestart::EachPage)));
+}
+
+fn assert_imported_body_and_metadata(d: &Document) {
     // Body.
-    let p = paras(&d);
+    let p = paras(d);
     assert_eq!(p[0].props.style.as_deref(), Some("1"));
     assert_eq!(p[0].props.numbering, Some(wordcraft_doc::props::NumRef { num: 2, level: 1 }));
     assert_eq!(p[0].props_of_char(4).font.as_deref(), Some("Major Face"));
@@ -2468,6 +2545,52 @@ fn vml_lines_and_rectangles() {
     ));
 }
 
+/// An arrowhead's kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML
+/// `startarrow`/`startarrowwidth`/`startarrowlength`) are read and saved: they set the size Word
+/// draws it at. An end without `w`/`len` is medium.
+#[test]
+fn arrowheads_keep_their_kind_and_size() {
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+    let style = |kind, width, length| ArrowStyle { kind, width, length };
+    let body = [
+        anchored_wsp(
+            "Line",
+            1270000,
+            0,
+            r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="stealth" w="sm" len="lg"/><a:tailEnd type="diamond" w="lg" len="sm"/></a:ln>"#,
+            "",
+            "<wps:cNvCnPr/>",
+        ),
+        anchored_wsp("Plain", 1270000, 0, r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#, "", "<wps:cNvCnPr/>"),
+        r#"<w:r><w:pict><v:line style="position:absolute" from="10pt,20pt" to="40pt,20pt"><v:stroke startarrow="classic" startarrowwidth="narrow" startarrowlength="long" endarrow="oval" endarrowwidth="wide" endarrowlength="short"/></v:line></w:pict></w:r>"#.to_string(),
+    ]
+    .concat();
+    let ends = |d: &Document| -> Vec<(bool, ArrowStyle, bool, ArrowStyle)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { extra, .. } => (extra.arrow_start, extra.start_style, extra.arrow_end, extra.end_style),
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let expected = vec![
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Diamond, ArrowSize::Large, ArrowSize::Small)),
+        (false, ArrowStyle::default(), true, ArrowStyle::default()),
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Oval, ArrowSize::Large, ArrowSize::Small)),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(ends(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
+    assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
@@ -4164,4 +4287,59 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+#[test]
+fn named_frames_keep_flow() {
+    const ROUND_TRIPS: usize = 2;
+    const FRAME_STYLE: &str = "FrameInput";
+    let zero = r#"<w:framePr w:w="0" w:h="0" w:xAlign="left" w:y="0" w:hRule="exact" w:vAnchor="margin"/>"#;
+    let sized = r#"<w:framePr w:w="2400" w:h="1200" w:x="1440" w:y="2880" w:hAnchor="page" w:vAnchor="page" w:hRule="exact"/>"#;
+    for (frame, active) in [(zero, false), (sized, true)] {
+        let styles = format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:pPrDefault><w:pPr>{frame}<w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
+            <w:style w:type="paragraph" w:styleId="{FRAME_STYLE}"><w:name w:val="{FRAME_STYLE}"/><w:pPr>{frame}</w:pPr></w:style>
+            <w:style w:type="paragraph" w:styleId="Framed"><w:name w:val="Framed"/><w:pPr>{sized}</w:pPr></w:style></w:styles>"#
+        );
+        let header = format!(
+            r#"<w:hdr {W_NS}><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Header alpha</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Header beta</w:t></w:r></w:p></w:hdr>"#
+        );
+        let footer =
+            format!(r#"<w:ftr {W_NS}><w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Footer delta</w:t></w:r></w:p></w:ftr>"#);
+        let body = format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{FRAME_STYLE}"/></w:pPr><w:r><w:t>Body one</w:t></w:r></w:p>
+            <w:p><w:pPr>{sized}</w:pPr><w:r><w:t>Direct frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/></w:pPr><w:r><w:t>Styled frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/>{zero}</w:pPr><w:r><w:t>Frame reset</w:t></w:r></w:p>
+            <w:sectPr><w:headerReference w:type="default" r:id="header"/><w:footerReference w:type="default" r:id="footer"/></w:sectPr>"#
+        );
+        let mut document = wordcraft_docx::read(&docx(
+            &body,
+            &[("styles", "styles", "styles.xml"), ("header", "header", "header1.xml"), ("footer", "footer", "footer1.xml")],
+            &[("word/styles.xml", &styles), ("word/header1.xml", &header), ("word/footer1.xml", &footer)],
+        ))
+        .unwrap();
+        for pass in 0..=ROUND_TRIPS {
+            let body = paras(&document);
+            let resolved = document.styles.resolve_para(&body[0].props);
+            assert_eq!(resolved.frame.is_some(), active);
+            // Main ignores document-default frames; a named style retains explicit dimensions.
+            assert!(document.styles.default_para.frame.is_none());
+            let stored = document.styles.get(FRAME_STYLE).unwrap().para.frame.as_ref().unwrap();
+            assert_eq!((stored.w, stored.h), if active { (Some(120.0), Some(60.0)) } else { (Some(0.0), Some(0.0)) });
+            assert_eq!(resolved.space_after, 8.0);
+            assert!(document.styles.resolve_para(&body[1].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[2].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[3].props).frame.is_none());
+            for id in [document.last_section.headers.default, document.last_section.footers.default] {
+                for block in &document.parts.get(&id.unwrap()).unwrap().blocks {
+                    let paragraph = block.as_para().unwrap();
+                    assert_eq!(document.styles.resolve_para(&paragraph.props).frame.is_some(), active);
+                }
+            }
+            if pass < ROUND_TRIPS {
+                document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+            }
+        }
+    }
 }
