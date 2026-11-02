@@ -117,6 +117,7 @@ impl Session {
             bib_style: _,
             merge: _,
             ui_requests: _,
+            bangla_mode: _,
             document_id: _,
             // The untitled name and when the document was made: not edits.
             untitled: _,

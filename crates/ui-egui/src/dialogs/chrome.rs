@@ -132,6 +132,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Organizer { .. } => "Organizer",
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
+        Dialog::BanglaConverter { .. } => "Bangla Converter",
     };
     let id = egui::Id::unique(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));

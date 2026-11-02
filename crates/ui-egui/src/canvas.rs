@@ -711,7 +711,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    if (app.canvas.focused || app.canvas.want_focus) && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         app.canvas.alt_code.clear();
@@ -1309,6 +1309,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 /// Lays out and paints the document pages for print, Read and Web views, settles viewports, draw
 /// rulers and overlays, anchors zoom and scrolling, and routes pointer, selection, IME and caret
 /// input.
+#[allow(clippy::cognitive_complexity)]
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
@@ -1586,6 +1587,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
             if focused {
                 ime_geometry = Some((cr, cr));
+            }
+            // Floating Bangla Phonetic candidate bar (Avro-style)
+            if app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
+                && !app.ui.phonetic_buffer.is_empty()
+                && !app.ui.phonetic_candidates.is_empty()
+            {
+                let pop_y = y1 + 6.0;
+                let mut label = format!("বাং [{}] ", app.ui.phonetic_buffer);
+                for (i, cand) in app.ui.phonetic_candidates.iter().enumerate() {
+                    label.push_str(&format!(" {}.{} ", i + 1, cand));
+                }
+                let font_size = 11.5;
+                let galley = painter.layout(label, semibold(font_size), t.text, 600.0);
+                let pad_x = 8.0;
+                let pad_y = 4.0;
+                let box_w = galley.size().x + pad_x * 2.0;
+                let box_h = galley.size().y + pad_y * 2.0;
+                let cand_rect = Rect::from_min_size(pos2(x - 4.0, pop_y), vec2(box_w, box_h));
+
+                painter.rect_filled(cand_rect.translate(vec2(0.0, 1.5)), 4.0, t.page_shadow);
+                painter.rect_filled(
+                    cand_rect,
+                    4.0,
+                    if app.ui_is_dark() { egui::Color32::from_rgb(0x28, 0x2A, 0x36) } else { egui::Color32::from_rgb(0xF8, 0xFA, 0xFC) },
+                );
+                painter.rect_stroke(cand_rect, 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                painter.galley(pos2(cand_rect.min.x + pad_x, cand_rect.min.y + pad_y), galley, t.text);
             }
         }
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);

@@ -145,6 +145,7 @@ impl Session {
             bib_style,
             merge,
             ui_requests: Vec::new(),
+            bangla_mode: crate::cmd::bangla::BanglaMode::Off,
             math,
             math_latex: false,
             math_normal_text: false,
