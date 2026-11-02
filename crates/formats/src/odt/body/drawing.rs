@@ -102,6 +102,12 @@ impl Body<'_> {
             // Kept when it floats, or turns or mirrors the object in line.
             let float =
                 float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline || crate::odt::frames::turned(f) || f.flip_h || f.flip_v || f.y != 0.0);
+            if let Some(blocks) = &boxed
+                && self.take_watermark(blocks)
+            {
+                self.frame = None;
+                return;
+            }
             let inline = match (boxed, eq) {
                 (Some(blocks), _) => {
                     let mut look = std::mem::take(&mut self.frame_look);
@@ -165,6 +171,39 @@ impl Body<'_> {
             }
         }
         self.frame = None;
+    }
+
+    /// The shape ending is a watermark (see [`Self::start_shape`]) holding `blocks`: the
+    /// document's watermark, from its text, font, colour, size and turn, and not a shape.
+    fn take_watermark(&mut self, blocks: &[FBlock]) -> bool {
+        let Some(((w, h), rot, color, see_through, true)) = self.watermark_shape.take() else { return false };
+        let mut text = String::new();
+        let mut font = None;
+        for b in blocks {
+            if let FBlock::Para(p) = b {
+                for i in &p.inlines {
+                    if let Inline::Text(t, f) = i {
+                        text.push_str(t);
+                        font = font.or_else(|| f.font.as_deref().map(str::to_string));
+                    }
+                }
+            }
+        }
+        let text: String = text.trim().chars().take(200).collect();
+        if text.is_empty() {
+            return false;
+        }
+        let turned = rot.rem_euclid(360.0);
+        let base = wordcraft_doc::Watermark::default();
+        self.watermark = Some(wordcraft_doc::Watermark {
+            text,
+            font: font.unwrap_or(base.font),
+            color: color.unwrap_or(base.color),
+            diagonal: turned > 1.0 && turned < 359.0,
+            semitransparent: see_through,
+            size: Some([w, h]).filter(|[w, h]| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0),
+        });
+        true
     }
 
     /// A shape's drawing id (its `xml:id` or `draw:id`) and, for a connector, its glued ends (§19.228
@@ -335,6 +374,11 @@ impl Body<'_> {
         }
         self.frame_look = g.shape_look(kind, &self.styles.defs);
         self.frame_look.conn = self.conn_of(a).map(Box::new);
+        // Word's and LibreOffice's watermark: a shape of this name whose geometry follows its text.
+        self.watermark_shape = get(a, "draw:name").filter(|n| n.starts_with(crate::odt::writer::WATERMARK_NAME)).map(|_| {
+            let (color, see_through) = g.watermark_look();
+            ((w, h), float.rot, color, see_through, false)
+        });
         self.shape_path = crate::odt::shapes::freeform(local(q), a, w, h).map(std::sync::Arc::new);
         self.shape_kind = Some(kind);
         let frame = (Some((Some(w), Some(h), None, String::new(), None, None, None)), Some(float), std::mem::take(&mut self.frame_look));

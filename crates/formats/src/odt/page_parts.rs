@@ -54,6 +54,8 @@ impl Slot {
 pub(super) struct Parts {
     parts: Vec<(PartKind, Vec<FBlock>)>,
     even_odd: bool,
+    /// The watermark a header holds (the first found).
+    pub(super) watermark: Option<wordcraft_doc::Watermark>,
 }
 
 impl Parts {
@@ -127,6 +129,7 @@ pub(super) fn read(
         for ev in evs {
             reader.feed(ev);
         }
+        out.watermark = out.watermark.take().or(reader.watermark.take());
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);
@@ -164,6 +167,9 @@ pub(super) fn read(
 /// `doc`'s notes, comments and text boxes already hold ids, so each part takes a free one and
 /// the sections are pointed at it.
 pub(super) fn add(doc: &mut Document, parts: Parts) {
+    if parts.watermark.is_some() {
+        doc.settings.watermark.clone_from(&parts.watermark);
+    }
     let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
     for (kind, blocks) in parts.parts {
         let blocks = model::part_blocks(doc, &blocks);

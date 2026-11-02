@@ -249,3 +249,50 @@ fn a_first_page_master_followed_by_another_is_a_different_first_page() {
     let first = s.split("<style:header-first>").nth(1).and_then(|r| r.split("</style:header-first>").next()).unwrap_or("missing");
     assert!(first.trim().starts_with("<text:p") && !first.contains("Running head") && s.contains("Running head"), "{s}");
 }
+
+#[test]
+fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
+    // Written as LibreOffice and Word write theirs (a fontwork shape behind the text in every
+    // header, here one made for it), and read back as the watermark, not a shape.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Body", CharProps::default()))];
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "CONFIDENTIAL".into(), ..Default::default() });
+    let saved = export(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(styles.contains("draw:name=\"PowerPlusWaterMarkObject\"") && styles.contains("draw:text-path=\"true\""), "{styles}");
+    assert!(styles.contains("<style:header>"), "a header holds it");
+    let back = import(&saved).unwrap();
+    let wm = back.settings.watermark.clone().expect("the watermark");
+    assert_eq!((wm.text.as_str(), wm.diagonal, wm.semitransparent), ("CONFIDENTIAL", true, true));
+    // Not a shape in the header too.
+    let header = back.last_section.headers.default.and_then(|id| back.parts.get(&id)).unwrap();
+    assert!(header.blocks.iter().filter_map(|b| b.as_para()).all(|p| p.objects.is_empty()));
+    // The text doesn't move for it: the header fits in the top margin.
+    let mut without = d.clone();
+    without.settings.watermark = None;
+    let plain = import(&export(&without).unwrap()).unwrap();
+    assert!(
+        (back.last_section.margin_top - plain.last_section.margin_top).abs() < 0.5,
+        "{} {}",
+        back.last_section.margin_top,
+        plain.last_section.margin_top
+    );
+}
+
+#[test]
+fn libreoffices_watermark_reads_as_the_watermark() {
+    // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.
+    let ns = crate::odt::tests::NS_T;
+    let nsd =
+        r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
+    let styles = format!(
+        r##"<office:document-styles {ns} {nsd}><office:automatic-styles><style:style style:name="Mgr1" style:family="graphic"><style:graphic-properties draw:stroke="none" draw:fill="solid" draw:fill-color="#c0c0c0" draw:opacity="50%" style:run-through="background" style:wrap="run-through"/></style:style><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p><draw:custom-shape text:anchor-type="char" draw:name="PowerPlusWaterMarkObject" draw:style-name="Mgr1" svg:width="6.69in" svg:height="2.24in" draw:transform="rotate (0.785398163397448) translate (0.19in 6.54in)"><text:p>DRAFT</text:p><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:text-path="true" draw:type="fontwork-plain-text"/></draw:custom-shape></text:p></style:header></style:master-page></office:master-styles></office:document-styles>"##
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    let wm = d.settings.watermark.expect("the watermark");
+    assert_eq!((wm.text.as_str(), wm.color, wm.diagonal, wm.semitransparent), ("DRAFT", wordcraft_doc::Rgb(0xc0, 0xc0, 0xc0), true, true));
+    let [w, h] = wm.size.unwrap();
+    assert!((w - 6.69 * 72.0).abs() < 0.5 && (h - 2.24 * 72.0).abs() < 0.5);
+}

@@ -573,3 +573,34 @@ impl Writer {
         format!("{}fr{}", self.prefix, k + 1)
     }
 }
+
+/// The name a watermark shape carries (Word's and LibreOffice's: how readers know it).
+pub(in crate::odt) const WATERMARK_NAME: &str = "PowerPlusWaterMarkObject";
+
+impl Writer {
+    /// The document's watermark as LibreOffice and Word write one in a header: a fontwork shape
+    /// (§10.3.2 `draw:custom-shape` whose geometry follows its text, `draw:text-path`) behind the
+    /// text, centred on a page whose text area is `area` (width, height; points), turned up 45°
+    /// when diagonal, filled with its colour (half transparent when semitransparent). It doesn't
+    /// grow to its text: its text is stretched to it.
+    pub(in crate::odt) fn watermark(&mut self, wm: &wordcraft_doc::Watermark, page: (f32, f32), area: (f32, f32)) -> String {
+        let [w, h] = wm.frame(page.0, page.1);
+        let opacity = if wm.semitransparent { " draw:opacity=\"50%\"" } else { "" };
+        let style = self.graphic_style(format!(
+            " draw:stroke=\"none\" draw:fill=\"solid\" draw:fill-color=\"#{}\"{opacity} style:run-through=\"background\" style:wrap=\"run-through\" style:horizontal-pos=\"center\" style:horizontal-rel=\"page-content\" style:vertical-pos=\"middle\" style:vertical-rel=\"page-content\" style:flow-with-text=\"false\" draw:auto-grow-height=\"false\" draw:auto-grow-width=\"false\"",
+            wm.color.hex().to_ascii_lowercase()
+        ));
+        let (aw, ah) = (if area.0.is_finite() { area.0 } else { w }, if area.1.is_finite() { area.1 } else { h });
+        let (x0, y0) = ((aw - w) / 2.0, (ah - h) / 2.0);
+        let place =
+            if wm.diagonal { crate::odt::frames::transform_attr(x0, y0, w, h, 315.0) } else { format!(" svg:x=\"{}\" svg:y=\"{}\"", pt(x0), pt(y0)) };
+        let fmt = model::Fmt { font: Some(std::sync::Arc::from(wm.font.as_str())), color: Some(wm.color), ..model::Fmt::default() };
+        let span =
+            self.text_style(&fmt).map(|t| format!("<text:span text:style-name=\"{t}\">{}</text:span>", x(&wm.text))).unwrap_or_else(|| x(&wm.text));
+        format!(
+            "<draw:custom-shape text:anchor-type=\"char\" draw:z-index=\"0\" draw:name=\"{WATERMARK_NAME}\" draw:style-name=\"{style}\" svg:width=\"{}\" svg:height=\"{}\"{place}><text:p>{span}</text:p><draw:enhanced-geometry svg:viewBox=\"0 0 21600 21600\" draw:text-areas=\"0 0 21600 21600\" draw:text-path=\"true\" draw:type=\"fontwork-plain-text\" draw:enhanced-path=\"M 0 0 L 21600 0 N M 0 21600 L 21600 21600 N\"/></draw:custom-shape>",
+            pt(w),
+            pt(h)
+        )
+    }
+}

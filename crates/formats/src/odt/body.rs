@@ -58,6 +58,11 @@ pub(super) struct Body<'a> {
     placeholder: Option<(String, Fmt, &'static str, String)>,
     /// The form controls of `office:forms`, placed where a `draw:control` names them.
     forms: super::forms::FormsReader,
+    /// A watermark found (in a header): see [`Self::start_shape`].
+    pub(super) watermark: Option<wordcraft_doc::Watermark>,
+    /// The shape being read is a watermark's, if its geometry follows its text: its size, turn,
+    /// colour and see-through, and whether its geometry is fontwork.
+    watermark_shape: Option<((f32, f32), f32, Option<wordcraft_doc::props::Rgb>, bool, bool)>,
     pub(super) manifest: Option<&'a HashMap<String, String>>,
     containers: Vec<Vec<FBlock>>,
     /// Drawings anchored in the text but outside any paragraph (LibreOffice's page-anchored
@@ -171,6 +176,8 @@ impl<'a> Body<'a> {
             zip,
             entries: &[],
             forms: Default::default(),
+            watermark: None,
+            watermark_shape: None,
             break_next: false,
             sources: Vec::new(),
             ruby: None,
@@ -772,6 +779,9 @@ impl Body<'_> {
         // path, worked out from its equations when the element ends. Its handles aren't read.
         if q == "draw:enhanced-geometry" && self.shape_kind.is_some() {
             let t = get(a, "draw:type").unwrap_or_default();
+            if let Some(wm) = &mut self.watermark_shape {
+                wm.4 = get(a, "draw:text-path").is_some_and(|v| v.trim() == "true") || t.starts_with("fontwork");
+            }
             self.shape_kind = Some(super::shapes::kind_of(t));
             self.geometry = super::geometry::Pending::of(t, a);
             // Kept as read, its mirroring aside (written from the shape's own).

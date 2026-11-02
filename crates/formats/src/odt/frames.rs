@@ -39,6 +39,8 @@ pub(super) struct Graphic {
     /// transparent).
     fill: Option<String>,
     fill_color: Option<Rgb>,
+    /// `draw:opacity` (§20.130), percent.
+    opacity: Option<f32>,
     background: Option<Option<Rgb>>,
     /// A drawing shape's line: its style (`draw:stroke`: none, solid, dash), colour and width.
     stroke: Option<String>,
@@ -139,6 +141,7 @@ impl Graphic {
             padding: ["left", "top", "right", "bottom"].map(|side| m(&format!("fo:padding-{side}")).or_else(|| m("fo:padding"))),
             fill: s("draw:fill"),
             fill_color: get(a, "draw:fill-color").and_then(parse_color),
+            opacity: get(a, "draw:opacity").and_then(|v| v.trim().strip_suffix('%')?.trim().parse::<f32>().ok()).filter(|v| v.is_finite()),
             background: get(a, "fo:background-color").map(|v| parse_color(v).filter(|_| !v.trim().eq_ignore_ascii_case("transparent"))),
             stroke: s("draw:stroke"),
             stroke_color: get(a, "svg:stroke-color").and_then(parse_color),
@@ -164,6 +167,11 @@ impl Graphic {
         }
     }
 
+    /// A watermark's look from its shape's style: its fill colour, and whether it is see-through.
+    pub(super) fn watermark_look(&self) -> (Option<Rgb>, bool) {
+        (self.fill_color, self.opacity.is_some_and(|o| o < 100.0))
+    }
+
     /// This placement with `parent`'s filling what it leaves unsaid.
     pub(super) fn or(mut self, parent: &Graphic) -> Graphic {
         let fill = |a: &mut Option<String>, b: &Option<String>| {
@@ -186,6 +194,7 @@ impl Graphic {
         self.line = self.line.or(parent.line);
         fill(&mut self.fill, &parent.fill);
         self.fill_color = self.fill_color.or(parent.fill_color);
+        self.opacity = self.opacity.or(parent.opacity);
         self.background = self.background.or(parent.background);
         fill(&mut self.stroke, &parent.stroke);
         self.stroke_color = self.stroke_color.or(parent.stroke_color);

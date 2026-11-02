@@ -11,6 +11,7 @@ mod tables;
 mod tracked;
 
 use drawing::Place;
+pub(super) use drawing::WATERMARK_NAME;
 use indexes::index_at;
 pub(super) use indexes::{IndexKind, index_instr};
 use notes::annotation_name;
@@ -216,7 +217,7 @@ impl Writer {
         Writer { prefix, ..Default::default() }
     }
 
-    fn text_style(&mut self, f: &Fmt) -> Option<String> {
+    pub(in crate::odt) fn text_style(&mut self, f: &Fmt) -> Option<String> {
         let mut props = text_props(f);
         // A custom character style: the automatic style's parent (after a separator in the key).
         if let Some(id) = f.extra.as_ref().and_then(|x| x.style.as_deref()) {

@@ -238,8 +238,12 @@ struct PageParts {
 fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     let mut out = PageParts::default();
     let even = doc.settings.even_odd_headers;
+    // A watermark is a shape in every header (one written for it alone when there is none).
+    let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
+    let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top - sec.margin_bottom);
     for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
-        let wanted = set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some());
+        let wanted =
+            set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (name == "header" && wm.is_some());
         if !wanted {
             continue;
         }
@@ -262,6 +266,11 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
             if body.is_empty() {
                 body.push_str("<text:p/>");
             }
+            if name == "header"
+                && let Some(wm) = wm
+            {
+                body = with_watermark(&body, &w.watermark(wm, (sec.page_w, sec.page_h), area));
+            }
             out.xml.push_str(&format!("<style:{el}>{body}</style:{el}>"));
         }
         if name == "header" {
@@ -273,7 +282,27 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     out
 }
 
-/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
+/// A header's content with `shape` (anchored to a character) at the start of its first
+/// paragraph, or in a paragraph of its own before a table that starts it.
+fn with_watermark(body: &str, shape: &str) -> String {
+    if let Some(rest) = body.strip_prefix("<text:p/>") {
+        return format!("<text:p>{shape}</text:p>{rest}");
+    }
+    if body.starts_with("<text:p") || body.starts_with("<text:h") {
+        // Into the first paragraph's element, after its start tag (or in place of an empty one).
+        if let Some(end) = body.find('>') {
+            let (tag, rest) = body.split_at(end + 1);
+            if let Some(open) = tag.strip_suffix("/>") {
+                let name = if tag.starts_with("<text:h") { "text:h" } else { "text:p" };
+                return format!("{open}>{shape}</{name}>{rest}");
+            }
+            return format!("{tag}{shape}{rest}");
+        }
+    }
+    format!("<text:p>{shape}</text:p>{body}")
+}
+
+/// `styles.xml` of `doc`: the default style/// `styles.xml` of `doc`: the default style from the document defaults (Normal's spacing, the
 /// body font, pair kerning, the tab interval), the paragraph kinds' styles, and one master page
 /// per entry of `pages` with `parts`, its headers and footers, whose automatic styles are
 /// `part_styles`.
