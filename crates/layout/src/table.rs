@@ -952,8 +952,23 @@ fn aligned_rule_top(rule: &AnchoredRule, before: Option<f32>, after: Option<f32>
     rule.top + delta
 }
 
-fn loses_split_cell(kept_cells: &[bool], cut_through: &[bool]) -> bool {
-    kept_cells.iter().zip(cut_through).any(|(&kept, &through)| !kept && through)
+fn place_anchored_rule(
+    item: &Placed,
+    top: f32,
+    cut: f32,
+    shift: f32,
+    above: &mut Vec<Placed>,
+    below: &mut Vec<Placed>,
+    anchors: &mut Vec<AnchoredRule>,
+) {
+    if top < cut {
+        above.push(item.clone());
+        return;
+    }
+    anchors.push(AnchoredRule { item: below.len(), top: top - shift });
+    let mut item = item.clone();
+    item.translate(0.0, -shift);
+    below.push(item);
 }
 
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
@@ -1062,7 +1077,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         return None;
     }
     // A cell left with nothing here because its first line or picture runs below the cut.
-    if whole_cells && loses_split_cell(&kept_cells, &cut_through) {
+    if whole_cells && kept_cells.iter().zip(&cut_through).any(|(&kept, &through)| !kept && through) {
         return None;
     }
     // Each cell resumes below its own top margin and border band.
@@ -1160,12 +1175,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                         // Horizontal: the top edge stays, the bottom edge moves; both fragments close.
                         if let Some(rule) = c.anchored_rules.iter().find(|r| r.item == source) {
                             let top = aligned_rule_top(rule, c.end, *end);
-                            if top < cut {
-                                a.push(it.clone());
-                            } else {
-                                anchored_rules.push(AnchoredRule { item: b.len(), top: top - shift });
-                                b.push(Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border });
-                            }
+                            place_anchored_rule(it, top, cut, shift, &mut a, &mut b, &mut anchored_rules);
                         } else if c.bottom_rule == Some(source) {
                             // Keep the entire closing stroke inside each physical fragment's band.
                             let above = cut - c.bottom_band / 2.0;
