@@ -1,14 +1,17 @@
 use super::dispatch::body;
 use super::{Dialog, Sense, Tokens, Ui, WordApp, vec2};
 
-/// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
-pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
-    color_field(ui, theme, value, "No Color", "");
+/// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none;
+/// `name` is the field's label (translated), which screen readers say with the colour.
+pub(crate) fn color_menu(ui: &mut Ui, name: &str, theme: &[wordcraft_doc::Rgb], value: &mut String) {
+    color_field(ui, name, theme, value, "No Color", "");
 }
 
 /// A colour field: a swatch and a drop-down with `none_label` (which sets `none_value`), the
-/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`.
-pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, none_value: &str) {
+/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`. To screen
+/// readers the drop-down is named by the field's label, `name`, and the colour ("Font color:
+/// #104861"): its text alone was the colour's hex digits.
+pub(crate) fn color_field(ui: &mut Ui, name: &str, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, none_value: &str) {
     ui.horizontal(|ui| {
         let id = ui.scope_id().with("colorField");
         crate::colors::take_field(ui.ctx(), id, value);
@@ -25,13 +28,19 @@ pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut
         }
         ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
         let label = if c.is_some() { value.clone() } else { tl!(none_label).to_string() };
-        ui.menu_button(label, |ui| {
+        let spoken = match c {
+            Some(c) => format!("{name} #{}", c.hex()),
+            None => format!("{name} {label}"),
+        };
+        let menu = ui.menu_button(label, |ui| {
             if ui.button(tl!(none_label)).clicked() {
                 *value = none_value.to_string();
                 ui.close();
             }
             crate::colors::field_menu(ui, theme, id, value);
         });
+        let enabled = ui.is_enabled();
+        menu.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &spoken));
     });
 }
 
@@ -140,6 +149,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         close = body(app, ui, &mut d);
     });
     if let Some(shown) = &shown {
+        // A dialog to screen readers, as Word's are ("Font, dialog"): an egui window is a window,
+        // so NVDA neither said it was a dialog nor read the text in it (Word Count's figures).
+        ctx.accesskit_node_builder(shown.response.id, |node| node.set_role(egui::accesskit::Role::Dialog));
         if let Dialog::SaveChanges { name, message, .. } = &d {
             let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
             let mut description = tl!("Your changes will be lost if you don't save them.").to_string();

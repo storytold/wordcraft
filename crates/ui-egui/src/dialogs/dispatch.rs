@@ -96,6 +96,9 @@ fn rename_document_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> boo
     false
 }
 
+/// Home › Font › Font… (Ctrl+D): font, size, colour (a colour field named "Font color:"),
+/// spacing, kerning and the effects, with a preview. OK applies them; true when OK or Cancel
+/// closes the dialog.
 fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::Font {
         font,
@@ -172,7 +175,7 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.end_row();
         ui.label(tl!("Font color:"));
         let theme = app.session.doc.settings.theme_colors.clone();
-        color_field(ui, &theme, color, "Automatic", "auto");
+        color_field(ui, tl!("Font color:"), &theme, color, "Automatic", "auto");
         ui.end_row();
         let spacing_label = ui.label(tl!("Spacing (pt):"));
         ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id);
