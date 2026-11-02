@@ -196,6 +196,43 @@ fn newly_created_bookmarks_do_not_reuse_imported_or_allocated_ids() {
 }
 
 #[test]
+fn newly_created_bookmarks_reserve_numeric_values_but_keep_imported_id_spelling() {
+    use wordcraft_doc::{CharProps, InlineObject, Pos};
+    for zero in ["00", "+000", "-0", "0000000000000000000000000000000000000000000000000"] {
+        let body =
+            format!("<w:p>{}<w:r><w:t>text</w:t></w:r>{}{}{}</w:p>", start(0, "OriginalZero", false), end(0), start(2, "OriginalTwo", false), end(2))
+                .replace(r#"w:id="0""#, &format!(r#"w:id="{zero}""#))
+                .replace(r#"w:id="2""#, r#"w:id="+0002""#);
+        let mut d = wordcraft_docx::read(&package(&body, &para("header"))).unwrap();
+        for name in ["NewOne", "NewTwo"] {
+            d.insert_object(&Pos::body(0, 0), InlineObject::BookmarkEnd { name: name.into() }, &CharProps::default()).unwrap();
+            d.insert_object(&Pos::body(0, 0), InlineObject::BookmarkStart { name: name.into() }, &CharProps::default()).unwrap();
+        }
+        let output = wordcraft_docx::write(&d).unwrap();
+        let actual = markers(&xml(&output, "word/document.xml"));
+        let mut ids = std::collections::BTreeSet::new();
+        let mut ends = std::collections::BTreeSet::new();
+        for (_, _, tag, attrs) in &actual {
+            let value = |key| attrs.iter().find(|a| a.0 == key).unwrap().1.as_str();
+            let id = value("w:id");
+            if tag == "w:bookmarkEnd" {
+                assert!(ends.insert(id));
+                continue;
+            }
+            assert!(ids.insert(id.parse::<i128>().unwrap()), "duplicate numeric ID {id}, imported zero {zero}");
+            match value("w:name") {
+                "OriginalZero" => assert_eq!(id, zero),
+                "OriginalTwo" => assert_eq!(id, "+0002"),
+                _ => {}
+            }
+        }
+        assert_eq!(ids.len(), 4);
+        assert_eq!(ends.len(), 4);
+        assert_eq!(ends.into_iter().map(|id| id.parse::<i128>().unwrap()).collect::<std::collections::BTreeSet<_>>(), ids);
+    }
+}
+
+#[test]
 fn moved_or_removed_bookmarks_are_not_recreated_at_stale_source_boundaries() {
     use wordcraft_doc::{CharProps, Path, StoryRef};
     let input = package(&format!("{}{}{}", start(309, "Editable", false), para("text"), end(309)), &para("header"));

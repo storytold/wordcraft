@@ -31,7 +31,13 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .filter(|(_, attrs)| !attrs.id.is_empty())
             .map(|(name, attrs)| (name.clone(), attrs.id.clone()))
             .collect(),
-        bookmark_ids: doc.bookmark_attrs.values().filter(|attrs| !attrs.id.is_empty()).map(|attrs| attrs.id.clone()).collect(),
+        // Reserve numeric values, while `bookmarks` retains the original XML spelling.
+        bookmark_ids: doc
+            .bookmark_attrs
+            .values()
+            .filter(|attrs| !attrs.id.is_empty())
+            .map(|attrs| attrs.id.trim().parse::<i128>().map_or_else(|_| attrs.id.clone(), |id| id.to_string()))
+            .collect(),
         next_bookmark_id: 0,
         lifted_bookmarks: HashMap::new(),
         next_rev_id: 0,
