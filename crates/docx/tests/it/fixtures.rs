@@ -4057,28 +4057,51 @@ fn zero_effects_stay_zero_rotated() {
 
 /// From 45° up to (not including) 135° Word measures a turned picture's overhang against its frame
 /// with width and height exchanged, so a quarter turn records no effect extent; at 135° it uses the
-/// frame as it is again. Reading must not take the turn for effects room, and saving must not
-/// write the turn's overhang (Word crops a picture by the negative extents that gives).
+/// frame as it is again (and the same from 225° up to 315°). Reading must not take the turn for
+/// effects room, and saving must not write the turn's overhang (Word crops a picture by the
+/// negative extents that gives).
 #[test]
 fn turned_pictures_keep_words_effect_extent() {
-    // A 254 × 337 pt picture with the effect extents Word saves for it turned 90°, 60° and 135°.
-    for (degrees, ext) in [(90, [6_350, 0, 0, 0]), (60, [520_700, 869_950, 533_400, 857_250]), (135, [1_047_750, 514_350, 1_041_400, 520_700])] {
-        let [l, t, r, b] = ext;
+    // A 254 × 337 pt picture with the effect extents (pt, left / top / right / bottom) Word for
+    // Microsoft 365 (build 16.0.20527) saves for it at 60°, a quarter turn and on both sides of
+    // each boundary of the exchanged-frame range. Near the boundaries Word's own values are a few
+    // points uneven (33 pt right against 41 pt left at 45°); the frame changes them by about 41 pt,
+    // so 10 pt there still tells the frames apart.
+    let cases: [(i64, [f32; 4], f32); 10] = [
+        (60, [41.0, 68.5, 42.0, 67.5], 1.0),
+        (90, [0.5, 0.0, 0.0, 0.0], 1.0),
+        (44, [82.5, 42.0, 77.5, 41.0], 10.0),
+        (45, [41.0, 82.0, 33.0, 82.5], 10.0),
+        (134, [41.0, 82.0, 36.0, 82.5], 10.0),
+        (135, [82.5, 40.5, 82.0, 41.0], 1.0),
+        (224, [82.5, 42.0, 77.5, 41.0], 10.0),
+        (225, [41.0, 82.0, 33.0, 82.5], 10.0),
+        (314, [41.0, 82.0, 36.0, 82.5], 10.0),
+        (315, [82.5, 40.5, 82.0, 41.0], 1.0),
+    ];
+    let effect_of = |bytes: &[u8]| paras(&wordcraft_docx::read(bytes).unwrap())[0].objects[0].frame().unwrap().2.effect;
+    for (degrees, ext_pt, tolerance_pt) in cases {
+        let [l, t, r, b] = ext_pt.map(|v| (v * 12_700.0).round() as i64);
         let body = format!(
             r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3225800" cy="4279900"/><wp:effectExtent l="{l}" t="{t}" r="{r}" b="{b}"/><wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="{}"><a:off x="0" y="0"/><a:ext cx="3225800" cy="4279900"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
             degrees * 60_000
         );
-        let d = wordcraft_docx::read(&docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
-        let effect = paras(&d)[0].objects[0].frame().unwrap().2.effect;
+        let file = docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")]);
+        let effect = effect_of(&file);
         assert!(effect.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}°: {effect:?}");
-        let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+        let d = wordcraft_docx::read(&file).unwrap();
+        let saved_file = wordcraft_docx::write(&d).unwrap();
+        let xml = text(&unzip(&saved_file), "word/document.xml");
         let start = xml.find("<wp:effectExtent ").expect("effect extent");
         let saved = &xml[start..start + xml[start..].find("/>").expect("end")];
-        for (k, want) in ["l", "t", "r", "b"].into_iter().zip(ext) {
+        for (k, want) in ["l", "t", "r", "b"].into_iter().zip([l, t, r, b]) {
             let at = saved.find(&format!(" {k}=\"")).expect("attribute") + k.len() + 3;
             let got: i64 = saved[at..at + saved[at..].find('"').expect("quote")].parse().expect("number");
-            assert!((got - want).abs() <= 12_700, "{degrees}°: {saved}");
+            assert!(((got - want).abs() as f32) <= tolerance_pt * 12_700.0, "{degrees}°: {saved}");
         }
+        // Reading the saved file back finds no effects room either: the round trip is stable.
+        let again = effect_of(&saved_file);
+        assert!(again.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}° saved: {again:?}");
     }
     // An angle the file rounds to 45° is measured against the exchanged frame, as 45° is.
     let pad = |rot: f32| Float { rot, ..Float::default() }.effect_spin_pad(254.0, 337.0);
