@@ -205,4 +205,129 @@ mod tests {
         h.step();
         assert_eq!(heard(&h).map(|(t, _)| t).as_deref(), Some("Bold On"));
     }
+
+    /// Each formatting shortcut says its own words, read from the formatting after it ran: the
+    /// format's name and On or Off for Ctrl+B, I, U, = (Subscript) and Shift+= (Superscript), the
+    /// alignment's name for Ctrl+E, R, J and L, and the size the selection now has for
+    /// Ctrl+Shift+. and , (Grow and Shrink Font) and Ctrl+] and [ (by 1 pt). A selection of mixed
+    /// sizes has no one size to say, so nothing is said.
+    #[test]
+    fn every_formatting_shortcut_says_its_own_words() {
+        let mut h = harness("Lanterns glow");
+        h.state_mut().run("format.size", json!({"size": 12})).unwrap();
+        h.run_steps(2);
+        let (cmd, shift) = (Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT);
+        for (m, key, said) in [
+            (cmd, Key::B, "Bold On"),
+            (cmd, Key::B, "Bold Off"),
+            (cmd, Key::I, "Italic On"),
+            (cmd, Key::I, "Italic Off"),
+            (cmd, Key::U, "Underline On"),
+            (cmd, Key::U, "Underline Off"),
+            (cmd, Key::Equals, "Subscript On"),
+            (cmd, Key::Equals, "Subscript Off"),
+            (shift, Key::Equals, "Superscript On"),
+            (shift, Key::Equals, "Superscript Off"),
+            (cmd, Key::E, "Center On"),
+            (cmd, Key::R, "Align Right On"),
+            (cmd, Key::J, "Justify On"),
+            (cmd, Key::L, "Align Left On"),
+            (shift, Key::Period, "Font 14 pt"),
+            (shift, Key::Comma, "Font 12 pt"),
+            (cmd, Key::CloseBracket, "Font 13 pt"),
+            (cmd, Key::OpenBracket, "Font 12 pt"),
+        ] {
+            assert_eq!(press(&mut h, m, key).map(|(t, _)| t).as_deref(), Some(said), "{m:?} {key:?}");
+        }
+
+        let mut h = harness("Lanterns glow");
+        let sizes = [(0, 8, 12.0), (8, 13, 16.0)];
+        for (from, to, size) in sizes {
+            h.state_mut().session.sel =
+                wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, from), focus: wordcraft_doc::Pos::body(0, to) };
+            h.state_mut().run("format.size", json!({"size": size})).unwrap();
+        }
+        h.state_mut().session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 13) };
+        h.run_steps(2);
+        assert_eq!(press(&mut h, shift, Key::Period), None, "mixed sizes: nothing to say");
+        assert!(h.state().announcement.is_none(), "and nothing waits to be said");
+    }
+
+    /// The words are looked up in the interface catalogs, so each language says its own.
+    #[test]
+    fn the_words_go_through_the_interface_catalogs() {
+        let mut h = harness("Lanterns glow");
+        crate::i18n::pseudo::set(true);
+        let said = press(&mut h, Modifiers::COMMAND, Key::B).map(|(t, _)| t).unwrap_or_default();
+        crate::i18n::pseudo::set(false);
+        assert!(said.contains('⟦') && crate::i18n::pseudo::unmarked(&said).trim().is_empty(), "every word is marked: {said:?}");
+    }
+
+    /// Ten presses in a burst, one per frame or all in one frame (a held key, or keys typed
+    /// faster than frames), leave one announcement at a time, the latest, in one live region:
+    /// each replaces the last (`WordApp::announcement` holds one), so nothing queues up.
+    #[test]
+    fn a_burst_of_ten_presses_leaves_one_announcement_the_latest() {
+        let live = |h: &egui_kittest::Harness<'_, WordApp>| h.query_all_by(|n| n.live() == Live::Polite).count();
+        let mut h = harness("Lanterns glow");
+        let mut nodes = std::collections::HashSet::new();
+        for i in 0..10 {
+            let (text, node) = press(&mut h, Modifiers::COMMAND, Key::B).expect("each press is announced");
+            assert_eq!(text, if i % 2 == 0 { "Bold On" } else { "Bold Off" }, "press {i}");
+            assert_eq!(live(&h), 1, "press {i}: one live region in the tree");
+            nodes.insert(node);
+        }
+        assert_eq!(nodes.len(), 10, "each press a new node, so each is heard");
+
+        let mut h = harness("Lanterns glow");
+        let key = |pressed| egui::Event::Key { key: Key::B, physical_key: None, pressed, repeat: false, modifiers: Modifiers::COMMAND };
+        for _ in 0..10 {
+            h.input_mut().events.extend([key(true), key(false)]);
+        }
+        h.run_steps(2);
+        let bold = wordcraft_engine::cmd::format::state(&h.state().session).get("bold").and_then(serde_json::Value::as_bool);
+        assert_eq!(bold, Some(false), "ten Ctrl+B in one frame: bold on and off five times");
+        assert_eq!(live(&h), 1, "one live region in the tree");
+        assert_eq!(heard(&h).map(|(t, _)| t).as_deref(), Some("Bold Off"), "the latest is said");
+    }
+
+    /// The words go through the interface's catalogs (`tl!`), as the ribbon's labels do: a
+    /// translated interface says them in its language. Checked with a fixture language and, when
+    /// the craft-i18n catalogs are embedded (`CRAFT_I18N_DIR`), Turkish and Simplified Chinese.
+    #[test]
+    fn the_announcements_are_in_the_interface_language() {
+        let said = |app: &mut WordApp, id: &str| {
+            app.run(id, json!({})).unwrap();
+            super::describe(app, id)
+        };
+        let app = || {
+            let mut app =
+                WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns glow")), crate::Services::default());
+            app.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos::body(0, 0), focus: wordcraft_doc::Pos::body(0, 8) };
+            app.run("format.size", json!({"size": 12})).unwrap();
+            app
+        };
+        let mut a = app();
+        crate::i18n::set_current(crate::i18n::fixture_lang(
+            "x-fixture",
+            "\tBold\tBold-FX\n\tOn\tOn-FX\n\tOff\tOff-FX\n\tCenter\tCenter-FX\n\tFont\tFont-FX\n\tpt\tpt-FX\n",
+        ));
+        assert_eq!(said(&mut a, "format.bold").as_deref(), Some("Bold-FX On-FX"));
+        assert_eq!(said(&mut a, "format.bold").as_deref(), Some("Bold-FX Off-FX"));
+        assert_eq!(said(&mut a, "para.alignCenter").as_deref(), Some("Center-FX On-FX"));
+        assert_eq!(said(&mut a, "format.growFont").as_deref(), Some("Font-FX 14 pt-FX"));
+        // The catalogs' own words: craft-i18n's `common.tsv` and `wordcraft.tsv` rows.
+        if crate::i18n::catalogs_embedded() {
+            for (code, bold, center, font) in
+                [("tr", "Kalın Açık", "Ortala Açık", "Yazı Tipi 14 pt"), ("zh-hans", "加粗 开", "居中 开", "字体 14 磅")]
+            {
+                let mut a = app();
+                crate::i18n::set_current(crate::i18n::Lang::from_code(code).expect("an interface language"));
+                assert_eq!(said(&mut a, "format.bold").as_deref(), Some(bold), "{code}");
+                assert_eq!(said(&mut a, "para.alignCenter").as_deref(), Some(center), "{code}");
+                assert_eq!(said(&mut a, "format.growFont").as_deref(), Some(font), "{code}");
+            }
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
 }
