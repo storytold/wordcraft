@@ -52,6 +52,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub(crate) mod language_packs;
 mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
@@ -61,6 +62,7 @@ pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
+pub mod proofing_pane;
 pub mod read_aloud;
 pub mod ribbon;
 pub mod ribbon_fit;
@@ -476,6 +478,8 @@ pub struct WordApp {
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).
     pub restrict: dialogs_review::RestrictPane,
+    /// The language-aware spelling and grammar task pane.
+    pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
@@ -496,6 +500,8 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// Language pack installs, the missing-pack bar ([`language_packs`]).
+    pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
