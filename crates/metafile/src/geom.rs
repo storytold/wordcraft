@@ -99,11 +99,21 @@ fn arc(cx: f64, cy: f64, rx: f64, ry: f64, a0: f64, sweep: f64) -> Vec<Op> {
 /// Consecutive subpaths: `counts[i]` points each, taken in order from `pts`. Counts that run past the
 /// point list are cut short rather than failing the whole record.
 pub(crate) fn subpaths(pts: &[P], counts: &[usize], close: bool) -> Vec<Op> {
-    let mut ops = Vec::with_capacity(pts.len() + counts.len());
+    // The exact size first: empty groups add no ops, so a long count list of zeros (file data)
+    // mustn't reserve room the canvas budget never sees.
+    let (mut n, mut at) = (0usize, 0usize);
+    for &c in counts {
+        let end = at.saturating_add(c).min(pts.len());
+        if end > at {
+            n = n.saturating_add(end - at + usize::from(close));
+        }
+        at = end;
+    }
+    let mut ops = Vec::with_capacity(n);
     let mut at = 0usize;
     for &c in counts {
         let end = at.saturating_add(c).min(pts.len());
-        let Some((first, rest)) = pts.get(at..end).and_then(|s| s.split_first()) else {
+        let Some((first, rest)) = pts.get(at..end).and_then(<[_]>::split_first) else {
             at = end;
             continue;
         };
