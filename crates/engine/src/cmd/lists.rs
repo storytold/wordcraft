@@ -666,4 +666,43 @@ mod tests {
             assert_eq!((got[0].as_deref(), got[1].as_deref(), got[3].as_deref()), (Some("1."), Some("2."), Some("3.")), "{cmd}: {got:?}");
         }
     }
+
+    /// The list of body paragraph `i`, given a start override at `level`.
+    fn override_start(s: &mut Session, i: usize, level: u8, start: u32) -> wordcraft_doc::props::NumRef {
+        let n = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).and_then(|p| p.props.numbering).unwrap();
+        if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == n.num) {
+            num.start_overrides = vec![(level, start)];
+        }
+        n
+    }
+
+    /// Review of #5245: a later item numbered by its style moves to the restarted list too, so
+    /// it counts on from the value set rather than its old list's start (7., 8., not 7., 5.).
+    #[test]
+    fn set_numbering_value_carries_items_numbered_by_their_style() {
+        let mut s = numbered_at(&["One", "Two"], &[(0, "numbered")]);
+        let n = override_start(&mut s, 0, 0, 5);
+        s.doc.styles.get_mut("Heading1").unwrap().para.numbering = Some(n);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        s.run("para.style", &json!({"style": "Heading1"})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("5."), Some("6.")]));
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        s.run("para.setNumberingValue", &json!({"value": 7})).unwrap();
+        assert_eq!(shown(&mut s), want(&[Some("7."), Some("8.")]));
+    }
+
+    /// Review of #5245: when a nested item is the list's first, its level above hasn't started,
+    /// so a restart there keeps that level's start (4) and the next top item is still 5.
+    #[test]
+    fn restarting_a_first_nested_item_keeps_the_start_of_the_level_above() {
+        let mut s = numbered_at(&["Sub", "Top"], &[(0, "numbered"), (1, "numbered")]);
+        s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        s.run("para.listLevel", &json!({"level": 1})).unwrap();
+        override_start(&mut s, 0, 0, 4);
+        s.relayout();
+        let before = shown(&mut s);
+        assert_eq!(before[1].as_deref(), Some("5."), "{before:?}");
+        s.run("para.restartNumbering", &json!({})).unwrap();
+        assert_eq!(shown(&mut s), before);
+    }
 }

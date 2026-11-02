@@ -89,23 +89,44 @@ pub(crate) fn restart_at(s: &mut Session, value: Option<u32>) -> CmdResult {
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
+    let effective = |s: &Session, path: &wordcraft_doc::Path| {
+        let x = s.doc.para(f.story, path)?;
+        x.props.numbering.or_else(|| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0)
+    };
+    // The deepest level of this list (any instance: they share counters) used above the caret;
+    // every level down to it has started counting.
+    let abs = s.doc.numbering.abstract_of(n.num).map(|a| a.id);
+    let paths = s.doc.para_paths(f.story);
+    let deepest_above = paths
+        .iter()
+        .filter(|q| **q < f.path)
+        .filter_map(|q| effective(s, q))
+        .filter(|x| s.doc.numbering.abstract_of(x.num).map(|a| a.id) == abs)
+        .map(|x| x.level)
+        .max();
+    let old_starts = s.doc.numbering.num(n.num).map(|x| x.start_overrides.clone()).unwrap_or_default();
     let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
     if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new) {
-        // Only this level and the ones below start again: a later item of a level above, moved
-        // to the new instance too, counts on (1., 2., a., then 3.).
-        num.start_overrides.retain(|(l, _)| *l >= n.level);
+        // Only this level and the ones below start again: a level above that is already counting
+        // counts on (1., 2., a., then 3.); one that isn't keeps the start it had, old list's
+        // override included, for this item to begin.
+        num.start_overrides.retain(|(l, _)| *l >= n.level || deepest_above.is_none_or(|d| *l > d));
+        for (l, start) in num.start_overrides.iter_mut().filter(|(l, _)| *l < n.level) {
+            if let Some((_, old)) = old_starts.iter().find(|(k, _)| k == l) {
+                *start = *old;
+            }
+        }
         if let Some(value) = value {
             num.start_overrides.retain(|(l, _)| *l != n.level);
             num.start_overrides.push((n.level, value));
         }
     }
-    let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
-    for path in paths {
+    // Items numbered by their style move too, given the new instance as their own numbering.
+    for path in paths.into_iter().filter(|p| *p >= f.path) {
+        let Some(x) = effective(s, &path).filter(|x| x.num == n.num) else { continue };
         let para = s.doc.para_mut(f.story, &path)?;
-        if let Some(x) = para.props.numbering.filter(|x| x.num == n.num) {
-            para.props.numbering = Some(NumRef { num: new, level: x.level });
-            para.touch();
-        }
+        para.props.numbering = Some(NumRef { num: new, level: x.level });
+        para.touch();
     }
     sel_result(s)
 }
