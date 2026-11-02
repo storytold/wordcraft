@@ -113,13 +113,13 @@ pub fn upright_in_vertical(c: char) -> bool {
 pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     let mut out = Vec::with_capacity(items.len());
     for d in items {
-        let Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg, x_scale } = d else {
+        let Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg, x_scale, list_label } = d else {
             out.push(d);
             continue;
         };
         let up = |k: usize| ranges.get(k).and_then(|r| text.get(r.clone())).and_then(|t| t.chars().next()).is_some_and(upright_in_vertical);
         if ranges.len() != glyphs.len() || !(0..glyphs.len()).any(up) {
-            out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg, x_scale });
+            out.push(Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, text_bg, x_scale, list_label });
             continue;
         }
         let piece = |k0: usize, k1: usize| -> Draw {
@@ -128,7 +128,21 @@ pub(super) fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
             let (b0, b1) = (rs.iter().map(|r| r.start).min().unwrap_or(0), rs.iter().map(|r| r.end).max().unwrap_or(0));
             let t = text.get(b0..b1).unwrap_or("").to_string();
             let rs = rs.iter().map(|r| r.start.saturating_sub(b0)..r.end.saturating_sub(b0)).collect();
-            Draw::Glyphs { face, size, glyphs: gs, color, alpha, synth_bold, synth_italic, text: t, link: link.clone(), ranges: rs, text_bg, x_scale }
+            Draw::Glyphs {
+                face,
+                size,
+                glyphs: gs,
+                color,
+                alpha,
+                synth_bold,
+                synth_italic,
+                text: t,
+                link: link.clone(),
+                ranges: rs,
+                text_bg,
+                x_scale,
+                list_label,
+            }
         };
         let mut k0 = 0;
         while k0 < glyphs.len() {

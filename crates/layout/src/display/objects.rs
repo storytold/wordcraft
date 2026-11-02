@@ -322,6 +322,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             ranges: Vec::new(),
             text_bg: None,
             x_scale: 1.0,
+            list_label: false,
         });
     }
     out

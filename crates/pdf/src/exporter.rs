@@ -3,12 +3,15 @@ use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_ri
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
-use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture};
+use super::tags::{
+    ListPlace, PendingItem, Role, Slot, TableSlot, TagEntry, figure_alt, graphic_alt, holds_picture, list_group, list_numbering, slot_in,
+};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
-    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
-    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation,
+    ListNumbering, Node, NonZeroU16, NonZeroU32, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag,
+    StoryRef, Stroke, StrokeDash, Surface, TableHeaderScope, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla,
+    rgb, write,
 };
 
 mod draw;
@@ -32,6 +35,15 @@ pub(crate) struct Exporter<'a> {
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
+    /// The structure entry of the paragraph whose lines are being drawn: a picture inline in a
+    /// list item is tagged inside the item, not after it.
+    pub(crate) inline_owner: Option<usize>,
+    /// The paragraph the content being drawn belongs to (an inline picture's, or a floating
+    /// picture's anchor), for the figures it makes: one in a table cell stays in that cell.
+    pub(crate) anchor: Option<(StoryRef, Vec<u32>)>,
+    /// Cell lines already drawn (story, paragraph, first line): drawn again, they are a header
+    /// row repeated at the top of a later page.
+    pub(crate) drawn_lines: HashSet<(StoryRef, DocPath, usize)>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
     pub(crate) links: Vec<(f32, f32, f32, f32, String)>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
@@ -133,15 +145,65 @@ impl Exporter<'_> {
                     e.children.push(Node::Leaf(id));
                 }
             }
+            Role::Label(i) => {
+                let id = s.start_tagged(ContentTag::Span(SpanTag::empty()));
+                f(self, s);
+                s.end_tagged();
+                if let Some(e) = self.tags.get_mut(i) {
+                    // A numbered heading is no list item: its number reads as part of its text.
+                    if e.list.is_some() {
+                        e.label.push(Node::Leaf(id));
+                    } else {
+                        e.children.push(Node::Leaf(id));
+                    }
+                }
+            }
             Role::Figure => {
                 let id: Identifier = s.start_tagged(ContentTag::Other);
                 f(self, s);
                 s.end_tagged();
                 let alt = alt.map(str::to_string).filter(|a| !a.is_empty()).or_else(|| Some("picture".to_string()));
                 let g = TagGroup::with_children(Tag::Figure(alt), vec![Node::Leaf(id)]);
-                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)] });
+                // Inline in a list item: part of the item's body, so the list goes on after it.
+                match self.inline_owner.and_then(|i| self.tags.get_mut(i)).filter(|e| e.list.is_some()) {
+                    Some(item) => item.children.push(Node::Group(g)),
+                    None => {
+                        let at = self.anchor.clone();
+                        self.tags.push(TagEntry { at, ..TagEntry::new(Tag::Div.into(), vec![Node::Group(g)]) });
+                    }
+                }
             }
         }
+    }
+
+    /// Turned lines of the paragraph at structure entry `idx`, drawn in their turned frame: a list
+    /// item's number or bullet is its label, a picture a Figure (an artifact when decorative), the
+    /// rest the paragraph's content, as before.
+    fn turned_lines(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
+        let Draw::Turned { x, y, turn, items } = d else {
+            self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d));
+            return;
+        };
+        if !ok(*x) || !ok(*y) {
+            return;
+        }
+        let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
+        s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+        for it in items {
+            match it {
+                Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, it)),
+                Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, it)),
+                Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, it)),
+                Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, it),
+                Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
+                    for d in inner {
+                        me.draw(s, d);
+                    }
+                }),
+                _ => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, it)),
+            }
+        }
+        s.pop();
     }
 
     /// A rotated inline picture or group: turned as a whole, with each picture in it tagged on its
@@ -212,11 +274,27 @@ impl Exporter<'_> {
         for it in &page.items {
             let draws = shown.draws(it, &dopts);
             match it {
+                // A table's header row repeated at the top of a later page: read once, where the
+                // table starts, and an artifact on the pages after (as Word exports it).
+                Placed::Lines { story, path, l0, .. } if path.cell().is_some() && !self.drawn_lines.insert((*story, path.clone(), *l0)) => {
+                    self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                        for d in &draws {
+                            me.draw(s, d);
+                        }
+                    });
+                }
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
+                    self.inline_owner = Some(idx);
+                    self.anchor = Some((*story, path.0.clone()));
                     for d in &draws {
                         match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // A list item's number or bullet: its label, apart from its text.
+                            Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, d)),
+                            Draw::Glyphs { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // Turned text (a table cell's text direction): turned as a whole, its
+                            // label, text and pictures tagged as in straight lines (see `turned_lines`).
+                            Draw::Turned { .. } => self.turned_lines(s, d, idx),
                             // A picture marked decorative: an artifact screen readers skip.
                             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
@@ -232,8 +310,11 @@ impl Exporter<'_> {
                             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                         }
                     }
+                    self.inline_owner = None;
+                    self.anchor = None;
                 }
                 Placed::Image { story, path, off, .. } => {
+                    self.anchor = Some((*story, path.0.clone()));
                     let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
                     let role = if obj.is_some_and(InlineObject::is_decorative) { Role::Artifact(ArtifactType::Other) } else { Role::Figure };
                     let alt = match obj {
@@ -245,6 +326,7 @@ impl Exporter<'_> {
                             me.draw(s, d);
                         }
                     });
+                    self.anchor = None;
                 }
                 // A floating shape with a description: a figure (see `shape_figure_alt`).
                 Placed::Shape { alt, .. } if !alt.is_empty() => self.tagged(s, Role::Figure, Some(alt), |me, s| {
@@ -253,6 +335,7 @@ impl Exporter<'_> {
                     }
                 }),
                 Placed::Graphic { story, path, off, graphic, .. } => {
+                    self.anchor = Some((*story, path.0.clone()));
                     let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
                         Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),
                         _ => graphic.kind.noun().to_string(),
@@ -262,6 +345,7 @@ impl Exporter<'_> {
                             me.draw(s, d);
                         }
                     });
+                    self.anchor = None;
                 }
                 _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                     for d in &draws {
@@ -288,14 +372,29 @@ impl Exporter<'_> {
         if let Some(i) = self.tag_index.get(&(story, path.clone())) {
             return *i;
         }
-        let kind: TagKind = match self.doc.para(story, path).map(|p| self.doc.styles.resolve_para(&p.props).outline_level) {
-            Some(Some(l)) if l < 6 => {
+        // The outline level as layout resolved it (a table style's paragraph formatting included),
+        // the same one that decides below whether a numbered paragraph is a list item.
+        let kind: TagKind = match pl.rp.outline_level {
+            Some(l) if l < 6 => {
                 let title = self.doc.para(story, path).map(|p| self.title_text(p, pl).trim().chars().take(200).collect::<String>());
                 Tag::Hn(NonZeroU16::new(u16::from(l) + 1).unwrap_or(NonZeroU16::MIN), title).into()
             }
             _ => Tag::P.into(),
         };
-        self.tags.push(TagEntry { kind, children: Vec::new() });
+        // A numbered or bulleted paragraph that shows its label is a list item (a numbered
+        // heading stays a heading).
+        let list = match (pl.rp.outline_level, pl.rp.numbering) {
+            (None, Some(num)) if num.num != 0 && pl.label.is_some() => path.0.split_last().map(|(block, container)| ListPlace {
+                story,
+                container: container.to_vec(),
+                block: *block,
+                num: num.num,
+                level: num.level,
+                numbering: self.doc.numbering.level(num.num, num.level).map_or(ListNumbering::None, |l| list_numbering(l.format)),
+            }),
+            _ => None,
+        };
+        self.tags.push(TagEntry { list, at: Some((story, path.0.clone())), ..TagEntry::new(kind, Vec::new()) });
         let i = self.tags.len() - 1;
         self.tag_index.insert((story, path.clone()), i);
         i
@@ -303,13 +402,174 @@ impl Exporter<'_> {
 
     pub(crate) fn tag_tree(&mut self) -> TagTree {
         let mut tree = TagTree::new().with_lang(self.doc.styles.default_chr.lang.clone());
+        let mut slots = Vec::new();
         for e in std::mem::take(&mut self.tags) {
-            if e.children.is_empty() {
-                continue;
+            match e.at.clone() {
+                Some((story, path)) => slot_in(&mut slots, story, &path, 0, e),
+                None => slots.push(Slot::Entry(e)),
             }
-            tree.push(TagGroup::with_children(e.kind, e.children));
+        }
+        for n in self.nodes(slots) {
+            tree.push(n);
         }
         tree
+    }
+
+    /// The structure of `slots`: consecutive list items of one container grouped into lists,
+    /// tables as tables.
+    fn nodes(&self, slots: Vec<Slot>) -> Vec<Node> {
+        let mut out = Vec::new();
+        // Consecutive list items of one container, waiting to be grouped into a list.
+        let mut run: Vec<PendingItem> = Vec::new();
+        let mut last: Option<ListPlace> = None;
+        let flush = |run: &mut Vec<PendingItem>, out: &mut Vec<Node>| {
+            let mut i = 0;
+            while i < run.len() {
+                let Some(Some((num, level, numbering, _, _))) = run.get(i) else { break };
+                let list = (*num, *level, *numbering);
+                out.push(list_group(run, &mut i, list));
+            }
+            run.clear();
+        };
+        for slot in slots {
+            let e = match slot {
+                Slot::Entry(e) => e,
+                Slot::Table(t) => {
+                    flush(&mut run, &mut out);
+                    last = None;
+                    out.push(self.table_node(t));
+                    continue;
+                }
+            };
+            // A list item with a number but no text still counts: it keeps its list together.
+            if e.children.is_empty() && e.label.is_empty() {
+                continue;
+            }
+            match e.list {
+                Some(place) => {
+                    let follows = last
+                        .as_ref()
+                        .is_some_and(|p| p.story == place.story && p.container == place.container && p.block.checked_add(1) == Some(place.block));
+                    if !follows {
+                        flush(&mut run, &mut out);
+                    }
+                    run.push(Some((place.num, place.level, place.numbering, e.label, e.children)));
+                    last = Some(place);
+                }
+                None => {
+                    flush(&mut run, &mut out);
+                    last = None;
+                    out.push(Node::Group(TagGroup::with_children(e.kind, e.children)));
+                }
+            }
+        }
+        flush(&mut run, &mut out);
+        out
+    }
+
+    /// A table's structure, as Word exports it: its leading header rows ("Repeat as header row at
+    /// the top of each page") in `THead` with `TH` cells scoped to their column, the other rows in
+    /// `TBody` with `TD` cells. Every cell of the table is there, empty ones included, so the
+    /// grid a screen reader announces matches the page; a merged cell is one cell with its
+    /// `RowSpan` / `ColSpan`.
+    fn table_node(&self, t: TableSlot) -> Node {
+        let TableSlot { story, path, mut cells } = t;
+        let Some(table) = self.doc.table(story, &DocPath(path)) else {
+            // Not a table any more (can't happen for a laid out document): its content, kept.
+            let content = cells.into_values().flat_map(|s| self.nodes(s)).collect();
+            return Node::Group(TagGroup::with_children(Tag::Div, content));
+        };
+        use wordcraft_doc::props::VMerge;
+        // A cell that continues a vertical merge from the cell above it is part of that cell. A
+        // "continue" with nothing to continue above it (malformed, but found in real files) is a
+        // cell of its own.
+        let covered = |r: usize, c: usize| {
+            table.rows.get(r).and_then(|row| row.cells.get(c)).is_some_and(|x| x.props.vmerge == VMerge::Continue)
+                && table.vertical_extent(r, c).is_some_and(|(top, _)| top < r)
+        };
+        // What a vertically merged cell's later rows hold belongs to the merged cell.
+        for (r, row) in table.rows.iter().enumerate() {
+            for c in 0..row.cells.len() {
+                if !covered(r, c) {
+                    continue;
+                }
+                let Some(moved) = cells.remove(&(r, c)) else { continue };
+                let top = table.vertical_extent(r, c).map_or(r, |(top, _)| top);
+                let at = table.cell_at_grid(top, table.grid_col(r, c)).map_or((r, c), |tc| (top, tc));
+                cells.entry(at).or_default().extend(moved);
+            }
+        }
+        let heads = table.rows.iter().take_while(|r| r.props.header).count();
+        let grid = table.cols();
+        // The grid columns row `r` leaves out before and after its cells (`w:gridBefore`,
+        // `w:gridAfter`, or a row shorter than the table).
+        let gaps = |r: usize| {
+            table.rows.get(r).map_or((0, 0), |row| {
+                let before = row.first_grid();
+                (before, grid.saturating_sub(before + row.cells.iter().map(wordcraft_doc::table::Cell::span).sum::<usize>()))
+            })
+        };
+        // A row whose columns are all covered by merges from above has no cell of its own and no
+        // `TR`: a merged cell's `RowSpan` counts only the rows that have one. Columns a row leaves
+        // out are a cell of their own (an empty one, below), so such a row keeps its `TR`.
+        let has_tr = |r: usize| {
+            let (before, after) = gaps(r);
+            before > 0 || after > 0 || table.rows.get(r).is_some_and(|row| (0..row.cells.len()).any(|c| !covered(r, c)))
+        };
+        let span = |n: usize| NonZeroU32::new(u32::try_from(n).unwrap_or(1)).filter(|n| n.get() > 1);
+        let (mut head, mut body) = (Vec::new(), Vec::new());
+        // An empty cell standing for `n` grid columns a row leaves out (`w:gridBefore`,
+        // `w:gridAfter`, or a row shorter than the table): every row then spans the same
+        // columns, as a screen reader's grid (and PDF/UA) needs.
+        let gap = |n: usize| Node::Group(TagGroup::with_children(Tag::TD.with_col_span(span(n)), Vec::new()));
+        for (r, row) in table.rows.iter().enumerate() {
+            let mut tr = Vec::new();
+            let (before, after) = gaps(r);
+            if before > 0 {
+                tr.push(gap(before));
+            }
+            for (c, cell) in row.cells.iter().enumerate() {
+                if covered(r, c) {
+                    continue;
+                }
+                let content = cells.remove(&(r, c)).map(|s| self.nodes(s)).unwrap_or_default();
+                let rows = span(table.vertical_extent(r, c).map_or(1, |(_, k)| (r..r + k).filter(|&i| has_tr(i)).count()));
+                let cols = span(cell.span());
+                let tag: TagKind = if r < heads {
+                    Tag::TH(TableHeaderScope::Column).with_row_span(rows).with_col_span(cols).into()
+                } else {
+                    Tag::TD.with_row_span(rows).with_col_span(cols).into()
+                };
+                tr.push(Node::Group(TagGroup::with_children(tag, content)));
+            }
+            // A row whose columns all continue merges from above has no row of its own.
+            if !has_tr(r) {
+                continue;
+            }
+            if after > 0 {
+                tr.push(gap(after));
+            }
+            let tr = Node::Group(TagGroup::with_children(Tag::TR, tr));
+            if r < heads { head.push(tr) } else { body.push(tr) }
+        }
+        // Content of a cell the table doesn't have (can't happen for a laid out document): kept,
+        // in a row of its own.
+        if !cells.is_empty() {
+            let tds = cells.into_values().map(|s| Node::Group(TagGroup::with_children(Tag::TD, self.nodes(s)))).collect();
+            body.push(Node::Group(TagGroup::with_children(Tag::TR, tds)));
+        }
+        // Header rows alone (no other rows) are the table's body: a THead needs a TBody after it.
+        if body.is_empty() {
+            std::mem::swap(&mut head, &mut body);
+        }
+        let mut parts = Vec::new();
+        if !head.is_empty() {
+            parts.push(Node::Group(TagGroup::with_children(Tag::THead, head)));
+        }
+        if !body.is_empty() {
+            parts.push(Node::Group(TagGroup::with_children(Tag::TBody, body)));
+        }
+        Node::Group(TagGroup::with_children(Tag::Table, parts))
     }
 
     /// The watermark text stretched over its box (Word's `v:textpath fitshape`): its advance across
