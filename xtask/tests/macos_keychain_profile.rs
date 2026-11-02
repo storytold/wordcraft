@@ -10,6 +10,41 @@ fn section(start: &str, end: &str) -> &'static str {
     &SCRIPT[SCRIPT.len() - rest.len() - start.len()..SCRIPT.len() - rest.len() + part.len()]
 }
 
+fn bash(path: &std::ffi::OsStr) -> Command {
+    let mut cmd = Command::new("bash");
+    cmd.env_clear().env("PATH", path);
+    cmd
+}
+
+#[test]
+fn bash_is_resolved_from_the_supplied_executable_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target"))
+        .join("macos-test-bash-path");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut fixture = None;
+    for n in 0..1000 {
+        let dir = root.join(format!("wordcraft-bash-path-{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                fixture = Some(dir);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => panic!("create test directory: {e}"),
+        }
+    }
+    let dir = fixture.unwrap();
+    let executable = dir.join("bash");
+    std::fs::write(&executable, "#!/bin/sh\nprintf 'synthetic-bash-from-path\\n'\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = bash(dir.as_os_str()).args(["-c", "exit 73"]).output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "synthetic-bash-from-path\n");
+}
+
 fn run(identity: &str, profile: bool, legacy: bool, accepted: bool, call: bool) -> Output {
     let setup = r#"
 export PATH=/usr/bin:/bin
@@ -53,8 +88,9 @@ plutil() {
     let decision = section("NOTARIZE=0\n", "\necho \"==> WordCraft");
     let function = section("notarize() {", "\n# ---- WordCraft.app");
     let tail = if call { "[[ $NOTARIZE = 1 ]]; notarize 'Synthetic app.zip'" } else { "[[ $NOTARIZE = 0 ]]" };
-    let mut cmd = Command::new("/bin/bash");
-    cmd.env_clear().env("IDENTITY", identity).env("PROFILE", if profile { "1" } else { "0" });
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut cmd = bash(&path);
+    cmd.env("IDENTITY", identity).env("PROFILE", if profile { "1" } else { "0" });
     cmd.env("RESULT", if accepted { "Accepted" } else { "Invalid" });
     if profile {
         cmd.env("APPLE_KEYCHAIN_PROFILE", "Synthetic profile");
