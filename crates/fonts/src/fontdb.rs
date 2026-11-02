@@ -44,9 +44,10 @@ pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
     /// Fallback faces found per (character, excluded face), valid while the face count is the
-    /// one stored (faces are only ever added). Layout asks once per uncovered character, and the
-    /// search sorts every loaded face, so without this text in a script the requested font lacks
-    /// (Thai, #59) got slower with every font loaded.
+    /// one stored (faces are only ever added) and dropped when the system fonts are cataloged
+    /// again. Layout asks once per uncovered character, and the search sorts every loaded face,
+    /// so without this text in a script the requested font lacks (Thai, #59) got slower with
+    /// every font loaded.
     fallbacks: RwLock<FallbackCache>,
     run_fallbacks: RwLock<RunFallbackCache>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -78,7 +79,8 @@ pub struct FontDb {
     /// needs that file. Held through a search, so two searches never read a file twice.
     #[cfg(not(target_arch = "wasm32"))]
     coverage: Mutex<CoverageIndex>,
-    /// Counts the font folder scans, so the coverage index notices a rescan.
+    /// Counts the font folder scans, so the coverage index notices a rescan, and a fallback
+    /// chosen from an older catalog is not cached.
     #[cfg(not(target_arch = "wasm32"))]
     catalog_gen: AtomicU32,
 }
@@ -134,10 +136,16 @@ impl FontDb {
             self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled = on;
         }
         // Misses remembered while it was off may be found now.
-        self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
-        *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
+        self.drop_fallback_caches();
         #[cfg(target_arch = "wasm32")]
         let _ = on;
+    }
+
+    /// Forget the cached fallback choices (per character and per run), so the next lookups search
+    /// again.
+    fn drop_fallback_caches(&self) {
+        self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
+        *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = RunFallbackCache::default();
     }
 
     /// Process-wide database: the bundled fonts, then the installed system fonts, cataloged the

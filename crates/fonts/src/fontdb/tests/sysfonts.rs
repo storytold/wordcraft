@@ -743,6 +743,7 @@ fn rtl_fallback_does_not_depend_on_what_loaded_before() {
     let fresh = fallback(false);
     assert!(fresh.as_deref().is_some_and(|f| f != "Liberation Sans"), "{fresh:?}");
     assert_eq!(fallback(true), fresh, "the same font after Liberation Sans loaded first");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// The right-to-left families load once, at the first right-to-left character that needs a
@@ -750,7 +751,7 @@ fn rtl_fallback_does_not_depend_on_what_loaded_before() {
 #[test]
 fn rtl_fallback_families_load_once() {
     let Some(dir) = rtl_fonts("rtl-once", |_| true) else { return };
-    let db = FontDb::with_font_dirs(vec![dir]);
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
     let latin = db.face(FALLBACK_FAMILY, "Regular");
     assert!(db.fallback_for('ש', latin.id()).is_some());
     assert!(db.is_loaded("DejaVu Sans"));
@@ -759,6 +760,7 @@ fn rtl_fallback_families_load_once() {
         assert!(db.fallback_for(c, latin.id()).is_some(), "{c}");
     }
     assert_eq!(db.read_faces().len(), n, "no family loaded again");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A right-to-left family installed after the first search is not left out as tried: after a
@@ -774,4 +776,60 @@ fn an_rtl_family_installed_later_loads_after_a_rescan() {
     db.load_system_fonts();
     assert!(db.fallback_for('א', latin.id()).is_some());
     assert!(db.is_loaded("DejaVu Sans"), "installed since and cataloged by the rescan");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A run of Hebrew falls back to the same font whatever loaded before it, like a single
+/// character (#4300): the run search loads the ranked right-to-left families too, before it
+/// looks for a loaded face that covers the whole run. As in
+/// `rtl_fallback_does_not_depend_on_what_loaded_before`, a build with craft-fonts gives Noto Sans
+/// Hebrew either way; the build without them tells the two cases apart. Skipped where DejaVu Sans
+/// and Liberation Sans aren't installed.
+#[test]
+fn rtl_run_fallback_does_not_depend_on_what_loaded_before() {
+    let Some(dir) = rtl_fonts("rtl-run", |_| true) else { return };
+    let run = ['ש', 'ל', 'ו', 'ם'];
+    let fallback = |liberation_first: bool| {
+        let db = FontDb::with_font_dirs(vec![dir.clone()]);
+        let latin = db.face(FALLBACK_FAMILY, "Regular");
+        if liberation_first {
+            assert_eq!(db.face("Liberation Sans", "Regular").family, "Liberation Sans");
+        }
+        db.fallback_for_run(&run, latin.id(), false, false).map(|f| f.family.clone())
+    };
+    let fresh = fallback(false);
+    assert!(fresh.as_deref().is_some_and(|f| f != "Liberation Sans"), "{fresh:?}");
+    assert_eq!(fallback(true), fresh, "the same font after Liberation Sans loaded first");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A character, and a run, whose fallback was chosen before a right-to-left family was
+/// installed get that family after a rescan, as a fresh database would give it: the rescan
+/// drops the cached choices, per character and per run. Each is checked on its own database, so
+/// the one looked up first doesn't load the family for the other. Skipped where DejaVu Sans and
+/// Liberation Sans aren't installed.
+#[test]
+fn a_cached_rtl_fallback_is_chosen_again_after_a_rescan() {
+    let run = ['ש', 'ל', 'ו', 'ם'];
+    let family = |f: Option<Arc<FontFace>>| f.map(|f| f.family.clone());
+    for by_run in [false, true] {
+        let Some(dir) = rtl_fonts(if by_run { "rtl-rescan-run" } else { "rtl-rescan" }, |p| p.contains("Liberation")) else { return };
+        let lookup = |db: &FontDb| {
+            let latin = db.face(FALLBACK_FAMILY, "Regular");
+            family(if by_run { db.fallback_for_run(&run, latin.id(), false, false) } else { db.fallback_for('ש', latin.id()) })
+        };
+        let db = FontDb::with_font_dirs(vec![dir.clone()]);
+        // Twice: the first lookup may catalog the fonts, and a choice made during a scan isn't
+        // cached; the second one is.
+        for _ in 0..2 {
+            assert!(lookup(&db).is_some(), "by run: {by_run}");
+        }
+        assert!(!db.is_loaded("DejaVu Sans"), "not installed yet");
+        std::fs::copy("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", dir.join("DejaVuSans.ttf")).unwrap();
+        db.load_system_fonts();
+        let fresh = FontDb::with_font_dirs(vec![dir.clone()]);
+        assert_eq!(lookup(&db), lookup(&fresh), "by run: {by_run}");
+        assert!(db.is_loaded("DejaVu Sans"), "installed since and cataloged by the rescan (by run: {by_run})");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
