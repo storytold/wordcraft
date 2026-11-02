@@ -1,3 +1,4 @@
+mod alt_chunks;
 mod bidi;
 mod bidi_runs;
 mod cell_margin_inheritance;
@@ -32,6 +33,7 @@ mod section_valign;
 mod settings_merge;
 mod text_boxes;
 mod toc_ranges;
+mod undefined_style;
 mod vml_shapes;
 mod word_xml;
 mod wordml2003_write;

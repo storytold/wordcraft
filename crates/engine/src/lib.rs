@@ -192,6 +192,11 @@ pub mod p {
     pub fn u64(v: &Value, k: &str) -> Option<u64> {
         v.get(k).and_then(|x| x.as_u64().or_else(|| x.as_f64().filter(|f| *f >= 0.0 && f.is_finite()).map(|f| f as u64)))
     }
+    /// A 1-based page parameter as a 0-based index. A value that cannot fit in
+    /// `usize` (32-bit and wasm) saturates instead of wrapping to page 1.
+    pub fn page_index(page: u64) -> usize {
+        usize::try_from(page.max(1)).unwrap_or(usize::MAX).saturating_sub(1)
+    }
     pub fn bool(v: &Value, k: &str) -> Option<bool> {
         v.get(k).and_then(Value::as_bool)
     }
