@@ -124,11 +124,12 @@ fn markup_key(app: &WordApp) -> MarkupKey {
 /// The print job's layout ([`Session::print_layout`](wordcraft_engine::Session::print_layout)),
 /// so the preview pages as the job does: without Print Markup tracked deletions take no space.
 /// Kept while the document and the markup settings are unchanged (laying out every frame would
-/// be slow).
+/// be slow). The document's identity is in the key: another document opened in the window may
+/// have reached the same revision.
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
-    let key = (app.session.rev(), markup_key(app));
-    if let Some((k, l)) = ctx.data(|d| d.get_temp::<((u64, MarkupKey), Arc<DocLayout>)>(id))
+    let key = (app.session.document_id(), app.session.rev(), markup_key(app));
+    if let Some((k, l)) = ctx.data(|d| d.get_temp::<((u64, u64, MarkupKey), Arc<DocLayout>)>(id))
         && k == key
     {
         return l;
@@ -146,12 +147,12 @@ fn preview_options(app: &WordApp) -> wordcraft_render::RenderOptions {
     opts
 }
 
-/// The texture of one page, re-rendered only when the document, the markup settings, the page or
-/// the size changes.
+/// The texture of one page, re-rendered only when the document (its identity or revision), the
+/// markup settings, the page or the size changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique("print_page_texture");
-    let key = (app.session.rev(), markup_key(app), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, MarkupKey, usize, u32, u32), TextureHandle)>(id))
+    let key = (app.session.document_id(), app.session.rev(), markup_key(app), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, u64, MarkupKey, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -417,5 +418,18 @@ mod tests {
         app.run("file.printMarkup", json!({"value": true})).unwrap();
         app.run("review.trackingOptions", json!({"deleteMark": "hidden"})).unwrap();
         assert_eq!(pages(&app), (1, 1));
+    }
+
+    /// Two documents at the same revision drawn in one window's context (#5270 review): each
+    /// preview gets its own layout, not the other's cached one.
+    #[test]
+    fn the_preview_cache_tells_documents_apart() {
+        let long: Vec<String> = (0..200).map(|i| format!("Line {i}")).collect();
+        let app = |text: &str| crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(text)), Default::default());
+        let (long, short) = (app(&long.join("\n")), app("One line"));
+        assert_eq!(long.session.rev(), short.session.rev(), "the test needs equal revisions");
+        let ctx = egui::Context::default();
+        assert!(super::layout_of(&long, &ctx).pages.len() > 1);
+        assert_eq!(super::layout_of(&short, &ctx).pages.len(), 1);
     }
 }
