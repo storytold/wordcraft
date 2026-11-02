@@ -1,5 +1,7 @@
 # Releasing WordCraft
 
+> **Last updated:** 2026-11-02 · **Change:** macOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication.
+
 1. Bump the version on `main`: `cargo xtask version set 0.2.0` (the one source of truth is
    `[workspace.package] version`; the app shows it in `--version` and About, with the commit from
    `WORDCRAFT_BUILD_SHA`).
@@ -26,3 +28,11 @@ Local packaging: `packaging/macos/package.sh --arch universal`, `packaging/windo
 Dry run: `gh workflow run release.yml --ref <branch>` builds the unsigned jobs (version, Linux,
 Linux riscv64, Flatpak, FreeBSD, web) on any branch; the signing jobs are refused there by the `release`
 environment's branch rule, so no draft release is made.
+
+Local notarization can use `APPLE_KEYCHAIN_PROFILE` with a real `MACOS_SIGN_IDENTITY`. The profile replaces `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` for submission and failure-log requests; the three-variable form remains supported.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-02 | macOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication. |
