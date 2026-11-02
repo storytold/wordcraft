@@ -91,10 +91,17 @@ Every event carries `providerId`, `namespace` and `connectionId`. Request IDs co
 per-WASM-instance nonce plus a checked monotonic counter. Late replies from a previous page,
 connection, account, read or completed save cannot address a newer request. Metadata never
 contains credentials. `snapshot()` reports connection state, current provider resources,
-document IDs/dirty state and outstanding work; `setResources` rejects stale connection IDs.
+document IDs/titles/dirty state and outstanding work; `setResources` rejects stale connection IDs.
+This metadata read is available to trusted same-origin callers as soon as the API is installed,
+including before provider registration. Registration enables storage operations; it does not gate
+the document snapshot or authenticate scripts already running on the editor's origin.
 
-- 80 MiB per file and aggregate queued open/capture event bytes.
-- 16 pending operations; 64 queued events; 100 listed resources.
+- 80 MiB per file, per aggregate queued-open payload total and per aggregate queued-event payload total.
+- Save-choice admission has a 16-slot count covering dialogs, captures, ordinary commands, working
+  saves and reserved failed captures. Read admission separately allows at most 16 read/opening owners.
+  These are separate admission counts, not one aggregate limit of 16 operations. Ordinary commands
+  share a 16-entry queue, and recovery reserves space for up to 16 already admitted failed captures.
+- 64 queued events; 100 listed resources.
 - IDs: 1–160 ASCII letters/digits, hyphen or underscore.
 - Filenames: 1–255 UTF-8 bytes; no controls, slash, backslash, `.` or `..`.
 - Labels and update text: at most 100 UTF-8 bytes; read-error text at most 1024 bytes.

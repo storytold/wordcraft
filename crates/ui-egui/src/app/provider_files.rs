@@ -6,6 +6,7 @@ use crate::{WordApp, json};
 
 impl WordApp {
     /// UI Save/Save As only. Exports, automation and ordinary local saves keep their route.
+    /// Return whether the provider handled the UI request, including a reported refusal or a missing document.
     pub(crate) fn choose_provider_save(&mut self, save_as: bool) -> bool {
         let Some(host) = self.services.file_providers.clone().filter(|host| host.enabled()) else { return false };
         if !self.has_document() {
@@ -19,6 +20,8 @@ impl WordApp {
         true
     }
 
+    /// Consume provider commands on the application logic frame, then publish current document metadata.
+    /// The snapshot includes dirty comment drafts and is updated for an installed Host even before registration.
     pub(crate) fn provider_tick(&mut self) {
         let Some(host) = self.services.file_providers.clone() else { return };
         for command in host.take_commands() {
@@ -39,6 +42,9 @@ impl WordApp {
             .collect::<Vec<_>>();
         host.publish_documents(json!(snapshot), &ids);
     }
+    /// Commit available comment drafts and serialize the selected document with the ordinary Word package writer.
+    /// Provider captures retain their exact revision and reject macro-losing names; device copies remain non-durable.
+    /// Refused drafts, closed documents and encoding/download failures settle only the owned request.
     fn provider_save(&mut self, host: &Host, command: Command) {
         let Command::Save { request, doc, destination, name, save_as } = command else { return };
         if self.session.document_id() == doc {
@@ -110,6 +116,8 @@ impl WordApp {
             }
         }
     }
+    /// Consume a captured result without cleaning later revisions, newer comment drafts or a closed document.
+    /// A saved result binds its live document and invalidates overwritten-resource aliases; other results never ACK.
     fn provider_result(&mut self, host: &Host, command: Command) {
         let Command::Result { capture, resource, status } = command else { return };
         if status == "saved" && self.session.documents().iter().any(|d| d.id == capture.doc) {
@@ -134,6 +142,8 @@ impl WordApp {
             self.status("Provider save failed. Your changes are still open.");
         }
     }
+    /// Import actual provider bytes through the normal file command while preserving the device Recent list.
+    /// Bind only the successfully admitted document; decoding or password-required failures retain the existing document.
     fn provider_open(&mut self, host: &Host, command: Command) {
         let Command::Open { request, name, bytes } = command else { return };
         let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);

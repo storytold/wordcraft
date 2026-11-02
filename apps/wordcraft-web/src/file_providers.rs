@@ -14,23 +14,29 @@ const MAX_BYTES: u32 = 80 * 1024 * 1024;
 extern "C" {
     // Rust's Uint8Array::from slice conversion is an uncaught constructor import. Keep
     // recoverable JS allocation/copy exceptions inside the production failure path.
+    /// Copy an event payload into an owned JavaScript array, returning recoverable JS exceptions.
     #[wasm_bindgen(catch, js_namespace = Uint8Array, js_name = from)]
     fn copy_event_bytes(bytes: &[u8]) -> Result<Uint8Array, JsValue>;
 }
 
+/// Convert a bridge validation failure into the JavaScript error returned by a callback.
 fn error(message: impl ToString) -> JsValue {
     JsValue::from_str(&message.to_string())
 }
 
+/// Create JavaScript metadata from trusted Rust JSON, propagating parse exceptions.
 fn object(value: &serde_json::Value) -> Result<JsValue, JsValue> {
     js_sys::JSON::parse(&value.to_string())
 }
 
+/// Set a bridge property, rejecting both thrown exceptions and a non-writable target.
 fn set(target: &JsValue, key: &str, value: &JsValue) -> Result<(), JsValue> {
     if Reflect::set(target, &key.into(), value)? { Ok(()) } else { Err(error("file-provider API is not writable")) }
 }
 
 // Inspect UTF-16 length before copying a host string into WASM memory.
+/// Require a JavaScript string and check its UTF-16 length before allocating the Rust copy.
+/// The Host performs the field-specific UTF-8 and character validation afterward.
 fn bounded_string(value: JsValue, max_units: u32) -> Result<String, JsValue> {
     let text = value.dyn_into::<js_sys::JsString>().map_err(|_| error("resource fields must be strings"))?;
     if text.length() > max_units {
@@ -39,6 +45,8 @@ fn bounded_string(value: JsValue, max_units: u32) -> Result<String, JsValue> {
     text.as_string().ok_or_else(|| error("invalid resource field"))
 }
 
+/// Read only bounded resource ID, filename and optional display-time text from a host object.
+/// Reject null, arrays and non-string fields without serializing arbitrary extra properties.
 fn resource(value: JsValue) -> Result<Resource, JsValue> {
     if value.is_null() || !value.is_object() || Array::is_array(&value) {
         return Err(error("resource entries must be objects"));
@@ -51,12 +59,15 @@ fn resource(value: JsValue) -> Result<Resource, JsValue> {
     Ok(Resource { id, name, updated_at })
 }
 
+/// Schedule a repaint after the callback returns; document commands remain on the logic frame.
 fn wake_later(ctx: &egui::Context) {
     let ctx = ctx.clone();
     wasm_bindgen_futures::spawn_local(async move { ctx.request_repaint() });
 }
 
 /// Makes the capability discoverable without enabling it or changing the browser's writer.
+/// Expose frozen same-origin callbacks with bounded inputs and a fresh request-session nonce.
+/// `snapshot` is available before registration; file operations still require provider ownership.
 pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(|| error("no window"))?;
     if Reflect::has(&window, &API.into())? {
@@ -201,6 +212,8 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
     dispatch(&serde_json::json!({"type": "ready", "protocolVersion": 1}), None)
 }
 
+/// Dispatch one real Window CustomEvent with metadata and, when present, an owned byte array.
+/// Propagate copy, event-construction and dispatch errors; this does not acknowledge persistence.
 fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), JsValue> {
     let detail = object(metadata)?;
     if let Some(bytes) = bytes {
@@ -213,6 +226,8 @@ fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), 
     Ok(())
 }
 
+/// Publish the Host's bounded batches through the production browser dispatcher.
+/// Log recoverable delivery failures and repaint when the Host has app-thread recovery or remaining work.
 pub fn publish(host: &Host, ctx: &egui::Context) {
     if host.publish_events_with(dispatch, |error| log::error!("file-provider event delivery failed: {error:?}")) {
         ctx.request_repaint();

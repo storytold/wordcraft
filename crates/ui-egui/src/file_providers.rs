@@ -101,6 +101,8 @@ struct State {
 }
 
 impl State {
+    /// Report unresolved transport ownership, queued terminals and publication in progress.
+    /// A taken batch remains busy even when its last terminal is no longer in the event queue.
     fn busy(&self) -> bool {
         !self.dialogs.is_empty()
             || !self.captures.is_empty()
@@ -114,6 +116,7 @@ impl State {
             || self.events.iter().any(|event| matches!(event.metadata["type"].as_str(), Some("opened" | "openFailed" | "saveFailed")))
     }
 
+    /// Allocate a nonce-scoped request ID, rejecting an uninitialized or exhausted counter.
     fn next(&mut self, kind: &str) -> Result<String, String> {
         if self.nonce.is_empty() {
             return Err("file provider session is not initialized".into());
@@ -122,6 +125,8 @@ impl State {
         Ok(format!("{}-{kind}-{}", self.nonce, self.serial))
     }
 
+    /// Queue one event within the event-count and aggregate event-byte budgets.
+    /// Attach the current account/connection identity without changing request ownership on rejection.
     fn event(&mut self, mut metadata: Value, bytes: Option<Vec<u8>>) -> Result<(), String> {
         let total = self.events.iter().fold(0usize, |n, e| n.saturating_add(e.bytes.as_ref().map_or(0, Vec::len)));
         if self.events.len() >= MAX_EVENTS || total.saturating_add(bytes.as_ref().map_or(0, Vec::len)) > MAX_BYTES {
@@ -136,6 +141,8 @@ impl State {
         Ok(())
     }
 
+    /// Find this document's save ownership across choices, captures, commands and recovery.
+    /// Independent reads do not count as a pending save for this document.
     fn pending(&self, doc: u64) -> bool {
         self.dialogs.values().any(|d| d.doc == doc)
             || self.captures.values().any(|c| c.doc == doc)
@@ -148,6 +155,8 @@ impl State {
             })
     }
 
+    /// Move retained terminals into available event slots in order.
+    /// Retire each working/opening owner only after its terminal has been queued successfully.
     fn flush_finished(&mut self) {
         while let Some(terminal) = self.finished.front().cloned() {
             if self.event(terminal.metadata, None).is_err() {
@@ -173,16 +182,19 @@ pub struct Host(Arc<Mutex<State>>);
 struct Publication(Host);
 
 impl Drop for Publication {
+    /// Release publication ownership when the outer batch leaves its callback boundary.
     fn drop(&mut self) {
         self.0.state().publishing = false;
     }
 }
 
 impl Host {
+    /// Lock shared transport state, retaining access to the state if an earlier holder poisoned the mutex.
     fn state(&self) -> MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Initialize the per-instance request nonce exactly once after validating its ID and minimum length.
     pub fn set_session(&self, nonce: String) -> Result<(), String> {
         let mut s = self.state();
         if !s.nonce.is_empty() || !valid_id(&nonce) || nonce.len() < 16 {
@@ -192,6 +204,8 @@ impl Host {
         Ok(())
     }
 
+    /// Register and enable a valid provider identity, returning its nonce-scoped connection ID.
+    /// Re-registering the identical identity is idempotent; a different identity requires unregistering first.
     pub fn connect(&self, id: String, label: String, namespace: String) -> Result<String, String> {
         if !valid_id(&id) || !valid_text(&label, 100) || !valid_id(&namespace) {
             return Err("invalid file provider identity".into());
@@ -208,6 +222,8 @@ impl Host {
         Ok(connection)
     }
 
+    /// Clear provider identity, resources, bindings and metadata only when transport ownership is idle.
+    /// Unresolved commands, retained/queued terminals and a taken publisher batch prevent account changes.
     pub fn disconnect(&self) -> Result<(), String> {
         let mut s = self.state();
         if s.busy() {
@@ -223,15 +239,18 @@ impl Host {
         Ok(())
     }
 
+    /// Report registration independently of whether new provider operations are enabled.
     pub fn connected(&self) -> bool {
         self.state().identity.is_some()
     }
 
+    /// Report whether a registered provider currently admits new choices and reads.
     pub fn enabled(&self) -> bool {
         let s = self.state();
         s.identity.is_some() && s.enabled
     }
 
+    /// Pause or resume new operations for a registered provider without discarding outstanding owners.
     pub fn set_enabled(&self, enabled: bool) -> Result<(), String> {
         let mut s = self.state();
         if s.identity.is_none() {
@@ -241,23 +260,29 @@ impl Host {
         Ok(())
     }
 
+    /// Report whether account unregistering must wait for pending work or terminal publication.
     pub fn busy(&self) -> bool {
         self.state().busy()
     }
 
+    /// Report unresolved save ownership for the specified document, including failed-delivery recovery.
     pub fn pending_for(&self, doc: u64) -> bool {
         self.state().pending(doc)
     }
 
+    /// Report whether the document has a provider resource binding in this account.
     pub(crate) fn bound(&self, doc: u64) -> bool {
         self.state().bindings.contains_key(&doc)
     }
 
+    /// Return the bound provider filename without treating its resource ID as a local path.
     pub(crate) fn filename(&self, doc: u64) -> Option<String> {
         self.state().bindings.get(&doc).map(|b| b.name.clone())
     }
 
     /// Start a destination choice. Repeated Save while one is unresolved does not recapture.
+    /// Use the save-choice admission count, which includes ordinary commands and reserved failed captures.
+    /// The separate read-owner count is not a single aggregate budget shared with saves.
     pub(crate) fn choose(&self, doc: u64, revision: u64, name: String, save_as: bool) -> Result<(), String> {
         if !valid_name(&name) {
             return Err("invalid provider filename".into());
@@ -283,6 +308,8 @@ impl Host {
         Ok(())
     }
 
+    /// Resolve an owned choice to provider, device or cancellation after validating the destination/name.
+    /// A full ordinary command queue leaves a non-cancelled choice owned so its callback can be retried.
     pub fn resolve_dialog(&self, request: &str, destination: &str, name: &str) -> Result<(), String> {
         if !matches!(destination, "provider" | "device" | "cancel") || (!name.is_empty() && !valid_name(name)) {
             return Err("invalid save destination or filename".into());
@@ -305,6 +332,8 @@ impl Host {
     }
 
     /// Only the app may create captures, after committing drafts and encoding the selected format.
+    /// Require the matching working document and preserve it if queueing the immutable payload fails.
+    /// Save As or a changed filename cannot inherit an existing overwrite resource.
     pub(crate) fn capture(&self, request: &str, capture: Capture, bytes: Vec<u8>) -> Result<(), String> {
         if bytes.len() > MAX_BYTES || !valid_name(&capture.name) {
             return Err("file exceeds the provider limit or has an invalid name".into());
@@ -325,6 +354,8 @@ impl Host {
         Ok(())
     }
 
+    /// Validate and consume one still-owned capture into an app-thread terminal result.
+    /// A full command queue preserves the capture; only the app consumer can acknowledge the captured revision.
     pub fn result(&self, request: String, status: String, resource: String) -> Result<(), String> {
         if !matches!(status.as_str(), "saved" | "failed" | "cancel" | "download")
             || (status == "saved" && !valid_id(&resource))
@@ -343,6 +374,7 @@ impl Host {
     }
 
     /// Returns other documents bound to the overwritten resource. Their clean state is stale.
+    /// Remove those aliases and refresh provider Recents; the application advances their document revisions.
     pub(crate) fn bind(&self, capture: &Capture, resource: String) -> Vec<u64> {
         let mut s = self.state();
         let aliases: Vec<u64> = s.bindings.iter().filter(|(doc, b)| **doc != capture.doc && b.resource == resource).map(|(doc, _)| *doc).collect();
@@ -356,6 +388,8 @@ impl Host {
         aliases
     }
 
+    /// Replace current-account Recent metadata after validating count, fields and unique IDs.
+    /// Reject a stale connection without changing the existing list.
     pub fn set_resources(&self, connection: &str, resources: Vec<Resource>) -> Result<(), String> {
         if resources.len() > MAX_RESOURCES {
             return Err("too many provider resources".into());
@@ -372,6 +406,8 @@ impl Host {
         Ok(())
     }
 
+    /// Request bytes for an enabled listed resource and return the correlated read ID.
+    /// Read admission counts reads plus opening owners separately from the save-choice admission budget.
     pub fn request_open(&self, resource: &str) -> Result<String, String> {
         let mut s = self.state();
         if !s.enabled || s.identity.is_none() || !s.resources.iter().any(|r| r.id == resource) {
@@ -386,6 +422,8 @@ impl Host {
         Ok(request)
     }
 
+    /// Admit bounded bytes for a still-owned read into the ordinary app command queue.
+    /// Validate filename, queue count and aggregate open bytes before retiring callback ownership.
     pub fn open(&self, request: String, name: String, bytes: Vec<u8>) -> Result<(), String> {
         if bytes.len() > MAX_BYTES || !valid_name(&name) {
             return Err("file exceeds the provider limit or has an invalid name".into());
@@ -406,6 +444,8 @@ impl Host {
         Ok(())
     }
 
+    /// Queue a correlated failure for an outstanding read and then retire its callback ownership.
+    /// Invalid error text or a full event queue leaves that read outstanding.
     pub fn cancel_open(&self, request: String, error: String) -> Result<(), String> {
         if !valid_optional_text(&error, 1024) {
             return Err("invalid provider read error".into());
@@ -417,6 +457,8 @@ impl Host {
         Ok(())
     }
 
+    /// Complete an app-admitted read once, binding only a successfully imported document.
+    /// Retain its opened/openFailed terminal and owner until event capacity is available.
     pub(crate) fn opened(&self, request: &str, capture: Option<Capture>, error: &str) {
         let mut s = self.state();
         let Some(resource) = s.opening.get(request).cloned() else { return };
@@ -434,6 +476,8 @@ impl Host {
         s.flush_finished();
     }
 
+    /// Fail a still-working save once without acknowledging or binding it.
+    /// Bound the error and retain its terminal until it can enter the event queue.
     pub(crate) fn failed(&self, request: &str, message: &str) {
         let mut s = self.state();
         if !s.working.contains_key(request) || s.finished.iter().any(|terminal| terminal.request == request) {
@@ -447,6 +491,8 @@ impl Host {
         s.flush_finished();
     }
 
+    /// Transfer ordinary commands and reserved failed captures to the application logic frame.
+    /// Failed captures become non-durable results; Save commands acquire working ownership before serialization.
     pub(crate) fn take_commands(&self) -> Vec<Command> {
         let mut s = self.state();
         let mut commands = std::mem::take(&mut s.commands);
@@ -463,6 +509,9 @@ impl Host {
         commands
     }
 
+    /// Recover only an unresolved owner identified by the failed event's connection and request.
+    /// Accepted synchronous replies win; failed reads lose callback authority before their retained terminal drains.
+    /// Failed save payloads use reserved metadata-only space for later application consumption.
     fn delivery_failed(&self, metadata: &Value) {
         let mut s = self.state();
         if s.identity.is_none() || metadata["connectionId"].as_str() != Some(s.connection.as_str()) {
@@ -543,6 +592,8 @@ impl Host {
         self.state().working.remove(request);
     }
 
+    /// Take the current event batch and refill newly available slots from retained terminals.
+    /// A caller must finish its taken batch before permitting an account change; the publisher guard enforces this.
     pub fn take_events(&self) -> Vec<Event> {
         let mut s = self.state();
         let events = std::mem::take(&mut s.events);
@@ -550,6 +601,8 @@ impl Host {
         if events.is_empty() { std::mem::take(&mut s.events) } else { events }
     }
 
+    /// Replace the document snapshot even when no provider is registered.
+    /// Retire closed-document bindings and choices; captured saves still require their own terminal result.
     pub(crate) fn publish_documents(&self, documents: Value, open_ids: &[u64]) {
         let mut s = self.state();
         s.documents = documents;
@@ -558,6 +611,8 @@ impl Host {
         s.dialogs.retain(|_, d| open_ids.contains(&d.doc));
     }
 
+    /// Return protocol, connection, resource, document and pending metadata without taking queued work.
+    /// This trusted same-origin metadata read is available before provider registration; it grants no file operation.
     pub fn snapshot(&self) -> Value {
         let s = self.state();
         json!({"protocolVersion":1, "connected":s.identity.is_some(), "enabled":s.identity.is_some() && s.enabled,
@@ -567,6 +622,7 @@ impl Host {
     }
 
     /// Native Home/Open view, separate from paths belonging to this device.
+    /// Only enabled provider entries issue correlated reads; resource names never enter device Recents.
     pub(crate) fn recent_ui(&self, ui: &mut egui::Ui) {
         let (label, resources) = {
             let s = self.state();
@@ -589,6 +645,7 @@ impl Host {
     }
 }
 
+/// Remove control characters and truncate error text at a UTF-8 boundary within 1024 bytes.
 fn bounded_error(message: &str) -> String {
     let mut error = String::new();
     for ch in message.chars().filter(|ch| !ch.is_control()) {
@@ -600,18 +657,22 @@ fn bounded_error(message: &str) -> String {
     error
 }
 
+/// Accept only nonempty IDs of at most 160 ASCII letters, digits, hyphens or underscores.
 fn valid_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 160 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
+/// Require nonblank text within the byte limit and without control characters.
 fn valid_text(value: &str, max: usize) -> bool {
     !value.trim().is_empty() && valid_optional_text(value, max)
 }
 
+/// Validate byte length and control characters while allowing an empty optional field.
 fn valid_optional_text(value: &str, max: usize) -> bool {
     value.len() <= max && !value.chars().any(char::is_control)
 }
 
+/// Validate a bounded filename, excluding path separators and the special dot directory names.
 pub(crate) fn valid_name(value: &str) -> bool {
     valid_text(value, 255) && !matches!(value, "." | "..") && !value.contains(['/', '\\'])
 }
