@@ -265,9 +265,10 @@ fn undo_list_row_returns_focus_to_the_document() {
     assert!(a.session.undo_history().is_empty(), "the step was undone");
 }
 
-/// A saved .docx (so AutoSave can cover it) with the title bar drawn over it.
-fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}", std::process::id()));
+/// A saved .docx (so AutoSave can cover it), or with `reopened` the same file opened in a
+/// fresh window, with the title bar drawn over it.
+fn autosave_harness(reopened: bool) -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}-{reopened}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("draft.docx");
@@ -275,6 +276,11 @@ fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::Pa
     a.run("text.insert", json!({"text": "Hello"})).unwrap();
     a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(a.autosaves(), "a saved .docx is covered by AutoSave");
+    if reopened {
+        a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert!(!a.autosaves(), "an opened file waits for the user's go-ahead");
+    }
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
@@ -297,7 +303,7 @@ fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::Pa
 #[test]
 fn clicking_the_autosave_label_toggles_autosave() {
     use egui_kittest::kittest::Queryable;
-    let (mut h, dir) = autosave_harness();
+    let (mut h, dir) = autosave_harness(false);
     assert!(h.state().autosaves());
     h.get_by_label("AutoSave").click();
     h.run_steps(2);
@@ -305,5 +311,18 @@ fn clicking_the_autosave_label_toggles_autosave() {
     h.get_by_label("AutoSave").click();
     h.run_steps(2);
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// #3307: a file opened, not saved, in this window had the switch greyed out, and clicking it
+/// asked for Save As. Clicking it now turns AutoSave on for that file.
+#[test]
+fn clicking_autosave_on_an_opened_file_turns_it_on() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, dir) = autosave_harness(true);
+    h.get_by_label("AutoSave").click();
+    h.run_steps(2);
+    assert!(h.state().autosaves(), "the switch turned AutoSave on");
+    assert!(h.state().dialog.is_none() && h.state().file_dialog.is_none(), "without Save As");
     let _ = std::fs::remove_dir_all(dir);
 }
