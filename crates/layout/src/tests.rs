@@ -7,6 +7,7 @@ use wordcraft_doc::{Pos, Table};
 mod autospace;
 mod bidi;
 mod budget;
+mod cell_floats;
 mod complex;
 mod grid;
 mod ligature;
@@ -5320,8 +5321,7 @@ fn floats_in_headers_and_table_cells_are_drawn() {
 }
 
 /// A float laid out in its cell (`layoutInCell`) whose offset would take it out of the cell is
-/// moved in to the cell's side, at its wrap distance (a letterhead logo anchored left of its
-/// header cell). One laid out on the page (`layoutInCell="0"`) keeps its offset.
+/// moved in to the cell's outer side (a letterhead logo anchored left of its header cell). One laid out on the page (`layoutInCell="0"`) keeps its offset.
 #[test]
 fn cell_floats_laid_out_in_the_cell_stay_in_it() {
     use wordcraft_doc::para::{Anchor, Float, Wrap};
@@ -5341,14 +5341,14 @@ fn cell_floats_laid_out_in_the_cell_stay_in_it() {
     // An offset inside the cell is kept: the cell's text starts 20 pt left of this one.
     let text_left = place(20.0, false, Wrap::Tight) - 20.0;
     assert!(text_left > 72.0 && text_left < 72.0 + 12.0, "the cell's text starts past its margin: {text_left}");
-    let text_w = cell_w - 2.0 * (text_left - 72.0);
-    // Anchored 95 pt left of the column: moved in to the cell's left side at its wrap distance.
+    let cell_left = text_left - 5.4;
+    // Anchored 95 pt left of the column: moved in to the cell's outer left side.
     let left = place(-95.0, false, Wrap::Tight);
-    assert!((left - (text_left + 9.0)).abs() < 0.5, "pulled in to the left side: {left} vs {text_left}");
+    assert!((left - cell_left).abs() < 0.5, "pulled in to the left side: {left} vs {text_left}");
     // Past the right side: moved in to it.
     let right = place(cell_w + 40.0, false, Wrap::Tight);
     // (within a point: the cell's border room is not split evenly between its two sides)
-    assert!((right - (text_left + text_w - 9.0 - 80.0)).abs() < 1.0, "pulled in to the right side: {right}");
+    assert!((right - (cell_left + cell_w - 80.0)).abs() < 1.0, "pulled in to the right side: {right}");
     // Not laid out in the cell: the offset is kept, off the cell or not.
     let out = place(-95.0, true, Wrap::Tight);
     assert!((out - (text_left - 95.0)).abs() < 0.5, "layoutInCell=0 keeps the offset: {out}");
@@ -5397,28 +5397,31 @@ fn cell_float_bounds_use_the_placed_width() {
 #[test]
 fn keep_in_cell_bounds() {
     use super::boxes::keep_in_cell;
-    assert_eq!(keep_in_cell(-95.0, 80.0, 234.0, 9.0), 9.0);
-    assert_eq!(keep_in_cell(300.0, 80.0, 234.0, 9.0), 234.0 - 9.0 - 80.0);
-    assert_eq!(keep_in_cell(20.0, 80.0, 234.0, 9.0), 20.0);
-    // Wider than the cell: starts at the left side.
-    assert_eq!(keep_in_cell(50.0, 300.0, 234.0, 9.0), 0.0);
-    assert_eq!(keep_in_cell(50.0, 234.0, 234.0, 9.0), 0.0);
-    // Reduce the requested clearance when only the object itself fits.
-    assert_eq!(keep_in_cell(-95.0, 230.0, 234.0, 9.0), 2.0);
-    assert_eq!(keep_in_cell(300.0, 230.0, 234.0, 9.0), 2.0);
-    // No wrap distance, and a negative one is treated as none.
-    assert_eq!(keep_in_cell(-5.0, 80.0, 234.0, 0.0), 0.0);
-    assert_eq!(keep_in_cell(-5.0, 80.0, 234.0, -4.0), 0.0);
+    assert_eq!(keep_in_cell(-95.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 80.0, 0.0, 234.0), 234.0 - 80.0);
+    assert_eq!(keep_in_cell(20.0, 80.0, 0.0, 234.0), 20.0);
+    // Wider than the cell, or exactly its width: starts at the outer left side.
+    assert_eq!(keep_in_cell(50.0, 300.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(50.0, 234.0, 0.0, 234.0), 0.0);
+    // Nearly full: no clearance is added to the object's position.
+    assert_eq!(keep_in_cell(-95.0, 230.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(300.0, 230.0, 0.0, 234.0), 4.0);
+    // Cell edges include its margins; negative offsets can be wholly inside the cell.
+    assert_eq!(keep_in_cell(-5.0, 80.0, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(-5.0, 80.0, -4.0, 234.0), -4.0);
+    assert_eq!(keep_in_cell(-5.15, 63.75, -5.4, 448.2), -5.15);
+    assert_eq!(keep_in_cell(395.95, 47.25, -5.4, 448.2), 395.95);
     // Clamp limits stay finite and ordered even at small scales or with malformed geometry.
     for width in [0.1_f32, 0.3, 1.0, 234.0] {
         let object = width * 0.98;
         for offset in [-width, 0.0, width, f32::NAN, f32::INFINITY] {
-            let x = keep_in_cell(offset, object, width, width);
+            let x = keep_in_cell(offset, object, 0.0, width);
             assert!(x.is_finite() && x >= 0.0 && x + object <= width + f32::EPSILON * width.max(1.0));
         }
     }
-    assert_eq!(keep_in_cell(10.0, 80.0, f32::NAN, 9.0), 0.0);
-    assert_eq!(keep_in_cell(10.0, f32::NAN, 234.0, 9.0), 0.0);
+    assert_eq!(keep_in_cell(10.0, 80.0, 0.0, f32::NAN), 0.0);
+    assert_eq!(keep_in_cell(10.0, f32::NAN, 0.0, 234.0), 0.0);
+    assert_eq!(keep_in_cell(10.0, 80.0, f32::NAN, 234.0), 10.0);
 }
 
 /// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.

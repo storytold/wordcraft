@@ -8,7 +8,12 @@ use super::*;
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
-    Cell(Option<&'a para::CellText>),
+    /// Outer cell edges relative to its text origin (not including wrap distances).
+    Cell {
+        text: Option<&'a para::CellText>,
+        left: f32,
+        right: f32,
+    },
 }
 
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
@@ -30,10 +35,11 @@ pub(crate) fn layout_box(
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
-    let (table, in_cell) = match context {
-        BoxContext::Other => (None, false),
-        BoxContext::Cell(table) => (Some(table.unwrap_or(&empty_cell)), true),
+    let (table, cell_edges) = match context {
+        BoxContext::Other => (None, None),
+        BoxContext::Cell { text, left, right } => (Some(text.unwrap_or(&empty_cell)), Some((left, right))),
     };
+    let in_cell = cell_edges.is_some();
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
@@ -147,13 +153,14 @@ pub(crate) fn layout_box(
                     // and frameless page/margin fallbacks retain the text-top origin.
                     let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
                     let mut r = float_rect(frame, (0.0, width), float_y, w, h, float);
-                    // Laid out in the cell (`wp:anchor/@layoutInCell`, Word's "Lay out in table
-                    // cell"): Word keeps the object within the cell's sides, moving it in when its
-                    // offset would take it out, at its wrap distance from the edge. A letterhead
-                    // logo anchored a few centimetres left of its cell lands at the cell's left
-                    // edge, not off the page.
-                    if in_cell && !float.outside_cell && float.h_align.is_none() && float.wrap != Wrap::InFrontOfText {
-                        r.x = keep_in_cell(r.x, r.w, width, float.dist);
+                    // Only move an offset-positioned float when its box crosses the outer
+                    // cell edge. Cell text margins and wrap distances do not move the object.
+                    if let Some((left, right)) = cell_edges
+                        && !float.outside_cell
+                        && float.h_align.is_none()
+                        && float.wrap != Wrap::InFrontOfText
+                    {
+                        r.x = keep_in_cell(r.x, r.w, left, right);
                     }
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
@@ -374,21 +381,17 @@ pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, legacy: f32, te
     r
 }
 
-/// Where a floating object `w` wide, laid out in a cell `width` wide (`wp:anchor/@layoutInCell`),
-/// starts across: at `x` when that keeps it inside the cell, else moved in to the nearer side at
-/// `dist` (its wrap distance) from it. One wider than the cell starts at the left side. Word
-/// keeps the object within the cell's boundaries, "moving it if necessary"; it does not let an
-/// offset push it out of the cell or off the page. Clearance shrinks when both full wrap distances
-/// do not fit beside the object; an object as wide as the cell starts at its left side.
-pub(crate) fn keep_in_cell(x: f32, w: f32, width: f32, dist: f32) -> f32 {
-    let room = width - w;
-    if !room.is_finite() || room <= 0.0 {
-        return 0.0;
+/// Keep a float's box within the outer cell edges, relative to the cell's text origin.
+/// Offsets that fit are unchanged, including those inside the text margins. Wrap distances
+/// affect surrounding text only. An oversized object starts at the outer left edge.
+pub(crate) fn keep_in_cell(x: f32, w: f32, left: f32, right: f32) -> f32 {
+    let left = if left.is_finite() { left } else { 0.0 };
+    let end = right - w;
+    if !end.is_finite() || end <= left {
+        return left;
     }
-    let dist = dist.max(0.0).min(room / 2.0);
-    // Derive both bounds from the same remaining space, avoiding cancellation at small sizes.
     // max/min also place a non-finite offset at a finite edge without panicking.
-    x.max(dist).min(room - dist)
+    x.max(left).min(end)
 }
 
 /// A text box's default internal margins (Word's: 0.1" left/right, 0.05" top/bottom); a box's
