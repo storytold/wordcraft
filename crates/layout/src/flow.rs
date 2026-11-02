@@ -267,7 +267,7 @@ impl<'a> Flow<'a> {
         // Single column, non-web mode and empty carry make next_room the fresh body capacity.
         let float_capacity = if shared_page { pb.next_room(self.body_top) } else { pb.uncapped_bottom() - pb.top };
         let float_overflows = self.picture_overflows(pb, float_capacity);
-        if !(float_overflows && !pb.web && (!pb.at_top() || partial_page_start)) {
+        if !float_overflows || pb.web || pb.at_top() && !partial_page_start {
             return;
         }
         pb.advance(self.block, self.body_top);

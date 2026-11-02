@@ -12927,6 +12927,7 @@ mod contextual_picture_fit {
 
 mod continuous_picture_fit {
     use super::*;
+    use crate::notes::v_span;
     use wordcraft_doc::CharProps;
     use wordcraft_doc::para::{Anchor, Float, Wrap};
     use wordcraft_doc::props::LineSpacing;
