@@ -10,6 +10,9 @@ pub(super) struct SysFallback {
     pub(super) misses: std::collections::HashSet<char>,
     /// Preferred fallback families already loaded (or tried) by a fallback search.
     pub(super) tried: std::collections::HashSet<&'static str>,
+    /// The catalog generation at which every installed right-to-left fallback family was last
+    /// loaded or tried: until the next rescan, loading them again has nothing to do.
+    pub(super) rtl_loaded: Option<u32>,
 }
 
 /// Characters remembered as covered by no installed font (a cap on memory: once full the set

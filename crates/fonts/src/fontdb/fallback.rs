@@ -29,8 +29,10 @@ impl FontDb {
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
-    /// The fallback search, cached per (character, excluded face) until more faces load.
+    /// The fallback search, cached per (character, excluded face) until more faces load or the
+    /// system fonts are cataloged again.
     fn cached_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        let generation = self.catalog_generation();
         let n = self.read_faces().len();
         {
             let cache = self.fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -48,6 +50,11 @@ impl FontDb {
             return found;
         }
         let mut cache = self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Checked under the lock: a rescan counts itself before it drops the caches, so an answer
+        // chosen from the old catalog is either refused here or dropped by the rescan.
+        if generation != self.catalog_generation() {
+            return found;
+        }
         if cache.faces != n || cache.map.len() >= FALLBACK_CACHE_MAX {
             cache.map.clear();
             cache.faces = n;
@@ -61,11 +68,24 @@ impl FontDb {
         if let Some(face) = self.circle_fallback(c, exclude) {
             return (Some(face), self.read_faces().len());
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::is_rtl(c) || arabic_block(c) {
+            self.load_rtl_fallbacks();
+        }
         let (found, n) = self.loaded_fallback(c, exclude);
         if found.is_some() {
             return (found, n);
         }
         self.system_search(c, exclude)
+    }
+
+    /// How many times the system fonts have been cataloged: a fallback chosen under an older count
+    /// is not cached (a rescan may have cataloged a family that ranks above it).
+    fn catalog_generation(&self) -> u32 {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.catalog_gen.load(Ordering::Acquire);
+        #[cfg(target_arch = "wasm32")]
+        0
     }
 
     fn circle_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
@@ -142,7 +162,8 @@ impl FontDb {
     /// keeps the per-character fallback.
     ///
     /// Cached per (character set, excluded face, bold, italic) and dropped when the loaded faces
-    /// change, like [`Self::fallback_for`], so relayout doesn't repeat the search.
+    /// change or the system fonts are cataloged again, like [`Self::fallback_for`], so relayout
+    /// doesn't repeat the search.
     pub fn fallback_for_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
         if chars.is_empty() {
             return None;
@@ -151,6 +172,7 @@ impl FontDb {
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
+        let generation = self.catalog_generation();
         let n = self.read_faces().len();
         {
             let cache = self.run_fallbacks.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -165,6 +187,10 @@ impl FontDb {
         // a miss count as stale, not as the answer for the new count.
         let (found, n) = self.search_run(&key.0, exclude, bold, italic);
         let mut cache = self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A rescan since the search began: not cached (see `cached_fallback`).
+        if generation != self.catalog_generation() {
+            return found;
+        }
         if cache.faces != n || cache.map.len() >= RUN_FALLBACK_CACHE_MAX || cache.chars.saturating_add(key.0.len()) > RUN_FALLBACK_CACHE_CHARS {
             cache.map.clear();
             cache.faces = n;
@@ -177,6 +203,12 @@ impl FontDb {
 
     /// The face for a run, and the number of loaded faces the search last chose from.
     fn search_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> (Option<Arc<FontFace>>, usize) {
+        // Right-to-left text: the ranked families loaded first, as in `search_fallback`, or a
+        // loaded face that covers the whole run would win by what loaded before it (#4300).
+        #[cfg(not(target_arch = "wasm32"))]
+        if chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c)) {
+            self.load_rtl_fallbacks();
+        }
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let (mut base, mut checked) = self.loaded_covering(chars, exclude);
         #[cfg(not(target_arch = "wasm32"))]
@@ -232,6 +264,50 @@ impl FontDb {
         let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
         let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
         (found, faces.len())
+    }
+
+    /// Load every installed [`RTL_FALLBACKS`] family (each tried once). The right-to-left
+    /// fallback ranks those families above the other loaded faces, but only chooses among faces
+    /// already loaded: without this, Hebrew or Arabic text fell back to whatever loaded face
+    /// happened to cover it first (Liberation Sans once a document had asked for Arial), and to
+    /// the ranked family only after something else loaded it. The same text then drew in
+    /// different fonts depending on what was laid out before it, even within one document (#4300).
+    ///
+    /// Both fallback searches call it, per character and per run, when they miss their cache. It
+    /// does the work once per catalog generation (twice when the first call is what catalogs the
+    /// fonts): later calls only compare the generation, under the `sys` lock, until the font
+    /// folders are scanned again. A family installed later is not marked tried (only cataloged
+    /// families are), and a rescan drops the cached choices, so it loads at the next right-to-left
+    /// lookup after the rescan, also for text looked up before.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_rtl_fallbacks(&self) {
+        let done = |generation: u32| {
+            let sys = self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            !sys.enabled || sys.rtl_loaded == Some(generation)
+        };
+        if done(self.catalog_generation()) {
+            return;
+        }
+        // One search at a time (see `searching`): a search racing one that is still loading a
+        // family would skip it as tried and choose without it.
+        let _searching = self.searching.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Read before the catalog: a scan this read starts (or one racing it) counts after, so
+        // the next call does the work again rather than skip a family it didn't see.
+        let generation = self.catalog_generation();
+        if done(generation) {
+            return;
+        }
+        let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
+        for fam in RTL_FALLBACKS {
+            if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
+                continue;
+            }
+            if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tried.insert(fam) {
+                continue;
+            }
+            self.load_cataloged(fam);
+        }
+        self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).rtl_loaded = Some(generation);
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged
