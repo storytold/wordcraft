@@ -49,6 +49,7 @@ impl WordApp {
         self.canvas.show_other_document(seen);
         self.controls = Default::default();
         self.dialog = None;
+        self.spelling_review = None;
         self.colors = None;
         self.restrict = crate::dialogs_review::RestrictPane { open: self.restrict.open, ..Default::default() };
         self.status_msg = None;

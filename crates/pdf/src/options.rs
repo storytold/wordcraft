@@ -33,6 +33,10 @@ pub struct PdfOptions {
     pub comments: bool,
     /// Compress content streams.
     pub compress: bool,
+    /// Write hyperlinks and in-document links as link annotations. A print job leaves them out:
+    /// they print nothing, and a printer driver can't fit a page with annotations to the paper
+    /// (#4734).
+    pub links: bool,
     /// Print on this paper (width, height in points) instead of each page's own size: the page
     /// is scaled to fit and centred, the paper turned to the page's orientation (Scale to paper
     /// size, #2108). `None` keeps the document's page sizes.
@@ -52,6 +56,7 @@ impl Default for PdfOptions {
             include_markup: false,
             comments: false,
             compress: true,
+            links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
         }
