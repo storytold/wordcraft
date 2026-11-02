@@ -181,8 +181,8 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
 | 2026-11-02 | trivial | Guarded optional PDF TOC refresh preserves admission limits and PAGEREF page labels. |
 | 2026-11-02 | trivial | Guarded transient print REF/PAGEREF refresh preserves saved caches; right-clicking a wrapped REF updates its visual line without changing the source position. PNG export excludes tracked deletions from pagination and ink when Print Markup is off, includes them when on, and preserves the live document. |
-| 2026-10-29 | trivial | Port existing transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
-| 2026-10-29 | trivial | Port existing guarded PDF TOC and transient REF/PAGEREF behavior to split modules. Source review only; compilation and runtime qualification pending. |
+| 2026-10-29 | trivial | Transient REF/PAGEREF print evaluation uses temporary copies; unsupported targets retain cache or refuse strict preparation. |
+| 2026-10-29 | trivial | Guarded optional PDF TOC refresh and transient REF/PAGEREF print evaluation retain cached fallback and strict refusal. |
 | 2026-10-25 | trivial | #2473: wrapped REF navigation keeps atomic source positions with snapshot-owned visual hints. Pointer hits resolve on the final layout after typing; reflow rejects old owners. Synthetic controls only; readiness unchanged. |
 | 2026-10-17 | trivial | Print PAGEREF range anchors follow native controls; ambiguous caches remain preserved. |
 | 2026-10-22 | trivial | View windows: several open documents and Switch Windows in the engine |
