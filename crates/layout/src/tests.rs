@@ -2792,6 +2792,12 @@ fn side_borders_lie_beyond_their_distance_from_the_text() {
             .find_map(|i| if let Placed::Lines { x, para, .. } = i { para.lines.first().map(|l| (*x, *x + l.right)) } else { None })
             .unwrap();
         let shade = items.iter().find_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).unwrap();
+        if let Some((b_rect, _)) = items.iter().find_map(|i| if let Placed::BorderBox { rect, borders } = i { Some((*rect, borders)) } else { None }) {
+            assert!((b_rect.x - (text - space)).abs() < 0.01, "{b_rect:?} {text}");
+            assert!((b_rect.right() - (end + space)).abs() < 0.01, "{b_rect:?} {end}");
+            assert!((shade.x - (b_rect.x - 3.0)).abs() < 0.01 && (shade.right() - (b_rect.right() + 3.0)).abs() < 0.01, "{b_rect:?} {shade:?}");
+            continue;
+        }
         let rules: Vec<(f32, f32)> = items.iter().filter_map(|i| if let Placed::Rule { x0, x1, .. } = i { Some((*x0, *x1)) } else { None }).collect();
         assert_eq!(rules.len(), 3, "{rules:?}");
         let (above, left, right) = (rules[0], rules[1], rules[2]);
