@@ -428,7 +428,8 @@ impl WordApp {
     }
 
     /// [`Windows::settle`]; a window that moved into the root viewport keeps its place on the
-    /// page (the page's scroll state is the viewport's).
+    /// page (the page's scroll state is the viewport's) and takes the keyboard focus, as a new
+    /// window does: nothing else re-arms `want_focus` for it (#5263).
     fn settle_windows(&mut self) {
         let root = |w: &Windows| w.viewports.as_ref().and_then(Viewports::root);
         let before = root(&self.windows);
@@ -437,8 +438,10 @@ impl WordApp {
         let Some(key) = self.windows.list.get(adopted).copied() else { return };
         if key == self.windows.shown {
             self.canvas.scroll_request = Some(self.canvas.scroll_offset);
+            self.canvas.want_focus = true;
         } else if let Some(w) = self.windows.get_mut(key).and_then(|w| w.ui.as_mut()) {
             w.canvas.scroll_request = Some(w.canvas.scroll_offset);
+            w.canvas.want_focus = true;
         }
     }
 
@@ -662,16 +665,32 @@ impl WordApp {
     /// The windows' focus changes and close requests from this frame.
     fn window_events(&mut self, ctx: &egui::Context, events: &[WindowEvent]) {
         for event in events {
-            let WindowEvent::CloseRequested(id) = *event else { continue };
-            let Some(key) = self.windows.list.get(id).copied() else { continue };
-            // The last window's close button quits: the host asks first ([`WordApp::close_requested`]).
-            if self.windows.open.len() <= 1 || self.quit_requested {
-                continue;
+            match *event {
+                WindowEvent::Focused(id) => {
+                    // The window that got the OS focus becomes the active one now, instead of
+                    // once the frame ends ([`WordApp::after_windows`]), and its canvas asks for
+                    // the keyboard focus: `want_focus` is consumed on the first frame (a new
+                    // window is not OS-focused yet, so `has_focus` is false and it takes it) and
+                    // nothing re-armed it, so a window that regained the focus did not respond
+                    // to typing (#5263).
+                    let Some(key) = self.windows.list.get(id).copied() else { continue };
+                    if self.enter_window(key) {
+                        self.canvas.want_focus = true;
+                        ctx.request_repaint();
+                    }
+                }
+                WindowEvent::CloseRequested(id) => {
+                    let Some(key) = self.windows.list.get(id).copied() else { continue };
+                    // The last window's close button quits: the host asks first ([`WordApp::close_requested`]).
+                    if self.windows.open.len() <= 1 || self.quit_requested {
+                        continue;
+                    }
+                    if self.windows.viewports.as_ref().and_then(Viewports::root) == Some(id) {
+                        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+                    }
+                    self.close_window(key);
+                }
             }
-            if self.windows.viewports.as_ref().and_then(Viewports::root) == Some(id) {
-                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-            }
-            self.close_window(key);
         }
     }
 
