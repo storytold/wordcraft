@@ -11001,6 +11001,15 @@ fn hangul_documents_open_by_name_and_content() {
     // A damaged Hangul file says what went wrong.
     let err = crate::io::open_bytes("x.hwpx", b"PK\x03\x04junk").unwrap_err();
     assert!(err.contains("HWPX"), "{err}");
+    // An encrypted package is refused, without a password prompt no password can satisfy.
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default();
+    z.start_file("mimetype", o).unwrap();
+    std::io::Write::write_all(&mut z, b"application/hwp+zip").unwrap();
+    z.start_file("META-INF/manifest.xml", o).unwrap();
+    std::io::Write::write_all(&mut z, b"<manifest><file-entry><encryption-data/></file-entry></manifest>").unwrap();
+    let err = crate::io::open_bytes("locked.hwpx", &z.finish().unwrap().into_inner()).unwrap_err();
+    assert!(err.contains("password") && !crate::io::needs_password(&err), "{err}");
 }
 
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
