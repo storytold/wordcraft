@@ -190,6 +190,27 @@ impl Drag {
         Drag { grab, page, start, press, to_page: page, rect: start, moved: false, deg: wordcraft_geom::normalize_degrees(deg) }
     }
 
+    /// Move along the dominant pointer axis, keeping the grab point fixed in the document
+    /// when scrolling moves its page. The boolean says the movement is horizontal.
+    pub(crate) fn update_axis(
+        &mut self,
+        pointer: Pos2,
+        pages: &[egui::Rect],
+        bands: &[(f32, f32)],
+        scale: f32,
+        min: f32,
+        press_origin: Pos2,
+    ) -> bool {
+        let delta = pointer - self.press;
+        let horizontal = delta.x.abs() >= delta.y.abs();
+        let press = self.press;
+        self.press += pages.get(self.page).map_or(egui::Vec2::ZERO, |p| p.min - press_origin);
+        let pointer = if horizontal { pos2(pointer.x, self.press.y) } else { pos2(self.press.x, pointer.y) };
+        self.update(pointer, pages, bands, scale, min, false);
+        self.press = press;
+        horizontal
+    }
+
     /// Follow the pointer with the rotation handle: the frame turns to face it, by whole degrees
     /// (or `snap`ping to 15° steps, Shift).
     pub fn turn_to(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, snap: bool) {
@@ -294,6 +315,19 @@ mod tests {
     use super::*;
 
     const R: Rect = Rect { x: 100.0, y: 50.0, w: 200.0, h: 100.0 };
+
+    /// #4802: an axis-locked copy follows the visible body band across a hidden margin.
+    #[test]
+    fn an_axis_locked_drag_uses_visible_page_bands() {
+        let pages = [egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(612.0, 792.0)), egui::Rect::from_min_size(pos2(0.0, 626.0), vec2(612.0, 792.0))];
+        let bands = [(36.0, 648.0), (36.0, 648.0)];
+        let start = Rect { x: 100.0, y: 100.0, w: 60.0, h: 40.0 };
+        let mut drag = Drag::new(Grab::Move, 0, start, 0.0, pos2(100.0, 100.0));
+        assert!(!drag.update_axis(pos2(103.0, 668.0), &pages, &bands, 1.0, 4.0, pages[0].min));
+        assert_eq!(drag.to_page, 1, "the visible second page, despite the nearer first-page centre");
+        assert_eq!(drag.rect.x, start.x, "the horizontal coordinate remains locked");
+        assert_eq!(drag.rect.y, 42.0, "coordinates retain the full page origin");
+    }
 
     #[test]
     fn resize_moves_only_the_grabbed_edges() {

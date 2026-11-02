@@ -12,7 +12,7 @@ fn renamed(file: &str) -> Vec<u8> {
 }
 
 /// A bundled Source Sans 3 file renamed `family` (13 characters, as long as the original name).
-fn renamed_to(file: &str, family: &str) -> Vec<u8> {
+pub(crate) fn renamed_to(file: &str, family: &str) -> Vec<u8> {
     assert_eq!(family.len(), "Source Sans 3".len());
     let mut data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
     let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
@@ -27,7 +27,7 @@ fn renamed_to(file: &str, family: &str) -> Vec<u8> {
 }
 
 /// The fonts in `faces` as one collection (TTC) file.
-fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"ttcf".to_vec();
     out.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
     out.extend_from_slice(&(faces.len() as u32).to_be_bytes());

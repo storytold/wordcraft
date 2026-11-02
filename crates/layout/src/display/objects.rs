@@ -1,6 +1,7 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
-use super::{BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use wordcraft_doc::connector::ArrowStyle;
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -137,7 +138,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
                 }
                 if !closed
                     && extra.arrow_end
-                    && let Some(arrow) = path_arrowhead(&pts, color, width)
+                    && let Some(arrow) = path_arrowhead(&pts, color, width, extra.end_style)
                 {
                     out.push(arrow);
                 }
@@ -166,7 +167,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
             && let Some(color) = stroke
         {
             let points: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
-            if let Some(arrow) = path_arrowhead(&points, color, width) {
+            if let Some(arrow) = path_arrowhead(&points, color, width, extra.end_style) {
                 out.push(arrow);
             }
         }
@@ -179,10 +180,10 @@ fn path_stroke_width(width: f32) -> f32 {
 }
 
 /// Make a filled triangular arrowhead at the last point, in the points' coordinate space.
-/// The last distinct segment supplies its direction and the bounded stroke width sets its size.
+/// The last distinct segment supplies its direction; `style` and the stroke width set its size.
 /// Returns `None` if there is no usable final segment. The triangle has no outline, so the path's
 /// cap setting does not affect its appearance.
-fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Option<Draw> {
+fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32, style: ArrowStyle) -> Option<Draw> {
     let tip = *points.last()?;
     let (prev_x, prev_y) = points.iter().rev().skip(1).copied().find(|p| *p != tip)?;
     let dx = tip.0 - prev_x;
@@ -191,13 +192,17 @@ fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Optio
     if !length.is_finite() || length <= f32::EPSILON {
         return None;
     }
-    let (dx, dy) = (dx / length, dy / length);
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
+    Some(arrowhead(tip, (dx / length, dy / length), stroke_width, style, color))
+}
+
+/// A filled triangular arrowhead with its tip at `tip`, pointing along unit vector `dir`: as long
+/// and as wide as `style` makes it for a `stroke_width` line ([`ArrowStyle::dims`]).
+fn arrowhead(tip: (f32, f32), (dx, dy): (f32, f32), stroke_width: f32, style: ArrowStyle, color: Rgb) -> Draw {
+    let (len, wide) = style.dims(stroke_width);
     let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-    let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
+    let (nx, ny) = (-dy * wide / 2.0, dx * wide / 2.0);
     let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() })
+    Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() }
 }
 
 /// A line or connector at `rect` (its unflipped frame: flips are the frame's turn), with its
@@ -243,17 +248,10 @@ fn line_draws(
     // to the bottom-right.
     let (start, end) =
         if kind == ShapeKind::Line { ((rect.x, rect.bottom()), (rect.right(), rect.y)) } else { ((rect.x, rect.y), (rect.right(), rect.bottom())) };
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
-    for (on, tip, at_end) in [(extra.arrow_start, start, false), (extra.arrow_end, end, true)] {
-        if !on {
-            continue;
+    for (on, tip, at_end, style) in [(extra.arrow_start, start, false, extra.start_style), (extra.arrow_end, end, true, extra.end_style)] {
+        if on {
+            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end), stroke_width, style, color));
         }
-        let (dx, dy) = end_direction(kind, rect.w, rect.h, at_end);
-        let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-        let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
-        let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() });
     }
 }
 
@@ -271,51 +269,113 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 }
 
 /// One line of a `GraphicItem::Text` in `r`, shaped in its font (the document's body font when
-/// unset) and aligned horizontally, centred vertically, at its size times `k`. `None` when there is
-/// nothing to draw, or the item's rectangle or size isn't a finite number (a degenerate scale:
-/// `r` itself is always finite, as [`Rect::new`] makes it).
-fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Option<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return None };
+/// unset) and aligned horizontally, centred vertically, at its size times `k`. Characters the font
+/// lacks (Chinese in a chart drawn in Calibri's substitute, #4720) are drawn in a fallback face, as
+/// in body text: one draw per run of a face, in reading order. Empty when there is nothing to draw,
+/// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
+/// finite, as [`Rect::new`] makes it).
+fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
+    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
-        return None;
+        return Vec::new();
     }
     let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
     let size = size.clamp(1.0, 400.0);
     let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
-    let face = resolved.face.get();
-    let shaped = wordcraft_fonts::shape(face, text, &[], |c| c);
-    if shaped.is_empty() {
-        return None;
-    }
-    let k = size / face.upem.max(1.0) as f32;
-    let width: f32 = shaped.iter().map(|g| g.x_advance as f32 * k).sum();
-    let (ascent, descent) = wordcraft_fonts::word::line_metrics(face);
-    let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * k / 2.0;
+    let primary = resolved.face;
+    let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
+    let runs: Vec<_> = face_runs(text, primary, *bold)
+        .into_iter()
+        .map(|(face, s)| (face, s, wordcraft_fonts::shape(face.get(), s, &[], |c| c)))
+        .filter(|(_, _, shaped)| !shaped.is_empty())
+        .collect();
+    let width: f32 = runs.iter().map(|(f, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
+    // The font's own line metrics centre the line, whichever faces draw it.
+    let (ascent, descent) = wordcraft_fonts::word::line_metrics(primary.get());
+    let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * scale(primary) / 2.0;
     let mut pen = match align {
         TextAlign::Left => r.x,
         TextAlign::Center => r.x + (r.w - width) / 2.0,
         TextAlign::Right => r.x + r.w - width,
     };
-    let mut glyphs = Vec::with_capacity(shaped.len());
-    for g in &shaped {
-        glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
-        pen += g.x_advance as f32 * k;
+    let mut out = Vec::with_capacity(runs.len());
+    for (face, s, shaped) in runs {
+        let k = scale(face);
+        let mut glyphs = Vec::with_capacity(shaped.len());
+        for g in &shaped {
+            glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
+            pen += g.x_advance as f32 * k;
+        }
+        // A fallback face is emboldened when it has no bold of its own, as in body text.
+        let synth_bold = if face.id() == primary.id() { resolved.synth_bold } else { *bold && face.weight < 600.0 };
+        out.push(Draw::Glyphs {
+            face,
+            size,
+            glyphs,
+            color: *color,
+            alpha,
+            synth_bold,
+            synth_italic: false,
+            text: s.to_string(),
+            link: None,
+            ranges: Vec::new(),
+            text_bg: None,
+            x_scale: 1.0,
+        });
     }
-    Some(Draw::Glyphs {
-        face: resolved.face,
-        size,
-        glyphs,
-        color: *color,
-        alpha,
-        synth_bold: resolved.synth_bold,
-        synth_italic: false,
-        text: text.clone(),
-        link: None,
-        ranges: Vec::new(),
-        text_bg: None,
-        x_scale: 1.0,
-    })
+    out
+}
+
+/// `text` split into runs of the face that draws them: `primary` where it has the character, else a
+/// fallback face. A run the primary lacks takes one face covering all of it when one does (so a
+/// Chinese label doesn't mix serif and sans glyphs), else each character its own fallback. Spaces
+/// and combining marks stay in the run before them; a character no face has stays in `primary`.
+fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
+    let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
+    // (start, end, drawn by `primary`)
+    let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    for (i, c) in text.char_indices() {
+        let end = i + c.len_utf8();
+        let own = primary.covers(c);
+        match spans.last_mut() {
+            Some(last) if last.2 == own || joins(c) => last.1 = end,
+            _ => spans.push((i, end, own)),
+        }
+    }
+    let db = wordcraft_fonts::FontDb::global();
+    let mut out: Vec<(FaceRef, &str)> = Vec::with_capacity(spans.len());
+    for (start, end, own) in spans {
+        let Some(s) = text.get(start..end) else { continue };
+        if own {
+            out.push((primary, s));
+            continue;
+        }
+        let chars: Vec<char> = s.chars().filter(|c| !joins(*c)).collect();
+        if let Some(f) = db.fallback_for_run(&chars, primary.id(), bold, false) {
+            out.push((FaceRef::of(&f), s));
+            continue;
+        }
+        // No one face has them all: each character in its own fallback, neighbours sharing a face
+        // in one run.
+        let mut run: Option<(FaceRef, usize)> = None;
+        for (i, c) in s.char_indices() {
+            let face =
+                if joins(c) { None } else { Some(db.fallback_styled(c, primary.id(), bold, false).map(|f| FaceRef::of(&f)).unwrap_or(primary)) };
+            match (run, face) {
+                (Some((cur, from)), Some(f)) if f.id() != cur.id() => {
+                    out.extend(s.get(from..i).map(|t| (cur, t)));
+                    run = Some((f, i));
+                }
+                (None, f) => run = Some((f.unwrap_or(primary), i)),
+                _ => {}
+            }
+        }
+        if let Some((cur, from)) = run {
+            out.extend(s.get(from..).map(|t| (cur, t)));
+        }
+    }
+    out
 }
 
 /// `items` turned by `spin` about the centre of `rect` (as they are, unturned).
@@ -419,10 +479,21 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
 /// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
 /// baseline at `cx`): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+///
+/// `line` is the room a horizontal rule is placed in, from `cx`.
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32, line: f32) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
+    // line, and is placed by its alignment in what the line has left: it runs past the margin
+    // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
+    if let Some(InlineObject::Shape { w, extra, .. }) = obj
+        && let Some(hr) = extra.hr
+    {
+        let rw = hr.width(room.w, *w);
+        return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
+    }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
     // The room is the rotated bounds of the frame: undo the rotation.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
@@ -446,3 +517,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;

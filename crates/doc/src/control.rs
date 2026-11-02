@@ -14,7 +14,7 @@
 //! outside what's deleted (so deleting across a control's edge empties it rather than breaking
 //! it); writers call [`Document::balance_controls`] so a saved file always has whole controls.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -422,24 +422,37 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
 }
 
 /// Positions of the markers without a partner in a block list and the cells inside it.
-fn orphans(bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: &mut Vec<(Path, usize)>, tables: &mut Vec<(Path, usize, bool)>) {
+pub(crate) fn orphans(bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: &mut Vec<(Path, usize)>, tables: &mut Vec<(Path, usize, bool)>) {
     if depth > MAX_DEPTH {
         return;
     }
     let events = control_events(bl);
     let (_, lone) = pair_events(&events);
-    for k in lone {
-        let Some(e) = events.get(k) else { continue };
-        let mut path = prefix.clone();
-        path.push(u32::try_from(e.block()).unwrap_or(u32::MAX));
-        match (e, e.off()) {
-            (_, Some(off)) => out.push((Path(path), off)),
-            (ControlEvent::Open { .. }, None) => {
-                // Which of the table's opens: count those before it on the same table.
-                let nth = events.iter().take(k).filter(|x| matches!(x, ControlEvent::Open { block, off: None, .. } if *block == e.block())).count();
-                tables.push((Path(path), nth, true));
+    if !lone.is_empty() {
+        let mut table_counts: HashMap<usize, usize> = HashMap::new();
+        let mut open_nth = Vec::with_capacity(events.len());
+        for e in &events {
+            if let ControlEvent::Open { block, off: None, .. } = e {
+                let count = table_counts.entry(*block).or_insert(0);
+                open_nth.push(*count);
+                *count += 1;
+            } else {
+                open_nth.push(0);
             }
-            (ControlEvent::Close { .. }, None) => tables.push((Path(path), 0, false)),
+        }
+        for k in lone {
+            let Some(e) = events.get(k) else { continue };
+            let mut path = prefix.clone();
+            path.push(u32::try_from(e.block()).unwrap_or(u32::MAX));
+            match (e, e.off()) {
+                (_, Some(off)) => out.push((Path(path), off)),
+                (ControlEvent::Open { .. }, None) => {
+                    // Which of the table's opens: index among table opens on the same table.
+                    let nth = open_nth.get(k).copied().unwrap_or(0);
+                    tables.push((Path(path), nth, true));
+                }
+                (ControlEvent::Close { .. }, None) => tables.push((Path(path), 0, false)),
+            }
         }
     }
     for (i, b) in bl.iter().enumerate() {
