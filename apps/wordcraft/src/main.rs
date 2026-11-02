@@ -19,6 +19,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+mod prefs_merge;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -191,6 +192,10 @@ fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
+/// The preferences as this process loaded them, which `save_prefs` compares with to write only
+/// what this process changed (#3773, see `prefs_merge`).
+static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
@@ -200,6 +205,10 @@ fn load_prefs(app: &mut WordApp) {
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
+    }
+    // As `prefs()` gives them back, so a setting nobody touched compares equal at exit.
+    if let (Ok(loaded), Ok(mut slot)) = (serde_json::to_value(app.prefs()), LOADED_PREFS.lock()) {
+        *slot = Some(loaded);
     }
 }
 
@@ -236,7 +245,7 @@ fn save_prefs(app: &WordApp) {
             log::warn!("preferences: cannot create {}: {e}", dir.display());
             return;
         }
-        match serde_json::to_vec_pretty(&app.prefs()) {
+        match serde_json::to_value(app.prefs()).map(|ours| merged_prefs(&p, ours)).and_then(|v| serde_json::to_vec_pretty(&v)) {
             Ok(bytes) => {
                 if let Err(e) = write_prefs(&p, &bytes) {
                     log::warn!("preferences: cannot save {}: {e}", p.display());
@@ -244,6 +253,18 @@ fn save_prefs(app: &WordApp) {
             }
             Err(e) => log::warn!("preferences: cannot serialize: {e}"),
         }
+    }
+}
+
+/// `ours` with what other WordCraft processes saved to `path` since this one loaded it, for the
+/// settings this one left alone (#3773, see `prefs_merge`). `ours` as it is when nothing was
+/// loaded, or the file is missing or unreadable now.
+fn merged_prefs(path: &std::path::Path, ours: serde_json::Value) -> serde_json::Value {
+    let base = LOADED_PREFS.lock().ok().and_then(|slot| slot.clone());
+    let disk = std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    match (base, disk) {
+        (Some(base), Some(disk)) if disk.is_object() => prefs_merge::merge(&base, ours, &disk),
+        _ => ours,
     }
 }
 
