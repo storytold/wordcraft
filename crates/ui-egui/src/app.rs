@@ -251,12 +251,12 @@ impl WordApp {
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
-        // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
-        // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
-        // desktop portal's answer fills in instead. The interface follows the Interface theme
-        // setting alone; Dark page only changes how pages are drawn (#312).
+        // With `System`, winit reports appearance changes live on macOS and Windows (#311).
+        // Linux's portal answer is authoritative: a native report can reflect the decoration
+        // override just sent, not a user change. Outside Linux the portal has no answer, so egui
+        // remains in System. Dark page only changes how pages are drawn (#312).
         let effective = match self.ui.theme {
-            theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
+            theme::Appearance::System => match self.desktop_dark {
                 Some(true) => theme::Appearance::Dark,
                 Some(false) => theme::Appearance::Light,
                 None => theme::Appearance::System,

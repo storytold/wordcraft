@@ -2,9 +2,10 @@ use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
-/// nobody answered, not a preference.
+/// nobody answered, not a preference. On Linux, native feedback may echo the decoration override,
+/// so the portal answer takes precedence; macOS and Windows keep winit's answer.
 fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<egui::Theme> {
-    ctx.system_theme().or_else(|| desktop_dark.map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }))
+    desktop_dark.map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }).or_else(|| ctx.system_theme())
 }
 
 impl WordApp {

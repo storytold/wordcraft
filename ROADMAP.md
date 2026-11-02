@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Theme update:** 2026-11-02 · Linux System appearance follows the desktop portal across native window feedback; macOS and Windows remain driven by winit. Regression tests cover stable light/dark decoration and portal changes.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -139,6 +141,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-11-02: Linux System appearance keeps the portal answer authoritative when native window feedback echoes a decoration override; macOS and Windows continue following winit. Stable light/dark decoration and portal switches have regressions.
 
 - 2026-11-01: DOCX tables keep rows and cells wrapped in `mc:AlternateContent`, selecting one supported Choice or Fallback with the existing reader policy (#5219). Original synthetic checks cover namespace aliases, unsupported requirements, nested row/cell content controls and two save/reopen cycles; broader corpus and native Word qualification remain open.
 
@@ -697,6 +701,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Linux System theme keeps the portal answer authoritative across native feedback; macOS and Windows remain winit-driven; synthetic regressions cover stable decoration and portal changes. |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
