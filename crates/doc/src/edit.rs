@@ -205,11 +205,15 @@ struct BoxBudget {
     costs: BTreeMap<u32, usize>,
     /// Boxes left without a story because the paste's budget couldn't hold theirs.
     skipped: usize,
+    /// A box the fragment has no story for may show this document's story of that id (a
+    /// fragment copied from this document without its parts). Off for another document's
+    /// fragment, whose ids mean nothing here.
+    local: bool,
 }
 
 impl BoxBudget {
     fn new() -> BoxBudget {
-        BoxBudget { stories: MAX_PASTED_BOXES, bytes: MAX_PASTED_BOX_BYTES, active: Vec::new(), costs: BTreeMap::new(), skipped: 0 }
+        BoxBudget { stories: MAX_PASTED_BOXES, bytes: MAX_PASTED_BOX_BYTES, active: Vec::new(), costs: BTreeMap::new(), skipped: 0, local: true }
     }
 }
 
@@ -971,7 +975,7 @@ impl Document {
             budget.skipped = budget.skipped.saturating_add(1);
             return None;
         }
-        let src = parts.get(&old).or_else(|| self.parts.get(&old).filter(|p| p.kind == PartKind::TextBox))?;
+        let src = parts.get(&old).or_else(|| self.parts.get(&old).filter(|p| budget.local && p.kind == PartKind::TextBox))?;
         // Charge what the copy really allocates before making any of it: the block slots, and the
         // blocks holding text boxes (deep-copied below). The rest are shared `Arc`s, however many
         // boxes show them, so they cost nothing more. Worked out once per paste.
@@ -1010,6 +1014,22 @@ impl Document {
             p.body = body;
         }
         Some(id)
+    }
+
+    /// The blocks of `frag`, a fragment of another document, with every text box given a new
+    /// story of its own here copied from the fragment's parts (as a paste does), to place them
+    /// in this document; a box the fragment has no story for keeps none.
+    pub fn adopt_fragment(&mut self, frag: &Fragment) -> Vec<Block> {
+        let mut blocks = frag.blocks.clone();
+        let mut budget = BoxBudget { local: false, ..BoxBudget::new() };
+        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        if budget.skipped > 0 {
+            log::warn!(
+                "{} text boxes are left empty; their stories are past what one copy brings ({MAX_PASTED_BOXES} stories, {MAX_PASTED_BOX_BYTES} bytes)",
+                budget.skipped
+            );
+        }
+        blocks
     }
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
