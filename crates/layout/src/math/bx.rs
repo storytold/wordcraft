@@ -21,12 +21,7 @@ pub(super) struct St {
 
 impl St {
     pub(super) fn script(self) -> St {
-        St {
-            level: (self.level + 1).min(2),
-            display: false,
-            fraction_size: if self.fraction_size == FracSize::Text { FracSize::Text } else { FracSize::Script },
-            ..self
-        }
+        St { level: (self.level + 1).min(2), display: false, ..self }
     }
     pub(super) fn cramp(self) -> St {
         St { cramped: true, ..self }
