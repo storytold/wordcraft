@@ -265,13 +265,17 @@ pub(super) fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
     let mut asked = false;
     if let Some(x) = v.get("layout") {
         asked = true;
-        *l = crate::RibbonLayout::from_value(x);
+        // A loaded layout replaces the user's; the add-ins' own tabs stay.
+        l.replace_layout(crate::RibbonLayout::from_value(x));
         l.retain_known(&reg);
     }
     if let Some(r) = v.get("reset") {
         asked = true;
         match (r.as_bool(), r.as_str()) {
-            (Some(true), _) => *l = crate::RibbonLayout::default(),
+            (Some(true), _) => {
+                l.reset_ribbon();
+                l.reset_qat();
+            }
             (_, Some("ribbon")) => l.reset_ribbon(),
             (_, Some("qat")) => l.reset_qat(),
             _ => return Err(e("`reset` is true, \"ribbon\" or \"qat\"".into())),

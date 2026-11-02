@@ -72,6 +72,12 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
+            let prefix_param = p::str(v, "prefix");
+            if let Some(pfx) = prefix_param
+                && pfx.chars().count() > 16
+            {
+                return Err(CmdError::Params("`prefix` is at most 16 characters".into()));
+            }
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
@@ -82,10 +88,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 if v.get("start").is_some() {
                     x.page_num_start = p::u64(v, "start").map(|n| n.min(100_000) as u32);
                 }
+                if let Some(pfx) = prefix_param {
+                    x.page_num_prefix = if pfx.is_empty() { None } else { Some(pfx.to_string()) };
+                }
             })
         })
         .params(
-            r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n | null} ("start" left out: the numbering keeps its start; null: the pages number on from the section before; a number: numbering starts there)"#,
+            r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n | null, "prefix"?: string (text before the page number, e.g. appendix "A")} ("start" left out: the numbering keeps its start; null: the pages number on from the section before; a number: numbering starts there)"#,
         ),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,

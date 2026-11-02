@@ -102,7 +102,11 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.para = st.para.formatting();
     }
     s.doc.styles.upsert(st);
-    apply_style(s, &json!({"style": id}))?;
+    // Word applies a new style to the selection; a caller defining styles in bulk (a court
+    // profile, say) doesn't want that and passes `apply: false`.
+    if p::bool(v, "apply").unwrap_or(true) {
+        apply_style(s, &json!({"style": id}))?;
+    }
     Ok(json!({"id": id}))
 }
 
@@ -112,6 +116,7 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let para: Option<ParaProps> =
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
+    let based_on = p::str(v, "basedOn").map(|b| style_id(s, b)).transpose()?;
     let name = p::str(v, "name").map(str::to_string);
     let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
@@ -119,6 +124,9 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(pp) = para {
         st.para.overlay(&pp);
+    }
+    if let Some(b) = based_on {
+        st.based_on = Some(b);
     }
     if let Some(n) = next {
         st.next = Some(n);

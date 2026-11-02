@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use crate::{CmdError, CmdResult, CommandSpec, Prefs, Session, p};
 
 /// Options panes, in the order the page lists them (the `pane` param of `file.options`).
-pub const PANES: [&str; 8] = ["general", "display", "proofing", "save", "language", "accessibility", "advanced", "agents"];
+/// An add-in's own page follows them, as `addin:<id>`, while the add-in is on.
+pub const PANES: [&str; 9] = ["general", "display", "proofing", "save", "language", "accessibility", "advanced", "agents", "addins"];
 
 /// Longest initials kept, in characters.
 pub const MAX_INITIALS_CHARS: usize = 9;
@@ -22,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents|addins" (or "addin:<id>": an add-in's own page), "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "modules"?: {"<id>": bool, …} (add-ins on or off, File › Options › Add-ins), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -80,7 +81,7 @@ fn words_param(v: &Value, k: &str) -> Result<Vec<String>, CmdError> {
 
 fn options(s: &mut Session, v: &Value) -> CmdResult {
     let pane = match p::str(v, "pane") {
-        Some(name) if PANES.contains(&name) => name,
+        Some(name) if PANES.contains(&name) || name.strip_prefix("addin:").is_some_and(|id| !id.is_empty()) => name,
         Some(name) => return Err(CmdError::Params(format!("unknown pane `{name}`; one of {}", PANES.join(", ")))),
         None => "general",
     };
@@ -147,6 +148,20 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     let check_spelling = bool_param(v, "checkSpelling")?;
     let add = words_param(v, "addWords")?;
     let remove = words_param(v, "removeWords")?;
+    let mut module_values = Vec::new();
+    match v.get("modules") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(m)) => {
+            for (k, val) in m {
+                let b = match val {
+                    Value::Bool(b) => *b,
+                    _ => return Err(CmdError::Params(format!("`modules.{k}` must be true or false"))),
+                };
+                module_values.push((k.clone(), b));
+            }
+        }
+        Some(_) => return Err(CmdError::Params("`modules` must be an object of true/false".into())),
+    }
 
     let setting = author.is_some()
         || initials.is_some()
@@ -158,7 +173,8 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || !mark_values.is_empty()
         || check_spelling.is_some()
         || !add.is_empty()
-        || !remove.is_empty();
+        || !remove.is_empty()
+        || !module_values.is_empty();
     if let Some(name) = author {
         super::file::set_author(s, &json!({"name": name}))?;
     }
@@ -196,6 +212,13 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     }
     if !add.is_empty() || !remove.is_empty() {
         s.persist_user_dictionary(&remove);
+    }
+    for (id, on) in module_values {
+        if on {
+            s.prefs.modules.insert(id, true);
+        } else {
+            s.prefs.modules.remove(&id);
+        }
     }
     if setting {
         // Marks, hidden text and proofing change what is laid out.
@@ -237,6 +260,7 @@ pub fn current(s: &Session) -> Value {
             .into_iter()
             .map(|(lang, dic)| json!({"language": lang.code(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
             .collect::<Vec<_>>(),
+        "modules": pr.modules,
     })
 }
 

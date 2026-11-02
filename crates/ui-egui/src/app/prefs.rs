@@ -73,12 +73,15 @@ impl WordApp {
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
-        // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
+        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
+        // The add-ins the saved setting turns on bring their commands (and ribbon tabs) first, so
+        // the keys and toolbar entries saved for those commands are kept.
+        self.sync_addins();
+        // Keys for commands this version doesn't have are dropped.
         let reg = self.session.registry.clone();
         self.session.keymap.retain_known(&reg);
         // So are ribbon and toolbar commands.
-        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }

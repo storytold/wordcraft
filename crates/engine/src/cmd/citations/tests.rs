@@ -1,4 +1,5 @@
 use super::*;
+use super::generated::{has_switch, switch_value};
 use crate::Session;
 
 #[test]
@@ -486,6 +487,53 @@ fn table_of_authorities_updates() {
     s.run("references.updateAuthorities", &json!({})).unwrap();
     let after = s.doc.plain_text(StoryRef::Body);
     assert!(after.matches("Doe v. Roe").count() > t.matches("Doe v. Roe").count(), "{after}");
+}
+
+/// A table of authorities per category (TOA `\c`) lists only that category's marks, and `\p`
+/// prints "passim" for an authority cited on five or more pages, as Word does.
+#[test]
+fn table_of_authorities_categories_and_passim() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Smith v. Jones\nSection 1.010\nTail"));
+    s.run("select.text", &json!({"text": "Smith v. Jones"})).unwrap();
+    s.run("references.markCitation", &json!({"category": 1})).unwrap();
+    s.run("select.text", &json!({"text": "Section 1.010"})).unwrap();
+    s.run("references.markCitation", &json!({"category": 2})).unwrap();
+    assert!(s.run("references.markCitation", &json!({"entry": "x", "category": 17})).is_err());
+    assert!(fields(&s).iter().any(|f| f.0 == "TA \\l \"Smith v. Jones\" \\c 1"), "{:?}", fields(&s));
+    for k in 0..5 {
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.pageBreak", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": format!("Again {k}")})).unwrap();
+    }
+    for k in 0..5 {
+        s.run("select.text", &json!({"text": format!("Again {k}")})).unwrap();
+        s.run("references.markCitation", &json!({"entry": "Smith v. Jones", "category": 1})).unwrap();
+    }
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfAuthorities", &json!({"category": 1, "passim": true, "title": "Cases"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfAuthorities", &json!({"category": 2, "title": "Statutes"})).unwrap();
+    assert!(fields(&s).iter().any(|f| f.0 == "TOA \\c \"1\" \\p"), "{:?}", fields(&s));
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("Smith v. Jones\tpassim"), "{t}");
+    assert!(t.contains("Section 1.010\t1"), "{t}");
+    let cases = t.find("Cases").unwrap();
+    let statutes = t.find("Statutes").unwrap();
+    let sec = t.rfind("Section 1.010\t").unwrap();
+    assert!(sec > statutes && statutes > cases, "statutes listed under Statutes only: {t}");
+    assert!(!t[cases..statutes].contains("Section 1.010"), "{t}");
+    assert!(s.run("references.tableOfAuthorities", &json!({"category": 0})).is_err());
+}
+
+#[test]
+fn field_switch_values() {
+    assert_eq!(switch_value(r#"TOA \h \c "4" \p"#, 'c').as_deref(), Some("4"));
+    assert_eq!(switch_value(r#"TA \l "Doe, 1 U.S. 1 \c" \c 2"#, 'c').as_deref(), Some("2"));
+    assert_eq!(switch_value("TOA", 'c'), None);
+    assert!(has_switch(r#"TOA \c "1" \p"#, 'p') && !has_switch(r#"TOA \c "1""#, 'p'));
 }
 
 /// Field instructions and results in the body, in order.

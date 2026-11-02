@@ -15,7 +15,9 @@ use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 /// The paragraph style generated lists use for their entries (see `citations.rs`).
-const ENTRY_STYLE: &str = "ListEntry";
+/// The paragraph style of generated list entries (bibliography, index, table of authorities
+/// lines); [`update_generated`] replaces every paragraph of this style after a list's field.
+pub const ENTRY_STYLE: &str = "ListEntry";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

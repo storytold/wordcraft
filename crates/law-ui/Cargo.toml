@@ -1,0 +1,20 @@
+[package]
+name = "wordcraft-law-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LawCraft's interface: the add-in that brings its File › Options page for court profiles"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-law = { workspace = true }
+wordcraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wordcraft-doc = { workspace = true }
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

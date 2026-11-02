@@ -276,7 +276,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     crate::cmd::citations::update_citations(s)?;
-    update_toc(s)
+    update_toc(s)?;
+    crate::hooks::run_on_update_fields(s)
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,

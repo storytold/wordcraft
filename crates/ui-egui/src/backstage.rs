@@ -95,7 +95,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            if (back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape)))) && app.leave_addin_page() {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
@@ -126,7 +126,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 {
                     crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
                 }
-                if resp.clicked() {
+                // Leaving File › Options for another page lets an add-in's options page save first.
+                if resp.clicked() && (id == app.ui.backstage_page || app.leave_addin_page()) {
                     go_to_page(app, id);
                 }
             }

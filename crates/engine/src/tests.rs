@@ -13,6 +13,7 @@ mod bidi;
 mod documents;
 mod font_sizes;
 mod fonts;
+mod hooks;
 mod ime_noop;
 mod revision_checks;
 mod typing;
@@ -109,6 +110,116 @@ fn txt_save_writes_list_labels() {
     assert_eq!(crate::io::save_bytes("l.txt", &doc).unwrap(), "•\talpha\r\n•\tbeta\r\n1.\tfirst\r\n2.\tsecond".as_bytes());
     let plain = crate::io::open_bytes("p.md", b"alpha\n\nbeta\n").unwrap();
     assert_eq!(crate::io::save_bytes("p.txt", &plain).unwrap(), b"alpha\r\nbeta");
+}
+
+#[test]
+fn a_module_installs_its_commands_and_never_shadows_core() {
+    let mut s = s();
+    assert!(!s.module_enabled("law"), "a module is off until the user turns it on");
+    assert!(s.run("mod.ping", &json!({})).is_err(), "unknown command");
+    let spec = crate::CommandSpec::new("mod.ping", "Ping", "Test", |_, _| Ok(json!({"pong": true})));
+    assert_eq!(s.install_commands(vec![spec]), 1);
+    assert_eq!(run(&mut s, "mod.ping", json!({})), json!({"pong": true}));
+    // The core's command wins, and nothing is installed twice.
+    let again = crate::CommandSpec::new("mod.ping", "Other", "Test", |_, _| Ok(json!({})));
+    assert_eq!(s.install_commands(vec![again]), 0);
+    let core = crate::CommandSpec::new("format.bold", "Not Bold", "Test", |_, _| Ok(json!({})));
+    assert_eq!(s.install_commands(vec![core]), 0);
+    assert_eq!(s.registry.get("format.bold").map(|c| c.label), Some("Bold"));
+    // A second session starts from the core registry again.
+    let mut fresh = Session::new(wordcraft_doc::Document::new());
+    assert!(fresh.run("mod.ping", &json!({})).is_err());
+}
+
+#[test]
+fn export_checks_see_the_export_options_and_serialise_like_lint() {
+    let mut s = s();
+    let echo = crate::CommandSpec::new("test.exportEcho", "Echo Export Options", "Test", |_, v| {
+        let markup = v.get("markup").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        Ok(json!({"findings": [{"kind": "lint", "checkId": "echo", "severity": "error", "message": format!("markup={markup}")}]}))
+    });
+    let boom = crate::CommandSpec::new("test.exportBoom", "Failing Export Check", "Test", |_, _| Err(crate::CmdError::Failed("boom".into())));
+    assert_eq!(s.install_commands(vec![echo, boom]), 2);
+
+    s.set_export_check_commands(vec![("test.exportEcho".into(), json!({"forExport": true}))]);
+    // The `markup` override reaches the check: the same stored command sees the current export.
+    let marked = crate::io::ExportOptions { markup: true, ..Default::default() };
+    let findings = s.run_export_checks(&marked, "pdf");
+    assert!(findings.iter().any(|f| f["message"] == "markup=true"), "{findings:?}");
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
+    let findings = s.run_export_checks(&plain, "pdf");
+    assert!(findings.iter().any(|f| f["message"] == "markup=false"), "the option is per export, not baked in: {findings:?}");
+
+    // A check that fails still produces a finding of the same shape as any other lint finding.
+    s.set_export_check_commands(vec![("test.exportBoom".into(), json!({}))]);
+    let findings = s.run_export_checks(&plain, "pdf");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0]["kind"], "lint", "{findings:?}");
+    assert_eq!(findings[0]["checkId"], "test.exportBoom");
+    assert_eq!(findings[0]["severity"], "error");
+}
+
+#[test]
+fn a_failed_export_check_clears_when_it_runs_again() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FAIL: AtomicBool = AtomicBool::new(true);
+    let mut s = s();
+    let flaky = crate::CommandSpec::new("test.exportFlaky", "Flaky Export Check", "Test", |_, _| {
+        if FAIL.load(Ordering::SeqCst) { Err(crate::CmdError::Failed("offline".into())) } else { Ok(json!({"findings": []})) }
+    });
+    assert_eq!(s.install_commands(vec![flaky]), 1);
+    s.set_export_check_commands(vec![("test.exportFlaky".into(), json!({}))]);
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
+    s.run_export_checks(&plain, "pdf");
+    assert_eq!(s.lint_findings_of("export:test.exportFlaky").len(), 1, "the failure shows in Proofing");
+    FAIL.store(false, Ordering::SeqCst);
+    assert!(s.run_export_checks(&plain, "pdf").is_empty());
+    assert!(s.lint_findings_of("export:test.exportFlaky").is_empty(), "a successful retry drops the old failure");
+    assert!(s.lint_findings().is_empty());
+}
+
+#[test]
+fn export_checks_see_the_output_format() {
+    let mut s = s();
+    let echo = crate::CommandSpec::new("test.exportFormat", "Echo Format", "Test", |_, v| {
+        let format = v.get("format").and_then(serde_json::Value::as_str).unwrap_or("");
+        Ok(json!({"findings": [{"kind": "lint", "checkId": "format", "severity": "error", "message": format!("format={format}")}]}))
+    });
+    assert_eq!(s.install_commands(vec![echo]), 1);
+    s.set_export_check_commands(vec![("test.exportFormat".into(), json!({}))]);
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
+    // A non-PDF export tells the check what it is writing, so PDF-only checks can tell it apart.
+    let findings = s.run_export_checks(&plain, "docx");
+    assert!(findings.iter().any(|f| f["message"] == "format=docx"), "{findings:?}");
+}
+
+#[test]
+fn module_settings_round_trip_and_default_off() {
+    let mut p = crate::Prefs::default();
+    assert!(!p.module_enabled("law"));
+    p.modules.insert("law".into(), true);
+    let json = serde_json::to_string(&p).expect("prefs serialize");
+    assert!(json.contains(r#""modules":{"law":true}"#), "{json}");
+    let back: crate::Prefs = serde_json::from_str(&json).expect("prefs deserialize");
+    assert!(back.module_enabled("law"));
+    // A saved value without the setting (an older file) reads as off, never as on.
+    let old: crate::Prefs = serde_json::from_str(r#"{"countNotes": false}"#).expect("older prefs deserialize");
+    assert!(!old.module_enabled("law"));
+    assert!(!old.count_notes);
+}
+
+#[test]
+fn styles_create_can_leave_the_selection_alone() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()), None);
+    let r = run(&mut s, "styles.create", json!({"name": "Quotation", "fromSelection": false, "apply": false}));
+    let id = r["id"].as_str().expect("style id").to_string();
+    assert!(s.doc.styles.get(&id).is_some(), "the style was created");
+    assert_eq!(s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()), None, "`apply: false` leaves the caret's paragraph in its own style");
+    // The default is Word's: a new style is applied to the selection.
+    run(&mut s, "styles.create", json!({"name": "Other", "fromSelection": false}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()).as_deref(), Some("Other"));
 }
 
 #[test]
@@ -4282,6 +4393,22 @@ fn toc_page_numbers_reach_the_right_margin() {
 }
 
 #[test]
+fn toc_page_numbers_use_the_section_page_prefix() {
+    let mut s = s();
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "prefix": "A"}));
+    run(&mut s, "layout.pageNumberFormat", json!({"start": 1}));
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.pageBreak", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Exhibit"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "references.updateToc", json!({}));
+    let t = text(&s);
+    assert!(t.contains("Exhibit\tA2"), "TOC page numbers include the section prefix: {t}");
+}
+
+#[test]
 fn toc_page_numbers_follow_headings() {
     let mut s = s();
     run(&mut s, "references.toc", json!({}));
@@ -6913,6 +7040,16 @@ fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
     assert_eq!(rec[0]["name"], "Normal");
     assert!(s.run("styles.manage", &json!({"sort": "sideways"})).is_err());
     assert!(!s.dirty);
+}
+
+#[test]
+fn modify_style_can_change_based_on() {
+    let mut s = s();
+    run(&mut s, "styles.create", json!({"name": "Mine", "basedOn": "Normal", "fromSelection": false, "apply": false}));
+    run(&mut s, "styles.create", json!({"name": "Base", "basedOn": "Normal", "fromSelection": false, "apply": false}));
+    assert_eq!(s.doc.styles.find("Mine").unwrap().based_on.as_deref(), Some("Normal"));
+    run(&mut s, "styles.modify", json!({"style": "Mine", "basedOn": "Base"}));
+    assert_eq!(s.doc.styles.find("Mine").unwrap().based_on.as_deref(), Some("Base"));
 }
 
 #[test]
@@ -11598,4 +11735,32 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn page_number_prefix_with_multibyte_unicode_inserts_after_the_prefix() {
+    let mut s = s();
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "prefix": "éA"}));
+    let footer = s.doc.sections().into_iter().next().and_then(|(_, sect)| sect.footers.default).expect("footer");
+    let text = s.doc.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "éA1", "the field goes after the whole prefix, not after one UTF-8 code unit: {text:?}");
+    let bytes = crate::io::save_bytes("prefix.docx", &s.doc).expect("save");
+    let reopened = crate::io::open_bytes("prefix.docx", &bytes).expect("reopen");
+    let footer = reopened.sections().into_iter().next().and_then(|(_, sect)| sect.footers.default).expect("footer");
+    let text = reopened.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "éA1", "round-trip: {text:?}");
+}
+
+#[test]
+fn page_number_prefix_with_x_of_y_keeps_the_prefix() {
+    let mut s = s();
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "format": "x of y", "prefix": "A-"}));
+    let footer = s.doc.sections().into_iter().next().and_then(|(_, sect)| sect.footers.default).expect("footer");
+    let text = s.doc.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "A-1 of 1", "prefixed x of y footer: {text:?}");
+    let bytes = crate::io::save_bytes("prefix-x-of-y.docx", &s.doc).expect("save");
+    let reopened = crate::io::open_bytes("prefix-x-of-y.docx", &bytes).expect("reopen");
+    let footer = reopened.sections().into_iter().next().and_then(|(_, sect)| sect.footers.default).expect("footer");
+    let text = reopened.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "A-1 of 1", "round-trip: {text:?}");
 }

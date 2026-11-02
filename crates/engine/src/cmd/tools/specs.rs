@@ -261,12 +261,16 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
-            let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
+            let Some((tp, row, col)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
             let story = s.sel.focus.story;
+            let cell_only = p::bool(v, "cell").unwrap_or(false);
             let current = {
                 let table = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
                 let style = table.props.style.as_deref().and_then(|id| s.doc.styles.table_style(id));
-                table.props.cell_margins.or(style.and_then(|st| st.parts.cell_margins)).unwrap_or([0.0, 5.4, 0.0, 5.4])
+                let whole = table.props.cell_margins.or(style.and_then(|st| st.parts.cell_margins)).unwrap_or([0.0, 5.4, 0.0, 5.4]);
+                // The caret cell's own margins, where it has them, for Cell Options.
+                let own = if cell_only { table.rows.get(row).and_then(|r| r.cells.get(col)).and_then(|c| c.props.margins) } else { None };
+                own.unwrap_or(whole)
             };
             let m = [
                 p::f32(v, "top").unwrap_or(current[0]),
@@ -275,13 +279,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 p::f32(v, "right").unwrap_or(current[3]),
             ]
             .map(|x| x.clamp(0.0, 144.0));
-            s.doc.table_mut(story, &tp)?.props.cell_margins = Some(m);
+            let t = s.doc.table_mut(story, &tp)?;
+            if cell_only {
+                // The caret cell's own margins (Cell Options), over the table's.
+                let cell = t.rows.get_mut(row).and_then(|r| r.cells.get_mut(col)).ok_or_else(|| CmdError::Disabled("not in a table".into()))?;
+                cell.props.margins = Some(m);
+            } else {
+                t.props.cell_margins = Some(m);
+            }
             for path in s.doc.para_paths(story).into_iter().filter(|p| p.0.starts_with(&tp.0) && p.0.len() > tp.0.len()) {
                 s.doc.para_mut(story, &path)?.touch();
             }
             sel_result(s)
         })
-        .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt)}"#),
+        .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt), "cell"?: bool (true: the caret cell only, not the whole table)}"#),
         CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", |s, v| {
             s.run(
                 "table.borders",
