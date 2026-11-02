@@ -29,9 +29,9 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
-            result_dialog: CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            result_dialog: CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +43,14 @@ impl Default for Runtime {
             status_message: None,
         }
     }
+}
+
+/// The update prompt's and the Check for Updates card's words in the interface language (#5257):
+/// craft-update hands over its English text and the values for its `{name}` placeholders, and
+/// looks them up each time it draws, so a language change shows at once.
+#[cfg(not(target_arch = "wasm32"))]
+fn translate(text: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::fmt(crate::i18n::t(text), args)
 }
 
 impl WordApp {
@@ -129,6 +137,49 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
         if !open {
             app.updates_rt.manual_window_open = false;
             app.updates_rt.status_message = None;
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use crate::i18n::pseudo;
+
+    /// #5257: the Check for Updates card draws every word through the interface's catalog; only
+    /// the app's name, its initial and the version number stay as they are.
+    #[test]
+    fn the_update_card_is_in_the_interface_language() {
+        pseudo::set(true);
+        let dialog = CheckResultDialog::new(&crate::UPDATE_APP, "1.2.3").with_translator(translate);
+        for status in [Status::Checking, Status::UpToDate, Status::Failed(String::new())] {
+            let ctx = egui::Context::default();
+            let mut drawn = Vec::new();
+            // The first frame of the card only sizes it; the second draws it.
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    dialog.show(ui.ctx(), &status);
+                });
+                drawn.clear();
+                for s in &out.shapes {
+                    collect(&s.shape, &mut drawn);
+                }
+                out.textures_delta.clear();
+            }
+            assert!(!drawn.is_empty(), "{status:?}: nothing drawn");
+            for text in &drawn {
+                let plain = pseudo::unmarked(text);
+                assert!(matches!(plain.trim(), "" | "W" | "WordCraft" | "v1.2.3"), "{status:?}: {text:?} skips the catalog");
+            }
+        }
+        pseudo::set(false);
+    }
+
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
         }
     }
 }
