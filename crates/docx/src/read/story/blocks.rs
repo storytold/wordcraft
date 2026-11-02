@@ -210,6 +210,8 @@ impl Reader<'_> {
     fn read_para(&mut self, sc: &mut StoryCtx, e: &El, rels: &Rels, depth: usize) -> Paragraph {
         let mut pb = PB::default();
         let mut para = Paragraph::new();
+        // Word's paragraph id: eight hex digits, valid from 1 to 0x7FFFFFFF ([MS-DOCX] `w14:paraId`).
+        para.para_id = e.attr("w14:paraId").and_then(|v| u32::from_str_radix(v, 16).ok()).filter(|v| (1..0x8000_0000).contains(v));
         let mut mark_moves: [Option<&El>; 2] = [None, None];
         self.moves.closed_here = [None, None];
         for o in std::mem::take(&mut sc.pending) {

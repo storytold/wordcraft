@@ -217,7 +217,8 @@ impl BoxBudget {
     }
 }
 
-/// Rough size of a block's content, and whether it holds text boxes (and so must be copied).
+/// Rough size of a block's content, and whether it holds text boxes or paragraph ids (and so
+/// must be copied).
 fn block_cost(b: &Block) -> (usize, bool) {
     let (mut cost, mut boxes) = (std::mem::size_of::<Block>(), false);
     each_para(b, 0, &mut |p| {
@@ -228,7 +229,7 @@ fn block_cost(b: &Block) -> (usize, bool) {
             .saturating_add(p.objects.len().saturating_mul(std::mem::size_of::<InlineObject>()));
         let objects = p.objects.iter().fold(0usize, |n, o| n.saturating_add(object_cost(o)));
         cost = cost.saturating_add(p.text.len()).saturating_add(items).saturating_add(objects);
-        boxes |= box_ids(p).next().is_some();
+        boxes |= box_ids(p).next().is_some() || p.para_id.is_some();
     });
     (cost, boxes)
 }
@@ -1339,11 +1340,18 @@ impl Document {
         budget.active.push(old);
         let mut blocks: Blocks = Vec::with_capacity(src_blocks.len());
         for b in src_blocks {
-            let mut boxes = false;
-            each_para(&b, 0, &mut |p| boxes |= box_ids(p).next().is_some());
-            if boxes {
+            let (mut boxes, mut ids) = (false, false);
+            each_para(&b, 0, &mut |p| {
+                boxes |= box_ids(p).next().is_some();
+                ids |= p.para_id.is_some();
+            });
+            if boxes || ids {
                 let mut copy = (*b).clone();
-                self.adopt_text_boxes(std::slice::from_mut(&mut copy), parts, depth + 1, budget);
+                // The copy's paragraphs are new ones: the ids stay with the source's.
+                each_para_mut(&mut copy, 0, &mut |p| p.para_id = None);
+                if boxes {
+                    self.adopt_text_boxes(std::slice::from_mut(&mut copy), parts, depth + 1, budget);
+                }
                 blocks.push(Arc::new(copy));
             } else {
                 blocks.push(b);
@@ -1381,6 +1389,14 @@ impl Document {
         for b in frag.blocks.iter().cloned() {
             fit_tables(b, room, &mut blocks);
         }
+        // Pasted paragraphs are new ones: the copies' ids stay with their sources.
+        for b in &mut blocks {
+            let mut ids = false;
+            each_para(b, 0, &mut |p| ids |= p.para_id.is_some());
+            if ids {
+                each_para_mut(b, 0, &mut |p| p.para_id = None);
+            }
+        }
         if blocks.is_empty() {
             return Ok(pos.clone());
         }
@@ -1404,6 +1420,7 @@ impl Document {
             let src = src.clone();
             let target = self.para_mut(pos.story, &pos.path)?;
             let tail = target.split_off(pos.off)?;
+            let para_id = target.para_id.or(tail.para_id);
             let added = src.len();
             let keep = target.props.clone();
             let sect = tail.section.clone();
@@ -1413,6 +1430,7 @@ impl Document {
             target.append(tail);
             target.props = keep;
             target.section = sect;
+            target.para_id = para_id;
             return Ok(Pos { off: pos.off + added, ..pos.clone() });
         }
         // Multi-block: split, merge first into left part, last into right part.
@@ -1447,8 +1465,11 @@ impl Document {
                 let tail = std::mem::replace(r, p.clone());
                 let off = r.len();
                 let sect = tail.section.clone();
+                let para_id = tail.para_id;
                 r.append(tail);
                 r.section = sect;
+                // The paragraph pasted into keeps its id (the pasted one has none).
+                r.para_id = para_id;
                 Ok(Pos { story: pos.story, path: right, off })
             }
             Some(t @ Block::Table(_)) => {

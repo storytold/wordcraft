@@ -713,6 +713,25 @@ impl Document {
         max.saturating_add(1).max(1)
     }
 
+    /// The paragraph ids (`w14:paraId`) the paragraphs of every story carry, and whether any is
+    /// outside the comments (whose last paragraphs are always written with one).
+    pub fn para_ids(&self) -> (std::collections::HashSet<u32>, bool) {
+        let mut ids = std::collections::HashSet::new();
+        let mut outside = false;
+        let parts = self.parts.values().map(|p| (&p.blocks, p.kind == PartKind::Comment));
+        for (blocks, comment) in std::iter::once((&self.body, false)).chain(parts) {
+            for b in blocks {
+                edit::each_para(b, 0, &mut |p| {
+                    if let Some(id) = p.para_id {
+                        ids.insert(id);
+                        outside |= !comment;
+                    }
+                });
+            }
+        }
+        (ids, outside)
+    }
+
     /// Change every inline object in every story (paragraphs inside tables too), copying only
     /// the blocks whose paragraphs `wants` says have objects to change.
     pub fn objects_mut(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
