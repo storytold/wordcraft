@@ -161,7 +161,7 @@ fn field(value: &JsValue, name: &str) -> Result<String, JsValue> {
 }
 
 fn frame(app: &mut WordApp, ctx: &egui::Context) {
-    let _ = ctx.run(egui::RawInput::default(), |ctx| app.logic(ctx));
+    let _ = ctx.run_pass(egui::RawInput::default(), |ctx| app.logic(ctx));
 }
 
 #[wasm_bindgen_test]
