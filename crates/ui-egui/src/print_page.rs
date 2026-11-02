@@ -113,25 +113,45 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// The output layout, kept while the document is unchanged (laying out every frame would be slow).
+/// What the preview's layout and pages depend on besides the document: Print Markup and the
+/// Track Changes Options it draws with.
+type MarkupKey = (bool, wordcraft_layout::display::MarkupOptions);
+
+fn markup_key(app: &WordApp) -> MarkupKey {
+    (app.session.prefs.print_markup, app.session.prefs.markup.clone())
+}
+
+/// The print job's layout ([`Session::print_layout`](wordcraft_engine::Session::print_layout)),
+/// so the preview pages as the job does: without Print Markup tracked deletions take no space.
+/// Kept while the document and the markup settings are unchanged (laying out every frame would
+/// be slow).
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
-    let rev = app.session.rev();
-    if let Some((r, l)) = ctx.data(|d| d.get_temp::<(u64, Arc<DocLayout>)>(id))
-        && r == rev
+    let key = (app.session.rev(), markup_key(app));
+    if let Some((k, l)) = ctx.data(|d| d.get_temp::<((u64, MarkupKey), Arc<DocLayout>)>(id))
+        && k == key
     {
         return l;
     }
-    let l = app.session.export_layout();
-    ctx.data_mut(|d| d.insert_temp(id, (rev, l.clone())));
+    let l = app.session.print_layout(app.session.prefs.print_markup);
+    ctx.data_mut(|d| d.insert_temp(id, (key, l.clone())));
     l
 }
 
-/// The texture of one page, re-rendered only when the document, page or size changes.
+/// How the preview draws a page: tracked changes marked as the print job marks them.
+fn preview_options(app: &WordApp) -> wordcraft_render::RenderOptions {
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.markup = app.session.prefs.print_markup;
+    opts.display.revisions = app.session.prefs.markup.clone();
+    opts
+}
+
+/// The texture of one page, re-rendered only when the document, the markup settings, the page or
+/// the size changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique("print_page_texture");
-    let key = (app.session.rev(), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, usize, u32, u32), TextureHandle)>(id))
+    let key = (app.session.rev(), markup_key(app), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, MarkupKey, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -140,7 +160,7 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
+    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &preview_options(app));
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
@@ -369,5 +389,33 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// The preview pages as the print job does (#5269 review): without Print Markup tracked
+    /// deletions take no space, whatever Track Changes Options mark them with.
+    #[test]
+    fn the_preview_pages_as_the_print_job() {
+        let text: Vec<String> = (0..200).map(|i| format!("Line {i} of the old text")).collect();
+        let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let ctx = egui::Context::default();
+        app.run("review.trackChanges", json!({"value": true})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Kept"})).unwrap();
+        let pages = |app: &crate::WordApp| (super::layout_of(app, &ctx).pages.len(), app.session.print_pdf(&json!({})).unwrap().1.chosen);
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        let (marked, job) = pages(&app);
+        assert!(marked > 1 && marked == job, "{marked} vs {job}");
+        app.run("file.printMarkup", json!({"value": false})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
+        // The cached layout follows the Delete mark option too (it changes the layout with markup).
+        app.run("file.printMarkup", json!({"value": true})).unwrap();
+        app.run("review.trackingOptions", json!({"deleteMark": "hidden"})).unwrap();
+        assert_eq!(pages(&app), (1, 1));
     }
 }
