@@ -174,6 +174,9 @@ pub(super) struct Writer {
     /// The document's custom properties' names: `DOCPROPERTY` fields naming one are written as
     /// `text:user-defined`.
     pub(super) custom_props: std::collections::HashSet<String>,
+    /// The names SET fields give values (the document's variables, §7.4.2): REF to one is a
+    /// `text:variable-get`.
+    pub(super) variables: std::collections::BTreeSet<String>,
     /// The kinds of the shapes with drawing ids, which connectors' glue points depend on.
     pub(super) conn_kinds: HashMap<u32, wordcraft_doc::para::ShapeKind>,
     /// Ruby was written: its automatic ruby style is.
@@ -685,6 +688,18 @@ impl Writer {
             return Some(super::fields::bib_mark(s, &x(result)));
         }
         // A custom document property's value (§7.5.6).
+        // A variable given a value, hidden (§7.4.5): a REF after it shows the value.
+        if let Some((name, value)) = super::fields::set_of(instr).filter(|(n, _)| self.variables.contains(*n)) {
+            return Some(format!(
+                "<text:variable-set text:name=\"{}\" text:display=\"none\" office:value-type=\"string\" office:string-value=\"{}\"/>",
+                x(name),
+                x(&value)
+            ));
+        }
+        // A variable's value (§7.4.6).
+        if let Some(name) = instr.trim_start().strip_prefix("REF").and_then(|r| r.split_whitespace().next()).filter(|n| self.variables.contains(*n)) {
+            return Some(format!("<text:variable-get text:name=\"{}\">{}</text:variable-get>", x(name), x(result)));
+        }
         if let Some(n) = super::fields::docproperty_name(instr).filter(|n| self.custom_props.contains(*n)) {
             return Some(format!("<text:user-defined text:name=\"{}\">{}</text:user-defined>", x(n), x(result)));
         }

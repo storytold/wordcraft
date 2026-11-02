@@ -52,3 +52,22 @@ fn character_styles_round_trip() {
     let back = import(&export(&d).unwrap()).unwrap();
     assert_eq!(runs(&back), runs(&d));
 }
+
+#[test]
+fn what_a_character_style_turns_off_stays_off() {
+    // "Plain" is based on the bold, italic "Loud" and turns both off.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Loud" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style><style:style style:name="Plain" style:family="text" style:parent-style-name="Loud"><style:text-properties fo:font-weight="normal" fo:font-style="normal"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:span text:style-name="Loud">a</text:span><text:span text:style-name="Plain">b</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let p = d.body[0].as_para().unwrap();
+    let shown: Vec<(bool, bool)> =
+        p.runs.iter().map(|r| d.styles.resolve_char(p.props.style.as_deref(), &r.props)).map(|c| (c.bold, c.italic)).collect();
+    assert_eq!(shown, [(true, true), (false, false)]);
+    let s = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    let plain = s.split(r#"style:name="Plain""#).nth(1).and_then(|r| r.split("</style:style>").next()).unwrap_or("missing");
+    assert!(plain.contains(r#"fo:font-weight="normal""#) && plain.contains(r#"fo:font-style="normal""#), "{plain}");
+}

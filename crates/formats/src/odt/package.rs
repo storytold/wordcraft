@@ -568,6 +568,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     w.conn_kinds = conn_kinds(&flow.blocks);
     w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
     w.custom_props = doc.custom_props.iter().filter(|p| p.kind != "raw").map(|p| p.name.clone()).collect();
+    w.variables = variables(doc);
     w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);
     let mut body = String::new();
@@ -620,6 +621,13 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         format!("<text:tracked-changes text:track-changes=\"{}\">{}</text:tracked-changes>\n", doc.settings.track_changes, w.regions.concat())
     };
     // The sequences fields count (§7.4.11), declared after any tracked changes.
+    // The variables, declared (§7.4.2).
+    let var_decls = if w.variables.is_empty() {
+        String::new()
+    } else {
+        let d: String = w.variables.iter().map(|n| format!("<text:variable-decl office:value-type=\"string\" text:name=\"{}\"/>", x(n))).collect();
+        format!("<text:variable-decls>{d}</text:variable-decls>")
+    };
     let decls = if w.sequences.is_empty() {
         String::new()
     } else {
@@ -628,12 +636,13 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         format!("<text:sequence-decls>{d}</text:sequence-decls>")
     };
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{decls}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{var_decls}{decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
         super::forms::forms_xml(&w.forms, &hidden_controls(doc))
     );
     let mut hw = Writer::with_prefix("M");
     hw.accents = accents;
+    hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     let mut named = std::mem::take(&mut w.named);
     named.append(&mut hw.named);
@@ -806,4 +815,25 @@ fn hidden_controls(doc: &Document) -> Vec<String> {
         .and_then(|b| std::str::from_utf8(b).ok())
         .map(|s| s.split('\0').filter(|h| h.starts_with("<form:hidden")).take(10_000).map(str::to_owned).collect())
         .unwrap_or_default()
+}
+
+/// The names SET fields in `doc` give values (each story, a bounded number): its variables.
+fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let stories = std::iter::once(wordcraft_doc::StoryRef::Body).chain(doc.parts.keys().map(|k| wordcraft_doc::StoryRef::Part(*k)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            let Some(p) = doc.para(story, &path) else { continue };
+            for o in &p.objects {
+                if let wordcraft_doc::InlineObject::Field { instr, .. } = o
+                    && let Some((name, _)) = super::fields::set_of(instr)
+                    && out.len() < 10_000
+                    && !name.contains(|c: char| c == '"' || c == '<' || c == '&')
+                {
+                    out.insert(name.to_string());
+                }
+            }
+        }
+    }
+    out
 }

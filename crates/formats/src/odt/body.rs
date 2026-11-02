@@ -1013,6 +1013,19 @@ impl Body<'_> {
         {
             self.sources.push(s);
         }
+        // A variable given a value (§7.4.5 `text:variable-set`): a SET field, then, unless it is
+        // hidden, a REF showing the value.
+        if q == "text:variable-set"
+            && self.frame.is_none()
+            && let Some(set) = super::fields::set_instr(a)
+        {
+            let fmt = self.cur_fmt();
+            self.push_inline(Inline::Field { instr: set, result: String::new(), fmt });
+            if get(a, "text:display").map(str::trim) == Some("none") {
+                self.skip = 1;
+                return true;
+            }
+        }
         if q.starts_with("text:")
             && self.frame.is_none()
             && let Some(instr) = super::fields::instr_of(local(q), a, |n| self.styles.date_picture(n).map(String::from))

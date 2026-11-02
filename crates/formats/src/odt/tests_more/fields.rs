@@ -58,7 +58,7 @@ fn fields_open_as_fields_with_their_shown_text() {
 
 #[test]
 fn a_fixed_date_and_unknown_fields_are_plain_text() {
-    let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:variable-get text:name="v">4</text:variable-get>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
+    let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:conditional-text text:condition="ooow:1" text:string-value-if-true="4" text:string-value-if-false="5">4</text:conditional-text>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
     assert!(fields(&d).is_empty());
     assert_eq!(d.body[0].as_para().unwrap().text, "1 May, 4, 5");
     // A fixed date with neither a value nor text (LibreOffice's templates) shows the day: a
@@ -234,4 +234,53 @@ fn bibliography_marks_are_citations_of_sources() {
         c.contains(r#"<text:bibliography-mark text:identifier="Smi20" text:bibliography-type="book" text:author="Smith, Jane" text:title="Kilns" text:year="2020" text:publisher="Clay Press">[Smi20]</text:bibliography-mark>"#),
         "{c}"
     );
+}
+
+const VARIABLES: &str = r#"<text:variable-decls><text:variable-decl office:value-type="string" text:name="who"/></text:variable-decls><text:p>Set: <text:variable-set text:name="who" office:value-type="string" office:string-value="Ada &quot;AL&quot;">Ada "AL"</text:variable-set>. Hidden: <text:variable-set text:name="who" text:display="none" office:value-type="string" office:string-value="Grace"></text:variable-set>. Get: <text:variable-get text:name="who">Grace</text:variable-get>. Number: <text:variable-set text:name="n" office:value-type="float" office:value="42" text:display="none"/><text:variable-get text:name="n">42</text:variable-get>.</text:p>"#;
+
+#[test]
+fn variables_open_as_set_and_ref_fields() {
+    let d = import(&body(VARIABLES)).unwrap();
+    let want: Vec<(String, String)> = [
+        (r#"SET who "Ada \"AL\"""#, ""),
+        ("REF who", r#"Ada "AL""#),
+        (r#"SET who "Grace""#, ""),
+        ("REF who", "Grace"),
+        (r#"SET n "42""#, ""),
+        ("REF n", "42"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    assert_eq!(fields(&d), want);
+    // The text around them, as LibreOffice shows it.
+    assert_eq!(d.body[0].as_para().unwrap().text.replace(wordcraft_doc::para::OBJ, ""), "Set: . Hidden: . Get: . Number: .");
+}
+
+#[test]
+fn variables_are_written_back_declared() {
+    let d = import(&body(VARIABLES)).unwrap();
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    for want in [
+        r#"<text:variable-decls><text:variable-decl office:value-type="string" text:name="n"/><text:variable-decl office:value-type="string" text:name="who"/></text:variable-decls>"#,
+        r#"<text:variable-set text:name="who" text:display="none" office:value-type="string" office:string-value="Ada &quot;AL&quot;"/>"#,
+        r#"<text:variable-get text:name="who">Grace</text:variable-get>"#,
+    ] {
+        assert!(c.contains(want), "{want} in {c}");
+    }
+    assert_eq!(fields(&import(&export(&d).unwrap()).unwrap()), fields(&d));
+}
+
+#[test]
+fn hostile_variables_never_panic() {
+    let long = "v".repeat(100_000);
+    for xml in [
+        r#"<text:p><text:variable-set/><text:variable-get/></text:p>"#.to_string(),
+        r#"<text:p><text:variable-set text:name="a b" office:string-value="x"/><text:variable-set text:name="q&quot;" office:string-value="x"/></text:p>"#.to_string(),
+        format!(r#"<text:p><text:variable-set text:name="v" office:string-value="{long}"/></text:p>"#),
+        r#"<text:p><text:variable-set text:name="v" text:formula="ooow:\\&quot;"><text:variable-set text:name="w"/></text:variable-set></text:p>"#.to_string(),
+    ] {
+        let d = import(&body(&xml)).unwrap();
+        let _ = export(&d).unwrap();
+    }
 }

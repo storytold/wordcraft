@@ -327,6 +327,29 @@ fn document_information_fields_show_the_properties() {
     assert_eq!(got, ["Budget", "plan; costs", "Draft for review", "Grace", "7", "VII", "11", "iii"]);
 }
 
+/// SET gives a name a value and shows nothing; REF shows it, a REF before the SET the value it
+/// ends up with (an ODT's variables open as SET and REF).
+#[test]
+fn set_gives_a_value_that_ref_shows() {
+    let doc = wordcraft_doc::Document::from_text("one");
+    let codes = [
+        r#"SET who "Ada Lovelace""#,
+        "REF who",
+        r"REF WHO \* Upper",
+        "REF later",
+        "SET later Bob",
+        r#"SET who "Grace""#,
+        "REF who",
+        "SET",
+        "REF nothing",
+    ];
+    let (mut s, hdr) = header_fields_session(doc, &codes);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got[..7], ["", "Ada Lovelace", "ADA LOVELACE", "Bob", "", "", "Grace"]);
+    assert_eq!(got[7], "");
+}
+
 /// USERNAME and USERINITIALS show the user's name and initials from File › Options (an ODT's
 /// `text:author-name` opens as USERNAME); a quoted text after the name is shown instead.
 #[test]

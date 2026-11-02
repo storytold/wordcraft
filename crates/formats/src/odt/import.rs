@@ -151,7 +151,7 @@ fn custom_char_styles(blocks: &mut [FBlock], styles: &Styles, para_ids: &[String
                 if found.iter().any(|(o, _)| *o == n) || chain.contains(&n) || chain.len() >= 16 {
                     break;
                 }
-                cur = styles.named_text(&n).and_then(|(_, parent, _)| parent);
+                cur = styles.named_text(&n).and_then(|(_, parent, ..)| parent);
                 chain.push(n);
             }
             for n in chain.into_iter().rev() {
@@ -167,15 +167,15 @@ fn custom_char_styles(blocks: &mut [FBlock], styles: &Styles, para_ids: &[String
 
 /// Add the custom character styles `found` (ODF name, document id; parents first) built from
 /// `defs` (name, parent's ODF name, own formatting), alongside.
-fn add_char_styles(doc: &mut Document, found: &[(String, String)], defs: &[(String, Option<String>, model::Fmt)]) {
-    for ((_, id), (name, parent, fmt)) in found.iter().zip(defs) {
+fn add_char_styles(doc: &mut Document, found: &[(String, String)], defs: &[(String, Option<String>, model::Fmt, [bool; 4])]) {
+    for ((_, id), (name, parent, fmt, off)) in found.iter().zip(defs) {
         let based_on = parent.as_ref().and_then(|p| found.iter().find(|(o, _)| o == p).map(|(_, id)| id.clone())).filter(|b| b != id);
         doc.styles.upsert(wordcraft_doc::styles::Style {
             id: id.clone(),
             name: name.clone(),
             kind: wordcraft_doc::styles::StyleKind::Character,
             based_on,
-            chr: model::char_props(fmt),
+            chr: turned_off(model::char_props(fmt), *off),
             ..Default::default()
         });
     }
@@ -402,7 +402,7 @@ struct Parsed {
     /// The custom character styles the text uses: ODF name and document id, parents first.
     char_styles: Vec<(String, String)>,
     /// Their names, parents and own formatting, alongside.
-    char_defs: Vec<(String, Option<String>, model::Fmt)>,
+    char_defs: Vec<(String, Option<String>, model::Fmt, [bool; 4])>,
     /// The file's `settings.xml`, kept for the next save.
     settings: Option<Vec<u8>>,
     /// The heading numbering (`text:outline-style`), level by level.

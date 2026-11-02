@@ -49,6 +49,8 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             .filter(|n| !n.is_empty() && n.len() <= MAX_REF_NAME && !n.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'))
     };
     match local {
+        // A variable's value (§7.4.5, §7.4.6): what a SET gave its name.
+        "variable-get" | "variable-set" => Some(format!("REF {}", name("text:name")?)),
         // A document property's value (§7.5.6 `text:user-defined`, a `meta:user-defined`) or a
         // user field's (§7.4.9 `text:user-field-get`, declared once for the document): Word's
         // `DOCPROPERTY`, the property kept as a custom document property.
@@ -413,4 +415,48 @@ pub(super) fn sequence_name(instr: &str) -> Option<&str> {
     let mut words = instr.split_whitespace();
     words.next().filter(|c| c.eq_ignore_ascii_case("SEQ"))?;
     words.next().filter(|n| !n.starts_with('\\') && n.len() <= MAX_REF_NAME)
+}
+
+/// The SET field (ECMA-376 §17.16.5.58) a `text:variable-set` with attributes `a` is: its name and
+/// value (§19.383 `office:string-value`, else the number, else the formula without its prefix).
+pub(super) fn set_instr(a: &Attrs) -> Option<String> {
+    let name = get(a, "text:name")
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && n.len() <= MAX_REF_NAME && !n.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\'))?;
+    let value = get(a, "office:string-value")
+        .or_else(|| get(a, "office:value"))
+        .or_else(|| get(a, "text:formula").map(|f| f.trim().strip_prefix("ooow:").unwrap_or(f.trim())))
+        .unwrap_or_default();
+    let value: String = value.chars().take(MAX_FIELD_VALUE).collect();
+    Some(format!("SET {name} \"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")))
+}
+
+/// Most characters of a variable's value kept.
+const MAX_FIELD_VALUE: usize = 10_000;
+
+/// A SET field's name and value, when `instr` is one.
+pub(super) fn set_of(instr: &str) -> Option<(&str, String)> {
+    let rest = instr.trim_start().strip_prefix("SET")?.strip_prefix(char::is_whitespace)?.trim_start();
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let (name, value) = (rest.get(..end)?, rest.get(end..)?.trim());
+    if name.is_empty() {
+        return None;
+    }
+    // A quoted value, its \" and \\ undone; else the words as they are.
+    let value = match value.strip_prefix('"') {
+        Some(q) => {
+            let mut out = String::new();
+            let mut it = q.chars();
+            while let Some(c) = it.next() {
+                match c {
+                    '"' => break,
+                    '\\' => out.extend(it.next()),
+                    c => out.push(c),
+                }
+            }
+            out
+        }
+        None => value.to_string(),
+    };
+    Some((name, value))
 }

@@ -1093,7 +1093,9 @@ impl Styles {
 
     /// A custom character style ([`Self::is_named_text`]): its name, the custom character style
     /// it is based on (by ODF name) and its own formatting.
-    pub(super) fn named_text(&self, odt: &str) -> Option<(String, Option<String>, Fmt)> {
+    /// A custom character style: its name, parent, own formatting, and what it turns off (bold,
+    /// italic, underline, strike-through: see [`NamedStyle::off`]).
+    pub(super) fn named_text(&self, odt: &str) -> Option<(String, Option<String>, Fmt, [bool; 4])> {
         if !self.is_named_text(odt) {
             return None;
         }
@@ -1102,7 +1104,8 @@ impl Styles {
         s.fmt.apply(&mut fmt);
         let parent = s.parent.clone().filter(|p| self.is_named_text(p));
         let name: String = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " ")).chars().take(model::MAX_FONT_NAME).collect();
-        Some((name, parent, fmt))
+        let off = [s.fmt.bold, s.fmt.italic, s.fmt.underline, s.fmt.strike].map(|v| v == Some(false));
+        Some((name, parent, fmt, off))
     }
 
     /// The formatting of a span in text style `name` over `base`: the automatic styles' over the
