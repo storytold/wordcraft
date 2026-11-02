@@ -1,3 +1,5 @@
+use super::builder::decls;
+use super::import::PAGE_FONT;
 use super::{Align, Fmt, model, parse_color};
 
 /// A CSS length (or font-size keyword) in points; `None` when it is not one.
@@ -33,7 +35,7 @@ pub fn css_len_pt(v: &str) -> Option<f32> {
     }
 }
 
-fn strip_important(v: &str) -> &str {
+pub(super) fn strip_important(v: &str) -> &str {
     let s = v.trim();
     if let Some(pos) = s.rfind('!') {
         let after = s[pos + 1..].trim();
@@ -53,10 +55,7 @@ pub(super) fn apply_style(
     page_break: &mut bool,
     page_break_after: &mut bool,
 ) {
-    for decl in css.split(';').take(64) {
-        let Some((k, v)) = decl.split_once(':') else { continue };
-        let k = k.trim().to_ascii_lowercase();
-        let v = strip_important(v);
+    for (k, v) in decls(css) {
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -94,6 +93,14 @@ pub(super) fn apply_style(
                     f.code = true;
                 } else if !fam.is_empty() && !matches!(fam.to_ascii_lowercase().as_str(), "serif" | "sans-serif" | "inherit" | "initial") {
                     f.font = model::kept_font(&fam).or(f.font.take());
+                } else if f.font.is_some() {
+                    // A generic family replaces a face the text has (a page's Times New Roman);
+                    // text without one keeps the document's font.
+                    match fam.to_ascii_lowercase().as_str() {
+                        "serif" => f.font = Some(PAGE_FONT.into()),
+                        "sans-serif" => f.font = Some("Arial".into()),
+                        _ => {}
+                    }
                 }
             }
             "vertical-align" => {
