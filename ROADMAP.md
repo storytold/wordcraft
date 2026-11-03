@@ -696,8 +696,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 ## Revision history
 
-> 2026-11-01 · Right-to-left styles show their sample text in the Home › Styles gallery (#4944): the tile paints the right end of the preview picture, where a right-to-left paragraph is laid out; left-to-right tiles are unchanged; regression test `a_right_to_left_style_previews_its_sample_text`.
->
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
 >
 > 2026-10-28 · Markdown import bounds reference-label scans and normalization within the existing link-work allowance. Nested undefined labels preserve literal text instead of causing quadratic work (#4658).
@@ -711,6 +709,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
+| 2026-11-01 | trivial | Progress log: right-to-left styles show their sample text in the Styles gallery (#4944) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
