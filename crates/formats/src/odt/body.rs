@@ -1670,12 +1670,13 @@ struct KeptOpen {
     done: usize,
 }
 
-/// Whether a paragraph holding element `q` can be written back as it was read: not when the
-/// element refers to something outside the paragraph that the writer names afresh (drawings and
-/// their pictures, comments, tracked changes, marks and bookmarks that span paragraphs, form
-/// controls).
+/// Whether markup holding element `q` can be kept as read. Pictures and shapes can (a shape's
+/// text, or a text box's, is read as paragraphs, which keeps the paragraph holding it from being
+/// kept); embedded objects (charts and formulas, written on their own), form controls, plugins
+/// and text boxes (whose text is the document's own story) can't, nor comments, tracked changes
+/// and marks that pair up with others elsewhere.
 fn keepable(q: &str) -> bool {
-    !(q.starts_with("draw:")
+    !(matches!(q, "draw:object" | "draw:object-ole" | "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame" | "draw:text-box")
         || q.starts_with("office:annotation")
         || q.starts_with("text:change")
         || q.starts_with("form:")

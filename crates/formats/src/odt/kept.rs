@@ -234,12 +234,13 @@ fn with_as_read(
     format!("{head}{body}{tail}")
 }
 
-/// Whether a definition (its markup) is a drawing's: a graphic style or default style, or a
-/// dash, gradient, marker or fill picture. Drawings are always written from the model, so
-/// their definitions are WordCraft's where both have one by that name.
+/// Whether a definition (its markup) is a dash, gradient, marker or fill picture: WordCraft's
+/// where both have one by that name, as the drawings it writes from the model name theirs. A
+/// graphic style (the `Graphics` and `Frame` styles drawings derive from) is the file's: its
+/// drawings written as read derive from it, and those written from the model derived from it
+/// when read (what WordCraft models of it is in theirs).
 fn drawing_def(xml: &str) -> bool {
-    let head = xml.split('>').next().unwrap_or("");
-    head.starts_with("<draw:") || head.contains(r#"style:family="graphic""#)
+    xml.split('>').next().unwrap_or("").starts_with("<draw:")
 }
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its `office:styles` as read: every kept
@@ -291,16 +292,8 @@ const MAX_FILES: usize = 1000;
 /// `fetch` (`entries`: the package's paths): a definition written as read needs them.
 pub(super) fn files(defs: &[(String, Arc<str>)], entries: &[String], fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec<(String, Vec<u8>)> {
     let mut paths = BTreeSet::new();
-    for (_, xml) in defs.iter().filter(|(_, x)| x.contains("xlink:href")) {
-        super::xml::events(xml.as_bytes(), |ev| {
-            if let Ev::Start(_, a) = ev
-                && let Some(h) = get(&a, "xlink:href")
-                && inside_package(h)
-                && paths.len() < MAX_FILES
-            {
-                paths.insert(h.trim_start_matches("./").to_string());
-            }
-        });
+    for (_, xml) in defs {
+        hrefs(xml, &mut paths);
     }
     let mut out = Vec::new();
     for p in paths {
@@ -315,6 +308,23 @@ pub(super) fn files(defs: &[(String, Arc<str>)], entries: &[String], fetch: &mut
         }
     }
     out
+}
+
+/// The package files `xml` links to (`xlink:href` to a path inside the package), added to
+/// `paths` (at most [`MAX_FILES`]).
+pub(super) fn hrefs(xml: &str, paths: &mut BTreeSet<String>) {
+    if !xml.contains("xlink:href") {
+        return;
+    }
+    super::xml::events(xml.as_bytes(), |ev| {
+        if let Ev::Start(_, a) = ev
+            && let Some(h) = get(&a, "xlink:href")
+            && inside_package(h)
+            && paths.len() < MAX_FILES
+        {
+            paths.insert(h.trim_start_matches("./").to_string());
+        }
+    });
 }
 
 /// Whether link `h` names a file inside the package (a relative path, not a URL or a fragment).

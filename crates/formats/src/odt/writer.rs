@@ -175,6 +175,10 @@ pub(super) struct Writer {
     /// The definitions kept paragraphs may refer to (see `super::kept`), and those the kept
     /// paragraphs written so far need: automatic, common, font faces.
     pub(super) kept_defs: std::sync::Arc<std::collections::BTreeMap<String, std::sync::Arc<str>>>,
+    /// The package files the markup written as read links to (its pictures): written as read.
+    pub(super) kept_files_used: std::collections::BTreeSet<String>,
+    /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
+    pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
     pub(super) kept_used: super::kept::Needed,
     /// The file's own master pages are written (its page setup is as read): kept markup may
     /// start one.
@@ -592,6 +596,8 @@ impl Writer {
         }
         self.close_ins(out);
         out.push_str(xml);
+        // With the pictures it shows.
+        super::kept::hrefs(xml, &mut self.kept_files_used);
         true
     }
 

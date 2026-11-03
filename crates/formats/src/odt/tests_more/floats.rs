@@ -96,7 +96,7 @@ fn an_inline_picture_is_saved_standing_on_the_baseline() {
     // LibreOffice puts an in-line frame without placement at the line's top (measured): a
     // picture standing on the baseline, as in Word, says so.
     let d = float_doc_inline();
-    let out = crate::odt::tests::content_of(&export(&d).unwrap());
+    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"style:vertical-pos="top" style:vertical-rel="baseline""#), "{out}");
 }
 
@@ -134,7 +134,7 @@ fn a_picture_alone_in_its_paragraph_keeps_its_raise_and_the_paragraphs_size() {
     let doc = crate::odt::tests::import_as(&pkg, &wordcraft_doc::odf_profile::OdfProfile::libreoffice());
     assert_eq!(look(&doc), (Some(10.8), Some(9.0), Some(9.0)));
     // Saved, it says so in terms every reader takes the same way.
-    let again = crate::odt::import(&crate::odt::export(&doc).unwrap()).unwrap();
+    let again = crate::odt::import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
     assert_eq!(look(&again), (Some(10.8), Some(9.0), Some(9.0)));
     let doc = crate::odt::import(&pkg).unwrap();
     assert_eq!(look(&doc), (None, Some(9.0), Some(9.0)));
@@ -258,13 +258,13 @@ fn an_inline_frame_keeps_its_place_on_the_baseline() {
         let pos = p.props_at(off + wordcraft_doc::para::OBJ.len_utf8()).position.unwrap_or(0.0);
         assert_eq!((pos * 10.0).round() / 10.0, want, "{vpos}{y}");
         // Saved: a lowered one says how far its top is from the baseline.
-        let saved = crate::odt::tests::content_of(&crate::odt::export(&doc).unwrap());
+        let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&doc).unwrap());
         if want != 0.0 {
             assert!(saved.contains(r#"style:vertical-pos="from-top" style:vertical-rel="baseline""#), "{saved}");
             let top = -(72.0 + want) + 0.0;
             assert!(saved.contains(&format!(r#"svg:y="{}pt""#, top)), "{vpos}{y}: {saved}");
         }
-        let again = crate::odt::import(&crate::odt::export(&doc).unwrap()).unwrap();
+        let again = crate::odt::import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
         let p2 = again.body.iter().find_map(|b| b.as_para()).unwrap();
         let (off2, _) = p2.objects_with_offsets().next().unwrap();
         assert_eq!(
@@ -296,7 +296,7 @@ fn a_cropped_picture_keeps_its_crop() {
         .and_then(|p| p.objects.iter().find_map(|o| if let wordcraft_doc::para::InlineObject::Image { crop, .. } = o { Some(*crop) } else { None }))
         .unwrap();
     assert_eq!(crop.map(|c| (c * 100.0).round() / 100.0), [0.25, 0.0, 0.0, 0.25]);
-    let c = crate::odt::tests::content_of(&crate::odt::export(&doc).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&doc).unwrap());
     // 0.2602 in is 18.73 pt, 0.5209 in 37.5 pt.
     assert!(c.contains(r#"fo:clip="rect(0pt, 0pt, 18.73pt, 37.5pt)""#), "{c}");
     // An absurd crop (nothing left) is none.
@@ -325,7 +325,7 @@ fn contour_wrapping_and_its_outline_are_kept() {
         let f = float(&doc);
         assert_eq!(f.wrap, want, "{mode}");
         assert_eq!(f.wrap_polygon.as_deref().map(|p| p.points.clone()), Some(vec![[10800, 0], [21600, 21600], [0, 21600]]), "{mode}");
-        let saved = crate::odt::export(&doc).unwrap();
+        let saved = crate::odt::tests::export_model(&doc).unwrap();
         let c = crate::odt::tests::content_of(&saved);
         assert!(c.contains(&format!(r#"style:wrap-contour="true" style:wrap-contour-mode="{mode}""#)), "{c}");
         assert!(c.contains(r#"draw:points="10800,0 21600,21600 0,21600""#), "{c}");
@@ -380,5 +380,5 @@ fn a_frame_keeps_its_place_in_the_stacking_order() {
     // Unknown (inserted in WordCraft): at the bottom, in document order.
     let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph""#);
     assert_eq!(float(&d).z, 0);
-    assert!(crate::odt::tests::entry(&export(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
+    assert!(crate::odt::tests::entry(&crate::odt::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
 }

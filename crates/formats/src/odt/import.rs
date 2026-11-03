@@ -426,6 +426,25 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
     parse_tracked(bytes, default_paper(), &OdfProfile::default()).map(|p| (p.flow, p.last))
 }
 
+/// The markup kept as read in `blocks` (paragraphs', tables', the paragraphs' in tables not
+/// kept whole) that links to package files, added to `out`.
+fn kept_markup(blocks: &[FBlock], depth: usize, out: &mut Vec<(String, std::sync::Arc<str>)>) {
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => out.extend(p.kept.iter().filter(|x| x.contains("xlink:href")).map(|x| (String::new(), x.clone()))),
+            FBlock::Table(t) => match &t.kept {
+                Some(x) => out.extend(x.contains("xlink:href").then(|| (String::new(), x.clone()))),
+                None if depth < crate::model::MAX_DEPTH => {
+                    for c in t.rows.iter().flatten() {
+                        kept_markup(&c.blocks, depth + 1, out);
+                    }
+                }
+                None => {}
+            },
+        }
+    }
+}
+
 /// What [`parse_tracked`] reads besides the flow.
 struct Parsed {
     flow: Flow,
@@ -627,7 +646,13 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let track = body.track;
     let sources = std::mem::take(&mut body.sources);
     let section_masters = std::mem::take(&mut body.section_masters);
-    let kept_files = super::kept::files(&kept_defs, &entries, &mut fetch);
+    // And the pictures paragraphs and tables kept as read show.
+    let mut linking: Vec<(String, std::sync::Arc<str>)> = kept_defs.clone();
+    kept_markup(&blocks, 0, &mut linking);
+    for b in parts.blocks_mut() {
+        kept_markup(b, 0, &mut linking);
+    }
+    let kept_files = super::kept::files(&linking, &entries, &mut fetch);
     // Their manifest entries, and their folders' (an object's says what it is).
     for (path, _) in &kept_files {
         let dir = path.rsplit_once('/').map(|(d, _)| format!("{d}/"));

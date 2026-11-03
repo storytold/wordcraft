@@ -37,8 +37,18 @@ fn package(s: &Sample) -> Vec<u8> {
         z.start_file(name, o).unwrap();
         std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
     }
+    // The picture a sample may show.
+    z.start_file("Pictures/dot.png", o).unwrap();
+    std::io::Write::write_all(&mut z, DOT).unwrap();
     z.finish().unwrap().into_inner()
 }
+
+/// A one-pixel picture of our own.
+const DOT: &[u8] = &[
+    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4,
+    0x89, 0, 0, 0, 0x0d, b'I', b'D', b'A', b'T', 0x78, 0xda, 0x63, 0xfc, 0xcf, 0xc0, 0x50, 0x0f, 0, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21,
+    0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+];
 
 /// A length's value in points to a tenth, else the value as written.
 fn norm(v: &str) -> String {
@@ -219,8 +229,17 @@ const INDEXES: Sample = Sample {
     meta: "",
 };
 
+/// Pictures and shapes in the text: a cropped picture with its look (adjustments WordCraft
+/// doesn't model), a wrapped one with a contour, a shape, a group, and a picture in a table.
+const DRAWINGS: Sample = Sample {
+    name: "drawings",
+    content: r##"<office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Graphics"><style:graphic-properties style:wrap="parallel" style:number-wrapped-paragraphs="no-limit" style:wrap-contour="true" style:wrap-contour-mode="outside" style:vertical-pos="top" style:vertical-rel="paragraph" style:horizontal-pos="center" style:horizontal-rel="paragraph" style:mirror="none" fo:clip="rect(0in, 0.1in, 0in, 0.1in)" draw:luminance="10%" draw:contrast="5%" draw:red="0%" draw:green="0%" draw:blue="0%" draw:gamma="100%" draw:color-inversion="false" draw:image-opacity="100%" draw:color-mode="standard" wcx:look="kept"/></style:style><style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill-color="#729fcf" style:run-through="background" style:wrap="run-through" draw:wrap-influence-on-position="once-concurrent"/></style:style></office:automatic-styles><office:body><office:text><text:p>A picture <draw:frame draw:style-name="fr1" draw:name="Dot" text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="1"><draw:image xlink:href="Pictures/dot.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad" draw:mime-type="image/png"/><svg:title>A dot</svg:title><svg:desc>One pixel of our own.</svg:desc><draw:contour-polygon svg:width="1in" svg:height="1in" svg:viewBox="0 0 1000 1000" draw:points="0,0 1000,0 1000,1000 0,1000" draw:recreate-on-edit="true"/></draw:frame>beside the text.</text:p><text:p>A shape <draw:custom-shape draw:style-name="gr1" draw:name="Badge" text:anchor-type="char" svg:x="0.5in" svg:y="0in" svg:width="1in" svg:height="0.5in" draw:z-index="2"><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="hexagon" draw:modifiers="5400" draw:enhanced-path="M ?f0 0 L ?f1 0 21600 10800 ?f1 21600 ?f0 21600 0 10800 Z N"><draw:equation draw:name="f0" draw:formula="$0 "/><draw:equation draw:name="f1" draw:formula="right-$0"/><draw:handle draw:handle-position="$0 top" draw:handle-range-x-minimum="0" draw:handle-range-x-maximum="10800"/></draw:enhanced-geometry></draw:custom-shape>and a group <draw:g draw:style-name="gr1" text:anchor-type="paragraph" draw:z-index="3"><draw:rect draw:style-name="gr1" svg:x="0in" svg:y="0in" svg:width="0.5in" svg:height="0.5in"/><draw:ellipse draw:style-name="gr1" svg:x="0.5in" svg:y="0in" svg:width="0.5in" svg:height="0.5in"/></draw:g>after.</text:p><table:table table:name="Pictured"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p><draw:frame draw:name="Cell dot" text:anchor-type="as-char" svg:width="0.2in" svg:height="0.2in" draw:z-index="4"><draw:image xlink:href="Pictures/dot.png" xlink:type="simple"/></draw:frame> in a cell</text:p></table:table-cell></table:table-row></table:table></office:text></office:body>"##,
+    styles: r##"<office:styles><style:style style:name="Graphics" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph" svg:x="0in" svg:y="0in" style:wrap="dynamic" style:vertical-pos="top" style:vertical-rel="paragraph" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style></office:styles>"##,
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 9] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES];
+const SAMPLES: [Sample; 10] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -335,4 +354,30 @@ fn a_section_in_a_text_box_closes_in_it_whatever_is_edited() {
             assert_eq!(in_box.matches("<text:section ").count(), in_box.matches("</text:section>").count(), "{c}");
         }
     }
+}
+
+#[test]
+fn a_picture_kept_as_read_is_written_with_its_paragraph_only() {
+    // The picture a paragraph written as read shows is in the package; once that paragraph
+    // and the table showing it are gone, it isn't (a deleted picture stays deleted).
+    let d = import(&package(&DRAWINGS)).unwrap();
+    let files = |bytes: &[u8]| {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let names: Vec<String> = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string())).collect();
+        let dot = z.by_name("Pictures/dot.png").ok().map(|mut f| {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut f, &mut v).unwrap();
+            v
+        });
+        (names, dot)
+    };
+    let saved = export(&d).unwrap();
+    assert_eq!(files(&saved).1.as_deref(), Some(DOT));
+    assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains(r#"manifest:full-path="Pictures/dot.png""#));
+    let mut e = d.clone();
+    e.body.retain(|b| b.as_para().is_none_or(|p| !p.text.starts_with("A picture")) && b.as_table().is_none());
+    let saved = export(&e).unwrap();
+    let (names, dot) = files(&saved);
+    assert!(dot.is_none(), "{names:?}");
+    assert!(!content_of(&saved).contains("dot.png"));
 }

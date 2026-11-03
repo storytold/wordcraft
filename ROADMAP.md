@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-03: ODT paragraphs and tables holding pictures and shapes are written as read while unchanged (gap 19), with their pictures and frame styles; over the corpus the attributes and values a save loses halve (1,551 → 789), the pages unchanged.
 - 2026-11-03: ODT sections inside text boxes are written as read (gap 19), as LibreOffice's letter and fax templates hold the sender's address; seven of those templates now round-trip pixel-identical; over the corpus 103 of 133 files do (95), the round-trip difference falls from 51k to 44k pixels, and the losses a save makes fall from 59 to 35.
 - 2026-11-03: ODT saves lose less (gap 19): list styles sharing a paragraph style's name are kept apart (§16.2), named sections around tables (nested too) are written as read, unchanged charts keep their replacement picture, note citations follow the document's numbering, and frames keep their stacking order. Over the 133-file corpus the losses a save makes, file by file, fall from 242 to 59 (19 kinds), with the pages unchanged.
 - 2026-11-03: ODT form definitions and indexes are written back as read (gap 19): a file's forms keep their settings, properties and event listeners, and an index nobody edited keeps its source settings and entry templates. Over the 133-file corpus the element kinds a save loses fall from 38 to 22 (losses per file 354 → 242), with the pages unchanged (95 pixel-identical, 130 with identical text).

@@ -189,7 +189,13 @@ pub(in crate::odt) const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
 impl Writer {
     pub(in crate::odt) fn picture(&mut self, img: &model::Img) -> String {
         let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
-        let name = format!("Pictures/{}image{}.{}", self.prefix, self.pictures.len() + 1, ext);
+        // Not a name the file's own pictures, kept as read, have.
+        let mut n = self.pictures.len() + 1;
+        let mut name = format!("Pictures/{}image{n}.{ext}", self.prefix);
+        while self.reserved.contains(&name) && n < usize::MAX {
+            n += 1;
+            name = format!("Pictures/{}image{n}.{ext}", self.prefix);
+        }
         self.pictures.push((name.clone(), img.data.clone(), mime_of(&img.ext).to_string()));
         name
     }

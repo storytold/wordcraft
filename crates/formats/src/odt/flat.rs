@@ -253,24 +253,35 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
         let tag = before.rfind('<').and_then(|i| before.get(i..)).unwrap_or("");
         // A picture, or an embedded object's replacement picture.
         let picture = target.starts_with("Pictures/") || target.trim_start_matches("./").starts_with("ObjectReplacements/");
+        // The rest of the linking element's start tag, whether it closes itself, and what follows
+        // the tag (markup kept as read may have `<draw:image …></draw:image>`).
+        let gt = after.find('>').unwrap_or(after.len());
+        let closed = after.get(..gt).is_some_and(|t| t.ends_with('/'));
+        let tag_rest = after.get(..gt).unwrap_or("").trim_end_matches('/');
+        let past_tag = after.get(gt + 1..).unwrap_or("");
+        // What follows the element: past its tag, or past its end tag.
+        let past = |el: &str| {
+            if closed { past_tag } else { past_tag.find(&format!("</{el}>")).and_then(|e| past_tag.get(e + el.len() + 3..)).unwrap_or("") }
+        };
+        // The link's other attributes go with it.
+        let attrs: String = tag_rest.split_whitespace().filter(|a| !a.starts_with("xlink:")).map(|a| format!(" {a}")).collect();
         if tag.starts_with("<draw:image") && picture {
-            // `<draw:image xlink:href="…" …/>` → `<draw:image …><office:binary-data>…`.
+            // `<draw:image xlink:href="…" …/>` → `<draw:image …><office:binary-data>…`, before
+            // anything else it holds.
             let data = bytes_of(target.trim_start_matches("./"));
-            let rest_tag_end = after.find("/>").unwrap_or(0);
-            // The link's other attributes go with it.
-            let attrs: String =
-                after.get(..rest_tag_end).unwrap_or("").split_whitespace().filter(|a| !a.starts_with("xlink:")).map(|a| format!(" {a}")).collect();
             flat.push_str(before.trim_end());
             flat.push_str(&attrs);
-            flat.push_str(&format!("><office:binary-data>{}</office:binary-data></draw:image>", STANDARD.encode(&data)));
-            rest = after.get(rest_tag_end + 2..).unwrap_or("");
+            flat.push_str(&format!("><office:binary-data>{}</office:binary-data>", STANDARD.encode(&data)));
+            if closed {
+                flat.push_str("</draw:image>");
+            }
+            rest = past_tag;
         } else if tag.starts_with("<draw:object-ole") && target.starts_with("./Object ") {
             // An OLE object's file inline (§10.4.7 allows `office:binary-data` in it).
             let data = bytes_of(target.trim_start_matches("./"));
-            let rest_tag_end = after.find("/>").unwrap_or(0);
             flat.push_str(before.rfind("<draw:object-ole").and_then(|i| before.get(..i)).unwrap_or(before));
             flat.push_str(&format!("<draw:object-ole><office:binary-data>{}</office:binary-data></draw:object-ole>", STANDARD.encode(&data)));
-            rest = after.get(rest_tag_end + 2..).unwrap_or("");
+            rest = past("draw:object-ole");
         } else if tag.starts_with("<draw:object") && target.starts_with("./Object ") {
             let dir = target.trim_start_matches("./");
             let mut text = |name: &str| String::from_utf8_lossy(&bytes_of(&format!("{dir}/{name}"))).into_owned();
@@ -284,11 +295,10 @@ pub fn export_flat(doc: &Document) -> Result<Vec<u8>, String> {
             } else {
                 content.split_once("?>").map_or(content.as_str(), |(_, m)| m).trim().to_string()
             };
-            // A plain `draw:object` around it: the reference's other attributes go with it.
-            let rest_tag_end = after.find("/>").unwrap_or(0);
+            // A plain `draw:object` around it.
             flat.push_str(before.rfind("<draw:object").and_then(|i| before.get(..i)).unwrap_or(before));
             flat.push_str(&format!("<draw:object>{math}</draw:object>"));
-            rest = after.get(rest_tag_end + 2..).unwrap_or("");
+            rest = past("draw:object");
         } else {
             flat.push_str(before);
             flat.push_str(from.get(..target_start + len + 1).unwrap_or(""));

@@ -770,15 +770,23 @@ fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, s
     super::kept::with_common_as_read(&styles, &k.defs, &k.order)
 }
 
-/// The package files the file's own definitions refer to, written as read with them (added to
-/// `files` and `manifest` where no file `taken` has the path).
+/// The package files the file's own definitions refer to, and those the markup written as read
+/// links to (`used`), written as read with them (added to `files` and `manifest` where no file
+/// `taken` has the path). A picture only an edited paragraph showed isn't written.
 fn with_kept_files(
     kept: Option<&wordcraft_doc::kept::KeptXml>,
+    used: &std::collections::BTreeSet<String>,
     taken: &dyn Fn(&str) -> bool,
     files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
     manifest: &mut String,
 ) {
     let Some(k) = kept else { return };
+    let mut wanted = used.clone();
+    for d in k.defs.values() {
+        super::kept::hrefs(d, &mut wanted);
+    }
+    // A file linked, or one in a folder linked (an object's).
+    let linked = |p: &str| wanted.contains(p) || wanted.iter().any(|w| p.strip_prefix(w.trim_end_matches('/')).is_some_and(|r| r.starts_with('/')));
     let entry = |manifest: &mut String, path: &str, mime: &str| {
         let e = format!("manifest:full-path=\"{}\"", x(path));
         if !manifest.contains(&e) {
@@ -786,7 +794,7 @@ fn with_kept_files(
         }
     };
     for (path, bytes) in &k.files {
-        if !taken(path) && !files.iter().any(|(p, _)| p == path) {
+        if linked(path) && !taken(path) && !files.iter().any(|(p, _)| p == path) {
             // As the file's manifest had it (the folder too), else by its extension.
             if let Some((dir, _)) = path.rsplit_once('/')
                 && let Some(mime) = k.defs.get(&format!("manifest:{dir}/"))
@@ -886,6 +894,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         (o.num_fmt, o.num_start)
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
+    w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
     w.accents.clone_from(&accents);
@@ -1071,7 +1080,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
     let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
-    with_kept_files(kept, &taken, &mut kept_files, &mut manifest);
+    with_kept_files(kept, &w.kept_files_used, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));

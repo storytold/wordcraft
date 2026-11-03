@@ -108,7 +108,7 @@ fn freeforms_round_trip_as_paths_or_custom_shapes() {
     let d = open(
         r#"<draw:polygon text:anchor-type="paragraph" svg:width="2in" svg:height="1in" svg:viewBox="0 0 2000 1000" draw:points="0,0 2000,0 1000,1000"/><draw:path svg:width="1in" svg:height="1in" svg:viewBox="0 0 100 100" svg:d="M0 0 H50 v50 l-50 0 Z m60 0 L100 100"/>"#,
     );
-    let bytes = export(&d).unwrap();
+    let bytes = crate::odt::tests::export_model(&d).unwrap();
     // The second, with a closed and an open path, as a custom shape (see `custom_geometry`).
     let c = content_of(&bytes);
     assert_eq!((c.matches("<draw:path ").count(), c.matches("<draw:custom-shape ").count()), (1, 1));
