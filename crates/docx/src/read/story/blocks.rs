@@ -443,6 +443,12 @@ impl Reader<'_> {
                 }
                 let mut blocks = Blocks::new();
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
+                if blocks.is_empty() {
+                    // Treat an omitted cell paragraph like <w:p/>, including pending-marker depth.
+                    let empty = El { name: "w:p".into(), ..Default::default() };
+                    let p = self.read_para(sc, &empty, rels, depth + 4);
+                    blocks.push(para_block(p));
+                }
                 self.flush_pending(sc, &mut blocks);
                 self.attach_bookmarks(&mut blocks, std::mem::take(&mut cell_lead), BookmarkContainer::Cell, false);
                 row.cells.push(Cell { props, blocks, controls: cell_controls });

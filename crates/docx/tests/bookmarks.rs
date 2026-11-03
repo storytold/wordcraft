@@ -320,7 +320,9 @@ fn physical_row_limit_counts_empty_rows_too() {
 
 #[test]
 fn bookmarks_before_imported_chunks_keep_their_source_container() {
-    for content in [para("Synthetic chunk text"), table(&row(&cell("Synthetic chunk text")))] {
+    let empty_first = table(&row(&format!("<w:tc/>{}", cell("Synthetic chunk text"))));
+    let nested_empty_first = table(&row(&format!("<w:tc>{empty_first}</w:tc>")));
+    for content in [para("Synthetic chunk text"), table(&row(&cell("Synthetic chunk text"))), empty_first, nested_empty_first] {
         let chunk = package(&content, "");
         let around_chunk = format!(r#"{}<w:altChunk r:id="chunk"/>{}{}"#, start(19, "ChunkBoundary", true), end(19), para("after"));
         let cases = [
@@ -345,6 +347,38 @@ fn bookmarks_before_imported_chunks_keep_their_source_container() {
                 assert_eq!(end.0, parent);
                 doc = wordcraft_docx::read(&bytes).unwrap();
             }
+        }
+    }
+}
+
+#[test]
+fn omitted_cell_paragraph_matches_an_explicit_empty_paragraph() {
+    let mut docs = Vec::new();
+    for empty in ["<w:tc/>", "<w:tc><w:p/></w:tc>"] {
+        let input = package(&table(&row(&format!("{empty}{}", cell("Synthetic payload")))), "");
+        let doc = wordcraft_docx::read(&input).unwrap();
+        let p = doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path(vec![0, 0, 0, 0])).unwrap();
+        assert!(p.text.is_empty());
+        docs.push(xml(&wordcraft_docx::write(&doc).unwrap(), "word/document.xml"));
+    }
+    assert_eq!(docs[0], docs[1], "omitted and explicit empty cell paragraphs save identically");
+}
+
+#[test]
+fn pending_bookmarks_keep_their_boundary_when_a_cell_paragraph_is_omitted() {
+    let around =
+        format!("{}{}{}{}", start(19, "EmptyBoundary", false), table(&row(&format!("<w:tc/>{}", cell("Synthetic payload")))), end(19), para("after"));
+    let inside = table(&row(&format!("<w:tc>{}{}</w:tc>{}", start(19, "EmptyBoundary", false), end(19), cell("Synthetic payload"))));
+    for (body, parent, end_at) in [(around, "w:body", 1), (inside, "w:tc", 0)] {
+        let mut doc = wordcraft_docx::read(&package(&body, "")).unwrap();
+        for _ in 0..2 {
+            let bytes = wordcraft_docx::write(&doc).unwrap();
+            let found = markers(&xml(&bytes, "word/document.xml"));
+            let begin = found.iter().find(|m| m.2 == "w:bookmarkStart" && m.3.iter().any(|(k, v)| k == "w:name" && v == "EmptyBoundary")).unwrap();
+            let end = found.iter().find(|m| m.2 == "w:bookmarkEnd" && m.3.iter().any(|(k, v)| k == "w:id" && v == "19")).unwrap();
+            assert_eq!((begin.0.as_str(), begin.1), (parent, 0));
+            assert_eq!((end.0.as_str(), end.1), (parent, end_at));
+            doc = wordcraft_docx::read(&bytes).unwrap();
         }
     }
 }
