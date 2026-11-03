@@ -290,6 +290,9 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 ## Revision history
 
+> 2026-11-03 · Quoted field arguments honor Word backslash escapes; body `PAGE` results follow the active section format in paragraphs and tables.
+>
+
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 
 > 2026-10-25 · Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`).
