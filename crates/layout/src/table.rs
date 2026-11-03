@@ -650,7 +650,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
+                let BoxLayout { mut items, mut height, floats_bottom, last_top, table_areas, .. } =
                     layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
@@ -658,6 +658,9 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     height = last_top;
                 } else {
                     collapsed = false;
+                    if hide_end_mark_below_float(&cell.blocks, &mut items, EndMark { depth: cpath.len(), last_top, areas: &table_areas }) {
+                        height = last_top;
+                    }
                 }
                 for it in &mut items {
                     it.translate(x0 + margins[1], margins[0] + band_t);
@@ -710,6 +713,56 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     }
     grow_vertical_merges(&rows, &mut heights);
     finish_table_rows(ctx, TableRows { story, table: t, path, depth, cell_text, rows, heights, bottoms, edges, x, total })
+}
+
+/// Where a cell's end mark stands: its path depth, its top and the areas of the cell's
+/// floating tables (see [`hide_end_mark_below_float`]).
+struct EndMark<'a> {
+    depth: usize,
+    last_top: f32,
+    areas: &'a [Rect],
+}
+
+/// A cell ending with an empty paragraph right after the floating table it anchors, pushed
+/// below the table because it left no room beside or above it: Word gives that end-of-cell
+/// mark no line there, the cell ends with the table. Moves the mark's line up to its anchor,
+/// inside the cell (the caret and the end-of-cell marker stay off the next row), and says
+/// whether the cell drops it. A mark that shows something (a number, shading, a border) keeps
+/// its line.
+/// A table raised above text before it in the cell keeps the line in Word. One first in its
+/// cell counts as not raised: Word keeps it at the cell's top (WordCraft still draws it a
+/// little above).
+fn hide_end_mark_below_float(blocks: &Blocks, items: &mut [Placed], at: EndMark<'_>) -> bool {
+    let EndMark { depth, last_top, areas } = at;
+    let n = blocks.len();
+    if !blocks.last().and_then(|b| b.as_para()).is_some_and(|p| crate::flow::only_markers(p, 0..p.text.len())) {
+        return false;
+    }
+    let Some(Block::Table(t)) = n.checked_sub(2).and_then(|i| blocks.get(i)).map(|b| &**b) else { return false };
+    let (Some(f), Some(area)) = (t.props.float, areas.last()) else { return false };
+    // The table as placed (its area less its distance from the text) starts at the mark's top.
+    if (area.y + f.dist_from_text()[1]).max(0.0) < last_top - 0.01 {
+        return false;
+    }
+    let last = u32::try_from(n.saturating_sub(1)).unwrap_or(u32::MAX);
+    // Pushed below the floats: a line moved past an exclusion starts below its paragraph's top.
+    let Some(y) = items.iter_mut().find_map(|it| match it {
+        Placed::Lines { path, para, y, .. }
+            if path.0.len() == depth + 1
+                && path.0.last() == Some(&last)
+                && para.lines.first().is_some_and(|l| l.top > 0.01)
+                && para.label.is_none()
+                && para.rp.shading.is_none()
+                && !para.rp.borders.is_some_and(|b| b.any_visible()) =>
+        {
+            Some(y)
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    *y = last_top;
+    true
 }
 
 fn grow_vertical_merges(rows: &[Vec<CellBox>], heights: &mut [f32]) {

@@ -754,7 +754,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
 
 /// Whether `range` of `p`'s text holds nothing but zero-width markers (bookmarks, field and
 /// control boundaries…), or nothing at all: a line of them takes no room after a page break.
-fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
+pub(crate) fn only_markers(p: &Paragraph, range: std::ops::Range<usize>) -> bool {
     let Some(text) = p.text.get(range.clone()) else { return false };
     text.char_indices().all(|(i, c)| c == wordcraft_doc::para::OBJ && p.object_at(range.start + i).is_some_and(InlineObject::is_marker))
 }
