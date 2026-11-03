@@ -4,7 +4,7 @@
 //! desktop there — so "Use system setting" has to ask the desktop itself. The XDG Desktop Portal's
 //! Settings interface answers on GNOME, KDE and XFCE alike, over X11 and Wayland alike.
 
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 /// How often [`DesktopTheme::start`] re-reads the desktop's answer. The portal also publishes a
@@ -25,6 +25,8 @@ pub fn prefers_dark() -> Option<bool> {
 pub struct DesktopTheme {
     /// `None` when no watcher thread could be started; the one-shot read still works.
     changes: Option<Receiver<Option<bool>>>,
+    /// Whether the watcher thread has delivered at least one response.
+    received: bool,
 }
 
 impl DesktopTheme {
@@ -56,7 +58,7 @@ impl DesktopTheme {
                 }
             }
         });
-        Self { changes: started.ok().map(|_| rx) }
+        Self { changes: started.ok().map(|_| rx), received: false }
     }
 
     /// Whether a watcher thread is running.
@@ -64,18 +66,24 @@ impl DesktopTheme {
         self.changes.is_some()
     }
 
+    /// Whether the watcher has delivered at least one response.
+    pub fn received(&self) -> bool {
+        self.received
+    }
+
     /// The desktop's new answer if it changed since the last call, to be polled once a frame.
     /// Several changes in one frame collapse to the newest, and a desktop that stops answering
     /// leaves the last answer in place.
-    pub fn take_change(&mut self) -> Option<bool> {
+    pub fn take_change(&mut self) -> Option<Option<bool>> {
         let Some(changes) = &self.changes else { return None };
         let mut newest = None;
-        loop {
-            match changes.try_recv() {
-                Ok(changed) => newest = changed,
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => return newest,
-            }
+        let mut got_any = false;
+        while let Ok(changed) = changes.try_recv() {
+            newest = changed;
+            got_any = true;
+            self.received = true;
         }
+        if got_any { Some(newest) } else { None }
     }
 }
 
@@ -222,6 +230,38 @@ mod tests {
     #[test]
     fn a_watcher_without_a_thread_is_inert() {
         assert_eq!(DesktopTheme::default().take_change(), None);
+    }
+
+    /// When the watcher thread delivers answers, `take_change` yields them and `received` turns true.
+    #[test]
+    fn take_change_delivers_answers_and_records_received() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut dt = DesktopTheme { changes: Some(rx), received: false };
+        assert!(!dt.received());
+        assert_eq!(dt.take_change(), None);
+        assert!(!dt.received());
+
+        // Send a dark preference.
+        tx.send(Some(true)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(true)));
+        assert!(dt.received());
+
+        // Empty channel leaves received true and returns None.
+        assert_eq!(dt.take_change(), None);
+        assert!(dt.received());
+
+        // Send a light preference.
+        tx.send(Some(false)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(false)));
+
+        // Multiple changes collapse to the newest.
+        tx.send(Some(false)).unwrap();
+        tx.send(Some(true)).unwrap();
+        assert_eq!(dt.take_change(), Some(Some(true)));
+
+        // Send None (no preference / portal stopped answering).
+        tx.send(None).unwrap();
+        assert_eq!(dt.take_change(), Some(None));
     }
 
     /// A new app doesn't watch the desktop (the app binary starts the watcher), so tests and

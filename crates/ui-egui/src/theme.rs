@@ -628,7 +628,7 @@ pub fn font_definitions_language_arabic(
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = system_cjk;
+    let _ = (system_cjk, system_arabic);
     // Arabic-script faces last: the Arabic interface, its name in the language list, Arabic file
     // names. Without an embedded one (a build without craft-fonts), an installed font, read when
     // `system_arabic` is set: for an Arabic interface.

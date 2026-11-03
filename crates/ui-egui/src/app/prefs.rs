@@ -87,7 +87,6 @@ impl WordApp {
     /// system theme; see [`desktop_theme`]). The desktop app calls this once at start-up; unit
     /// tests and `ui_shot` don't, so what they draw doesn't depend on the host's desktop theme.
     pub fn watch_desktop_theme(&mut self, ctx: &egui::Context) {
-        self.desktop_dark = desktop_theme::prefers_dark();
         let ctx = ctx.clone();
         self.desktop_theme = desktop_theme::DesktopTheme::start(move || ctx.request_repaint());
     }
