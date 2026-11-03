@@ -29,10 +29,10 @@ pub(crate) use comments::comment_draft;
 use comments::comments;
 pub(crate) use comments::{CommentDrafts, comment_editor, commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, reply_editor};
 use host::Content;
-pub use host::show;
-pub(crate) use host::{dock_command, overlay_open};
 #[cfg(test)]
 pub(crate) use host::apply;
+pub use host::show;
+pub(crate) use host::{dock_command, overlay_open};
 pub(crate) use inspector::describe_props;
 use inspector::inspector;
 use nav::nav;
