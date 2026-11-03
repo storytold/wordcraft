@@ -597,3 +597,19 @@ fn citation_at_document_end_stays_closed() {
     let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
     assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }
+
+#[test]
+fn a_note_reference_is_found_in_one_pass_over_its_paragraph() {
+    // 20,000 other notes' marks before the one wanted: each was counted again from the start.
+    let n = 20_000u32;
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.text = OBJ.to_string().repeat(n as usize);
+        p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+        p.objects = (1..=n).map(|id| InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }).collect();
+    }
+    let s = Session::new(d);
+    let at = crate::bridge::note_ref_pos(&s, n).expect("found");
+    assert_eq!(at.off, (n as usize - 1) * OBJ.len_utf8());
+    assert!(crate::bridge::note_ref_pos(&s, n + 1).is_none());
+}
