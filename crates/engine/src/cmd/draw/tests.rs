@@ -416,6 +416,14 @@ fn ink_replay_plays_strokes_in_the_order_they_were_drawn() {
 }
 
 #[test]
+fn ink_replay_disabled_when_no_ink() {
+    let mut s = session();
+    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
+    s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [150, 100]]})).unwrap();
+    assert_eq!(s.why_disabled("draw.replay"), None);
+}
+
+#[test]
 fn add_pen_validates_and_saved_galleries_drop_junk() {
     let mut s = session();
     let r = s.run("draw.addPen", &json!({"kind": "highlighter", "color": "00B050", "width": 1e9})).unwrap();

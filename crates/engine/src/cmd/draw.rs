@@ -252,6 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("draw.convertInk", "Convert to Shapes", "Draw › Convert", convert_selection),
         CommandSpec::new("draw.replay", "Ink Replay", "Draw › Replay", replay)
+            .when(can_replay)
             .params(r#"{"value"?: bool}  (starts or stops Ink Replay; returns the strokes in the order they were drawn)"#)
             .pure(),
         CommandSpec::new("review.hideInk", "Hide Ink", "Review › Ink", |s, v| {
@@ -919,6 +920,35 @@ fn replay(s: &mut Session, v: &Value) -> CmdResult {
         })
         .collect();
     Ok(json!({"replaying": on, "strokes": list}))
+}
+
+/// Whether the session has any ink strokes in the document or placed on pages.
+pub fn has_ink(s: &Session) -> bool {
+    if s.current_layout().is_some_and(|layout| (0..layout.pages.len()).any(|page| !ink_on(s, &layout, page).is_empty())) {
+        return true;
+    }
+    let mut found = false;
+    s.doc.objects_in_reading_order(&mut |o| {
+        if o.ink().is_some() {
+            found = true;
+        }
+    });
+    if found {
+        return true;
+    }
+    for part in s.doc.parts.values() {
+        for b in &part.blocks {
+            if b.as_para().is_some_and(|p| p.objects.iter().any(|o| o.ink().is_some())) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether Ink Replay can be started or stopped: enabled when ink exists or replay is active.
+fn can_replay(s: &Session) -> Option<&'static str> {
+    if s.view.draw.replay || has_ink(s) { None } else { Some("there is no ink to replay") }
 }
 
 #[cfg(test)]
