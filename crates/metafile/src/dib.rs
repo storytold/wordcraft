@@ -1,7 +1,7 @@
 //! Device-independent bitmaps. BITMAPINFOHEADER DIBs at 1/4/8/16/24/32 bpp with BI_RGB or BI_BITFIELDS
 //! decode to RGBA8 rows, top-down. Compressed (RLE, JPEG, PNG) and V4/V5-only features are not decoded.
 
-use crate::{MAX_PIXELS, bytes::Bytes};
+use crate::{MAX_BITMAP_SIDE, MAX_PIXELS, bytes::Bytes};
 
 const BI_RGB: u32 = 0;
 const BI_BITFIELDS: u32 = 3;
@@ -88,6 +88,7 @@ pub(crate) fn info_len(dib: Bytes) -> Option<usize> {
 /// 32-bit alpha byte is kept only when `keep_alpha` is set (per-pixel alpha blends); otherwise pixels
 /// are opaque. Only the clipped rows and columns are decoded, so the work and the memory follow the
 /// crop, not the whole bitmap; the whole bitmap is still validated (size cap, palette, bits length).
+/// None as well when the clipped width or height is over [`MAX_BITMAP_SIDE`], which no renderer draws.
 pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64; 4], dst: [f64; 4]) -> Option<(Rgba, [f64; 4])> {
     let hd = Header::read(info)?;
     let pixels = hd.w.checked_mul(hd.h)?;
@@ -98,6 +99,12 @@ pub(crate) fn decode_clip(info: Bytes, bits: Bytes, keep_alpha: bool, src: [i64;
     let data = bits.slice(0, stride.checked_mul(hd.h)?)?;
     let pal = info.slice(hd.pal_off, hd.pal_n * 4)?;
     let (clip, out) = clip_rect(hd.w, hd.h, !hd.top_down, src, dst)?;
+    // The renderers draw no bitmap with a side over the cap (`Item::take_pixels`); decoding one
+    // would only fill the parse's memory budget with pixels nobody draws.
+    let cap = MAX_BITMAP_SIDE as usize;
+    if clip.x1 - clip.x0 > cap || clip.r1 - clip.r0 > cap {
+        return None;
+    }
     let (ow, oh) = (clip.x1 - clip.x0, clip.r1 - clip.r0);
     let mut px = vec![0u8; ow.checked_mul(oh)?.checked_mul(4)?];
     for (y, line) in (clip.r0..clip.r1).zip(px.chunks_exact_mut(ow * 4)) {
@@ -400,5 +407,24 @@ mod tests {
         DECODED.with(|d| d.set(0));
         decode_whole(Bytes(&info), Bytes(&bits), false).unwrap();
         assert_eq!(DECODED.with(|d| d.get()), 400 * 300);
+    }
+
+    #[test]
+    fn decode_clip_refuses_a_side_no_renderer_draws() {
+        let cap = MAX_BITMAP_SIDE as usize;
+        let mut seed = 11;
+        // 1 bpp, one row longer than the cap: 5 KB of bits, 120 KB of RGBA.
+        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
+        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
+        // The same for the height.
+        let (info, bits) = make_dib(1, cap as i32 + 1, 1, &mut seed);
+        assert!(decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).is_none());
+        // A crop of the wide bitmap within the cap still decodes, and so does the cap itself.
+        let (info, bits) = make_dib(cap + 1, 1, 1, &mut seed);
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [10, 0, 100, 1], [0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!((img.w, img.h), (100, 1));
+        let (info, bits) = make_dib(cap, 1, 1, &mut seed);
+        let (img, _) = decode_clip(Bytes(&info), Bytes(&bits), false, [0, 0, 0, 0], [0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!((img.w, img.h), (cap, 1));
     }
 }
