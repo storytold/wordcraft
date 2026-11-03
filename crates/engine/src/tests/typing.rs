@@ -3631,3 +3631,82 @@ fn backspace_cannot_join_into_locked_content_control() {
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
 }
+
+// English spelling from SCOWL 2026 (CP2): each English reads its own SCOWL dictionary, with
+// `en-variants.txt` deciding the other dialect's spellings. Typed text, as a person types it.
+
+/// The spelling words typed text gets in `lang` (the whole document's language), with the first
+/// suggestion of each.
+fn typed_spelling_in(lang: &str, keys: &str) -> Vec<(String, String)> {
+    let mut s = s();
+    run(&mut s, "review.language", json!({"lang": lang, "default": true}));
+    typ(&mut s, keys);
+    let issues = s.run("review.issues", &json!({})).unwrap();
+    issues
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "spelling")
+        .map(|i| (i["text"].as_str().unwrap().to_string(), i["suggestions"][0].as_str().unwrap_or("").to_string()))
+        .collect()
+}
+
+/// #40: the British spellings the issue lists are right in en-GB, and the American ones are
+/// flagged with the British form first.
+#[test]
+fn issue_40_british_spellings_are_right_in_en_gb() {
+    if super::no_language_data("issue_40_british_spellings_are_right_in_en_gb") {
+        return;
+    }
+    let none: Vec<(String, String)> = Vec::new();
+    let text = "The judgement on the defence licence put the programme in the catalogue. ";
+    assert_eq!(typed_spelling_in("en-GB", text), none);
+    assert_eq!(typed_spelling_in("en-GB", "Its colour and centre, organised and organized, travelled. "), none);
+    let flagged = typed_spelling_in("en-GB", "The color of the center. ");
+    assert_eq!(flagged, [("color".to_string(), "colour".to_string()), ("center".to_string(), "centre".to_string())]);
+}
+
+/// #520: common modern words are right (SCOWL plus our supplement), and real misspellings of
+/// them are still caught.
+#[test]
+fn issue_520_common_words_are_right() {
+    if super::no_language_data("issue_520_common_words_are_right") {
+        return;
+    }
+    let none: Vec<(String, String)> = Vec::new();
+    assert_eq!(typed_spelling_in("en-US", "My desktop email has downloads, a smartphone and a website. "), none);
+    // (`recieved` would be AutoCorrected as it is typed.)
+    let flagged = typed_spelling_in("en-US", "My desktpo emial. ");
+    assert_eq!(flagged.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["desktpo", "emial"]);
+    assert_eq!(flagged[0].1, "desktop");
+}
+
+/// #1281 and #1045: Canadian and Australian English (and the other British-spelling Englishes)
+/// proof by their own rules; ordinals are words in every English.
+#[test]
+fn issues_1281_1045_english_dialects_proof_typed_text() {
+    if super::no_language_data("issues_1281_1045_english_dialects_proof_typed_text") {
+        return;
+    }
+    let none: Vec<(String, String)> = Vec::new();
+    // Canada: British -our and -re, American -ize.
+    assert_eq!(typed_spelling_in("en-CA", "We organize the colour in the centre. "), none);
+    assert_eq!(
+        typed_spelling_in("en-CA", "We organise the color. "),
+        [("organise".to_string(), "organize".to_string()), ("color".to_string(), "colour".to_string())]
+    );
+    // Australia, New Zealand, India: British spelling.
+    for lang in ["en-AU", "en-NZ", "en-IN"] {
+        assert_eq!(typed_spelling_in(lang, "We analyse the colour of the theatre. "), none, "{lang}");
+        assert_eq!(typed_spelling_in(lang, "We analyze it. "), [("analyze".to_string(), "analyse".to_string())], "{lang}");
+    }
+    // US English flags British spellings with the American form first.
+    assert_eq!(typed_spelling_in("en-US", "The colour. "), [("colour".to_string(), "color".to_string())]);
+    // SCOWL's ordinals (COMPOUNDRULE) are words, even where numbers are checked.
+    let mut s = s();
+    run(&mut s, "file.options", json!({"ignoreNumbers": false}));
+    typ(&mut s, "The 21st and 112th times, not the 21th. ");
+    let issues = s.run("review.issues", &json!({})).unwrap();
+    let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
+    assert_eq!(words, ["21th"]);
+}
