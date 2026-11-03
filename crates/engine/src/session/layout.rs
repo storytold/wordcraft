@@ -183,8 +183,8 @@ impl Session {
     pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
         let first = self.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
         let l = self.layout();
-        let Some((caret, page)) = l.caret(pos).and_then(|c| Some((c.clone(), l.pages.get(c.page)?))) else { return first };
-        let section = self.doc.sections().get(page.section).map(|(_, sp)| sp.clone());
+        let Some((caret, page)) = l.caret(pos).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+        let section = self.doc.sections().get(page.section).map(|(_, sp)| (*sp).clone());
         let column = match (&section, pos.story) {
             (Some(sp), StoryRef::Body) => {
                 let boxes = sp.column_boxes();
