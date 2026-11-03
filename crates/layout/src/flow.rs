@@ -405,8 +405,9 @@ impl<'a> Flow<'a> {
             if kept_over && !self.stays_at_bottom(pb, l) {
                 break;
             }
-            // Kept without room and not a break: the empty mark closing the section (#3974).
-            fit.mark_over |= kept_over && !matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak);
+            // Kept without room and not a break: the empty mark closing the section (#3974). A
+            // mark showing a list label draws something, so it keeps the room it takes.
+            fit.mark_over |= kept_over && self.label.is_none() && !matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak);
             fit.notes.extend(line_notes);
             fit.l1 += 1;
             if self.ends_page(pb, l, &mut fit) || split {

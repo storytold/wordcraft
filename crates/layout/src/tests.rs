@@ -1478,6 +1478,34 @@ fn footnotes_below_text_stay_put_below_an_empty_section_mark_without_room() {
 }
 
 #[test]
+fn a_numbered_empty_section_mark_keeps_its_label_clear_of_notes_below_the_text() {
+    // #3974's saved floor is for a mark that draws nothing. Numbered, the empty mark closing the
+    // section draws its list label; with a large space after and the footnotes set below the
+    // text, the note goes below the label, not over it, wherever the label's line fits.
+    use wordcraft_doc::props::NumRef;
+    use wordcraft_doc::section::{NotePos, NoteProps};
+    let mut checked = 0;
+    for before in (400..=700).map(|b| b as f32) {
+        let (mut d, id, at) = section_mark_note_doc(before, &["One", "Two"], true, true);
+        d.settings.footnote_pr = NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() };
+        let num = para_props(&mut d, at - 1).numbering.expect("the list items are numbered").num;
+        let mark = para_props(&mut d, at);
+        (mark.numbering, mark.space_after) = (Some(NumRef { num, level: 0 }), Some(200.0));
+        let l = lay(&d);
+        let (mark, _) = para_pieces(&l, at);
+        let note = note_pieces(&l, id);
+        let Some((&(0, _, _, mark_bottom), &(0, _, _, note_top))) = mark.first().zip(note.first()) else { continue };
+        checked += 1;
+        assert!(
+            mark_bottom <= note_top - NOTE_SEP + 0.01,
+            "space before {before}: the note's separator at {} overlaps the numbered mark ending at {mark_bottom}",
+            note_top - NOTE_SEP
+        );
+    }
+    assert!(checked > 0, "the sweep puts the numbered mark and the note on one page");
+}
+
+#[test]
 fn a_bookmark_after_a_page_break_takes_no_line() {
     // "Before", a page break, then a bookmark start (Word writes the next heading's TOC bookmark
     // there): the bookmark takes no room, so "After" starts at the top of page 2, as in Word.
