@@ -251,7 +251,9 @@ impl Table {
         let prev = ui.data(|d| d.get_temp::<Vec<f32>>(key)).unwrap_or_default();
         let spacing = self.spacing.unwrap_or(ui.spacing().item_spacing);
         let gap = spacing.x;
-        let shown = ui.scope(|ui| {
+        // Rows stack top to bottom from the reading edge, whatever way the area around runs (a ribbon
+        // group lays its content out in a row).
+        let shown = ui.scope_builder(UiBuilder::new().layout(Layout::top_down(Align::Max)), |ui| {
             ui.spacing_mut().item_spacing.y = spacing.y;
             let mirror = Mirror { prev: prev.clone(), cur: Vec::new(), gap, top: self.top, min_row: self.min_row_height };
             let mut rows = Rows { ui, mirror: Some(mirror) };
