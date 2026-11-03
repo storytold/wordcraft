@@ -87,7 +87,12 @@ struct FieldState {
 /// paragraph of its last cell (nested tables to [`MAX_TABLE_DEPTH`]).
 fn edge_para_mut(out: &mut Blocks, last: bool, depth: usize) -> Option<(&mut Paragraph, u8)> {
     let b = if last { out.last_mut() } else { out.first_mut() }?;
-    match Arc::make_mut(b) {
+    edge_block_para_mut(Arc::make_mut(b), last, depth)
+}
+
+/// The edge paragraph in an owned imported block, with the table depth to reach it.
+fn edge_block_para_mut(block: &mut Block, last: bool, depth: usize) -> Option<(&mut Paragraph, u8)> {
+    match block {
         Block::Para(p) => Some((p, 0)),
         Block::Table(t) if depth < MAX_TABLE_DEPTH => {
             let row = if last { t.rows.last_mut() } else { t.rows.first_mut() }?;

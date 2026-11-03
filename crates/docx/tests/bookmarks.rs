@@ -320,27 +320,31 @@ fn physical_row_limit_counts_empty_rows_too() {
 
 #[test]
 fn bookmarks_before_imported_chunks_keep_their_source_container() {
-    let chunk = package(&para("Synthetic chunk text"), "");
-    let around_chunk = format!(r#"{}<w:altChunk r:id="chunk"/>{}{}"#, start(19, "ChunkBoundary", true), end(19), para("after"));
-    let cases = [
-        (around_chunk.clone(), "w:body"),
-        (format!("{}{}", table(&row(&cell("before"))), around_chunk), "w:body"),
-        (table(&row(&format!("<w:tc>{around_chunk}</w:tc>"))), "w:tc"),
-    ];
-    for (body, parent) in cases {
-        let mut doc = wordcraft_docx::read(&package_with_chunk(&body, "", Some(&chunk))).unwrap();
-        assert!(doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Synthetic chunk text"));
-        for _ in 0..2 {
-            let bytes = wordcraft_docx::write(&doc).unwrap();
-            let found = markers(&xml(&bytes, "word/document.xml"));
-            let begin = found.iter().find(|m| m.2 == "w:bookmarkStart" && m.3.iter().any(|(k, v)| k == "w:name" && v == "ChunkBoundary")).unwrap();
-            assert_eq!(begin.0, parent, "the bookmark remains outside the imported paragraph");
-            for (key, value) in [("w:id", "19"), ("w:colFirst", "1"), ("w:colLast", "2")] {
-                assert!(begin.3.iter().any(|(k, v)| k == key && v == value));
+    for content in [para("Synthetic chunk text"), table(&row(&cell("Synthetic chunk text")))] {
+        let chunk = package(&content, "");
+        let around_chunk = format!(r#"{}<w:altChunk r:id="chunk"/>{}{}"#, start(19, "ChunkBoundary", true), end(19), para("after"));
+        let cases = [
+            (around_chunk.clone(), "w:body", 0),
+            (format!("{}{}", table(&row(&cell("before"))), around_chunk), "w:body", 1),
+            (table(&row(&format!("<w:tc>{around_chunk}</w:tc>"))), "w:tc", 0),
+        ];
+        for (body, parent, preceding) in cases {
+            let mut doc = wordcraft_docx::read(&package_with_chunk(&body, "", Some(&chunk))).unwrap();
+            assert!(doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Synthetic chunk text"));
+            for _ in 0..2 {
+                let bytes = wordcraft_docx::write(&doc).unwrap();
+                let found = markers(&xml(&bytes, "word/document.xml"));
+                let begin =
+                    found.iter().find(|m| m.2 == "w:bookmarkStart" && m.3.iter().any(|(k, v)| k == "w:name" && v == "ChunkBoundary")).unwrap();
+                assert_eq!(begin.0, parent, "the bookmark remains outside the imported content");
+                assert_eq!(begin.1, preceding, "the bookmark precedes the imported block");
+                for (key, value) in [("w:id", "19"), ("w:colFirst", "1"), ("w:colLast", "2")] {
+                    assert!(begin.3.iter().any(|(k, v)| k == key && v == value));
+                }
+                let end = found.iter().find(|m| m.2 == "w:bookmarkEnd" && m.3.iter().any(|(k, v)| k == "w:id" && v == "19")).unwrap();
+                assert_eq!(end.0, parent);
+                doc = wordcraft_docx::read(&bytes).unwrap();
             }
-            let end = found.iter().find(|m| m.2 == "w:bookmarkEnd" && m.3.iter().any(|(k, v)| k == "w:id" && v == "19")).unwrap();
-            assert_eq!(end.0, parent);
-            doc = wordcraft_docx::read(&bytes).unwrap();
         }
     }
 }

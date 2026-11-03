@@ -2,8 +2,8 @@ use wordcraft_doc::bookmark::{BookmarkAttrs, BookmarkContainer, BookmarkPlace};
 
 use super::{
     Arc, Block, Blocks, Cell, CharProps, El, InlineObject, MAX_COLS, MAX_ROWS, MAX_TABLE_DEPTH, Node, NumChange, PB, Paragraph, Phase, PropChange,
-    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, edge_para_mut, para_block,
-    placeholder_of, sectpr, tcpr, trpr,
+    Reader, Rels, RevisionKind, Row, Run, RunCtx, StoryCtx, Table, children_of_choice, clean_text, collect, edge_block_para_mut, edge_para_mut,
+    para_block, placeholder_of, sectpr, tcpr, trpr,
 };
 
 impl Reader<'_> {
@@ -186,17 +186,21 @@ impl Reader<'_> {
 
     /// Markers read before content placed whole (a chunk's `next`) stay before it: at the end of
     /// the paragraph before, or after a table or with none, at the start of the content's first
-    /// paragraph, as a paragraph read there would take them (with a table first, the next
-    /// paragraph read takes them).
+    /// paragraph, including one inside the chunk's first table. Preserve the table depth so
+    /// saving restores each marker outside the same imported content.
     pub fn flush_pending_before(&mut self, sc: &mut StoryCtx, out: &mut Blocks, next: &mut [Block]) {
         if out.last().is_some_and(|b| matches!(**b, Block::Para(_))) {
             return self.flush_pending(sc, out);
         }
-        if let Some(Block::Para(p)) = next.first_mut() {
+        if let Some((p, nested)) = next.first_mut().and_then(|block| edge_block_para_mut(block, false, 0)) {
             for (o, tables) in sc.pending.drain(..).rev() {
                 self.bookmark_place(
                     &o,
-                    BookmarkPlace { container: BookmarkContainer::Block, after: false, tables: sc.tables.saturating_sub(tables) },
+                    BookmarkPlace {
+                        container: BookmarkContainer::Block,
+                        after: false,
+                        tables: sc.tables.saturating_sub(tables).saturating_add(nested),
+                    },
                 );
                 let _ = p.insert_object(0, o, &CharProps::default());
             }
