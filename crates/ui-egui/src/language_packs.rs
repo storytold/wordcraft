@@ -637,9 +637,28 @@ mod tests {
     #[test]
     fn font_store_errors_are_sanitised() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another test's frame can turn the engine's background thread on at any moment
+        // (`WordApp::logic`), so an install or a fetch may fail inline or on that thread: wait
+        // for the thread's job before reading its error, and for every job before the reset.
+        let idle = || packs::installing().is_empty() && !packs::fetching();
+        let wait = |until: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !until() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let settle = |started: Result<bool, String>, before: u64| {
+            if started.is_ok() {
+                wait(&|| packs::finished() != before);
+            }
+        };
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !(packs::installing().is_empty() && !packs::fetching()) && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
                 packs::set_background(None);
                 packs::set_backend(None);
             }
@@ -661,9 +680,12 @@ mod tests {
         // An install and the list fail in the engine.
         a.packs_rt.errors.clear();
         backend.inner.network.store(true, Ordering::Relaxed);
-        assert!(packs::start_install("nl").is_err());
+        wait(&idle);
+        let before = packs::finished();
+        settle(packs::start_install("nl"), before);
         clean(&super::error_of(&a, "nl").expect("the install's failure is shown"));
-        assert!(packs::start_refresh().is_err());
+        let before = packs::finished();
+        settle(packs::start_refresh(), before);
         clean(&super::error_of(&a, "").expect("the list's failure is shown"));
     }
 
