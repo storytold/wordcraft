@@ -294,3 +294,17 @@ fn a_kept_outline_holds_on_to_its_pictures_allocation() {
     drop(disc);
     assert!(weak.upgrade().is_none(), "the bytes are freed with the document; only their allocation is kept");
 }
+
+#[test]
+fn a_box_keeps_room_only_for_what_it_shows() {
+    // A linked box showing a few lines of a long story kept room for all of it (each of up to
+    // 256 boxes), and copied the whole shared layout before cutting it.
+    let color = wordcraft_doc::Rgb(0, 0, 0);
+    let items: Vec<Placed> = (0..10_000).map(|i| Placed::Fill { rect: Rect::new(0.0, i as f32 * 10.0, 5.0, 10.0), color }).collect();
+    let kept = boxes::fit_box(items.clone(), 25.0);
+    assert_eq!(kept.len(), 3);
+    assert!(kept.capacity() < 100, "{}", kept.capacity());
+    let below = textbox::from_y(&items, 99_950.0);
+    assert_eq!(below.len(), 6);
+    assert!(below.capacity() < 100, "{}", below.capacity());
+}

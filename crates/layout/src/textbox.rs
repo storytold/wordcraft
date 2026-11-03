@@ -252,22 +252,30 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
         // Past the cap the box takes the nearest layout in its direction: the widest line length
         // that fits it, else the narrowest. The first box in a direction is laid out (one more
         // layout for each of the few directions at most).
-        let near = || layouts.iter().filter(|((_, v), _)| *v == key.1).min_by_key(|((k, _), _)| (*k > key.0, k.abs_diff(key.0)));
-        let kept = layouts.iter().find(|(k, _)| *k == key).or_else(|| if layouts.len() >= MAX_FLOW_WIDTHS { near() } else { None });
-        let items = match kept {
-            Some((_, items)) => items.clone(),
+        let near = || {
+            layouts.iter().enumerate().filter(|(_, ((_, v), _))| *v == key.1).min_by_key(|(_, ((k, _), _))| (*k > key.0, k.abs_diff(key.0))).map(|(i, _)| i)
+        };
+        let kept = layouts.iter().position(|(k, _)| *k == key).or_else(|| if layouts.len() >= MAX_FLOW_WIDTHS { near() } else { None });
+        let at = match kept {
+            Some(at) => at,
             None => {
                 (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
                 let items = lay(ctx, head, &blocks, len, body.vert, depth);
                 after.get_or_insert_with(|| (ctx.counters.clone(), ctx.eq_count));
-                layouts.push((key, items.clone()));
-                items
+                layouts.push((key, items));
+                layouts.len() - 1
             }
         };
+        // The shared layout is read in place: a box copies only the items from its own top
+        // down, not the whole story first.
+        let Some((_, shared)) = layouts.get(at) else {
+            out.push(Vec::new());
+            continue;
+        };
         let items = match &cut {
-            None => items,
-            Some(cut) => match cut_y(&items, cut) {
-                Some(top) => from_y(items, top),
+            None => shared.clone(),
+            Some(cut) => match cut_y(shared, cut) {
+                Some(top) => from_y(shared, top),
                 None => {
                     out.push(Vec::new());
                     continue;
@@ -298,28 +306,28 @@ fn cut_y(items: &[Placed], cut: &Cut) -> Option<f32> {
 }
 
 /// The items from `top` down, moved up to start at 0.
-fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
+pub(crate) fn from_y(items: &[Placed], top: f32) -> Vec<Placed> {
     let lim = top - 0.5;
-    let mut out = Vec::with_capacity(items.len());
+    let mut out = Vec::new();
     for it in items {
         if let Some(r) = it.turned_bounds() {
             if r.y >= lim {
-                out.push(it);
+                out.push(it.clone());
             }
             continue;
         }
         match it {
             Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
-                let Some(first) = para.lines.get(l0) else { continue };
-                let Some(k) = (l0..l1).find(|k| para.lines.get(*k).is_some_and(|l| y + l.top - first.top >= lim)) else { continue };
-                let ky = para.lines.get(k).map_or(y, |l| y + l.top - first.top);
-                out.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
+                let Some(first) = para.lines.get(*l0) else { continue };
+                let Some(k) = (*l0..*l1).find(|k| para.lines.get(*k).is_some_and(|l| y + l.top - first.top >= lim)) else { continue };
+                let ky = para.lines.get(k).map_or(*y, |l| y + l.top - first.top);
+                out.push(Placed::Lines { story: *story, path: path.clone(), para: para.clone(), l0: k, l1: *l1, x: *x, y: ky, turn: *turn });
             }
             Placed::Fill { rect, color } if rect.bottom() > lim => {
                 let y0 = rect.y.max(top);
-                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color });
+                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color: *color });
             }
-            Placed::Rule { y0, y1, .. } if y0.max(y1) >= lim => out.push(it),
+            Placed::Rule { y0, y1, .. } if y0.max(*y1) >= lim => out.push(it.clone()),
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
@@ -328,7 +336,7 @@ fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
             | Placed::Object { rect, .. }
                 if rect.y >= lim =>
             {
-                out.push(it)
+                out.push(it.clone())
             }
             _ => {}
         }

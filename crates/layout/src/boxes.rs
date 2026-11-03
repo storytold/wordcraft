@@ -519,7 +519,9 @@ pub(crate) const BOX_INSET_Y: f32 = 3.6;
 /// The first line always stays, so even a tiny box shows the start of its text.
 pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
     let limit = height + 0.5;
-    let mut out = Vec::with_capacity(items.len());
+    // Sized to what is kept, not to `items`: a box showing a few lines of a long story keeps
+    // no room for the rest of it.
+    let mut out = Vec::new();
     let mut kept_line = false;
     for it in items {
         if let Some(r) = it.turned_bounds() {
