@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/ro-legal-docx/craft-libs?rev=b8fc024bfb0ff82524ddcb9f4d772d46df43d5cf#b8fc024bfb0ff82524ddcb9f4d772d46df43d5cf"
+source = "git+https://github.com/ro-legal-docx/craft-libs?rev=d8c32ed650075fe03a5503e86976b2646d8863bd#d8c32ed650075fe03a5503e86976b2646d8863bd"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
