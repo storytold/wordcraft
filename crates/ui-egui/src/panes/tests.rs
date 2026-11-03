@@ -480,12 +480,13 @@ fn navigation_arrows_and_enter_step_through_the_search_results() {
     assert!(h.get_by_label("Next result").accesskit_node().is_disabled());
 }
 
-/// #5019: on a result past the first 500, the Results list shows it, marked and scrolled into view.
+/// #5019: on a result past the first 500, the Results list shows the 500 around it, the result
+/// marked and scrolled into view.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn the_results_list_shows_and_marks_a_result_past_the_first_500() {
     use egui_kittest::kittest::{NodeT, Queryable};
-    let text: Vec<String> = (0..600).map(|i| format!("cat #{i}.")).collect();
+    let text: Vec<String> = (0..1200).map(|i| format!("cat #{i}.")).collect();
     let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
     app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
@@ -495,16 +496,21 @@ fn the_results_list_shows_and_marks_a_result_past_the_first_500() {
     h.state_mut().canvas.want_focus = false;
     h.state_mut().nav_search_focus = true;
     h.run_steps(2);
-    assert_eq!(h.state().session.find.results.len(), 600);
+    assert_eq!(h.state().session.find.results.len(), 1200);
     let (a, b) = h.state().session.find.results[500].clone();
     h.state_mut().run("select.range", serde_json::json!({"anchor": a, "focus": b})).unwrap();
     h.run_steps(4);
-    h.get_by_label("Result 501 of 600");
-    let row = h.get_by_label_contains("#500.");
-    assert_eq!(row.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the current result is marked");
-    let y = row.rect().center().y;
+    h.get_by_label("Result 501 of 1200");
+    // The page's own text is in the tree too: only the list's rows (buttons) count.
+    let marked = |h: &egui_kittest::Harness<'static, crate::WordApp>, label: &str| {
+        h.query_all_by_label_contains(label)
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+            .map(|n| (n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True), n.rect().center().y))
+    };
+    let (current, y) = marked(&h, "#500.").expect("the current result is listed");
+    assert!(current, "and marked");
     assert!((0.0..900.0).contains(&y), "and scrolled into view: {y}");
-    assert!(h.query_by_label_contains("#200.").is_none(), "the list holds the 500 around it, not the first 500");
-    let other = h.get_by_label_contains("#499.");
-    assert_ne!(other.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "only the current one");
+    assert_eq!(marked(&h, "#499.").map(|(m, _)| m), Some(false), "only the current one is marked");
+    assert!(marked(&h, "#250.").is_some() && marked(&h, "#749.").is_some(), "the list holds the 500 around it");
+    assert!(marked(&h, "#200.").is_none() && marked(&h, "#750.").is_none(), "not the first 500");
 }
