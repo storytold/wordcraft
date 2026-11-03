@@ -3,6 +3,7 @@ use egui_kittest::kittest::Queryable;
 
 mod perf;
 
+/// The native caption uses the compiled application name with and without a document.
 #[test]
 fn native_window_title_uses_the_compiled_application_name() {
     let app = app();
@@ -486,6 +487,7 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
 }
 
+/// A fitted label survives long names and the exact-width boundary without overflowing.
 #[test]
 fn title_elision_retains_a_fitting_build_label() {
     let width = |text: &str| text.chars().count() as f32;

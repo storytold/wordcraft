@@ -18,6 +18,7 @@ pub fn app_name() -> &'static str {
     NAME.get_or_init(|| name_for_label(BUILD_LABEL)).as_str()
 }
 
+/// Format the application name, omitting parentheses for an unlabeled build.
 fn name_for_label(label: &str) -> String {
     if label.is_empty() { "WordCraft".to_string() } else { format!("WordCraft ({label})") }
 }
@@ -27,6 +28,7 @@ pub const fn startup_update_check(requested: bool) -> bool {
     update_policy(requested, BUILD_LABEL)
 }
 
+/// Startup checks require both the requested preference and an unlabeled build.
 const fn update_policy(requested: bool, label: &str) -> bool {
     requested && label.is_empty()
 }
@@ -35,6 +37,7 @@ const fn update_policy(requested: bool, label: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The compiled label governs startup checks; explicit labels cover both policy branches.
     #[test]
     fn startup_update_policy_matches_the_compiled_build() {
         assert!(update_policy(true, ""));
@@ -48,6 +51,7 @@ mod tests {
         }
     }
 
+    /// Compiled and explicit labels identify internal builds without changing the default name.
     #[test]
     fn application_name_identifies_internal_builds() {
         assert_eq!(name_for_label(""), "WordCraft");
