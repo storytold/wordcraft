@@ -177,13 +177,20 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// A copy of the block with every run (in tables, every cell's) changed by `f`.
+/// A copy of the block with every run (in tables, every cell's) changed by `f`, and a paragraph's
+/// mark along with them, so a whole inserted or deleted paragraph carries the revision even when
+/// the paragraph is empty (`format` returns early for a length-0 range).
+///
+/// Known limitation: resolving a revision needs a following paragraph, so a paragraph inserted at
+/// the very end (rejected) or deleted from the very end (accepted) still leaves one empty
+/// paragraph. That is a separate follow-up, not handled here.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
+            f(&mut p.mark);
             Block::Para(p)
         }
         Block::Table(t) => {

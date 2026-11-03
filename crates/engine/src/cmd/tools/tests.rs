@@ -9,6 +9,77 @@ fn compare_marks_changes() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "The dog sat.\nKeep this.\nNew line here.");
 }
 
+/// Top-level body blocks that are empty paragraphs.
+fn empty_paras(s: &Session) -> usize {
+    s.doc.body.iter().filter(|b| matches!(b.as_para(), Some(p) if p.is_empty())).count()
+}
+
+#[test]
+fn compare_marks_a_whole_paragraph_and_its_mark() {
+    // A whole inserted paragraph carries the insertion on its mark, not just on its runs.
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\nNEW\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "NEW");
+    assert!(mid.mark.ins.is_some(), "the inserted paragraph's mark is not marked inserted");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "rejecting an inserted paragraph left an empty paragraph behind");
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\nNEW\nB"})).unwrap();
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nNEW\nB");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 0, "accepting an inserted paragraph left an empty paragraph behind");
+
+    // A whole deleted paragraph carries the deletion on its mark.
+    let mut s = Session::new(Document::from_text("A\nOLD\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let mid = s.doc.body[1].as_para().unwrap();
+    assert_eq!(mid.plain_text(), "OLD");
+    assert!(mid.mark.del.is_some(), "the deleted paragraph's mark is not marked deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "accepting a deleted paragraph left an empty paragraph behind");
+    let mut s = Session::new(Document::from_text("A\nOLD\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nOLD\nB");
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(empty_paras(&s), 0, "rejecting a deleted paragraph left an empty paragraph behind");
+}
+
+#[test]
+fn compare_marks_an_empty_paragraphs_mark() {
+    // An empty inserted paragraph is stamped on its mark, though `format` skips its empty range.
+    let mut s = Session::new(Document::from_text("A\nB"));
+    s.run("review.compare", &json!({"text": "A\n\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let empty = s.doc.body[1].as_para().unwrap();
+    assert!(empty.is_empty());
+    assert!(empty.mark.ins.is_some(), "the empty inserted paragraph's mark is not marked inserted");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "rejecting an empty inserted paragraph left it behind");
+
+    // An empty deleted paragraph is stamped on its mark too.
+    let mut s = Session::new(Document::from_text("A\n\nB"));
+    s.run("review.compare", &json!({"text": "A\nB"})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let empty = s.doc.body[1].as_para().unwrap();
+    assert!(empty.is_empty());
+    assert!(empty.mark.del.is_some(), "the empty deleted paragraph's mark is not marked deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "A\nB");
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(empty_paras(&s), 0, "accepting an empty deleted paragraph left it behind");
+}
+
 #[test]
 fn compare_options_ignore_case_and_white_space() {
     let original = "The Cat sat.\nTwo  spaces here.";
