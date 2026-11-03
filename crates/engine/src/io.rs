@@ -182,21 +182,24 @@ pub fn region_page(region: &wordcraft_geom::Region) -> wordcraft_doc::SectionPro
 /// (see [`region_page`]); a document with its own page size keeps it.
 pub fn open_bytes_in(name: &str, bytes: &[u8], password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let page = region_page(region);
-    let (doc, encrypted) = read_bytes(name, bytes, password, &page)?;
-    load_embedded_fonts(&doc);
+    let (mut doc, encrypted) = read_bytes(name, bytes, password, &page)?;
+    load_embedded_fonts(&mut doc);
     Ok((doc, encrypted))
 }
 
 /// Load the fonts `doc` embeds (#1171) for this run, in memory only: text set in a font that isn't
 /// installed then lays out and exports with it instead of a fallback. Faces already available
-/// stay as they are.
-fn load_embedded_fonts(doc: &Document) {
+/// stay as they are. They belong to `doc` (`Document::embedded_fonts`): another document asking
+/// for the same family doesn't get them.
+fn load_embedded_fonts(doc: &mut Document) {
     let files: Vec<(Vec<u8>, String)> = wordcraft_docx::embedded_fonts(doc)
         .into_iter()
         .filter_map(|f| wordcraft_fonts::decode_font_file(&f.data).ok().map(|data| (data, f.name)))
         .collect();
     if !files.is_empty() {
-        wordcraft_fonts::FontDb::global().add_document_fonts(files);
+        let owner = wordcraft_fonts::DocumentFonts::new_owner();
+        wordcraft_fonts::FontDb::global().add_document_fonts(files, owner);
+        doc.embedded_fonts = wordcraft_doc::EmbeddedFontsOwner(owner);
     }
 }
 

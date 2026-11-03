@@ -308,6 +308,8 @@ pub struct DocLayout {
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
     let t0 = now_ms();
+    // The fonts this document embeds, and no other document's, answer to their names.
+    let _fonts = wordcraft_fonts::DocumentFonts::enter(doc.embedded_fonts.0);
     // Page totals shown in the body (`NUMPAGES`, `SECTIONPAGES`) are known only after
     // paginating: lay out again with the totals found until they hold (bounded). Footnotes
     // numbered again on each page likewise settle over a few more passes.

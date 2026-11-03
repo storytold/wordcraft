@@ -192,3 +192,23 @@ fn a_subset_font_word_embeds_lays_out_text_set_in_its_table_name() {
     let x = end_x(&docx_embedding(FAMILY, Some((&subset, "{6A0E3B57-1C2D-4E8F-9A7B-3D5C1E0F2B64}")), TEXT));
     assert!((x - mono).abs() < 0.01, "measured with the embedded subset: {x} vs {mono} (missing {missing})");
 }
+
+/// Fonts a document embeds are its own: a document opened later that asks for the same family
+/// without embedding it falls back as if the first had never been opened (a subset embedded in
+/// one file drew another's text in a fallback, `gov-mct-keji` after `gov-fj-gaoxin`), and the
+/// first document still lays out with its font.
+#[test]
+fn fonts_embedded_in_one_document_are_not_used_by_another() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "Embedded Scope";
+    let end_x = |s: &mut Session| s.layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let open = |bytes: &[u8]| Session::new(crate::io::open_bytes("e.docx", bytes).unwrap());
+    let mono = end_x(&mut open(&docx_embedding("JetBrains Mono", None, TEXT)));
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let mut first = open(&docx_embedding(FAMILY, Some((&font, "{00000000-0000-0000-0000-000000000000}")), TEXT));
+    assert!((end_x(&mut first) - mono).abs() < 0.01, "the embedding document uses its font");
+    let mut other = open(&docx_embedding(FAMILY, None, TEXT));
+    let x = end_x(&mut other);
+    assert!((x - mono).abs() > 1.0, "another document asking for {FAMILY} falls back: {x} vs {mono}");
+    assert!((end_x(&mut first) - mono).abs() < 0.01, "the embedding document keeps its font");
+}
