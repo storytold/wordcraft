@@ -32,7 +32,8 @@ struct ElsewhereContext {
 impl Session {
     fn restore_layouts(&mut self, before: Option<LayoutSlots>) {
         if let Some(entries) = before {
-            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == self.rev));
+            let rev = (self.rev, wordcraft_proof::dictionary_generation());
+            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == rev));
         }
     }
 
