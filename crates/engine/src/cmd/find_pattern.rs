@@ -345,32 +345,73 @@ pub enum Piece {
     Lit(String),
     /// `^&`: the text found.
     Found,
-    /// `\n` with wildcards: group `n`.
+    /// `\n` with wildcards, or `$n` / `${n}` / `\n` with a regex: group `n` (0 is the match).
     Group(usize),
+    /// `${name}` / `$name` with a regex: a named group, resolved to a [`Piece::Group`] once the
+    /// pattern is built ([`resolve_names`]); one left unresolved expands to nothing.
+    Named(String),
     /// `^c`: the clipboard.
     Clip,
 }
 
-/// Read Replace with text: `^` codes (unless `literal`), and `\1`–`\9` with wildcards.
+/// Read Replace with text: `^` codes (unless `literal`), `\1`–`\9` with wildcards, and with a
+/// regex also `$n`, `${n}`, `${name}`, `$name`, `$$`, `\n` (paragraph mark), `\t` and `\\`.
+/// Pushes the pending literal text, if any.
+fn flush_literal(cur: &mut String, out: &mut Vec<Piece>) {
+    if !cur.is_empty() {
+        out.push(Piece::Lit(std::mem::take(cur)));
+    }
+}
+
+/// The `^` code whose letter is `chars[i]` (`^&`, `^c`, a replace code or a numeric one): pushes
+/// its piece and returns the characters it used, or `None` when it isn't a code.
+fn caret_code(chars: &[char], i: usize, cur: &mut String, out: &mut Vec<Piece>) -> Option<usize> {
+    let &n = chars.get(i)?;
+    if n == '&' || n == 'c' {
+        flush_literal(cur, out);
+        out.push(if n == '&' { Piece::Found } else { Piece::Clip });
+        return Some(1);
+    }
+    if let Some(ch) = replace_code(n) {
+        cur.push(ch);
+        return Some(1);
+    }
+    let (ch, used) = numeric_code(chars, i)?;
+    cur.push(ch);
+    Some(used)
+}
+
 pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
-    if o.literal || o.regex {
+    // With a regex, `special: false` turns off only the `^` codes; group references still expand.
+    if o.literal && !o.regex {
         return vec![Piece::Lit(with.to_string())];
     }
     let chars: Vec<char> = with.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
-    let flush = |cur: &mut String, out: &mut Vec<Piece>| {
-        if !cur.is_empty() {
-            out.push(Piece::Lit(std::mem::take(cur)));
-        }
-    };
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         i += 1;
+        if o.regex && (c == '$' || c == '\\') {
+            match regex_ref(&chars, i, c) {
+                Some((Ref::Char(ch), used)) => {
+                    cur.push(ch);
+                    i += used;
+                }
+                Some((Ref::Group(pc), used)) => {
+                    flush_literal(&mut cur, &mut out);
+                    out.extend(pc);
+                    i += used;
+                }
+                // Not a reference or an escape: the character as written.
+                None => cur.push(c),
+            }
+            continue;
+        }
         if c == '\\' && o.wildcards {
             match chars.get(i) {
                 Some(d) if d.is_ascii_digit() && *d != '0' => {
-                    flush(&mut cur, &mut out);
+                    flush_literal(&mut cur, &mut out);
                     out.push(Piece::Group(d.to_digit(10).unwrap_or(0) as usize));
                     i += 1;
                     continue;
@@ -384,29 +425,77 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
             }
         }
         if c == '^'
-            && let Some(&n) = chars.get(i)
+            && !o.literal
+            && let Some(used) = caret_code(&chars, i, &mut cur, &mut out)
         {
-            if n == '&' || n == 'c' {
-                flush(&mut cur, &mut out);
-                out.push(if n == '&' { Piece::Found } else { Piece::Clip });
-                i += 1;
-                continue;
-            }
-            if let Some(ch) = replace_code(n) {
-                cur.push(ch);
-                i += 1;
-                continue;
-            }
-            if let Some((ch, used)) = numeric_code(&chars, i) {
-                cur.push(ch);
-                i += used;
-                continue;
-            }
+            i += used;
+            continue;
         }
         cur.push(c);
     }
-    flush(&mut cur, &mut out);
+    flush_literal(&mut cur, &mut out);
     out
+}
+
+/// What a `$` or `\` starts in regex Replace with text.
+enum Ref {
+    /// An escape: `$$`, `\n`, `\t`, `\\`.
+    Char(char),
+    /// A group reference; `None` for a number too large to be a group (expands to nothing).
+    Group(Option<Piece>),
+}
+
+/// A group named by its number or name, as the `regex` crate reads it.
+fn group_ref(name: &str) -> Option<Piece> {
+    if name.bytes().all(|b| b.is_ascii_digit()) { name.parse().ok().map(Piece::Group) } else { Some(Piece::Named(name.to_string())) }
+}
+
+/// Read a regex reference or escape after `c` (`$` or `\`) at `chars[i..]`: what it is and how
+/// many characters it uses after `c`, or `None` when `c` is a plain character.
+fn regex_ref(chars: &[char], i: usize, c: char) -> Option<(Ref, usize)> {
+    let next = *chars.get(i)?;
+    if c == '\\' {
+        return match next {
+            'n' => Some((Ref::Char(PARA_MARK), 1)),
+            't' => Some((Ref::Char('\t'), 1)),
+            // `\$` and `\^` keep a `$` or `^` as typed (no group, no `^` code).
+            '\\' | '$' | '^' => Some((Ref::Char(next), 1)),
+            '1'..='9' => Some((Ref::Group(next.to_digit(10).map(|d| Piece::Group(d as usize))), 1)),
+            _ => None,
+        };
+    }
+    if next == '$' {
+        return Some((Ref::Char('$'), 1));
+    }
+    let rest = chars.get(i..).unwrap_or_default();
+    if next == '{' {
+        // `${…}`: everything up to the closing brace; unclosed or empty, the `$` is literal.
+        let close = rest.iter().position(|&ch| ch == '}')?;
+        let name: String = rest.get(1..close)?.iter().collect();
+        if name.is_empty() {
+            return None;
+        }
+        return Some((Ref::Group(group_ref(&name)), close + 1));
+    }
+    // `$name`: the longest run of letters, digits and `_`.
+    let len = rest.iter().take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_').count();
+    if len == 0 {
+        return None;
+    }
+    let name: String = rest.get(..len)?.iter().collect();
+    Some((Ref::Group(group_ref(&name)), len))
+}
+
+/// Turn named group references into numbered ones with `index` (a name's group number);
+/// an unknown name is dropped, so it expands to nothing.
+pub fn resolve_names(pieces: Vec<Piece>, index: &dyn Fn(&str) -> Option<usize>) -> Vec<Piece> {
+    pieces
+        .into_iter()
+        .filter_map(|p| match p {
+            Piece::Named(n) => index(&n).map(Piece::Group),
+            p => Some(p),
+        })
+        .collect()
 }
 
 /// Searched text as it is inserted again: marks become paragraph breaks.
@@ -423,6 +512,7 @@ pub fn expand(pieces: &[Piece], found: &str, group: &dyn Fn(usize) -> Option<Str
             Piece::Found => out.push_str(&as_inserted(found)),
             Piece::Group(n) => out.push_str(&as_inserted(&group(*n).unwrap_or_default())),
             Piece::Clip => out.push_str(&clip.replace("\r\n", "\r").replace('\n', "\r")),
+            Piece::Named(_) => {}
         }
     }
     out

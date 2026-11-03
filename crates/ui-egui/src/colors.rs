@@ -247,16 +247,19 @@ pub enum Pick {
     More,
 }
 
+/// Stable storage id for the Recent Colors list.
 fn recent_id() -> Id {
-    Id::new("wordcraft.recentColors")
+    Id::unique("wordcraft.recentColors")
 }
 
+/// Stable storage id for the pending More Colors request.
 fn request_id() -> Id {
-    Id::new("wordcraft.moreColorsRequest")
+    Id::unique("wordcraft.moreColorsRequest")
 }
 
+/// Stable storage id for the Colors dialog's open flag.
 fn open_flag_id() -> Id {
-    Id::new("wordcraft.colorsDialogOpen")
+    Id::unique("wordcraft.colorsDialogOpen")
 }
 
 /// Removes and returns a temporary value.
@@ -449,7 +452,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ctx.data_mut(|m| m.insert_temp(open_flag_id(), false));
         return;
     };
-    let resp = egui::Modal::new(Id::new("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
+    let resp = egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
     let mut done = resp.inner;
     if done.is_none() && resp.should_close() {
         done = Some(false);
@@ -494,14 +497,14 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     });
     ui.separator();
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(330.0);
             match d.tab {
                 ColorsTab::Standard => standard(ui, d),
                 ColorsTab::Custom => custom(ui, d),
             }
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.add_space(110.0);
             preview(ui, d, &t);
         });
@@ -509,7 +512,7 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     let mut out = None;
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (okb, cancelb) = crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!("OK"))), tl!("Cancel"));
             if cancelb.clicked() {
                 out = Some(false);
@@ -667,9 +670,9 @@ fn custom(ui: &mut Ui, d: &mut ColorsDialog) {
         ui.add_space(8.0);
     });
     ui.add_space(8.0);
-    egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("colors_custom").num_columns(2).spacing(vec2(10.0, 5.0)), |ui| {
         ui.label(tl!("Color model:"));
-        egui::ComboBox::from_id_salt("colors_model")
+        craft_ui::ComboBox::from_id_salt("colors_model")
             .selected_text(match d.model {
                 Model::Rgb => "RGB",
                 Model::Hsl => "HSL",
@@ -794,12 +797,14 @@ mod tests {
         assert_eq!((g.first().copied(), g.last().copied()), (Some(Rgb::WHITE), Some(Rgb::BLACK)));
     }
 
+    /// Assert that colour targets build the expected `format.color` or JSON-path command payload, and
+    /// that a field target has no command.
     #[test]
     fn targets_put_the_colour_where_the_command_wants_it() {
         assert_eq!(Target::cmd("format.color").command("1A2B3C"), Some(("format.color".into(), json!({"color": "1A2B3C"}))));
         let glow = Target::at("shape.effects", json!({"glow": {"color": null, "size": 8.0}}), "/glow/color");
         assert_eq!(glow.command("00FF00"), Some(("shape.effects".into(), json!({"glow": {"color": "00FF00", "size": 8.0}}))));
-        assert_eq!(Target::Field(Id::new("x")).command("00FF00"), None);
+        assert_eq!(Target::Field(Id::unique("x")).command("00FF00"), None);
     }
 
     #[test]
@@ -837,7 +842,7 @@ mod tests {
         assert_eq!(app.canvas.last_font_color, "7A3EC8");
         assert_eq!(app.ui.recent_colors.first().map(String::as_str), Some("7A3EC8"));
         // A dialog field gets the colour back instead.
-        let id = Id::new("field");
+        let id = Id::unique("field");
         d.target = Target::Field(id);
         finish(&mut app, &ctx, &d);
         let mut value = String::new();

@@ -21,7 +21,11 @@ MAC="$TMP/mac.svg"
 sed 's/viewBox="0 0 512 512"/viewBox="-62.136 -62.136 636.272 636.272"/' "$SVG" >"$MAC"
 grep -q 'viewBox="-62.136' "$MAC" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
 
-render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
+render() {
+  local src="$1" size="$2" dst="$3"
+  resvg -w "$size" -h "$size" "$src" "$dst" </dev/null
+  return 0
+}
 
 render "$SVG" 1024 "$DIR/wordcraft-1024.png"
 # Runtime window/Dock icon on macOS (embedded by apps/wordcraft); other platforms use hicolor 256.

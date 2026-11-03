@@ -31,7 +31,7 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
                 Some(&s) if s == b'+' || s == b'-' => &rest[1..],
                 _ => rest,
             };
-            if after_sign.first().is_some_and(|c| c.is_ascii_digit()) {
+            if after_sign.first().is_some_and(u8::is_ascii_digit) {
                 in_exp = true;
                 continue;
             }

@@ -256,6 +256,10 @@ fn vml_commands(path: &str) -> Vec<(String, Vec<f64>)> {
     };
     while let Some(c) = chars.next() {
         if c.is_ascii_alphabetic() {
+            // Cap the commands too, so a path of bare letters can't build a million entries.
+            if out.len() >= MAX_VML_PARAMS {
+                break;
+            }
             if !has_num {
                 push(&mut out, 0.0);
             }
@@ -359,6 +363,13 @@ mod tests {
              <a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo>{seg}</a:path></a:pathLst></a:custGeom></wps:spPr>"
         );
         crate::xml::parse(xml.as_bytes()).expect("parse spPr")
+    }
+
+    #[test]
+    fn a_vml_path_of_bare_letters_builds_a_bounded_command_list() {
+        let path = "x".repeat(MAX_VML_PATH);
+        let n = vml_commands(&path).len();
+        assert!(n <= MAX_VML_PARAMS, "{n} commands");
     }
 
     #[test]

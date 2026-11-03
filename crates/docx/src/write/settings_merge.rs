@@ -153,11 +153,26 @@ struct Child {
     end: usize,
 }
 
+/// Byte index of the `>` that ends the tag at the start of `s`, skipping quoted attribute values.
+fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The root start tag's span end and the root's direct children, or `None` for anything the
 /// scanner doesn't expect (CDATA, DOCTYPE, a different root).
 fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     let open = xml.find(&format!("<{root}"))?;
-    let open_end = open + xml.get(open..)?.find('>')? + 1;
+    let open_end = open + tag_end(xml.get(open..)?)? + 1;
     if xml.get(open_end - 2..open_end)? == "/>" {
         return None;
     }
@@ -182,7 +197,7 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
             i = at + tail.find("?>")? + 2;
             continue;
         }
-        let gt = at + tail.find('>')? + 1;
+        let gt = at + tag_end(tail)? + 1;
         let tag = xml.get(at..gt)?;
         if tag.starts_with("</") {
             depth = depth.checked_sub(1)?;
@@ -341,6 +356,18 @@ mod tests {
         assert!(merge(&[0xff, 0xfe], GEN.as_bytes()).is_none());
         // Missing declarations for a prefix the generated part uses: fall back.
         assert!(merge(br#"<w:settings xmlns:x="x"><w:rsids/></w:settings>"#, GEN.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn a_gt_inside_an_attribute_value_does_not_hide_the_kept_settings() {
+        for v in [r#"w:val="x>y""#, "w:val='x>y'"] {
+            let orig = format!(
+                r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:docVar w:name="a" {v}/><w:docVar w:name="b" {v}></w:docVar></w:settings>"#
+            );
+            assert!(has_unowned(orig.as_bytes()), "{v}");
+            let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+            assert!(out.contains(r#"w:name="a""#) && out.contains(r#"w:name="b""#), "{v}");
+        }
     }
 
     #[test]
