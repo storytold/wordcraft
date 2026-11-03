@@ -230,7 +230,7 @@ fn calendar(ui: &mut Ui, t: &Tokens, month: &mut (i64, u32)) -> Option<u32> {
     // 1970-01-01 was a Thursday: Monday-first column of the 1st.
     let lead = (first + 3).rem_euclid(7) as u32;
     let days = wordcraft_engine::cmd::controls::days_in_month(y, m);
-    egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)), |ui| {
         for cell in 0..(lead + days) {
             if cell < lead {
                 ui.label("");
