@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
 use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
@@ -156,11 +158,17 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     // Keep a corner of it on the page.
     let x = x.max(12.0 - w).min(pg.w - 12.0);
     let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
-    // The paragraph under the middle of its top edge: in the column it mostly lands in.
-    let (anchor, on_page) = match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
-        Some(path) => (Pos { story, path, off: 0 }, false),
-        None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
-    };
+    // Preserve an unchanged header/footer anchor, but still convert and reposition the object.
+    let (anchor, on_page) =
+        if matches!(story, StoryRef::Part(_)) && layout.object(pos, page).is_some_and(|hit| hit.page == page && hit.rect.x == x && hit.rect.y == y) {
+            (pos.clone(), false)
+        } else {
+            // The paragraph under the middle of its top edge: in the column it mostly lands in.
+            match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
+                Some(path) => (Pos { story, path, off: 0 }, false),
+                None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
+            }
+        };
     // Move its character to the anchor (unless it's already in that paragraph).
     let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page {
         pos.clone()
@@ -273,6 +281,24 @@ pub(crate) fn anchor_paragraph(
     story: StoryRef,
 ) -> Option<wordcraft_doc::Path> {
     let pg = layout.pages.get(page)?;
+    // Root objects record their paragraph origin before applied spacing.
+    let origins: HashMap<_, _> = match story {
+        StoryRef::Part(id)
+            if doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)) =>
+        {
+            pg.header
+                .iter()
+                .chain(&pg.footer)
+                .filter_map(|item| match item {
+                    wordcraft_layout::Placed::Object { story: s, path, origin, .. } if *s == story && path.depth() == 0 && origin.y.is_finite() => {
+                        Some((path, origin.y))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        _ => HashMap::new(),
+    };
     let items: Box<dyn Iterator<Item = &wordcraft_layout::Placed> + '_> = match story {
         StoryRef::Body => Box::new(pg.items.iter()),
         StoryRef::Part(_) => Box::new(pg.header.iter().chain(pg.footer.iter())),
@@ -281,7 +307,7 @@ pub(crate) fn anchor_paragraph(
     let pieces: Vec<(&wordcraft_doc::Path, f32, f32, bool)> = items
         .filter_map(|it| match it {
             wordcraft_layout::Placed::Lines { story: s, path, l0, x, y: top, .. } if *s == story && path.depth() == 0 => {
-                Some((path, *x, *top, *l0 == 0))
+                Some((path, *x, origins.get(path).copied().unwrap_or(*top), *l0 == 0))
             }
             _ => None,
         })
