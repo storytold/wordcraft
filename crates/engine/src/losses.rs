@@ -214,7 +214,7 @@ impl Walk<'_> {
             let loss = match o {
                 // The picture is written, the object it shows isn't.
                 InlineObject::Image { ole: Some(_), .. } => Loss::EmbeddedObjects,
-                // RTF leaves out pictures it can't re-encode as PNG (EMF, WMF, SVG).
+                // RTF leaves out pictures it can neither write as they are nor re-encode as PNG (SVG).
                 InlineObject::Image { media, .. } if self.rtf => match self.doc.media.get(media) {
                     Some(data) if !wordcraft_formats::rtf::can_write_picture(&wordcraft_formats::model::media_ext(media, data), data) => {
                         Loss::Pictures
@@ -371,8 +371,8 @@ mod tests {
         s.doc
     }
 
-    /// RTF re-encodes pictures other than PNG and JPEG and leaves out those it can't read (EMF,
-    /// WMF, SVG); ODT stores the bytes as they are.
+    /// RTF writes PNG, JPEG and metafiles as they are, re-encodes other pictures it can read and
+    /// leaves out the rest (SVG); ODT stores the bytes as they are.
     #[test]
     fn pictures_rtf_cannot_hold_are_listed_for_rtf_only() {
         let emf = [
@@ -381,7 +381,14 @@ mod tests {
         ];
         let wmf = [0xD7u8, 0xCD, 0xC6, 0x9A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>".to_vec();
-        for (key, bytes) in [("media/a.emf", emf.to_vec()), ("media/b.wmf", wmf.to_vec()), ("media/c.svg", svg)] {
+        // An EMF, and a WMF with records after its placeable header, are written as metafiles (#4259).
+        let mut wmf_body = wmf.to_vec();
+        wmf_body.extend([1u8, 0, 9, 0, 0, 3, 0, 0]);
+        for (key, bytes) in [("media/a.emf", emf.to_vec()), ("media/e.wmf", wmf_body)] {
+            assert_eq!(format_losses(&picture(key, &bytes), "p.rtf"), Vec::<Loss>::new(), "{key}");
+        }
+        // A placeable header alone and SVG have nothing RTF can hold.
+        for (key, bytes) in [("media/b.wmf", wmf.to_vec()), ("media/c.svg", svg)] {
             let doc = picture(key, &bytes);
             assert_eq!(format_losses(&doc, "p.rtf"), vec![Loss::Pictures], "{key}");
             assert_eq!(format_losses(&doc, "p.odt"), Vec::<Loss>::new(), "{key}: ODT keeps the bytes");

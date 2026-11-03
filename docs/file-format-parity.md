@@ -262,7 +262,7 @@ see a dialog: `file.save` saves as before and its result's `losses` lists the id
 The list comes from the writers (`crates/engine/src/losses.rs`): both write
 `formats::model::from_doc`'s flow, which holds only the body's paragraphs, tables, pictures,
 bookmarks and links; both write equations as their linear text and leave charts out, and RTF
-also leaves out pictures it can't re-encode as PNG (`rtf::can_write_picture`: EMF, WMF, SVG).
+also leaves out pictures it can't re-encode as PNG (`rtf::can_write_picture`: SVG; EMF and WMF are written as metafiles, #4259).
 Listed: tracked changes (deleted text left out, insertions written as plain text, formatting and
 page-setup changes dropped; this shrinks when RTF/ODT revisions land), comments, footnotes and
 endnotes, headers and footers, content controls, equations (written as plain text), charts and

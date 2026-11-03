@@ -657,10 +657,20 @@ fn level_def(ordered: bool, l: usize) -> String {
 }
 
 /// Whether the RTF writer keeps a picture with this extension ([`model::media_ext`]) and bytes:
-/// PNG and JPEG go in as they are, other formats only when they can be read to re-encode as PNG
-/// (not EMF, WMF or SVG, which are left out).
+/// PNG, JPEG and the metafiles (EMF, WMF, #4259) go in as they are, other formats only when they
+/// can be read to re-encode as PNG (not SVG, which is left out).
 pub fn can_write_picture(ext: &str, data: &[u8]) -> bool {
-    matches!(ext, "png" | "jpeg" | "jpg") || image::guess_format(data).is_ok_and(|f| f.reading_enabled())
+    match ext {
+        "png" | "jpeg" | "jpg" => return true,
+        // A metafile is written as it is, but a placeable header with nothing after it leaves no picture.
+        "emf" | "wmf" if !data.starts_with(&[1, 0, 0, 0]) => {
+            let body = if data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) { data.get(22..).unwrap_or_default() } else { data };
+            return !body.is_empty();
+        }
+        "emf" | "wmf" => return true,
+        _ => {}
+    }
+    image::guess_format(data).is_ok_and(|f| f.reading_enabled())
 }
 
 /// RTF text of a document.
