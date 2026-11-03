@@ -242,7 +242,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                         2 => VAlign::Bottom,
                         _ => VAlign::Top,
                     };
-                    for c in *a..*b {
+                    for c in *a..(*b).min(MAX_COLS as u8) {
                         set(&mut r.valign, c, v);
                     }
                 }
