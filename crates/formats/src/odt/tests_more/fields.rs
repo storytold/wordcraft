@@ -355,3 +355,14 @@ fn sender_fields_stay_fields() {
         "{c}"
     );
 }
+
+#[test]
+fn a_field_that_follows_the_document_says_so() {
+    // §19.807: not fixed unless said; LibreOffice reads an author field without `text:fixed` as
+    // fixed (an empty one stayed empty instead of showing the author), so WordCraft says it, as
+    // LibreOffice does. Sender fields it writes without, and so does WordCraft.
+    let d = import(&body(r#"<text:p><text:author-name text:fixed="false"/> <text:sender-firstname>Ann</text:sender-firstname></text:p>"#)).unwrap();
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"<text:author-name text:fixed="false""#), "{c}");
+    assert!(c.contains("<text:sender-firstname>Ann</text:sender-firstname>"), "{c}");
+}

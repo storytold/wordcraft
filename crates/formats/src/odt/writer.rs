@@ -450,7 +450,9 @@ impl Writer {
                 Inline::FieldStart(_) | Inline::FieldEnd => {}
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
                 Inline::Field { instr, result, fmt, locked } => {
-                    match self.field_element(instr, result).and_then(|el| if *locked { super::fields::locked(&el, instr, result) } else { Some(el) })
+                    match self
+                        .field_element(instr, result)
+                        .and_then(|el| if *locked { super::fields::locked(&el, instr, result) } else { Some(super::fields::unfixed(&el)) })
                     {
                         Some(el) => {
                             match self.text_style(&Fmt { link: None, ..fmt.clone() }) {

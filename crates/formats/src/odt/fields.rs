@@ -77,12 +77,23 @@ pub(super) fn locked(el: &str, instr: &str, result: &str) -> Option<String> {
 }
 
 pub(super) fn fixed(el: &str) -> String {
+    with_fixed(el, true)
+}
+
+/// `el`, a field element, an author field said not to be fixed (§19.807's default, said:
+/// LibreOffice reads an author field without `text:fixed` as fixed, showing what it holds, and
+/// writes `false` itself). Other fields are written as LibreOffice writes them, without it.
+pub(super) fn unfixed(el: &str) -> String {
+    if el.starts_with("<text:author-") { with_fixed(el, false) } else { el.to_string() }
+}
+
+fn with_fixed(el: &str, fixed: bool) -> String {
     const FIXABLE: [&str; 6] = ["<text:date", "<text:time", "<text:author-name", "<text:author-initials", "<text:sender-", "<text:file-name"];
     if !FIXABLE.iter().any(|f| el.starts_with(f)) {
         return el.to_string();
     }
     match el.find(['>', ' ']).and_then(|at| Some((el.get(..at)?, el.get(at..)?))) {
-        Some((tag, rest)) => format!("{tag} text:fixed=\"true\"{rest}"),
+        Some((tag, rest)) => format!("{tag} text:fixed=\"{fixed}\"{rest}"),
         None => el.to_string(),
     }
 }
