@@ -414,11 +414,18 @@ impl super::Writer<'_> {
     pub(super) fn smart_art_graphic(&mut self, spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, rels: &mut PartRels) -> String {
         use crate::package::rt;
         use crate::smart_art as sa;
+        use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, MAX_TEXT};
         // Written as the reader takes it back, so the graphic reopens editable.
         let (kept, cut) = sa::bounded(spec);
         if cut && !self.embeds.smart_art_cut {
             self.embeds.smart_art_cut = true;
-            log::warn!("docx: a SmartArt graphic has more items, longer text or deeper levels than SmartArt keeps; it is written cut to the limits");
+            // `bounded` also trims text, turns control characters into spaces and closes level gaps, so a model within the
+            // limits can change too.
+            log::warn!(
+                "docx: a SmartArt graphic is outside what SmartArt keeps (at most {MAX_ITEMS} items; text of at most {MAX_TEXT} characters, \
+                 with no control characters and no spaces at either end; levels that follow on, none deeper than {MAX_LEVEL}); \
+                 it is written changed to fit"
+            );
         }
         let spec = &kept;
         let names = self.embeds.fresh_set(
@@ -902,7 +909,7 @@ mod tests {
         // save wrote it whole and it reopened as a plain diagram (#3648).
         use std::sync::Arc;
         use wordcraft_doc::graphic::{Graphic, GraphicKind};
-        use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, SmartArtItem, SmartArtLayout, SmartArtSpec};
+        use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, MAX_TEXT, SmartArtItem, SmartArtLayout, SmartArtSpec};
         use wordcraft_doc::{Block, CharProps, InlineObject, Pos};
         let spec = |n: usize, level: fn(usize) -> u8| SmartArtSpec {
             layout: SmartArtLayout::Hierarchy,
@@ -919,8 +926,10 @@ mod tests {
             crate::test_log::warnings(|| crate::write(&doc).unwrap())
         };
         let cut = |w: &Vec<String>| w.iter().filter(|w| w.contains("SmartArt")).count();
-        // 150 items at level 255, 101 items, and one level past the deepest.
-        let past = [spec(MAX_ITEMS + 50, |_| u8::MAX), spec(MAX_ITEMS + 1, |_| 0), spec(usize::from(MAX_LEVEL) + 2, |i| i as u8)];
+        // 150 items at level 255, 101 items, one level past the deepest, and text past the longest.
+        let long_text =
+            SmartArtSpec { layout: SmartArtLayout::Hierarchy, items: vec![SmartArtItem::new("x".repeat(MAX_TEXT + 45), 0)], ..Default::default() };
+        let past = [spec(MAX_ITEMS + 50, |_| u8::MAX), spec(MAX_ITEMS + 1, |_| 0), spec(usize::from(MAX_LEVEL) + 2, |i| i as u8), long_text];
         let (bytes, warned) = save(&past);
         let doc = crate::read(&bytes).unwrap();
         let mut back: Vec<Option<SmartArtSpec>> = doc
@@ -933,13 +942,19 @@ mod tests {
         let key = |s: &Option<SmartArtSpec>| format!("{s:?}");
         back.sort_by_key(key);
         let editable: Vec<bool> = back.iter().map(Option::is_some).collect();
-        assert_eq!(editable, [true; 3], "each graphic reopens editable");
+        assert_eq!(editable, [true; 4], "each graphic reopens editable");
         let mut want: Vec<Option<SmartArtSpec>> = past.iter().map(|s| Some(s.clone().sanitized())).collect();
         want.sort_by_key(key);
         assert_eq!(back, want, "each graphic reopens as the limits keep it");
         assert_eq!(cut(&warned), 1, "one warning for the save, not one per graphic: {warned:?}");
         let (_, warned) = save(&[spec(5, |i| (i % 2) as u8)]);
         assert_eq!(cut(&warned), 0, "nothing left out: {warned:?}");
+        // Text that only needs trimming changes too, and the warning covers that case as well as the limits (review of
+        // #5461).
+        let trimmed = SmartArtSpec { items: vec![SmartArtItem::new("  Note  ", 0)], ..Default::default() };
+        let (_, warned) = save(&[trimmed]);
+        assert_eq!(cut(&warned), 1, "trimmed text is a change too: {warned:?}");
+        assert!(warned.iter().any(|w| w.contains("SmartArt") && w.contains("no spaces at either end")), "the warning names the trimming: {warned:?}");
     }
 
     #[test]
