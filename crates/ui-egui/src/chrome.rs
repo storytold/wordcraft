@@ -109,6 +109,11 @@ pub(crate) fn status_message_id() -> egui::Id {
     egui::Id::unique("status_message")
 }
 
+/// Where the status bar keeps the left edge of its controls for the next frame.
+fn status_controls_id() -> egui::Id {
+    egui::Id::unique("status_controls_left")
+}
+
 /// Row `i` of the Undo list (0 = the newest step).
 fn undo_list_row_id(i: usize) -> egui::Id {
     undo_list_button_id().with(("row", i))
@@ -640,8 +645,18 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     } else {
                         lang.clone()
                     };
-                    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
-                    let resp = st(ui, &shown).on_hover_text(tip);
+                    let mut tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
+                    // A long language name (a translation: "Engleski (Sjedinjene Američke Države)") stops
+                    // before the controls, whose left edge the previous frame recorded; the tooltip has it whole.
+                    let mut label = shown.clone();
+                    if !rtl && let Some(left) = ui.ctx().data(|d| d.get_temp::<f32>(status_controls_id())) {
+                        let room = left - ui.spacing().item_spacing.x - ui.cursor().min.x;
+                        label = fit_text(ui.painter(), &shown, &TypeRung::Caption.regular(), TypeRung::Caption.tracking(), t.text_dim, room);
+                        if label != shown {
+                            tip = format!("{shown}\n{tip}");
+                        }
+                    }
+                    let resp = st(ui, &label).on_hover_text(tip);
                     crate::rtl::menu(&resp).show(|ui| {
                         ui.set_min_width(200.0);
                         crate::rtl::root(ui, |ui| crate::ribbon::language_menu(ui, app));
@@ -755,6 +770,15 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("view.focus", json!({}));
                         }
                     });
+                    if !rtl && controls_left.is_finite() {
+                        let id = status_controls_id();
+                        let before = ui.ctx().data(|d| d.get_temp::<f32>(id));
+                        ui.ctx().data_mut(|d| d.insert_temp(id, controls_left));
+                        // The window was resized: draw once more with the new edge.
+                        if before.is_none_or(|b| (b - controls_left).abs() > 0.5) {
+                            ui.ctx().request_repaint();
+                        }
+                    }
                     if let Some((msg, at)) = &app.status_msg
                         && crate::now_ms() - at < 6000.0
                     {

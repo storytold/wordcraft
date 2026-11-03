@@ -119,6 +119,35 @@ fn a_long_status_message_stops_before_the_controls() {
     assert!(f64::from(msg.rect.right()) <= focus.x0, "the message stops before the Focus button: {:?} vs {}", msg.rect, focus.x0);
 }
 
+/// A language name wider than the room left of the controls (a long translation in a narrow
+/// window) is shortened so that it stops before the Focus button instead of running under it.
+#[test]
+fn a_long_language_name_stops_before_the_controls() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    // Two frames: the bar learns where its controls start from the frame before.
+    let mut update = None;
+    for n in 0..2 {
+        let input = egui::RawInput {
+            time: Some(f64::from(n) / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(560.0, 300.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(&mut a, ui));
+        out.textures_delta.clear();
+        update = out.platform_output.accesskit_update.take();
+    }
+    let update = update.expect("the last frame has an accessibility update");
+    let bounds = |wanted: &dyn Fn(&str) -> bool| {
+        update.nodes.iter().find(|(_, node)| node.label().is_some_and(wanted)).unwrap_or_else(|| panic!("the node is drawn")).1.bounds().unwrap()
+    };
+    let focus = bounds(&|l| l == "Focus");
+    // Shortened to what fits: "Engli…".
+    let language = bounds(&|l| l.starts_with("Eng") && l.ends_with('…'));
+    assert!(language.x1 <= focus.x0, "the language stops before the Focus button: {language:?} vs {focus:?}");
+}
+
 /// The status bar's "editing a non-body story" line named every one of them "Editing
 /// header/footer", footnotes and endnotes included — it only ever checked "not the body,
 /// not a text box", with no regard for which kind of part it actually was.
