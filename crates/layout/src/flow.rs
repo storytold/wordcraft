@@ -1,13 +1,13 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
-use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
+use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, floating, place_objects};
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
 use super::{
-    Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
-    ViewMode, outline, para,
+    Anchor, Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, SectionStart, StoryRef,
+    TextDirection, ViewMode, Wrap, outline, para,
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
@@ -224,6 +224,58 @@ impl<'a> Flow<'a> {
         });
         (self.float_rects, self.pl, self.rel) = (rects, pl, rel);
         (self.laid_page, self.laid_width) = (pb.number, pb.col_w());
+    }
+
+    // The shared single-column route has no pending notes or carry.
+    fn picture_shared_page(&self, pb: &PageBuilder) -> bool {
+        !pb.web
+            && pb.sect.start == SectionStart::Continuous
+            && pb.pages.last().is_some_and(|p| p.section != pb.sect_idx && pb.content_bottom > p.body.y + 0.01)
+            && pb.cols.len() == 1
+            && pb.top > self.body_top + 0.01
+            && pb.notes.is_empty()
+            && pb.carry.is_empty()
+    }
+
+    fn picture_overflows(&self, pb: &PageBuilder, float_capacity: f32) -> bool {
+        let p = self.p;
+        let picture_paragraph =
+            p.objects.iter().filter(|o| !matches!(o, InlineObject::BookmarkStart { .. } | InlineObject::BookmarkEnd { .. })).count() == 1
+                && p.text.chars().all(|c| c == wordcraft_doc::para::OBJ || c.is_whitespace());
+        picture_paragraph
+            && p.objects.iter().enumerate().any(|(i, o)| {
+                let picture = match o {
+                    InlineObject::Image { .. } => true,
+                    InlineObject::Group { children, .. } => children.iter().any(|c| matches!(c.obj, InlineObject::Image { .. })),
+                    _ => false,
+                };
+                picture
+                    && floating(o).is_some_and(|(_, _, f)| {
+                        f.v_rel == Anchor::Paragraph
+                            && !matches!(f.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
+                            && self
+                                .float_rects
+                                .get(&i)
+                                .is_some_and(|r| r.bottom() > pb.bottom + 0.01 && r.bottom() - self.anchor_y <= float_capacity + 0.01)
+                    })
+            })
+    }
+
+    fn fit_picture(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+        let shared_page = self.picture_shared_page(pb);
+        let partial_page_start = shared_page && pb.at_top();
+        // Single column, non-web mode and empty carry make next_room the fresh body capacity.
+        let float_capacity = if shared_page { pb.next_room(self.body_top) } else { pb.uncapped_bottom() - pb.top };
+        let float_overflows = self.picture_overflows(pb, float_capacity);
+        if !float_overflows || pb.web || pb.at_top() && !partial_page_start {
+            return;
+        }
+        pb.advance(self.block, self.body_top);
+        let before = self.pl.rp.space_before.min(0.0);
+        pb.y += before;
+        let y0 = pb.y;
+        self.reanchor(ctx, pb, (y0, before));
+        self.anchor_y = y0 - before;
     }
 
     /// Lay the paragraph out again around the wrap areas `rel`, with its fields on their pages.
@@ -721,12 +773,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
-    // A different top only matters when there is something to wrap around.
+    // Refresh wrapping floats at the effective top before checking picture overflow.
     if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;
         f.reanchor(ctx, pb, (y0, applied_before));
         f.anchor_y = y0 - applied_before;
     }
+    f.fit_picture(ctx, pb);
     while f.l0 < f.n() {
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);
