@@ -265,6 +265,25 @@ mod tests {
         }
 
         #[test]
+        fn preferred_only_sets_the_pref_and_nothing_else() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "Hello"})).unwrap();
+                s.run("select.all", &json!({})).unwrap();
+                let (doc, sel) = (s.doc.styles.default_chr.lang.clone(), s.sel.clone());
+                let normal = s.doc.styles.styles.iter().find(|x| x.id == "Normal").map(|x| x.chr.lang.clone());
+                let rev = s.rev();
+                s.run("review.language", &json!({"lang": "nl-NL", "preferredOnly": true})).unwrap();
+                assert_eq!(s.prefs.default_language.as_deref(), Some("nl-NL"));
+                assert_eq!(s.doc.styles.default_chr.lang, doc);
+                assert_eq!(s.doc.styles.styles.iter().find(|x| x.id == "Normal").map(|x| x.chr.lang.clone()), normal);
+                assert_eq!(s.sel, sel);
+                assert_eq!(packs::document_languages(s), ["en-US"], "the text keeps its language");
+                assert_eq!(s.rev(), rev);
+                assert!(s.run("review.language", &json!({"preferredOnly": true})).is_err());
+            });
+        }
+
+        #[test]
         fn hostile_tags_never_panic() {
             with_backend(FixedBackend::sample(), |s, _| {
                 s.run("document.setText", &json!({"text": "a b"})).unwrap();

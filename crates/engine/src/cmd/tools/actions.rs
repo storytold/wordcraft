@@ -12,6 +12,14 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
         ),
         None => None,
     };
+    // Options › Language › Set as default: only the saved default proofing language (what future
+    // blank documents are written in), as Word's Set as Preferred; neither this document nor
+    // the selection changes.
+    if p::bool(v, "preferredOnly") == Some(true) {
+        let l = lang.ok_or_else(|| CmdError::Params("`preferredOnly` needs `lang`".into()))?;
+        s.prefs.default_language = Some(l.clone());
+        return Ok(json!({"preferred": l}));
+    }
     let no_proof = p::bool(v, "noProof");
     let detect = p::bool(v, "detect");
     if let Some(d) = detect {

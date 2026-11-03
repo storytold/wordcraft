@@ -576,7 +576,7 @@ pub(crate) fn your_languages_section(app: &mut WordApp, ui: &mut Ui) {
         remove(app, &l);
     }
     if let Some(tag) = default
-        && let Err(e) = app.run("review.language", json!({"lang": tag, "default": true}))
+        && let Err(e) = app.run("review.language", json!({"lang": tag, "preferredOnly": true}))
     {
         app.status(e);
     }
@@ -1317,7 +1317,7 @@ mod tests {
         assert!(labels(&tree).iter().any(|l| l == "Catalan"), "the packs are listed by name: {:?}", labels(&tree));
     }
 
-    /// Set as default sets the default proofing language: new text is written in it.
+    /// Set as default sets only the saved default proofing language (`preferredOnly`); the document is untouched.
     #[test]
     fn set_as_default_changes_new_texts_language() {
         let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1328,8 +1328,10 @@ mod tests {
         // Dutch is listed first and isn't the default: its Set as default is the first one.
         let set = spot(&tree, "Set as default").expect("Dutch can be made the default");
         assert_eq!(a.session.prefs.default_language, None);
+        let before = a.session.doc.clone();
         user_click(&mut a, &ctx, set);
         assert_eq!(a.session.prefs.default_language.as_deref(), Some("nl-NL"));
+        assert_eq!(a.session.doc, before, "the open document is untouched");
         let tree = settled(&mut a, &ctx);
         assert!(has(&tree, "Dutch (default)"), "{:?}", labels(&tree));
         // The caret is in Dutch now, so it is the bold row, and English can be set back.
