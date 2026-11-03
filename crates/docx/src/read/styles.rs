@@ -54,14 +54,20 @@ impl Reader<'_> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
         let Some(root) = self.xml(path)? else { return Ok(()) };
-        // The default paragraph style must be called `Normal` in our model.
-        let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
-        if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
-            && let Some(id) = def.attr("w:styleId")
+        // The default paragraph style must be called `Normal` in our model. When another style
+        // already has the id `Normal` (a custom style named `[Normal]` beside a default style
+        // `a` named Normal, as Chinese Word and WPS files have), that one takes a free id, so
+        // unstyled paragraphs keep the default style's formatting (ECMA-376 §17.7.4.17).
+        if let Some(def) =
+            root.children("w:style").find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(id) = def.attr("w:styleId").filter(|id| *id != "Normal")
         {
+            let ids: Vec<&str> = root.children("w:style").take(10_000).filter_map(|s| s.attr("w:styleId")).collect();
+            if ids.contains(&"Normal")
+                && let Some(free) = (1..=ids.len() + 1).map(|n| format!("Normal{n}")).find(|f| !ids.contains(&f.as_str()))
+            {
+                self.pc.alias.insert("Normal".into(), free);
+            }
             self.pc.alias.insert(id.to_string(), "Normal".into());
         }
         // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumrio1`

@@ -67,3 +67,24 @@ fn an_unset_default_size_does_not_take_a_styles_size() {
     assert_eq!(reopened.styles.default_chr.size, Some(DEFAULT_FONT_SIZE));
     assert_eq!(resolved(&reopened), resolved(&d));
 }
+#[test]
+fn a_custom_style_with_the_id_normal_does_not_replace_the_default_paragraph_style() {
+    // Chinese Word and WPS files: the default paragraph style is `a` (named Normal) and a custom
+    // style named `[Normal]` has the id `Normal`. Unstyled paragraphs take `a`'s 10.5 pt; the
+    // custom style keeps its 12 pt under another id, and a paragraph using it follows it.
+    let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>y</w:t></w:r></w:p></w:body></w:document>"#;
+    let styles = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/><w:rPr><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:customStyle="1" w:styleId="Normal"><w:name w:val="[Normal]"/><w:rPr><w:sz w:val="24"/></w:rPr></w:style></w:styles>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, body) in [("_rels/.rels", root), ("word/document.xml", doc), ("word/_rels/document.xml.rels", rels), ("word/styles.xml", styles)] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(body.as_bytes()).unwrap();
+    }
+    let d = wordcraft_docx::read(&zw.finish().unwrap().into_inner()).unwrap();
+    assert_eq!(d.styles.resolve_char(Some("Normal"), &CharProps::default()).size, 10.5);
+    let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    let size = |i: usize| d.styles.resolve_char(paras[i].props.style.as_deref(), &CharProps::default()).size;
+    assert_eq!(size(0), 10.5);
+    assert_eq!(size(1), 12.0);
+}
