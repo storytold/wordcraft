@@ -102,6 +102,9 @@ choices the file can state, so the presets don't cover them:
   changes (a heading after body text) the two differ by a few points.
 - **Leader dots** in a table of contents start right after the text in LibreOffice and after a
   small gap in WordCraft.
+- **Line breaks after a slash.** LibreOffice breaks a long path after a `/`; WordCraft, as Word,
+  keeps the text after a slash with it and breaks such a word where it must. The standard
+  doesn't define line breaking; this could become a setting.
 - **Objects that may not overlap text** (`style:wrap="none"` with several on one paragraph):
   LibreOffice moves them down by its own rules (`draw:wrap-influence-on-position`).
 

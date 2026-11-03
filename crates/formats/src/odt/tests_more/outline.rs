@@ -86,3 +86,29 @@ fn unnumbered_heading_styles_are_detached_from_the_outline() {
     let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
     assert!(!h1.contains("style:list-style-name"), "{h1}");
 }
+
+#[test]
+fn a_heading_looks_as_its_style_and_has_the_level_its_element_gives() {
+    // Google Docs' 2011 export: `<text:h>` without `text:outline-level` (level 1, §19.850.4) in a
+    // style based on Heading 2. It looks as Heading 2 (as LibreOffice draws it) and is at outline
+    // level 1; saved, both stay.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph"><style:text-properties fo:font-size="18pt" fo:font-weight="bold"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P7" style:family="paragraph" style:parent-style-name="Heading_20_2"/></office:automatic-styles><office:body><office:text><text:h text:style-name="P7">Clarifying the beat</text:h><text:h text:style-name="P7" text:outline-level="2">Second</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let props = |d: &Document, i: usize| d.body[i].as_para().unwrap().props.clone();
+    let p = props(&d, 0);
+    assert_eq!((p.style.as_deref(), p.outline_level), (Some("Heading2"), Some(0)));
+    let p = props(&d, 1);
+    assert_eq!(p.style.as_deref(), Some("Heading2"));
+    assert!(p.outline_level.is_none() || p.outline_level == Some(1));
+    assert_eq!(d.styles.resolve_char(p.style.as_deref(), &Default::default()).size, 18.0);
+    let saved = export(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"text:outline-level="1">Clarifying"#) || c.contains(r#"text:outline-level="1"><"#), "{c}");
+    let back = import(&saved).unwrap();
+    assert_eq!((props(&back, 0).style.as_deref(), props(&back, 0).outline_level), (Some("Heading2"), Some(0)));
+}

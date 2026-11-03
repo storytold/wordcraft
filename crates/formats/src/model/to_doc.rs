@@ -174,6 +174,8 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         out.keep_lines = x.keep_lines.or(out.keep_lines);
         out.widow_control = x.widow_control.or(out.widow_control);
         out.suppress_hyphens = x.suppress_hyphens.or(out.suppress_hyphens);
+        // An outline level apart from its heading style's.
+        out.outline_level = x.outline_level.map(|l| l.min(8)).or(out.outline_level);
     }
     // Tab stops a format gives the paragraph itself: finite, on the page, at most 64.
     if let Some(tabs) = p.extra.as_ref().and_then(|x| x.tabs.as_ref()) {

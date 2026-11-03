@@ -170,6 +170,7 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
+        outline_level: p.outline_level,
         widow_control: p.widow_control.filter(|w| !*w),
         // Hyphenated (the document hyphenates and the paragraph doesn't opt out): `Some(false)`.
         suppress_hyphens: (doc.settings.auto_hyphenation && p.suppress_hyphens != Some(true)).then_some(false),
@@ -199,7 +200,13 @@ pub fn para_kind(doc: &Document, p: &Paragraph) -> (Kind, Option<ListInfo>) {
 fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<ListInfo>) {
     let rp = doc.styles.resolve_para(props);
     let style = props.style.as_deref().unwrap_or("Normal");
-    let kind = if let Some(l) = rp.outline_level {
+    // A heading's kind is its style's (Heading 2 looks as Heading 2 whatever its outline level,
+    // which the paragraph may set apart); else its outline level's.
+    let style_level =
+        doc.styles.chain(style).iter().find_map(|s| s.id.strip_prefix("Heading").and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=9).contains(n)));
+    let kind = if let Some(l) = style_level.filter(|_| rp.outline_level.is_some()) {
+        Kind::Heading(l.min(6))
+    } else if let Some(l) = rp.outline_level {
         Kind::Heading((l + 1).min(6))
     } else if doc.styles.chain(style).iter().any(|s| s.id == "Title") {
         Kind::Title

@@ -479,8 +479,14 @@ impl Body<'_> {
         {
             (pb, new_page) = (false, true);
         }
+        // A heading looks as its style says (a Heading 2 style without a level attribute, which
+        // makes it level 1, still looks as Heading 2); its outline level is the attribute's.
+        let mut level = None;
         if let Some(h) = heading {
-            kind = Kind::Heading(h.clamp(1, 6));
+            match kind {
+                Kind::Heading(k) if k != h.clamp(1, 6) => level = Some(h.clamp(1, 10) - 1),
+                _ => kind = Kind::Heading(h.clamp(1, 6)),
+            }
         }
         // The paragraph before ended with a page break after it (`fo:break-after`): this one
         // starts the page.
@@ -493,6 +499,9 @@ impl Body<'_> {
             p.inlines.push(Inline::Text(wordcraft_doc::para::COLUMN_BREAK.to_string(), model::Fmt::default()));
         }
         p.borders = look.borders;
+        if let Some(l) = level {
+            p.extra.get_or_insert_with(Default::default).outline_level = Some(l);
+        }
         if let Some(n) = look.named {
             // The ODF name for now; import makes it the document style's id.
             p.extra.get_or_insert_with(Default::default).style = Some(n);

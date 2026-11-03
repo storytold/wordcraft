@@ -553,7 +553,9 @@ impl Writer {
         self.cur_style = style.clone();
         let tag = match p.kind {
             Kind::Heading(n) => {
-                out.push_str(&format!("<text:h text:style-name=\"{style}\" text:outline-level=\"{}\">", n.clamp(1, 6)));
+                // Its own outline level when it sets one apart from its style's.
+                let level = p.extra.as_ref().and_then(|x| x.outline_level).map_or(n.into(), |l| u32::from(l) + 1);
+                out.push_str(&format!("<text:h text:style-name=\"{style}\" text:outline-level=\"{}\">", level.clamp(1, 10)));
                 "</text:h>"
             }
             _ => {
