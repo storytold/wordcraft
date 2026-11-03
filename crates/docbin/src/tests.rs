@@ -2829,3 +2829,57 @@ fn shared_props_start_one_run_per_formatting() {
     );
     assert_eq!(pb.text.len(), 100_005);
 }
+
+/// Several bins, equal and descending breakpoints, a missing page and the last FC: wherever a
+/// run is reported as valid it gives the answer a fresh lookup gives.
+#[test]
+fn chpx_runs_are_sound_across_bins() {
+    let page_a = chpx_fkp(&[(0, grpprl(&[(0x0835, &[1])])), (8, grpprl(&[(0x0836, &[1])]))], 20);
+    let page_b = chpx_fkp(&[(20, Vec::new()), (26, grpprl(&[(0x0835, &[1])]))], 40);
+    let mut word = vec![0u8; 512];
+    word.extend_from_slice(&page_a);
+    word.extend_from_slice(&page_b);
+    let (a, b, end) = (fc_of(20), fc_of(40), fc_of(60));
+    let plc = |fcs: &[u32], pns: &[u32]| {
+        [fcs.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>(), pns.iter().flat_map(|p| p.to_le_bytes()).collect()].concat()
+    };
+    let tables = [
+        ("two bins", plc(&[0, a, end], &[1, 2])),
+        ("an empty bin", plc(&[0, a, a, end], &[1, 2, 2])),
+        ("a missing page", plc(&[0, a, end], &[1, 9])),
+        ("descending breakpoints", plc(&[0, b, a, end], &[1, 2, 1])),
+        ("fcs up to the maximum", plc(&[0, a, u32::MAX], &[1, 2])),
+    ];
+    for (what, t) in &tables {
+        let bins = crate::fkp::Bins::parse(t, 0, t.len() as u32).expect("bins");
+        let probes: Vec<u32> = (0..fc_of(50)).step_by(2).chain([u32::MAX - 1, u32::MAX]).collect();
+        for &fc in &probes {
+            let run = bins.chpx_run(&word, fc);
+            assert_eq!(run.grpprl, bins.chpx(&word, fc), "{what}: fc {fc}");
+            for &other in &probes {
+                if run.contains(other) {
+                    assert_eq!(bins.chpx(&word, other), run.grpprl, "{what}: fc {fc} run reused at {other}");
+                }
+            }
+        }
+    }
+}
+
+/// The same formatting changes through a whole read: runs break exactly where the CHPX changes
+/// (with a field and a symbol character in between), and nowhere else.
+#[test]
+fn formatting_runs_break_where_the_chpx_changes() {
+    let spec = RichSpec {
+        text: "aaaabbbb\u{13}PAGE\u{14}12\u{15}ccdd(ee\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman", "Arial"],
+        chpx_runs: vec![(0, grpprl(&[(0x0835, &[1])])), (4, Vec::new()), (8, grpprl(&[(0x0835, &[1])])), (20, grpprl(&[(0x0836, &[1])]))],
+        papx_entries: vec![(30, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    let shape: Vec<(usize, Option<bool>, Option<bool>)> = p.runs.iter().map(|r| (r.len, r.props.bold, r.props.italic)).collect();
+    // "aaaa" bold, "bbbb" plain plus the field's anchor (3 bytes, default formatting), "ccd" bold
+    // (the run from the field to CP 20), "d(ee" italic.
+    assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
+}

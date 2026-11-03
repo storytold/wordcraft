@@ -211,8 +211,7 @@ impl PieceSpan<'_> {
         if self.pcd.compressed { self.pcd.fc.checked_add(step)?.checked_div(2) } else { self.pcd.fc.checked_add(step) }
     }
 
-    /// The raw Prm of the piece (0, no properties, when there is no piece): two CPs with the same
-    /// value get the same [`PrmRef`].
+    /// The raw Prm of the piece: two CPs with the same value get the same [`PrmRef`].
     pub(crate) fn prm(&self) -> u16 {
         self.pcd.prm
     }
