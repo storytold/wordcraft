@@ -34,6 +34,8 @@ fn lines(doc: &Document) -> Vec<String> {
 #[test]
 fn a_document_saved_as_a_single_file_web_page_opens_again() {
     assert!(io::SAVE_EXTS.contains(&"mht"), "Save As offers the format");
+    // Its other extension belongs to it.
+    assert_eq!(io::SAVE_ALIASES, [("mhtml", "mht")]);
     let doc = report();
     for name in ["report.mht", "report.mhtml", "REPORT.MHT"] {
         let bytes = io::save_bytes(name, &doc).unwrap_or_else(|e| panic!("{name}: {e}"));

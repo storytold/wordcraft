@@ -199,18 +199,28 @@ fn on_path(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
+/// The suggested name's extension, lower case, when the engine saves it (a format's own
+/// extension or one of its [`wordcraft_engine::io::SAVE_ALIASES`]).
+fn suggested_ext(name: &str) -> Option<String> {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()) || wordcraft_engine::io::SAVE_ALIASES.iter().any(|(alias, _)| alias == e))
+}
+
+/// The format a saved extension belongs to: an alias's format, else the extension itself.
+fn format_of(ext: &str) -> &str {
+    wordcraft_engine::io::SAVE_ALIASES.iter().find(|(alias, _)| *alias == ext).map_or(ext, |(_, format)| format)
+}
+
 /// The file types Save As offers: every format the engine saves, with the suggested name's own
 /// format first. rfd makes a filter's first extension the dialog's default, which the Windows,
 /// macOS and Linux panels append to a file name the user typed without one; with no filter at
 /// all the name came back bare and the save failed, since the format is chosen by extension
 /// (#689).
 fn save_exts(name: &str) -> Vec<String> {
-    let suggested = std::path::Path::new(name)
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .map(str::to_ascii_lowercase)
-        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
-        .unwrap_or_else(|| "docx".to_string());
+    let suggested = suggested_ext(name).map(|e| format_of(&e).to_string()).unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
     exts.push(suggested.clone());
     exts.extend(wordcraft_engine::io::SAVE_EXTS.iter().filter(|e| **e != suggested).map(|e| (*e).to_string()));
@@ -222,8 +232,24 @@ fn save_exts(name: &str) -> Vec<String> {
 ///
 /// rfd doesn't report which entry the user picked, so if they choose "PDF" but leave "name.docx"
 /// in the name box, the extension in the name wins, as the format is chosen by extension.
+///
+/// A format saved under more than one extension (Single File Web Page: `.mht`, `.mhtml`) is one
+/// entry listing them all, the suggested name's own first so the dialog keeps it.
 fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
-    save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
+    let suggested = suggested_ext(name);
+    save_exts(name)
+        .into_iter()
+        .map(|format| {
+            let mut exts = vec![format.clone()];
+            exts.extend(wordcraft_engine::io::SAVE_ALIASES.iter().filter(|(_, f)| *f == format).map(|(alias, _)| (*alias).to_string()));
+            if let Some(i) = suggested.as_ref().and_then(|s| exts.iter().position(|e| e == s)) {
+                let own = exts.remove(i);
+                exts.insert(0, own);
+            }
+            let patterns: Vec<String> = exts.iter().map(|e| format!("*.{e}")).collect();
+            (format!("{} ({})", format_name(&format), patterns.join("; ")), exts)
+        })
+        .collect()
 }
 
 /// A readable name for a save format's extension.
@@ -283,13 +309,19 @@ mod tests {
         for e in wordcraft_engine::io::SAVE_EXTS {
             assert_eq!(all.iter().filter(|x| x.as_str() == *e).count(), 1, "{e}");
         }
-        assert!(filters.iter().all(|(l, e)| !l.trim().is_empty() && e.len() == 1));
+        let aliases = |e: &str| wordcraft_engine::io::SAVE_ALIASES.iter().filter(|(_, f)| *f == e).count();
+        assert!(filters.iter().all(|(l, e)| !l.trim().is_empty() && e.len() == 1 + aliases(&e[0])));
         let mut labels: Vec<&String> = filters.iter().map(|(l, _)| l).collect();
         labels.sort();
         labels.dedup();
         assert_eq!(labels.len(), filters.len(), "labels are distinct");
         // Unknown names fall back to Word's format first.
         assert_eq!(save_filters("no extension")[0].1, vec!["docx".to_string()]);
+        // A Single File Web Page is one entry for .mht and .mhtml, the suggested one first.
+        let s = |v: &[&str]| v.iter().map(|e| (*e).to_string()).collect::<Vec<_>>();
+        assert_eq!(save_filters("page.mht")[0], ("Single File Web Page (*.mht; *.mhtml)".to_string(), s(&["mht", "mhtml"])));
+        assert_eq!(save_filters("page.MHTML")[0], ("Single File Web Page (*.mhtml; *.mht)".to_string(), s(&["mhtml", "mht"])));
+        assert_eq!(save_filters("report.docx").iter().filter(|(l, _)| l.starts_with("Single File Web Page")).count(), 1);
     }
 
     /// #689: the Save dialog's default extension is the suggested name's own format, so a file

@@ -31,6 +31,9 @@ pub const OPEN_EXTS: &[&str] = &[
 ];
 /// Formats WordCraft saves (Save As).
 pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "mht", "rtf", "odt", "tex", "png", "json", "xml"];
+/// Other extensions a format in [`SAVE_EXTS`] saves under, with that format's extension: a
+/// Single File Web Page is `.mht` or `.mhtml`, as Word's Save As offers it.
+pub const SAVE_ALIASES: &[(&str, &str)] = &[("mhtml", "mht")];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
