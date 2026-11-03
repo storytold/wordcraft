@@ -2,7 +2,7 @@ use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
-use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
+use super::headers::{MAX_HEADER_ITEMS, begins_section, header_table_areas};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
@@ -14,14 +14,14 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
         return Vec::new();
     }
     let Some(page) = pb.pages.last() else { return Vec::new() };
-    let first = pb.pages.iter().rev().nth(1).is_none_or(|prev| prev.section != page.section);
+    let hf = Arc::clone(&ctx.hf);
+    let first = begins_section(&hf.sections, pb.pages.iter().rev().nth(1), page);
     let key = (page.section, page.number, first);
     if let Some(areas) = ctx.footer_wraps.get(&key) {
         return areas.clone();
     }
     ctx.footer_wraps.insert(key, Vec::new());
     let doc = ctx.doc;
-    let hf = Arc::clone(&ctx.hf);
     let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();

@@ -36,6 +36,19 @@ pub(crate) fn section_side(start: SectionStart, restart: Option<u32>, last: u32,
     }
 }
 
+/// Whether `page` (after `prev`) is its section's first page, the one a different first page's
+/// header and footer go on: the page where the section begins. A page's section is the one at its
+/// top, so a section that starts continuously part-way down `prev` has no first page of its own:
+/// Word shows the earlier section's header there and the section's default one from the next page
+/// on. `sections` as [`Document::sections`] gives them (each with its last block).
+pub(crate) fn begins_section(sections: &[(usize, &SectionProps)], prev: Option<&Page>, page: &Page) -> bool {
+    if prev.is_some_and(|p| p.section == page.section) {
+        return false;
+    }
+    let start = page.section.checked_sub(1).and_then(|k| sections.get(k)).map_or(0, |(end, _)| end.saturating_add(1));
+    start >= page.first_block
+}
+
 /// The document's sections with their headers and footers (Word's "link to previous"), each
 /// section's resolved once for the whole layout in document order rather than by looking back
 /// over the sections before it whenever one is needed.
@@ -121,12 +134,12 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
         return Vec::new();
     }
     let Some(page) = pb.pages.last() else { return Vec::new() };
-    let first = pb.pages.iter().rev().nth(1).is_none_or(|prev| prev.section != page.section);
+    let hf = Arc::clone(&ctx.hf);
+    let first = begins_section(&hf.sections, pb.pages.iter().rev().nth(1), page);
     let key = (page.section, page.number, first);
     if let Some(areas) = ctx.header_tables.get(&key) {
         return areas.clone();
     }
-    let hf = Arc::clone(&ctx.hf);
     let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
@@ -250,13 +263,9 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
     let hf = Arc::clone(&ctx.hf);
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
-    let mut first_of_section: HashSet<usize> = HashSet::new();
-    let mut seen = HashSet::new();
-    for (i, p) in pages.iter().enumerate() {
-        if seen.insert(p.section) {
-            first_of_section.insert(i);
-        }
-    }
+    let first_of_section: HashSet<usize> = (0..pages.len())
+        .filter(|&i| pages.get(i).is_some_and(|p| begins_section(sections, i.checked_sub(1).and_then(|k| pages.get(k)), p)))
+        .collect();
     for (i, page) in pages.iter_mut().enumerate() {
         let Some((_, sect)) = sections.get(page.section) else { continue };
         // Inherit header/footer references from earlier sections (Word's "link to previous").
