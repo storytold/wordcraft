@@ -147,18 +147,13 @@ fn stored_state(app: &WordApp, pane: Pane) -> (PaneState, bool) {
     let Some(saved) = app.ui.pane_places.get(pane.key()) else {
         return (default, false);
     };
-    match saved.dock {
-        Some(SavedDock::Left) => (
-            PaneState { place: Place::Docked(Edge::Start), size: saved.width.or(default.size), float_rect: saved.float },
-            true,
-        ),
-        Some(SavedDock::Right) => (
-            PaneState { place: Place::Docked(Edge::End), size: saved.width.or(default.size), float_rect: saved.float },
-            true,
-        ),
-        Some(SavedDock::Float) => (PaneState { place: Place::Floating, size: saved.width.or(default.size), float_rect: saved.float }, true),
-        None => (PaneState { place: default.place, size: saved.width.or(default.size), float_rect: saved.float }, false),
-    }
+    let (place, explicit) = match saved.dock {
+        Some(SavedDock::Left) => (Place::Docked(Edge::Start), true),
+        Some(SavedDock::Right) => (Place::Docked(Edge::End), true),
+        Some(SavedDock::Float) => (Place::Floating, true),
+        None => (default.place, false),
+    };
+    (PaneState { place, size: saved.width.or(default.size), float_rect: saved.float }, explicit)
 }
 
 /// The Styles pane's place and size, from `view.stylesPaneDock` and the UI preferences (#1756).
