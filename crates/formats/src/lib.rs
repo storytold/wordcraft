@@ -1,5 +1,5 @@
 //! WordCraft import/export for the "other" text formats: plain text, Markdown (CommonMark subset
-//! plus GFM tables and strikethrough), HTML (and MHT web archives, read-only), RTF, OpenDocument
+//! plus GFM tables and strikethrough), HTML (and MHT web archives), RTF, OpenDocument
 //! Text and LaTeX — and, read-only, spreadsheet cells for mail-merge recipient lists ([`sheet`]:
 //! .xlsx/.xlsm/.xls/.ods).
 //!
@@ -73,6 +73,7 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "txt" | "text" => Ok(txt::export(doc)),
         "md" | "markdown" => Ok(markdown::export(doc).into_bytes()),
         "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
+        "mht" | "mhtml" => Ok(mht::export(doc)),
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
         "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
@@ -83,20 +84,25 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
 /// How [`export_with`] writes a copy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExportOptions {
-    /// Print Markup: HTML, Markdown and plain text end with the document's comments (who wrote
-    /// each, the text it comments on, what it says, its replies). Other formats keep comments
-    /// their own way or not at all.
+    /// Print Markup: HTML (and the page of an MHT web archive), Markdown and plain text end with
+    /// the document's comments (who wrote each, the text it comments on, what it says, its
+    /// replies). Other formats keep comments their own way or not at all.
     pub comments: bool,
 }
 
 /// [`export`] with options.
 pub fn export_with(ext: &str, doc: &Document, opts: &ExportOptions) -> Option<Result<Vec<u8>, String>> {
+    let lower = ext.trim_start_matches('.').to_ascii_lowercase();
+    if opts.comments && matches!(lower.as_str(), "mht" | "mhtml") {
+        // The comment list goes on the page before the page is packed with its pictures.
+        let page = comments::append("html", doc, html::export(doc).into_bytes());
+        return Some(Ok(mht::export_html(&String::from_utf8_lossy(&page), &doc.core.title)));
+    }
     let out = export(ext, doc)?;
     if !opts.comments {
         return Some(out);
     }
-    let ext = ext.trim_start_matches('.').to_ascii_lowercase();
-    Some(out.map(|bytes| comments::append(&ext, doc, bytes)))
+    Some(out.map(|bytes| comments::append(&lower, doc, bytes)))
 }
 
 #[cfg(test)]

@@ -237,6 +237,7 @@ fn format_name(ext: &str) -> String {
         "txt" => "Plain Text".into(),
         "md" => "Markdown".into(),
         "html" => "Web Page".into(),
+        "mht" | "mhtml" => "Single File Web Page".into(),
         "rtf" => "Rich Text Format".into(),
         "odt" => "OpenDocument Text".into(),
         "tex" => "LaTeX".into(),

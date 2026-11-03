@@ -4,11 +4,17 @@
 //! found among the other parts by `Content-Location` (also relative to the page's) or `cid:`
 //! `Content-ID`, and the page opens as Word opens one ([`crate::html::import_page`]). Word keeps
 //! HTML `w:altChunk`s in this form too.
+//!
+//! Saving ([`export`]) writes the page [`crate::html`] writes as the message's first part and each
+//! picture as a part beside it (`mht/write.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use wordcraft_doc::Document;
+
+mod write;
+pub use write::{export, export_html};
 
 /// Most parts read from one message (nested multiparts included).
 const MAX_PARTS: usize = 10_000;

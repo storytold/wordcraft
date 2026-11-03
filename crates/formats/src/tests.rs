@@ -9,7 +9,7 @@ use crate::model::{self, FBlock, Kind};
 use crate::{export, import};
 
 /// A small PNG made with the image crate.
-fn png() -> Vec<u8> {
+pub(crate) fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(8, 4, |x, _| image::Rgba([(x * 30) as u8, 80, 160, 255]));
     let mut buf = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
@@ -236,6 +236,30 @@ fn html_round_trip() {
     let back = import("html", html.as_bytes()).unwrap().unwrap();
     assert_eq!(back.media.len(), 1, "picture survives");
     assert_eq!(back.core.title, "Sample Title");
+}
+
+/// A Single File Web Page keeps what a web page keeps: the page and its picture come back.
+#[test]
+fn mht_round_trip() {
+    for ext in ["mht", "mhtml"] {
+        check_round_trip(ext, true);
+        let back = import(ext, &export(ext, &sample()).unwrap().unwrap()).unwrap().unwrap();
+        assert_eq!(back.media.values().map(|m| m.to_vec()).collect::<Vec<_>>(), vec![png()], "{ext}: the picture, byte for byte");
+        assert_eq!(back.core.title, "Sample Title", "{ext}");
+    }
+}
+
+/// Print Markup's comment list goes on the page of an MHT copy, as on an HTML one.
+#[test]
+fn mht_copies_carry_the_comment_list_with_print_markup() {
+    let mut d = Document::from_text("Reviewed text");
+    d.comments.insert(1, wordcraft_doc::Comment { author: "Ana".into(), ..Default::default() });
+    let opts = crate::ExportOptions { comments: true };
+    let page = |bytes: Vec<u8>| crate::mht::import(&bytes).plain_text(Default::default());
+    let with = page(crate::export_with("mht", &d, &opts).unwrap().unwrap());
+    let without = page(crate::export_with("mht", &d, &crate::ExportOptions::default()).unwrap().unwrap());
+    assert!(with.contains("Comments") && with.contains("Ana"), "{with}");
+    assert!(!without.contains("Ana"), "{without}");
 }
 
 #[test]
