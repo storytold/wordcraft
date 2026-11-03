@@ -336,7 +336,7 @@ fn preset_tile(ui: &mut Ui, label: &str, widths: &[f32], on: bool, t: &Tokens) -
 /// A preset tile in a mirrored interface: a caption longer than the 44 pt tile (it is longer in
 /// Arabic) widens the tile's column and is centred under it, so it never runs into the next tile.
 fn preset_tile_mirrored(ui: &mut Ui, label: &str, widths: &[f32], on: bool, t: &Tokens) -> bool {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::TextStyle::Small.resolve(ui.style()), t.text);
+    let galley = ui.painter().layout_no_wrap(tl!(label).to_string(), egui::TextStyle::Small.resolve(ui.style()), t.text);
     let column = galley.size().x.max(44.0);
     let (cell, resp) = ui.allocate_exact_size(vec2(column, 52.0 + 2.0 + galley.size().y), Sense::click());
     let r = Rect::from_min_size(pos2(cell.center().x - 22.0, cell.min.y), vec2(44.0, 52.0));
