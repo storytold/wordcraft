@@ -275,6 +275,21 @@ impl MacTitleBar {
     }
 }
 
+/// Elide the document title before sacrificing the compiled distribution label.
+/// If the label alone does not fit, show an elided label instead of painting into controls.
+pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let (title, suffix) = if width(suffix) > available { (suffix.trim_start(), "") } else { (title, suffix) };
+    let mut shown: String = title.chars().take(240).collect();
+    if width(&format!("{shown}{suffix}")) > available {
+        while !shown.is_empty() && width(&format!("{shown}…{suffix}")) > available {
+            shown.pop();
+        }
+        shown.push('…');
+    }
+    shown.push_str(suffix);
+    shown
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -393,22 +408,17 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 )
             };
-            if app.has_document() && !crate::build_config::BUILD_LABEL.is_empty() {
-                title.push_str(" (");
-                title.push_str(crate::build_config::BUILD_LABEL);
-                title.push(')');
-            }
+            let suffix = if app.has_document() && !crate::build_config::BUILD_LABEL.is_empty() {
+                format!(" ({})", crate::build_config::BUILD_LABEL)
+            } else {
+                String::new()
+            };
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;
             let available = 2.0 * (cx - qat_end - 10.0).min(right_start - 10.0 - cx);
-            let mut shown: String = title.chars().take(240).collect();
-            if text_width(ui.painter(), &shown, &font, track, t.text) > available {
-                while !shown.is_empty() && text_width(ui.painter(), &format!("{shown}…"), &font, track, t.text) > available {
-                    shown.pop();
-                }
-                shown.push('…');
-            }
+            let shown = fitted_title(&title, &suffix, available, |text| text_width(ui.painter(), text, &font, track, t.text));
+            title.push_str(&suffix);
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
