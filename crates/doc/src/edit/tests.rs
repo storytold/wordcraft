@@ -416,6 +416,24 @@ fn pasted_box_copies_are_capped_in_bytes() {
 }
 
 #[test]
+fn pasted_box_copies_count_the_formatting_they_copy() {
+    // A story holding a text box and a run whose font name is 1 MiB: each copy clones the
+    // formatting too, so 64 copies used to copy 64 MiB of it past the 32 MiB cap.
+    let props = CharProps { font: Some("f".repeat(1 << 20)), ..CharProps::default() };
+    let mut p = Paragraph::with_text("x", props);
+    p.insert_object(0, box_shape(Some(999)), &CharProps::default()).unwrap();
+    let f = fan_out(vec![para_block(p)], 64);
+    let mut d = doc(&["x"]);
+    let before = d.parts.len();
+    d.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let added = d.parts.len() - before;
+    let font = |p: &Paragraph| p.runs.iter().map(|r| r.props.font.as_ref().map_or(0, String::len)).sum::<usize>();
+    let copied: usize = d.parts.values().flat_map(|p| p.blocks.iter()).map(|b| if let Block::Para(p) = &**b { font(p) } else { 0 }).sum();
+    assert!((1..64).contains(&added), "{added}");
+    assert!(copied <= MAX_PASTED_BOX_BYTES, "{copied}");
+}
+
+#[test]
 fn pasted_box_copies_count_the_objects_they_copy() {
     // #3614 review: a story holding a text box and a 1 MiB kept-for-round-trip object costs
     // the object's XML too, not only its slot: 64 copies used to copy 64 MiB of it.
