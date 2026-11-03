@@ -1,7 +1,6 @@
 # WordCraft roadmap
 
-> **PR #5254 — DOCX bookmarks (2026-11-03):** Direct table-row and table bookmark boundaries retain their source IDs and optional cell-range columns on save. Synthetic repeated-save controls also cover cells, paragraphs, headers and boundaries between tables. Broader document-corpus qualification remains open.
-
+**PR #5254 — DOCX bookmarks (2026-11-03):** Direct table-row and table bookmark boundaries retain their source IDs and optional cell-range columns on save. Synthetic repeated-save controls also cover cells, paragraphs, headers and boundaries between tables. Broader document-corpus qualification remains open.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
