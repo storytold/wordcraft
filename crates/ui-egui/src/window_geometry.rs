@@ -47,8 +47,12 @@ impl RawWindowState {
     /// The content size reported by this frame, if any. Never the last painted size: a hidden
     /// Wayland tick with neither an `inner_rect` nor a screen rect has no usable geometry.
     pub fn content_size(self) -> Option<egui::Vec2> {
-        let size = self.inner_rect.or(self.screen_rect)?.size();
-        (size.is_finite() && size.x > 0.0 && size.y > 0.0).then_some(size)
+        [self.inner_rect, self.screen_rect]
+            .into_iter()
+            .flatten()
+            .filter(|r| r.is_finite())
+            .map(|r| r.size())
+            .find(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)
     }
 }
 
@@ -308,6 +312,26 @@ mod tests {
         };
         let g = WindowGeometry::track(Some(saved()), &fresh).expect("the fresh raw size");
         assert_eq!((g.position, g.width, g.height, g.monitor), (None, 1000.0, 700.0, Some([1920.0, 1080.0])));
+    }
+
+    /// Invalid inner dimensions use fresh screen geometry; valid inner dimensions take precedence.
+    #[test]
+    fn invalid_inner_size_falls_back_to_fresh_screen_geometry() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        for size in [egui::vec2(0.0, 0.0), egui::vec2(-1.0, 10.0), egui::vec2(f32::NAN, 10.0)] {
+            let raw = RawWindowState {
+                inner_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            assert_eq!(raw.content_size(), Some(screen.size()));
+        }
+        let inner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        assert_eq!(RawWindowState { inner_rect: Some(inner), screen_rect: Some(screen), ..Default::default() }.content_size(), Some(inner.size()));
+        assert_eq!(
+            RawWindowState { inner_rect: Some(egui::Rect::ZERO), screen_rect: Some(egui::Rect::ZERO), ..Default::default() }.content_size(),
+            None
+        );
     }
 
     /// Only the current frame's root viewport contributes inner, outer, content and monitor sizes; a

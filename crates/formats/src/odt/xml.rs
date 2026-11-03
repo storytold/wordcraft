@@ -85,3 +85,13 @@ pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) -> Result<(), String> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::events;
+
+    #[test]
+    fn invalid_utf8_odt_xml_is_an_error() {
+        assert!(events(b"<office:document><office:body/>\xff<office:body/></office:document>", |_| {}).is_err());
+    }
+}

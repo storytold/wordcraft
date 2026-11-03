@@ -77,7 +77,7 @@ pub fn sniff_xml(bytes: &[u8]) -> XmlKind {
 
 /// Read a Flat OPC file.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
-    crate::read::read_opened(&unpack(bytes)?)
+    crate::read::read_opened(&unpack(bytes)?, None)
 }
 
 /// The data element of the part being read.
@@ -499,6 +499,16 @@ mod tests {
         assert_eq!(sniff_xml(b"<html><body/></html>"), XmlKind::Other);
         assert_eq!(sniff_xml(b"\x00\xff garbage"), XmlKind::Other);
         assert_eq!(sniff_xml(b""), XmlKind::Other);
+    }
+
+    #[test]
+    fn flat_opc_readers_allow_129_root_namespace_bindings() {
+        let declarations: String = (0..129).map(|i| format!(" xmlns:p{i}=\"urn:p{i}\"")).collect();
+        let xml = format!(
+            "<pkg:package xmlns:pkg=\"{PKG_NS}\"{declarations}><pkg:part pkg:name=\"/a.xml\" pkg:contentType=\"application/xml\"><pkg:xmlData><a/></pkg:xmlData></pkg:part></pkg:package>"
+        );
+        assert_eq!(sniff_xml(xml.as_bytes()), XmlKind::FlatOpc);
+        assert!(unpack(xml.as_bytes()).is_ok());
     }
 
     #[test]

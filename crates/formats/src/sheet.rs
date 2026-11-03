@@ -201,6 +201,7 @@ struct Package<'a> {
 
 impl<'a> Package<'a> {
     fn open(bytes: &'a [u8]) -> Result<Self, String> {
+        wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES)?;
         let zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a valid spreadsheet package ({e})"))?;
         Ok(Package { zip, total: 0 })
     }
@@ -406,6 +407,14 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn a_package_declaring_too_many_entries_is_refused() {
+        // #3660: refused before `zip` reserves and parses them.
+        let bomb = wordcraft_doc::zip_guard::zip64_entry_count_sample(crate::MAX_ZIP_ENTRIES + 1);
+        assert!(sheet_names(&bomb).is_err_and(|e| e.contains("declares")));
+        assert!(crate::odt::parse(&bomb).is_err_and(|e| e.contains("declares")));
+    }
+
+    #[test]
     fn negative_zero_formats_as_zero() {
         assert_eq!(number(-0.0), "0");
     }
@@ -413,6 +422,11 @@ mod tests {
     #[test]
     fn malformed_spreadsheet_xml_is_an_error() {
         assert!(walk(b"<root attr='unterminated", |_| {}).is_err());
+    }
+
+    #[test]
+    fn invalid_utf8_spreadsheet_xml_is_an_error() {
+        assert!(walk(b"<root><row><cell>first</cell></row>\xff<row><cell>later</cell></row>", |_| {}).is_err());
     }
 
     fn zip(entries: &[(&str, &str)]) -> Vec<u8> {

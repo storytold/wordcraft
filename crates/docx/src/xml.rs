@@ -670,6 +670,13 @@ mod tests {
         assert!(parse(s.as_bytes()).is_err());
     }
 
+    #[test]
+    fn readers_support_129_namespace_declarations() {
+        let declarations: String = (0..129).map(|i| format!(" xmlns:p{i}=\"urn:p{i}\"")).collect();
+        let xml = format!("<root{declarations}/>");
+        assert!(parse(xml.as_bytes()).is_ok());
+    }
+
     /// One start tag carrying 200,000 attributes (distinct or duplicate names) is refused or
     /// truncated instead of allocated: a 59 KB `.docx` used to cost 611 MB (#3702, WC-06).
     #[test]
