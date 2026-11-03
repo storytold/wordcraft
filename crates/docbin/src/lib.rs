@@ -49,6 +49,13 @@ const MAX_PARTS: usize = 50_000;
 /// headers, notes, text boxes), whatever the file's size. The working budget is tied to the
 /// WordDocument stream (see [`read`]); this caps even a maximal stream.
 const MAX_TOTAL_CHARS: u64 = 64 << 20;
+/// Most paragraph and cell marks across every story walk of one document. The character
+/// budget does not see them: a mark is one byte of the file but about 1 KB of document, so a
+/// file of nothing but marks would grow memory about a thousand times faster than its size.
+/// Past the cap the read fails with [`DocbinError::Limit`]. Real documents stay far below it:
+/// 50 paragraphs on each of 10,000 pages is 500,000, and a 10,000-page one-column table (46
+/// rows, each a cell mark plus a row mark) is about 920,000.
+const MAX_PARAGRAPHS: usize = 2_000_000;
 /// Bytes of repeated work per document beyond the text itself: piece Prm grpprls (Prcs, up
 /// to 64 KB each) interpreted (#3692), hyperlink targets (#3708), picture alt text (#3709)
 /// and floating objects (#3710) copied into every run or anchor. Past it Prms are skipped,
@@ -193,6 +200,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
 /// verifier ([`DocbinError::WrongPassword`] when it does not match) and then decrypted. The
 /// password is ignored for an unprotected file.
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Document, DocbinError> {
+    read_limited(bytes, password, MAX_PARAGRAPHS)
+}
+
+/// [`read_with_password`] with the paragraph cap as a parameter, so tests need not build a
+/// file of [`MAX_PARAGRAPHS`] marks.
+fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> Result<Document, DocbinError> {
     let mut comp = open_container(bytes)?;
     let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
@@ -268,6 +281,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // tight against aliasing — and never past the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
+    let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
     let ctx = WalkCtx {
         word: &word,
@@ -283,6 +297,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         drawn: &[],
         sect_ends: &[],
         budget: &budget,
+        paragraphs: &paragraphs,
         work: &work,
     };
 
@@ -391,6 +406,9 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.last_section = l;
     }
 
+    if paragraphs.exceeded.get() {
+        return Err(DocbinError::Limit(format!("the document has more than {max_paragraphs} paragraphs and table cells")));
+    }
     doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
@@ -431,8 +449,33 @@ struct WalkCtx<'a> {
     /// footnotes, text boxes) are hostile and can each span a whole subdocument, so thousands of
     /// them could otherwise materialise the same text thousands of times; this bounds the total.
     budget: &'a std::cell::Cell<u64>,
+    /// Paragraph and cell marks still allowed across every story walk ([`MAX_PARAGRAPHS`]).
+    paragraphs: &'a ParaBudget,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
     work: &'a Work,
+}
+
+/// The paragraph and cell marks still allowed in this document, and whether a walk ran into
+/// the end of them (the read then fails).
+struct ParaBudget {
+    left: std::cell::Cell<usize>,
+    exceeded: std::cell::Cell<bool>,
+}
+
+impl ParaBudget {
+    /// Spends one mark; false (and the overrun noted) when none are left.
+    fn spend(&self) -> bool {
+        match self.left.get().checked_sub(1) {
+            Some(left) => {
+                self.left.set(left);
+                true
+            }
+            None => {
+                self.exceeded.set(true);
+                false
+            }
+        }
+    }
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -525,6 +568,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {
             '\r' | '\u{7}' | '\u{C}' if c != '\u{C}' || section_mark => {
+                if !ctx.paragraphs.spend() {
+                    break;
+                }
                 // Paragraph mark: its PAPX covers the FC range of the paragraph it ends, so
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
@@ -534,6 +580,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
+                // Only table marks keep their table context; a plain paragraph would carry
+                // about 300 unused bytes.
+                let row = row.is_table().then(|| Box::new(row));
                 let mut ilvl = 0u8;
                 let mut ilfo = 0i32;
                 for prl in sprm::iter(papx) {
@@ -666,7 +715,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         out.push(ParaOut {
             para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, objects: done.objects, ..Default::default() },
             end_cp: cp_end,
-            row: table::RowInfo::default(),
+            row: None,
         });
     }
     out

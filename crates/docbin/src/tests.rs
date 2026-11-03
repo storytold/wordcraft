@@ -247,6 +247,49 @@ fn empty_paragraphs_kept() {
     assert_eq!(body_texts(&doc), ["a", "", "b"]);
 }
 
+/// A document of `n` copies of `mark` as one compressed piece.
+fn marks_doc(mark: char, n: usize) -> Vec<u8> {
+    text_doc(&[Piece { compressed: true, text: mark.to_string().repeat(n) }], &[], 0)
+}
+
+/// Paragraph marks are one byte each in the file but about 1 KB each in memory, so they have
+/// their own cap ([`super::MAX_PARAGRAPHS`]); a file past it is refused instead of growing
+/// until the machine runs out. A document exactly at the cap still opens.
+#[test]
+fn a_flood_of_paragraph_marks_is_refused() {
+    let at_cap = super::read_limited(&marks_doc('\r', 1000), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 1000);
+    let over = super::read_limited(&marks_doc('\r', 1001), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// Cell marks are paragraph marks too: a never-closed row of them is refused the same way.
+#[test]
+fn a_flood_of_cell_marks_is_refused() {
+    let over = super::read_limited(&marks_doc('\u{7}', 5000), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The cap is shared by every story of the document, not given to each walk anew.
+#[test]
+fn the_paragraph_cap_is_shared_by_all_stories() {
+    let budget = super::ParaBudget { left: std::cell::Cell::new(2), exceeded: std::cell::Cell::new(false) };
+    assert!(budget.spend() && budget.spend());
+    assert!(!budget.exceeded.get());
+    assert!(!budget.spend());
+    assert!(budget.exceeded.get());
+}
+
+/// The cap is far above any real document (10,000 pages of 50 paragraphs is 500,000), and a
+/// paragraph outside a table no longer carries a table context (a `ParaOut` was 1,224 bytes).
+#[test]
+fn the_paragraph_cap_leaves_room_and_a_paragraph_stays_small() {
+    const { assert!(super::MAX_PARAGRAPHS >= 1_000_000) };
+    assert!(std::mem::size_of::<crate::table::ParaOut>() < 1000, "{}", std::mem::size_of::<crate::table::ParaOut>());
+    let doc = read(&marks_doc('\r', 10)).expect("opens");
+    assert_eq!(doc.body.len(), 10);
+}
+
 #[test]
 fn empty_document_gets_a_paragraph() {
     let f = text_doc(&[Piece { compressed: false, text: "".into() }], &[], 0);
