@@ -1,5 +1,6 @@
 use super::*;
 
+/// Keyboard smart quotes stay searchable, and replacement keeps their original spelling.
 #[test]
 fn keyboard_apostrophe_finds_smart_quoted_typing() {
     let mut s = s();
@@ -19,6 +20,7 @@ fn keyboard_apostrophe_finds_smart_quoted_typing() {
     assert_eq!(text(&s), "[Tau’va]");
 }
 
+/// Normal search uses raw UTF-8 ranges while explicit syntax and modifier letters stay exact.
 #[test]
 fn normal_apostrophe_search_keeps_exact_modes_and_original_byte_ranges() {
     let mut s = s();
