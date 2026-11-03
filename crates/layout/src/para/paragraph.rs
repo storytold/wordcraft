@@ -537,7 +537,12 @@ fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
     let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
-    let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
+    let mut rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
+    // Word never kerns a list number, whatever the kerning of the paragraph mark or the level
+    // (measured in Word for Windows: "11)" in Times New Roman with kerning on is 16 pt wide, not
+    // the 15.55 pt of the kerned "11", so it passes a 312-twip hanging indent and the text goes on
+    // to the next tab stop).
+    Arc::make_mut(&mut rc).kern = 0.0;
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
     // default bullet instead.
