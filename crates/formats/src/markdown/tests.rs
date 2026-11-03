@@ -714,3 +714,17 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
 }
+
+#[test]
+fn a_wide_table_builds_only_the_cells_a_row_keeps() {
+    // A 5,000-column header padded every one-cell row below it to 5,000 cells.
+    let n = 5000;
+    let md = format!("{}|\n{}|\n{}", "|h".repeat(n), "|-".repeat(n), "|x|\n".repeat(200));
+    let flow = parse(&md);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows.len(), 201);
+    assert!(t.rows.iter().all(|r| r.len() == wordcraft_doc::table::MAX_COLS));
+    // A narrow table is unchanged.
+    let FBlock::Table(t) = &parse("| a | b |\n| - | - |\n| x |\n").blocks[0] else { panic!("expected table") };
+    assert_eq!(t.rows[1].len(), 2);
+}

@@ -474,14 +474,17 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                     let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
                     Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
                 };
-                table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
+                // A document row keeps MAX_COLS cells: only those are built, so a wide header
+                // doesn't pad every sparse row below it out to its width.
+                let cols = aligns.len().min(wordcraft_doc::table::MAX_COLS);
+                table.rows.push(head.iter().zip(&aligns).take(cols).map(|(s, a)| cell(s, true, *a)).collect());
                 i += 2;
                 while let Some(l) = lines.get(i) {
                     if is_blank(l) || !l.contains('|') || interrupts(l) {
                         break;
                     }
                     let mut cells = split_row(l);
-                    cells.resize(aligns.len(), String::new());
+                    cells.resize(cols, String::new());
                     table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
                     i += 1;
                 }
