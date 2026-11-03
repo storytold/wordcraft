@@ -73,6 +73,7 @@ impl WordApp {
                 if moved(self) {
                     return;
                 }
+                crate::language_packs::bar(self, ui);
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
             }
