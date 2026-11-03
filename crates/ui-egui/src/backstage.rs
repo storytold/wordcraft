@@ -205,15 +205,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     if !mac && !cfg!(target_arch = "wasm32") {
+        let rtl = crate::rtl::on();
         egui::Area::new(egui::Id::unique("backstage_window_controls"))
-            .fixed_pos(pos2(ui.ctx().content_rect().max.x - 3.0 * crate::chrome::WINDOW_CONTROL_WIDTH, 0.0))
+            .fixed_pos(pos2(
+                if rtl { ui.ctx().content_rect().min.x } else { ui.ctx().content_rect().max.x - 3.0 * crate::chrome::WINDOW_CONTROL_WIDTH },
+                0.0,
+            ))
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                    crate::chrome::window_minimize_button(ui, &t, 38.0);
-                    crate::chrome::window_maximize_button(ui, &t, 38.0);
-                    crate::chrome::window_close_button(ui, &t, 38.0);
+                    if rtl {
+                        crate::chrome::window_close_button(ui, &t, 38.0);
+                        crate::chrome::window_maximize_button(ui, &t, 38.0);
+                        crate::chrome::window_minimize_button(ui, &t, 38.0);
+                    } else {
+                        crate::chrome::window_minimize_button(ui, &t, 38.0);
+                        crate::chrome::window_maximize_button(ui, &t, 38.0);
+                        crate::chrome::window_close_button(ui, &t, 38.0);
+                    }
                 });
             });
     }

@@ -1054,3 +1054,36 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// #4311: In RTL, backstage window controls are placed on the left side and do not overlap the right-aligned sidebar/back button.
+#[test]
+fn backstage_window_controls_mirrored_in_rtl() {
+    let arabic = crate::i18n::fixture_lang("ar", "");
+    crate::i18n::set_current(arabic);
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                crate::i18n::set_current(arabic);
+                crate::rtl::sync(&ctx);
+                super::show(app, ui);
+            },
+            a,
+        );
+    h.run_steps(4);
+    let close = h.ctx.read_response(crate::chrome::window_close_button_id());
+    let minimize = h.ctx.read_response(crate::chrome::window_minimize_button_id());
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert!(close.is_some(), "Close button exists in backstage");
+    assert!(minimize.is_some(), "Minimize button exists in backstage");
+    let close_rect = close.unwrap().rect;
+    let min_rect = minimize.unwrap().rect;
+    assert!(close_rect.min.x < 100.0, "Close button must be at the left side in RTL, got {:?}", close_rect);
+    assert!(min_rect.min.x > close_rect.min.x, "In RTL, Close is at the left outer edge and Minimize is towards the inside");
+}
