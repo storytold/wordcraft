@@ -190,11 +190,26 @@ impl Reader<'_> {
                 .and_then(|i| VML_TEXT_WARPS.get(i as usize))
                 .copied()
                 .and_then(TextWarp::new);
+            // The letters are the shape's fill: `filled="f"` leaves them unfilled, and the fill's
+            // `opacity` makes them transparent (a WPS document's invisible tracing watermark has
+            // opacity 0; drawn opaque, it covered the page).
+            let color = attr("fillcolor").and_then(vml_color);
+            let unfilled = attr("filled").is_some_and(|v| matches!(v.trim(), "f" | "false" | "0"));
+            let opacity = shape.child("v:fill").and_then(|f| f.attr("opacity")).and_then(vml_opacity).unwrap_or(1.0);
+            let fill = if unfilled {
+                Some(wordcraft_doc::wordart::TextFill::None)
+            } else if opacity < 1.0 {
+                let transparency = ((1.0 - opacity) * 100.0).clamp(0.0, 100.0);
+                Some(wordcraft_doc::wordart::TextFill::Solid { color: color.unwrap_or(Rgb::BLACK), transparency })
+            } else {
+                None
+            };
             // The letters fill the box (`fitshape`): sized to its height.
             let props = CharProps {
                 font,
                 size: Some((h * 0.75).clamp(8.0, 200.0)),
-                color: attr("fillcolor").and_then(vml_color).map(TextColor::Rgb),
+                color: color.map(TextColor::Rgb),
+                text_effects: fill.map(|fill| Box::new(wordcraft_doc::wordart::TextEffects { fill: Some(fill), ..Default::default() })),
                 ..CharProps::default()
             };
             let id = self.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, props))]);

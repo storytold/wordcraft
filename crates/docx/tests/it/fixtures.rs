@@ -1408,6 +1408,28 @@ fn vml_textpath_in_body_is_shown() {
 
     assert!(paras(&read(&art.replace("<v:textpath ", r#"<v:textpath on="f" "#)))[0].objects.is_empty());
     assert!(paras(&read(&art.replace(r#"string="Sale""#, r#"string=" ""#)))[0].objects.is_empty());
+
+    // The letters are the shape's fill: its `opacity` makes them transparent, and `filled="f"`
+    // leaves them unfilled. A WPS tracing watermark (names and phone numbers) has opacity 0: drawn
+    // opaque, it covered the page, and saved so, WPS showed it too.
+    use wordcraft_doc::wordart::TextFill;
+    let fill = |d: &Document| {
+        let InlineObject::Shape { story: Some(id), .. } = &paras(d)[0].objects[0] else { panic!("not a text shape") };
+        let p = d.parts.get(id).unwrap().blocks[0].as_para().unwrap();
+        p.runs[0].props.text_effects.as_ref().and_then(|e| e.fill.clone())
+    };
+    assert_eq!(fill(&read(art)), None, "opaque: the colour alone");
+    let invisible = art.replace(r#"stroked="f">"#, r#"stroked="f"><v:fill opacity="0"/>"#);
+    let d = read(&invisible);
+    let want = Some(TextFill::Solid { color: Rgb(0x33, 0x66, 0x99), transparency: 100.0 });
+    assert_eq!(fill(&d), want);
+    assert_eq!(fill(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap()), want, "kept through save and reopen");
+    // 70% opaque, in 65536ths: 30% transparent.
+    let Some(TextFill::Solid { transparency, .. }) = fill(&read(&art.replace(r#"stroked="f">"#, r#"stroked="f"><v:fill opacity="45875f"/>"#))) else {
+        panic!("a transparent fill")
+    };
+    assert_eq!(transparency.round(), 30.0);
+    assert_eq!(fill(&read(&art.replace(r#"stroked="f""#, r#"stroked="f" filled="f""#))), Some(TextFill::None));
 }
 
 /// Issue #1290: a file with Word's watermark keeps it through save and reopen: the same
