@@ -1,6 +1,7 @@
 use super::boxes::{BoxInput, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
+use super::flow::again;
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
@@ -78,6 +79,8 @@ pub(crate) struct PageBuilder<'a> {
     /// Top of the footer of the pages being started: a footer reaching above the bottom margin
     /// pushes the body up (`f32::MAX`: no footer).
     pub(crate) foot_top: f32,
+    /// The selected even-page footer limit.
+    pub(super) even_foot_top: f32,
     /// The wrap areas pages start with ([`EarlyFloats`]) ...
     pub(crate) early: &'a EarlyFloats,
     /// ... and how many of the current page's `excl` they are (its first ones).
@@ -313,7 +316,7 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number = self.restart_at.take().unwrap_or_else(|| self.number.saturating_add(1));
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        let bottom = self.body_bottom(body_top);
+        let bottom = self.body_bottom(body_top, self.number);
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
@@ -393,8 +396,9 @@ impl PageBuilder<'_> {
     }
     /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
     /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
-    fn body_bottom(&self, body_top: f32) -> f32 {
-        (self.sect.page_h - self.sect.margin_bottom).min(self.foot_top.max(body_top + 36.0))
+    fn body_bottom(&self, body_top: f32, number: u32) -> f32 {
+        let foot_top = if number.is_multiple_of(2) { self.even_foot_top } else { self.foot_top };
+        (self.sect.page_h - self.sect.margin_bottom).min(foot_top.max(body_top + 36.0))
     }
     /// The room for text in the next column, or on the page [`Self::advance`] starts after the
     /// last: there, below its body top (`body_top`) and above its footer and the notes carried
@@ -405,7 +409,7 @@ impl PageBuilder<'_> {
         } else if self.web {
             f32::MAX / 8.0 - body_top
         } else {
-            self.body_bottom(body_top) - self.stack_h(&self.carry) - body_top
+            self.body_bottom(body_top, self.restart_at.unwrap_or_else(|| self.number.saturating_add(1))) - self.stack_h(&self.carry) - body_top
         }
     }
     /// The bottom of the columns without balancing: above the footnotes.
@@ -493,13 +497,41 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
 pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
     let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
     let (id, blocks) = (part.0, part.1.blocks.clone());
-    // A page total in the footer is filled in after pagination, like the header's: it doesn't
-    // make the body lay out again.
+    // Both passes are speculative: footer labels and equations must not advance body state.
+    let counters = std::mem::take(&mut ctx.counters);
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let fields = ctx.fields.clone();
+    let uses_totals = ctx.uses_totals;
+    // Footer totals are filled after pagination; only body totals request another pass.
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (laid, ..) =
-        with_pin(ctx, id, sect, 1, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
-    ctx.track_totals = track;
+    let (laid, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
+        again(ctx, 0, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)))
+    });
     let top = sect.page_h - sect.footer - laid.height;
+    let x = sect.margin_left + sect.gutter;
+    let frame = PageFrame { sect, margin_top: None, origin: (x, top), number: fields.page, mirror: ctx.mirror };
+    // Position the same story from the same numbering and box-budget baseline.
+    ctx.counters = Default::default();
+    ctx.boxes = Default::default();
+    ctx.chains = Default::default();
+    ctx.fields = fields.clone();
+    let (positioned, _, _, pinned_wraps) = with_pin(ctx, id, sect, frame.number, None, |ctx| {
+        again(ctx, 0, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))))
+    });
+    ctx.counters = counters;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.fields = fields;
+    ctx.uses_totals = uses_totals;
+    ctx.track_totals = track;
+    let wrap_top = positioned
+        .exclusions
+        .iter()
+        .filter(|(r, tb, ..)| *tb && super::footer_band_overlap(Rect::new(r.x, r.y + top, r.w, r.h), sect))
+        .map(|(r, ..)| top + r.y)
+        .chain(pinned_wraps.iter().filter(|(r, ..)| super::footer_band_overlap(*r, sect)).map(|(r, ..)| r.y))
+        .fold(top, f32::min);
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.
     let flow_cells: Vec<_> = laid
         .items
@@ -531,7 +563,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
             }
             _ => None,
         })
-        .fold(top, f32::min)
+        .fold(wrap_top, f32::min)
 }
 
 /// Where a box of laid-out items sits on its page, for floating objects positioned relative to

@@ -234,6 +234,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+|---|---|
 | 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
 | 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
@@ -244,6 +245,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-29 | A NUL in a document title no longer reaches the native window title, which panicked on X11 (#3634): displayed titles and suggested file names drop NUL characters and fall back to the untitled name when empty; the stored title is unchanged |
 | 2026-10-28 | The Traditional Chinese interface draws hanzi to the Taiwan standard: on the desktop an installed Traditional Chinese font (PingFang TC on macOS, Microsoft JhengHei on Windows, Noto Sans CJK TC on Linux) comes before the embedded Noto Sans CJK SC, which drew 說, 這, 為, 戶 in mainland shapes; without one, and on the web, nothing changes. |
 | 2026-10-17 | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files, and a file that fails to open names the file and the real cause on the status bar and in the log (#1103). The reported "corrupt" error could not be reproduced. |
+| 2026-10-19 | Mid-page footer drawings preserve body text below them; genuine footer-band drawings retain their clearance (#2000). |
 | 2026-10-17 | Password-protected Word files from Word 2007 (Standard encryption: AES-128/192/256, SHA-1) open with their password, also when named `.doc` or `.dot`; a wrong or missing password is reported as for newer files. Word 97-2003 files with an AES header, which the public spec doesn't define, are refused with a clear message (gap 9) |
 | 2026-10-27 | Connector rerouting indexes laid-out object positions once per batch, preserving page hints, first-match order and same-page glue; synthetic equivalence, geometry and scaling regressions (#3631); routing policy and readiness estimates unchanged |
 | 2026-10-28 | Markdown import bounds nested undefined reference-label work within the existing link allowance; literal source and normal reference matching are preserved (#4658). |
@@ -706,6 +708,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-11-02 | trivial | #2000: footer probes preserve body list and equation numbering. Footer drawing band limits, mid-page flow, pinned bounds, page-slot selection, header anchors and nonempty-cell row splitting remain unchanged. No new native/corpus qualification. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
@@ -739,6 +742,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: window titles omit NUL characters (#3634) |
 | 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
+| 2026-10-29 | trivial | #2000: current-main source repair retains footer-band limits, pinned drawings and mid-page body/table flow. Existing regressions retained; primary owns compilation and qualification. No new native parity claim. |
+| 2026-10-19 | trivial | Footer drawings overlapping the reserved band cap body clearance; mid-page top-and-bottom drawings retain body flow above and below, including pinned footer-cell drawings and body table rows. Synthetic controls; no new native Word comparison. |
 | 2026-10-22 | trivial | Progress log: one native window per open document |
 | 2026-10-22 | trivial | Progress log: every open document keeps its own recovery copy |
 | 2026-10-22 | trivial | Progress log: several open documents in the desktop window |
@@ -891,6 +896,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | Footer page tables no longer inflate footer text height; body lines wrap at their physical bounds |
 | 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
+| 2026-10-15 | trivial | Top-and-bottom wrapped footer drawings keep body rows above their positioned wrap area; nonwrapping drawings retain their placement |
+| 2026-10-19 | trivial | Page-anchored top-and-bottom drawings outside footer table cells reserve their wrap bounds and distance from text; nonwrapping controls keep body clearance. |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
 | 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
 | 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
