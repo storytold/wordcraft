@@ -1019,6 +1019,32 @@ fn two_sections_box_the_first() {
 }
 
 #[test]
+fn sections_ending_off_a_paragraph_mark_attach_nowhere() {
+    // Hostile section ends that miss every paragraph mark are skipped; the one that ends a
+    // paragraph still boxes it. Paragraphs are found by their end, not scanned per section.
+    let mut sections: Vec<(u32, Vec<u8>)> = (1..6).map(|cp| (cp, Vec::new())).collect();
+    sections.push((6, grpprl(&[(0x300A, &[0x01])])));
+    sections.push((12, Vec::new()));
+    let spec = StructSpec {
+        text: "first\rsecond\r",
+        header_stories: vec![],
+        sections,
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert!(paras.first().and_then(|p| p.section.as_ref()).expect("first paragraph boxed").title_page);
+    assert_eq!(paras.iter().filter(|p| p.section.is_some()).count(), 1, "the missing ends attach nowhere");
+}
+
+#[test]
 fn header_story_becomes_part() {
     let spec = StructSpec {
         text: "body\r",
