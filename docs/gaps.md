@@ -155,7 +155,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | trivial | Gap 19: RTF saves retain prior paragraph spacing, indents and visible side borders for Reject after reopening (#2915); list definitions, ordinary current-paragraph export and readiness estimates unchanged |
+| 2026-11-03 | trivial | Gap 19: RTF saves retain prior paragraph spacing, indents and visible side borders for Reject after reopening, including app-supported exact line spacing down to 0.7 pt (#2915); list definitions, ordinary current-paragraph export and readiness estimates unchanged |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
 | 2026-11-03 | trivial | #8: language-packs-2 published and pinned, 75 packs; Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto available as Language packs |
 | 2026-11-02 | trivial | #8 (CP4.4): language-packs-1 published and pinned, 61 packs; Lithuanian, Romanian, Catalan, French, Greek, Slovak, Serbian and Latvian available as Language packs; Dutch, German and the other compounding languages wait on craft-proof; Basque, Ukrainian and Uyghur excluded; no ranked gap changed |

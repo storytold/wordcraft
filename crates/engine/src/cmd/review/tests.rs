@@ -1086,6 +1086,33 @@ fn rtf_reopened_paragraph_change_restores_layout_on_reject() {
     }
 }
 
+/// App-supported sub-point exact spacing survives RTF saves and Reject.
+#[test]
+fn rtf_reject_restores_subpoint_exact_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    for points in [0.7, 0.95, 1.0, 18.0, 1584.0] {
+        let mut s = Session::new(wordcraft_formats::rtf::import(br"{\rtf1\pard\ql Boundary\par\pard\ql Neighbor\par}").unwrap());
+        s.run("para.lineSpacing", &json!({"exactly": points})).unwrap();
+        let old = body_para(&s).props.formatting();
+        assert_eq!(old.line_spacing, Some(LineSpacing::Exactly(points)));
+        let neighbor = s.doc.body[1].clone();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("review.trackingOptions", &json!({"trackFormatting": true})).unwrap();
+        s.run("para.lineSpacing", &json!({"exactly": 2.0})).unwrap();
+        let mut doc = s.doc;
+        for _ in 0..2 {
+            doc = wordcraft_formats::rtf::import(wordcraft_formats::rtf::export(&doc).as_bytes()).unwrap();
+            assert_eq!(doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old.line_spacing, old.line_spacing);
+            let mut rejected = Session::new(doc.clone());
+            rejected.run("review.rejectAll", &json!({})).unwrap();
+            assert_eq!(body_para(&rejected).props, old);
+            assert_eq!(body_para(&rejected).text, "Boundary");
+            assert_eq!(rejected.doc.body[1], neighbor);
+            assert!(rejected.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+        }
+    }
+}
+
 #[cfg(test)]
 mod spelling_navigation_tests {
     use super::*;

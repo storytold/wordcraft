@@ -254,7 +254,7 @@ fn spacing(st: &St) -> model::Spacing {
     let line = if sl == 0 {
         None
     } else if sl < 0 {
-        Some(LineSpacing::Exactly(pt(sl.saturating_neg()).max(1.0)))
+        Some(LineSpacing::Exactly(pt(sl.saturating_neg()).max(0.7)))
     } else if st.slmult {
         // \sl240\slmult1 is single spacing.
         Some(LineSpacing::Multiple((sl as f32 / 240.0).clamp(0.06, 132.0)))

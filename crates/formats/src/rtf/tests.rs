@@ -107,6 +107,26 @@ fn headers_and_footers() {
     assert!(import(br"{\rtf1\ansi{\header x").is_ok());
 }
 
+/// Exact spacing uses the command's supported bounds; other spacing rules stay unchanged.
+#[test]
+fn exact_line_spacing_supports_subpoint_values() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, expected) in [
+        (r"\sl-1", Some(LineSpacing::Exactly(0.7))),
+        (r"\sl-14", Some(LineSpacing::Exactly(0.7))),
+        (r"\sl-19", Some(LineSpacing::Exactly(0.95))),
+        (r"\sl-20", Some(LineSpacing::Exactly(1.0))),
+        (r"\sl-2147483648", Some(LineSpacing::Exactly(1584.0))),
+        (r"\sl0", None),
+        (r"\sl1\slmult0", Some(LineSpacing::AtLeast(0.05))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let rtf = format!(r"{{\rtf1\pard{words} Boundary\par}}");
+        let doc = import(rtf.as_bytes()).unwrap();
+        assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, expected, "{words}");
+    }
+}
+
 #[test]
 fn paragraph_spacing_and_indents() {
     use wordcraft_doc::props::LineSpacing;
