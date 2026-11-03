@@ -46,6 +46,10 @@ pub struct CustomProp {
     /// Bookmark associated with this property (`linkTarget`), retained without evaluating it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
+    /// Declared in an ODF document as a user field (§7.4.7 `text:user-field-decl`) rather than
+    /// a document property: written back as one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub odf_user_field: bool,
 }
 
 /// Document properties (File › Info).

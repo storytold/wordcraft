@@ -186,6 +186,8 @@ pub(super) struct Writer {
     /// The document's custom properties' names: `DOCPROPERTY` fields naming one are written as
     /// `text:user-defined`.
     pub(super) custom_props: std::collections::HashSet<String>,
+    /// The custom properties declared as user fields (`text:user-field-get`).
+    pub(super) user_fields: std::collections::HashSet<String>,
     /// The names SET fields give values (the document's variables, §7.4.2): REF to one is a
     /// `text:variable-get`.
     pub(super) variables: std::collections::BTreeSet<String>,
@@ -731,6 +733,10 @@ impl Writer {
         // A variable's value (§7.4.6).
         if let Some(name) = instr.trim_start().strip_prefix("REF").and_then(|r| r.split_whitespace().next()).filter(|n| self.variables.contains(*n)) {
             return Some(format!("<text:variable-get text:name=\"{}\">{}</text:variable-get>", x(name), x(result)));
+        }
+        // A user field's value (§7.4.9), or a document property's (§7.5.6).
+        if let Some(n) = super::fields::docproperty_name(instr).filter(|n| self.user_fields.contains(*n)) {
+            return Some(format!("<text:user-field-get text:name=\"{}\">{}</text:user-field-get>", x(n), x(result)));
         }
         if let Some(n) = super::fields::docproperty_name(instr).filter(|n| self.custom_props.contains(*n)) {
             return Some(format!("<text:user-defined text:name=\"{}\">{}</text:user-defined>", x(n), x(result)));

@@ -245,7 +245,7 @@ pub(super) fn custom_prop(name: &str, t: Option<&str>, v: &str) -> Option<wordcr
             }
         };
     }
-    Some(wordcraft_doc::CustomProp { name, kind: kind.into(), value, link_target: None })
+    Some(wordcraft_doc::CustomProp { name, kind: kind.into(), value, link_target: None, odf_user_field: false })
 }
 
 /// The custom properties of a package's `meta.xml` (§4.3.2.14 `meta:user-defined`).
@@ -297,7 +297,7 @@ pub(super) fn user_fields(xml: &[u8]) -> Vec<wordcraft_doc::CustomProp> {
             if let Some(p) = get(&a, "text:name").and_then(|n| custom_prop(n, t, v))
                 && !out.iter().any(|o| o.name == p.name)
             {
-                out.push(p);
+                out.push(wordcraft_doc::CustomProp { odf_user_field: true, ..p });
             }
         }
     });

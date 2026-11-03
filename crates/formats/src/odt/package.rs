@@ -648,18 +648,45 @@ fn meta_xml(m: &Meta, core: &wordcraft_doc::CoreProps, props: &[wordcraft_doc::C
         s.push_str(&format!("<meta:creation-date>{}</meta:creation-date>", x(m.created.trim_end_matches('Z'))));
     }
     // Custom document properties (§4.3.2.14); ones kept as raw XML from a Word file aren't.
-    for p in props.iter().filter(|p| p.kind != "raw") {
-        let t = match p.kind.as_str() {
-            "r4" | "r8" | "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8" | "uint" | "decimal" | "cy" => "float",
-            "bool" => "boolean",
-            "filetime" | "date" => "date",
-            _ => "string",
-        };
-        let value = if t == "boolean" { if matches!(p.value.trim(), "true" | "1") { "true" } else { "false" }.to_string() } else { p.value.clone() };
+    // (User fields go in the content instead: `user_field_decls`.)
+    for p in props.iter().filter(|p| p.kind != "raw" && !p.odf_user_field) {
+        let (t, value) = odf_value(p);
         s.push_str(&format!("<meta:user-defined meta:name=\"{}\" meta:value-type=\"{t}\">{}</meta:user-defined>", x(&p.name), x(&value)));
     }
     s.push_str("</office:meta></office:document-meta>\n");
     s
+}
+
+/// A custom property's ODF value type and value.
+fn odf_value(p: &wordcraft_doc::CustomProp) -> (&'static str, String) {
+    let t = match p.kind.as_str() {
+        "r4" | "r8" | "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8" | "uint" | "decimal" | "cy" => "float",
+        "bool" => "boolean",
+        "filetime" | "date" => "date",
+        _ => "string",
+    };
+    let value = if t == "boolean" { if matches!(p.value.trim(), "true" | "1") { "true" } else { "false" }.to_string() } else { p.value.clone() };
+    (t, value)
+}
+
+/// The document's user fields (§7.4.7 `text:user-field-decls`), declared at the start of the text.
+fn user_field_decls(props: &[wordcraft_doc::CustomProp]) -> String {
+    let decls: String = props
+        .iter()
+        .filter(|p| p.odf_user_field && p.kind != "raw")
+        .map(|p| {
+            let (t, value) = odf_value(p);
+            let attr = match t {
+                "float" => "office:value",
+                "boolean" => "office:boolean-value",
+                "date" => "office:date-value",
+                _ => "office:string-value",
+            };
+            let value = if t == "date" { value.trim_end_matches(['Z', 'z']).to_string() } else { value };
+            format!("<text:user-field-decl text:name=\"{}\" office:value-type=\"{t}\" {attr}=\"{}\"/>", x(&p.name), x(&value))
+        })
+        .collect();
+    if decls.is_empty() { String::new() } else { format!("<text:user-field-decls>{decls}</text:user-field-decls>") }
 }
 
 /// The sections of a flow: each one's setup and the top-level blocks it holds. A paragraph that
@@ -738,6 +765,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     w.conn_kinds = conn_kinds(&flow.blocks);
     w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
     w.custom_props = doc.custom_props.iter().filter(|p| p.kind != "raw").map(|p| p.name.clone()).collect();
+    w.user_fields = doc.custom_props.iter().filter(|p| p.odf_user_field && p.kind != "raw").map(|p| p.name.clone()).collect();
     w.variables = variables(doc);
     w.forms_allowed = true;
     w.ranged = model::ranged_anchors(&flow.blocks);
@@ -813,8 +841,9 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
             w.sequences.iter().map(|n| format!("<text:sequence-decl text:display-outline-level=\"0\" text:name=\"{}\"/>", x(n))).collect();
         format!("<text:sequence-decls>{d}</text:sequence-decls>")
     };
+    let user_decls = user_field_decls(&doc.custom_props);
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{var_decls}{decls}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{var_decls}{user_decls}{decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
         super::forms::forms_xml(&w.forms, &hidden_controls(doc))
     );

@@ -185,13 +185,14 @@ fn custom_properties_and_user_fields_are_docproperty_fields() {
         .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None })
         .collect();
     assert_eq!(instrs, [r#"DOCPROPERTY "Project""#, r#"DOCPROPERTY "Owner""#]);
-    // Saved: the properties in `meta.xml`, the fields as `text:user-defined`.
+    // Saved: the properties in `meta.xml` with `text:user-defined` fields, the user field as one.
     let saved = crate::odt::export(&d).unwrap();
     let m = crate::odt::tests::entry(&saved, "meta.xml");
     assert!(m.contains(r#"<meta:user-defined meta:name="Budget" meta:value-type="float">1200.5</meta:user-defined>"#), "{m}");
-    assert!(m.contains(r#"meta:name="Owner""#), "{m}");
+    assert!(!m.contains(r#"meta:name="Owner""#), "{m}");
     let c = crate::odt::tests::content_of(&saved);
-    assert!(c.contains(r#"<text:user-defined text:name="Owner">Ada</text:user-defined>"#), "{c}");
+    assert!(c.contains(r#"<text:user-defined text:name="Project">Kiln</text:user-defined>"#), "{c}");
+    assert!(c.contains(r#"<text:user-field-get text:name="Owner">Ada</text:user-field-get>"#), "{c}");
     assert_eq!(crate::odt::import(&saved).unwrap().custom_props.len(), 3);
 }
 
@@ -298,4 +299,24 @@ fn a_date_in_the_locales_order_shows_so() {
     let d = import(&package(&content, Some(&styles))).unwrap();
     let codes: Vec<String> = fields(&d).into_iter().map(|(c, _)| c).collect();
     assert_eq!(codes, [r#"DATE \@ "MMMM d, yyyy""#, r#"DATE \@ "M/d/yyyy""#]);
+}
+
+#[test]
+fn user_fields_stay_user_fields() {
+    // LibreOffice's report templates: user fields (§7.4.7 `text:user-field-decl`, §7.4.9
+    // `text:user-field-get`) are written back as such, not as document properties.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:user-field-decls><text:user-field-decl office:value-type="string" office:string-value="Group one" text:name="GroupField1"/><text:user-field-decl office:value-type="float" office:value="3" text:name="Count"/></text:user-field-decls><text:p>Group: <text:user-field-get text:name="GroupField1">Group one</text:user-field-get>, <text:user-field-get text:name="Count">3</text:user-field-get></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    assert!(d.custom_props.iter().all(|p| p.odf_user_field), "{:?}", d.custom_props);
+    let saved = export(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"<text:user-field-decl text:name="GroupField1" office:value-type="string" office:string-value="Group one"/>"#), "{c}");
+    assert!(c.contains(r#"office:value-type="float" office:value="3""#), "{c}");
+    assert!(c.contains(r#"<text:user-field-get text:name="GroupField1">Group one</text:user-field-get>"#), "{c}");
+    let meta = crate::odt::tests::entry(&saved, "meta.xml");
+    assert!(!meta.contains("GroupField1"), "not a document property too: {meta}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.custom_props, d.custom_props);
 }
