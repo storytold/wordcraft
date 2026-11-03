@@ -65,7 +65,7 @@ impl CrossRefForm {
 /// Insert.
 pub(super) fn cross_ref_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CrossRefForm) -> Next {
     let was = f.to.clone();
-    egui::Grid::new("xref_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("xref_opts").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         let type_label = ui.label(tl!("Reference type:"));
         let types = ref_types(app);
         let types: Vec<(String, &str)> = types.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
