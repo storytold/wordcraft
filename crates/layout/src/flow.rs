@@ -713,7 +713,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut f = Flow::new(ctx, pb, p, (block, body_top));
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
     let placed_at = spot(pb);
-    let broke_before = f.pl.rp.page_break_before && !pb.at_top() && !pb.web;
+    // A continuous section's top mid-page is not a page top, so the break still applies.
+    let broke_before = f.pl.rp.page_break_before && !pb.fresh() && !pb.web;
     if broke_before {
         pb.new_page(block, body_top);
     }
