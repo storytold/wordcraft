@@ -198,7 +198,7 @@ fn special(query: &str, o: &Opts) -> (String, bool) {
         if (o.ignore_punct && is_punct(c)) || (o.ignore_space && is_space(c)) {
             continue;
         }
-        atoms.push(lit(c));
+        atoms.push(quote_class(c).map_or_else(|| lit(c), str::to_string));
     }
     let filler = match (o.ignore_punct, o.ignore_space) {
         (true, true) => r"[\p{P} \t\x{A0}]*",
@@ -207,6 +207,18 @@ fn special(query: &str, o: &Opts) -> (String, bool) {
         (false, false) => "",
     };
     (atoms.join(filler), spans)
+}
+
+/// The quote marks a normal search treats as one. Word's "doesn't differentiate between regular
+/// and smart quotes" in a regular search, only in a wildcard one: AutoCorrect turns a typed `'`
+/// into `’`, so `Tau'va` typed in the Find box found nothing in the text it had typed (#5388).
+/// A `^039`-style code, a wildcard search and a regular expression still mean the one character.
+fn quote_class(c: char) -> Option<&'static str> {
+    match c {
+        '\'' | '\u{2018}' | '\u{2019}' => Some("['\u{2018}\u{2019}]"),
+        '"' | '\u{201C}' | '\u{201D}' => Some("[\"\u{201C}\u{201D}]"),
+        _ => None,
+    }
 }
 
 fn is_punct(c: char) -> bool {
@@ -529,6 +541,23 @@ mod tests {
 
     fn replaced(with: &str) -> String {
         expand(&parse_replace(with, &Opts::default()), "", &|_| None, "")
+    }
+
+    /// A normal search doesn't tell straight and smart quotes apart, in either direction, as in
+    /// Word; a wildcard search, a regular expression and a `^039` code do (#5388).
+    #[test]
+    fn a_normal_search_matches_straight_and_smart_quotes_alike() {
+        for (query, hay) in
+            [("Tau'va", "Tau\u{2019}va"), ("Tau\u{2019}va", "Tau'va"), ("'s", "\u{2018}s"), ("\"hi\"", "\u{201C}hi\u{201D}"), ("\u{201D}", "\"")]
+        {
+            assert!(finds(query, hay), "{query:?} should find {hay:?}");
+        }
+        assert!(!finds("'", "\u{201C}"), "a single quote does not match a double one");
+        assert!(!finds("^039", "\u{2019}"), "a code is the one character");
+        for o in [Opts { wildcards: true, ..Opts::default() }, Opts { regex: true, ..Opts::default() }] {
+            let c = compile("Tau'va", &o).unwrap();
+            assert!(!regex::Regex::new(&c.pattern).unwrap().is_match("Tau\u{2019}va"), "{o:?} tells them apart");
+        }
     }
 
     #[test]

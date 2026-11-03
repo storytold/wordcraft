@@ -11981,3 +11981,20 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// AutoCorrect types `Tau’va` when `Tau'va` is typed, so Find with the straight apostrophe found
+/// nothing in the text it had just typed (#5388). A normal search matches the two, as Word's
+/// does; Replace All replaces what Find finds.
+#[test]
+fn find_matches_the_apostrophe_autocorrect_typed() {
+    let mut s = s();
+    for c in "Tau'va and tau".chars() {
+        run(&mut s, "text.insert", json!({"text": c.to_string()}));
+    }
+    assert_eq!(text(&s), "Tau\u{2019}va and tau", "AutoCorrect curled the apostrophe");
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "Tau'va"}))["count"], 1);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "Tau'va", "wildcards": true}))["count"], 0, "a wildcard search tells them apart");
+    // Find's options stay set, as in Word's dialog, so the wildcard search is turned off again.
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "Tau'va", "with": "Tau-va", "wildcards": false}))["replaced"], 1);
+    assert_eq!(text(&s), "Tau-va and tau");
+}
