@@ -22,7 +22,11 @@ impl Vector {
             wordcraft_metafile::Item::Bitmap { width, height, .. } => (*width as usize).saturating_mul(*height as usize).saturating_mul(4),
             wordcraft_metafile::Item::Text(t) => t.text.len().saturating_add(t.font.len()),
         };
-        let items = self.pic.items.iter().fold(self.pic.items.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Item>()), |n, it| n.saturating_add(item(it)));
+        let items = self
+            .pic
+            .items
+            .iter()
+            .fold(self.pic.items.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Item>()), |n, it| n.saturating_add(item(it)));
         items.saturating_add(self.images.len().saturating_mul(std::mem::size_of::<Option<Image>>()))
     }
 }
