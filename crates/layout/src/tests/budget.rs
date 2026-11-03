@@ -294,3 +294,20 @@ fn a_kept_outline_holds_on_to_its_pictures_allocation() {
     drop(disc);
     assert!(weak.upgrade().is_none(), "the bytes are freed with the document; only their allocation is kept");
 }
+
+#[test]
+fn comment_anchors_are_found_in_one_pass_over_a_paragraph() {
+    // 20,000 comment ends before the one start: each marker counted the objects before it again.
+    let n = 20_000usize;
+    let mut d = Document::from_text("");
+    d.comments.insert(1, wordcraft_doc::Comment::default());
+    if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut) {
+        p.text = wordcraft_doc::para::OBJ.to_string().repeat(n + 1);
+        p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+        p.objects = (0..n).map(|_| InlineObject::CommentEnd { id: 1 }).collect();
+        p.objects.push(InlineObject::CommentStart { id: 1 });
+    }
+    let found = balloons::anchors(&d);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].1.off, n * wordcraft_doc::para::OBJ.len_utf8());
+}
