@@ -11791,3 +11791,72 @@ fn page_down_and_up_move_by_a_page_in_the_continuous_views() {
         assert_eq!(after_page_down(view), print, "{view}");
     }
 }
+
+#[test]
+fn page_down_and_up_never_stay_on_a_line_in_the_continuous_views() {
+    // A page with less than an inch of text area: the views move by the one-inch minimum. The
+    // caret ends a long line and the paragraphs after it are narrow (a large right indent): the
+    // line a page away, not the one the caret is on, is where Page Down goes, however far right
+    // of it the caret is.
+    for view in ["view.draft", "view.outline", "view.webLayout"] {
+        let mut s = s();
+        run(&mut s, "layout.margins", json!({"top": 370, "bottom": 370}));
+        let long = "Lorem ipsum dolor sit amet ".repeat(4);
+        run(&mut s, "text.insert", json!({"text": long}));
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "para.indents", json!({"right": 700}));
+        for i in 0..60 {
+            if i > 0 {
+                run(&mut s, "text.newParagraph", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": "a"}));
+        }
+        run(&mut s, view, json!({}));
+        run(&mut s, "caret.docStart", json!({}));
+        run(&mut s, "caret.end", json!({}));
+        assert_eq!(s.sel.focus.off, long.chars().count(), "{view}: the first paragraph is one line");
+        let mut at = s.sel.focus.clone();
+        for step in 0..3 {
+            run(&mut s, "caret.pageDown", json!({}));
+            assert!(s.sel.focus > at, "{view}: Page Down {step} moves on from {at:?}");
+            at = s.sel.focus.clone();
+        }
+        for step in 0..3 {
+            run(&mut s, "caret.pageUp", json!({}));
+            assert!(s.sel.focus < at, "{view}: Page Up {step} moves back from {at:?}");
+            at = s.sel.focus.clone();
+        }
+    }
+}
+
+#[test]
+fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
+    // Selecting a collapsed heading and its content ends the selection in hidden text; Page Down
+    // still extends it from where it shows (the heading), keeping its anchor.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    for i in 0..5 {
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": format!("Hidden {i}")}));
+    }
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second"}));
+    for i in 0..200 {
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": format!("Shown {i}")}));
+    }
+    run(&mut s, "view.outline", json!({}));
+    for block in [0, 6] {
+        run(&mut s, "caret.set", json!({"pos": {"block": block}}));
+        run(&mut s, "outline.promoteToHeading1", json!({}));
+    }
+    run(&mut s, "outline.collapse", json!({"block": 0}));
+    run(&mut s, "outline.selectSubtree", json!({"block": 0}));
+    let anchor = s.sel.anchor.clone();
+    assert_eq!(s.sel.focus.path.0, [5], "the selection ends in the last hidden paragraph");
+    assert!(s.layout().caret(&s.sel.focus).is_none(), "the outline doesn't show its end");
+    run(&mut s, "caret.pageDown", json!({"extend": true}));
+    assert_eq!(s.sel.anchor, anchor, "the anchor stays");
+    assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
+    assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
