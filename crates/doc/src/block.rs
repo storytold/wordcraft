@@ -46,6 +46,12 @@ impl BoxBudget {
     /// Boxes expanded inside one outermost box.
     pub const MAX_NESTED: usize = 64;
 
+    /// A fresh budget that counts on from `total` boxes already expanded (an incremental layout
+    /// resuming part way through a document).
+    pub fn counted(total: usize) -> Self {
+        BoxBudget { total, ..Default::default() }
+    }
+
     /// Start expanding text box story `id`; false if it mustn't be (pair a true with `leave`).
     pub fn enter(&mut self, id: u32) -> bool {
         if self.open.contains(&id) || self.open.len() >= MAX_TEXT_BOX_DEPTH {

@@ -13,6 +13,7 @@ mod contour;
 pub mod display;
 pub mod fields;
 pub mod hit;
+mod incremental;
 pub mod kinsoku;
 pub mod math;
 pub mod outline;
@@ -303,6 +304,9 @@ pub struct DocLayout {
     pub ms: f64,
     /// Text box stories laid out (each time a box's text was).
     pub text_boxes: usize,
+    /// Body blocks placed by this pass: all of them for a full layout, those from the edited
+    /// page on for an incremental one (see `incremental`).
+    pub blocks_placed: usize,
 }
 
 /// Lay out the whole document.
