@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Romanian proofing update:** 2026-11-03 · #4743 now uses shared craft-proof for Romanian-specific spelling/context and new-document defaults; shared dependency integration pending. Readiness unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -690,6 +692,9 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
 ## Revision history
+
+> 2026-11-03 · #4743: retain Romanian language-pack support while adding the shared Romanian specialization and conservative contextual suggestions; no readiness estimate changed.
+
 
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
 >

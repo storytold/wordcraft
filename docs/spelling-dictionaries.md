@@ -1,6 +1,6 @@
 # Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** minor (Romanian-specific shared proofing and defaults, #4743; dependency integration pending); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -179,10 +179,42 @@ from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones
 
 Never commit dictionary files to this repository: they stay on the user's system.
 
+## Romanian proofing
+
+Romanian text (`ro`, `ro-RO`, `ro-MD`; also legacy Latin-script `ron`, `rum`,
+`mo`, `mol`) uses the shared `craft-proof` Romanian specialization. The Language
+picker offers Romanian. A Romanian interface defaults new documents to `ro-RO`;
+existing document languages and an explicitly saved default take precedence.
+
+Install the Romanian Language pack or supply `ro_RO.aff`/`ro_RO.dic` in the
+dictionaries folder; `ro_MD` is also recognized. No dictionary is bundled by
+this change. Missing or unreadable dictionaries are reported by the existing
+Proofing options. Cedilla and decomposed letters are normalized for lookup only,
+not silently rewritten in the document. Installed Romanian pack hyphenation
+continues through the shared backend; no new patterns are embedded here.
+
+Spelling suggestions favor missing diacritics and handle case, typos and missing
+spaces/hyphens. Basic checks cover repetition, punctuation and sentence capitals.
+Manual contextual suggestions cover `instanta`/`instantei` before `de judecată`,
+`de apel`, `de recurs`; `instantei` after `pe rolul`/`în fața`; `parat` after
+`calitate de`/`calitatea de`; `paratul` after `contradictoriu cu`/`reclamantul și`
+or before `a depus întâmpinare`; `paratului` after `citarea`, `obligarea`, `audierea`.
+These cues do not cross punctuation or hard line boundaries. Bare ambiguous
+words, valid verb uses of `parat`, and tested identifiers/literals stay unchanged;
+Ignore All opts out. Broad `nici un` and comma-before-`ci`/`dar` guesses are disabled.
+This is not full Romanian grammar or semantic/legal checking.
+
+The shared base is storytold/craft-libs#550; the contextual extension is
+vioreltus/craft-libs#1. This PR temporarily pins the exact tested fork revision
+and must switch to the accepted upstream shared revision before merging.
+The original work is @Moogabe's #2565, with @VladMcj's helper adaptation in
+ro-legal-docx/wordcraft#1 and @vioreltus's shared port.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | #4743: Romanian-specific proofing migrated to shared craft-proof on 0.15; context/compound regressions and app defaults; shared dependency pending, readiness unchanged |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
