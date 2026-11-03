@@ -9,7 +9,8 @@ description = "WordCraft document model: stories, paragraphs, runs, tables, sect
 workspace = true
 
 [features]
-# Test inputs other crates' tests share (`cfb_guard::repeating_difat_sample`); turned on only as a
+# Test inputs other crates' tests share (`cfb_guard::repeating_difat_sample`,
+# `zip_guard::zip64_entry_count_sample`); turned on only as a
 # dev-dependency, so never built into the app.
 test-support = []
 
