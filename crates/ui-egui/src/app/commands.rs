@@ -123,7 +123,11 @@ impl WordApp {
             return self.close_document(&params);
         }
         if id == "file.autosave" {
-            return self.set_autosave(&params);
+            let r = self.set_autosave(&params);
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
         }
         if let Some(r) = table_pen::toggle(self, id, &params) {
             return r;
