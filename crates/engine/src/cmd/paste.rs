@@ -234,7 +234,7 @@ pub fn html_fragment(html: &str) -> &str {
 /// Whether an imported document has anything to paste: text, a table, or a picture it carries.
 fn has_content(d: &Document) -> bool {
     d.body.iter().any(|b| match &**b {
-        Block::Para(p) => !p.text.trim().is_empty() || (!p.objects.is_empty() && !d.media.is_empty()),
+        Block::Para(p) => !p.text.trim().is_empty() || !p.objects.is_empty(),
         Block::Table(_) => true,
     })
 }
@@ -270,6 +270,11 @@ pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+        // If any Image key in the fragment is absent from this document's media store the
+        // clipboard belongs to a different Session (cross-document paste). Fall through so
+        // rich_fragment() imports via the HTML on the system clipboard, which now carries
+        // proper data: URIs after the fix to copy_result() / to_document_with_media().
+        && !f.has_missing_media(&s.doc)
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
@@ -521,6 +526,23 @@ fn adopt(s: &mut Session, src: Document) -> Fragment {
     }
     unlink_sections(&mut blocks);
     // Text box stories the imported shapes show; pasting gives each a new story of its own.
-    let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
+    let mut parts: std::collections::BTreeMap<u32, wordcraft_doc::Part> =
+        src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
+    // Remap Image media keys inside text-box stories: the main-blocks loop above only visits
+    // paragraphs in locks, not the part stories, so images inside shapes/text boxes would
+    // keep the source document's keys and silently vanish after pasting into another document.
+    for part in parts.values_mut() {
+        for pb in part.blocks.iter_mut().map(std::sync::Arc::make_mut) {
+            each_para(pb, 0, &mut |p| {
+                for o in &mut p.objects {
+                    if let wordcraft_doc::InlineObject::Image { media: key, .. } = o
+                        && let Some(k) = media.get(key.as_str())
+                    {
+                        *key = k.clone();
+                    }
+                }
+            });
+        }
+    }
     Fragment { blocks, parts }
 }

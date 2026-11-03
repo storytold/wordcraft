@@ -31,6 +31,52 @@ impl Fragment {
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
         d
     }
+    /// The fragment as the body of a new document, carrying only the media entries (images) that
+    /// the fragment's blocks and text-box parts actually reference from `src`. Used when exporting
+    /// a copy to HTML for the system clipboard so that `<img>` tags contain a `data:` URI instead
+    /// of being dropped silently when the key is absent from the temporary document.
+    pub fn to_document_with_media(&self, src: &Document) -> Document {
+        let mut d = self.to_document();
+        let copy_keys = |blocks: &[Block], d: &mut Document| {
+            for b in blocks {
+                each_para(b, 0, &mut |p| {
+                    for o in &p.objects {
+                        if let InlineObject::Image { media: key, .. } = o
+                            && let Some(data) = src.media.get(key)
+                        {
+                            d.media.insert(key.clone(), data.clone());
+                        }
+                    }
+                });
+            }
+        };
+        let main: Vec<Block> = self.blocks.clone();
+        copy_keys(&main, &mut d);
+        // Also carry media referenced inside text-box stories that travel with this fragment.
+        for part in self.parts.values() {
+            let part_blocks: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+            copy_keys(&part_blocks, &mut d);
+        }
+        d
+    }
+    /// Whether any of this fragment's `InlineObject::Image` entries reference a key that is not
+    /// present in `doc`'s media store. Used by the paste path to detect a cross-document paste
+    /// where the internal clipboard belongs to a different `Session` and its keys are invalid here.
+    pub fn has_missing_media(&self, doc: &Document) -> bool {
+        let mut missing = false;
+        for b in &self.blocks {
+            each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let InlineObject::Image { media: key, .. } = o
+                        && !doc.media.contains_key(key)
+                    {
+                        missing = true;
+                    }
+                }
+            });
+        }
+        missing
+    }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
     /// system clipboard as MathML (#816).
     pub fn has_equation(&self) -> bool {
@@ -826,6 +872,64 @@ mod tests {
 
     fn doc(lines: &[&str]) -> Document {
         Document::from_text(&lines.join("\n"))
+    }
+
+    /// Minimal 1-pixel PNG bytes, enough for [Document::add_media] and image size detection.
+    fn tiny_png() -> Vec<u8> {
+        // PNG signature + IHDR (1x1 RGBA) + IDAT + IEND, valid per spec.
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF,
+            0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+
+    fn image_para(key: &str, w: f32, h: f32) -> Block {
+        let mut p = Paragraph::new();
+        p.text.push(crate::para::OBJ);
+        p.objects.push(InlineObject::Image {
+            media: key.to_string(),
+            w,
+            h,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        });
+        Block::Para(p)
+    }
+
+    /// 	o_document_with_media copies the referenced media bytes from the source document so
+    /// the temporary document used for HTML export has them — fixing cross-document paste.
+    #[test]
+    fn to_document_with_media_carries_referenced_images() {
+        let mut src = Document::new();
+        let key = src.add_media(tiny_png(), "png");
+        // A paragraph with one inline image referencing that key.
+        let body = vec![Arc::new(image_para(&key, 72.0, 36.0))];
+        src.body = body;
+        let frag = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1));
+        // to_document() produces a media-empty doc — that was the bug.
+        assert!(frag.to_document().media.is_empty(), "to_document() must not carry media");
+        // to_document_with_media() carries exactly the bytes the fragment references.
+        let rich = frag.to_document_with_media(&src);
+        assert_eq!(rich.media.len(), 1, "one image should be in the export doc");
+        assert!(rich.media.contains_key(&key), "the image key must be present");
+    }
+
+    /// has_missing_media returns true when a fragment's Image key is absent from a document,
+    /// detecting the cross-session case so paste_content falls through to the HTML import path.
+    #[test]
+    fn has_missing_media_detects_cross_session_keys() {
+        let mut src = Document::new();
+        let key = src.add_media(tiny_png(), "png");
+        src.body = vec![Arc::new(image_para(&key, 72.0, 36.0))];
+        let frag = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1));
+        // Same document: no missing keys.
+        assert!(!frag.has_missing_media(&src));
+        // Different (empty) document: the key is absent.
+        let other = Document::new();
+        assert!(frag.has_missing_media(&other));
     }
 
     /// Paths between two positions are those of all the story's paragraphs between them.

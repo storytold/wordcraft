@@ -72,15 +72,15 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// set it, else the text through egui. egui sets its text at the end of the frame, which would
 /// replace the HTML, so only one of them runs.
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
+    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
+        return;
+    }
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
         // else Paste would find the text copied before it and paste that instead of our copy.
         if !html.is_empty() {
             ctx.copy_text(String::new());
         }
-        return;
-    }
-    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
         return;
     }
     ctx.copy_text(text.to_string());
@@ -286,5 +286,64 @@ mod tests {
         let got_now = got.borrow().clone();
         assert_eq!(got_now.len(), 3);
         assert!(got_now[2].2.starts_with("<math") && got_now[2].2.contains("<msub>") && got_now[2].1 == "y=2x_s", "{got_now:?}");
+    }
+
+    /// Copying a paragraph with an inline image produces HTML whose `<img>` tag contains a
+    /// `data:image/…;base64,` URI so paste into another document can reconstruct the image via
+    /// the HTML clipboard path (cross-document paste fix, Bug #1).
+    #[test]
+    fn copy_result_html_includes_image_data_uri() {
+        let captured = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let sink = captured.clone();
+        let mut a = app(Services {
+            set_clipboard_html: Some(Box::new(move |h, _t, _m| {
+                *sink.borrow_mut() = h.to_string();
+                true
+            })),
+            ..Default::default()
+        });
+        let tiny_png_b64 = {
+            let bytes: Vec<u8> = vec![
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+                0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63,
+                0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+                0x42, 0x60, 0x82,
+            ];
+            wordcraft_engine::cmd::insert::base64_encode(&bytes)
+        };
+        a.run("insert.picture", serde_json::json!({"data": tiny_png_b64})).unwrap();
+        a.run("select.all", serde_json::json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let r = a.run("edit.copy", serde_json::json!({})).unwrap();
+        put_result(&a, &ctx, &r);
+        let html = captured.borrow().clone();
+        assert!(
+            html.contains("data:image") && html.contains("base64,"),
+            "HTML for a copied image must contain an <img> with a data: URI; got: {:.200}",
+            html
+        );
+    }
+
+    /// Paste from the system HTML clipboard (simulating cross-document paste) correctly imports
+    /// the image. The internal clipboard is None to force the HTML fallback path (Bug #2).
+    #[test]
+    fn paste_cross_document_via_html_restores_image() {
+        let tiny_png_bytes: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF,
+            0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let b64 = wordcraft_engine::cmd::insert::base64_encode(&tiny_png_bytes);
+        let html_payload = format!("<meta charset=\"utf-8\"><p><img src=\"data:image/png;base64,{}\" width=\"1\" height=\"1\" alt=\"\"></p>", b64);
+        let html_clone = html_payload.clone();
+        let services = Services {
+            clipboard_html: Some(Box::new(move || Some(html_clone.clone()))),
+            clipboard_text: Some(Box::new(|| Some(String::new()))),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        // No internal clipboard: must fall through to the HTML import path.
+        a.run("edit.paste", serde_json::json!({})).unwrap();
+        assert_eq!(a.session.doc.media.len(), 1, "pasting cross-document HTML with an image must import the image into doc.media");
     }
 }
