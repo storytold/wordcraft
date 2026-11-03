@@ -331,6 +331,7 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:textDirection" => p.text_direction = Some(TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""))),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
                 "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),

@@ -701,6 +701,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | DOCX paragraph text direction (`w:textDirection`) now survives JSON and repeated saves, including style inheritance and explicit horizontal values; rendering remains unimplemented |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |

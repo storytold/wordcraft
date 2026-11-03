@@ -193,6 +193,7 @@ fn every_para_prop_round_trips() {
         suppress_hyphens: Some(true),
         suppress_line_numbers: Some(true),
         bidi: Some(false),
+        text_direction: Some(TextDirection::Down),
         drop_cap: None,
         drop_cap_margin: None,
         drop_cap_distance: None,

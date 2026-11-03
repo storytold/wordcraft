@@ -316,6 +316,9 @@ pub struct ParaProps {
     pub suppress_line_numbers: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bidi: Option<bool>,
+    /// Paragraph text direction (`w:textDirection`); `None` inherits from the paragraph style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_direction: Option<super::TextDirection>,
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
@@ -383,7 +386,7 @@ impl ParaProps {
     }
 
     fn overlay_script_layout(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; bidi, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
+        overlay_fields!(self, patch; bidi, text_direction, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
