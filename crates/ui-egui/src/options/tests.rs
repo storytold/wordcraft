@@ -267,6 +267,10 @@ fn options_panes_open_and_change_settings() {
     h.get_by_label("Typing replaces selected text").click();
     h.run_steps(2);
     assert!(!h.state().session.prefs.typing_replaces_selection);
+    // Show document content › Show bookmarks (#3572).
+    h.get_by_label("Show bookmarks").click();
+    h.run_steps(2);
+    assert!(h.state().session.prefs.show_bookmarks);
     assert!(h.query_by_label("Measurement units:").is_some());
 }
 

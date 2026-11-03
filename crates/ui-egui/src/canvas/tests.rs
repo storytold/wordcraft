@@ -363,6 +363,21 @@ fn caret_contrasts_with_what_lies_under_it() {
     assert_eq!(at(&mut a, 2), Color32::WHITE, "again, from the cache");
 }
 
+/// File › Options › Advanced › Show bookmarks (#3572): the pages on screen are drawn with the
+/// brackets while it is on, and drawn again when it changes.
+#[test]
+fn show_bookmarks_reaches_the_pages_on_screen() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+    assert!(!page_render_options(&a, false).display.bookmarks, "off, as in Word");
+    let off = view_key(&a, false, None);
+    a.run("file.options", json!({"showBookmarks": true})).unwrap();
+    assert!(page_render_options(&a, false).display.bookmarks);
+    assert_ne!(view_key(&a, false, None), off, "the pages are drawn again, with the brackets");
+    a.run("file.options", json!({"showBookmarks": false})).unwrap();
+    assert!(!page_render_options(&a, false).display.bookmarks);
+    assert_eq!(view_key(&a, false, None), off);
+}
+
 /// Read Mode › View › Page Color: the reading columns are drawn on white, sepia or a dark
 /// page, in place of the document's page color; other views keep the page color.
 #[test]

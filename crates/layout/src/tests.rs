@@ -6,6 +6,7 @@ use wordcraft_doc::{Pos, Table};
 
 mod autospace;
 mod bidi;
+mod bookmarks;
 mod budget;
 mod complex;
 mod grid;
