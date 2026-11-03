@@ -255,6 +255,8 @@ pub struct CanvasState {
     /// The character an Alt code just typed: if the platform also sends its own composed
     /// character as text on the Alt release (Windows does), it isn't typed twice.
     pub(crate) alt_code_echo: Option<crate::keys::AltCodeEcho>,
+    /// Alt+numpad entry in the focused text box, while the page doesn't have the keyboard (#4403).
+    pub(crate) field_alt_code: crate::keys::FieldAltCode,
     /// Create Link is waiting for a click on the text box to link to: the linking box's object.
     pub(crate) link_from: Option<wordcraft_doc::Pos>,
     /// What screen readers were last told about the document (#488).
@@ -401,6 +403,7 @@ impl Default for CanvasState {
             ime_viewport: None,
             alt_code: String::new(),
             alt_code_echo: None,
+            field_alt_code: Default::default(),
             wheel: Default::default(),
             auto_scroll: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
