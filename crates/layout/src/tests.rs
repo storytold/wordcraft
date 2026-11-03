@@ -1822,12 +1822,17 @@ fn a_numbering_num_tab_stays_within_the_first_lines_span() {
         )
         .unwrap();
         let l = lay(&d);
-        let Placed::Lines { para, x, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
-        x + para.lines[0].left
+        let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
+        // First cluster position in column coordinates (Line.left is the span edge).
+        para.lines[0].xs[0]
     };
     // The float occupies 0-144 pt plus its distance: the first line spans from 153 pt.
-    assert!((mk(108.0) - 153.0).abs() < 1.0, "a tab under the float is not the destination: text starts beside it");
-    assert!((mk(200.0) - 200.0).abs() < 0.5, "a tab inside the free span still carries the text");
+    assert!(
+        (mk(108.0) - 180.0).abs() < 0.5,
+        "a tab under the float is not the destination: the label sits at the float's edge and the text resumes the default stops, got {}",
+        mk(108.0)
+    );
+    assert!((mk(200.0) - 200.0).abs() < 0.5, "a tab inside the free span still carries the text, got {}", mk(200.0));
 }
 
 #[test]

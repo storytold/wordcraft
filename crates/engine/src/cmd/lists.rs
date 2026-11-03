@@ -73,7 +73,10 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
         l.custom_format = None;
     }
     match v.get("customFormat") {
-        Some(Value::String(s)) => l.custom_format = Some(s.chars().take(1024).collect()).filter(|s: &String| !s.is_empty()),
+        // Oversized patterns are dropped whole, never truncated into a modified original —
+        // the same policy the DOCX reader applies.
+        Some(Value::String(s)) if s.chars().count() <= 1024 => l.custom_format = Some(s.clone()).filter(|s: &String| !s.is_empty()),
+        Some(Value::String(_)) => l.custom_format = None,
         Some(Value::Null) => l.custom_format = None,
         _ => {}
     }

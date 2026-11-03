@@ -235,7 +235,11 @@ impl Numbering {
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
     /// one), without counting it.
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
-        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None)
+        // A recognized custom pattern labels even under a `none` fallback (see next_label).
+        self.abstract_of(num).is_some()
+            && self.level(num, level.min(8)).is_some_and(|d| {
+                d.format != NumFormat::None || (!d.legal && d.custom_format.as_deref().is_some_and(|p| custom_pad_width(p).is_some()))
+            })
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
         if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
@@ -734,11 +738,13 @@ mod tests {
                 list_with(Level { text: "[%1]".into(), format: fallback, custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() });
             let mut c = Counters::default();
             assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0001]", "{fallback:?} fallback must not hide the pattern");
+            assert!(n.shows_label(id, 0), "{fallback:?} fallback with a recognized pattern still shows a label");
         }
         let (n, id) =
             list_with(Level { text: "[%1]".into(), format: NumFormat::None, custom_format: Some("0001, 0008, ...".into()), ..Level::default() });
         let mut c = Counters::default();
         assert!(c.next_label(&n, id, 0).is_none(), "unrecognized pattern with a none fallback shows nothing");
+        assert!(!n.shows_label(id, 0), "shows_label agrees: unrecognized pattern with a none fallback");
         let (n, id) =
             list_with(Level { text: "[%1]".into(), format: NumFormat::Bullet, custom_format: Some("0001, 0008, ...".into()), ..Level::default() });
         let mut c = Counters::default();
