@@ -98,6 +98,29 @@ pub struct ParaLayout {
     /// What each compressible mark may give up on a line that would otherwise overflow
     /// ([`compress_punct`]), by cluster index, sorted. Empty unless punctuation is compressed.
     pub squeeze: Vec<Squeeze>,
+    /// How much a line may squeeze its marks in all ([`SqueezeRule`]).
+    pub squeeze_rule: SqueezeRule,
+    /// Closing marks whose blank half is free at a line's end ([`compress_punct`]), by cluster
+    /// index, sorted: a line ending in one may squeeze more.
+    pub end_marks: Vec<usize>,
+}
+
+/// How much one line may take from its compressible marks in all, measured in WPS Office on
+/// 20-character lines (sweeps of 1–8 marks, isolated, mixed, in pairs, opening and closing, with
+/// marks in the last unit and without). The line has a pool: the base below, plus an amount for
+/// each compressible mark in its last unit (what can't be broken off the line's end, `《瑞` or
+/// `中。`): a closing mark's free blank half at the line end comes out of the pool, and the marks
+/// share the rest equally, each at most its blank half. In mode 14 and older an automatic space
+/// between Asian text and digits or Latin text shares the pool too, giving up at most half itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SqueezeRule {
+    /// Compatibility mode 14 and older (any alignment): half an em, however many marks, and a
+    /// whole em more for each mark in the last unit.
+    #[default]
+    HalfEm,
+    /// Mode 15, justified lines only: 1 − 1/(2k) em for k marks (½ em for one mark, ¾ for two,
+    /// approaching a whole em), and half an em more for each mark in the last unit.
+    Justified,
 }
 
 /// Room one side of a full-width punctuation mark may give up when its line is squeezed.
@@ -110,6 +133,12 @@ pub struct Squeeze {
     /// The blank is on the mark's left (an opening mark): the mark itself moves left. Else the
     /// clusters after it do.
     pub left: bool,
+    /// The size the line's pool is measured in: the mark's font size, or for an automatic space
+    /// the Asian text's.
+    pub em: f32,
+    /// An automatic space between Asian text and Latin text or digits ([`auto_space`]), not a
+    /// mark: it shares the pool but adds nothing to it in the last unit.
+    pub gap: bool,
 }
 
 impl ParaLayout {
@@ -137,10 +166,42 @@ impl ParaLayout {
     }
 
     /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
-    /// The squeeze room of the clusters `c0..c1`.
-    fn squeeze_room(&self, c0: usize, c1: usize) -> f32 {
+    /// Whether a line of the clusters `c0..c1` ends in a closing mark whose blank half is free.
+    fn ends_in_free_mark(&self, c0: usize, c1: usize) -> bool {
+        c1 > c0 && self.end_marks.binary_search(&(c1 - 1)).is_ok()
+    }
+    /// The marks of the clusters `c0..c1` that may give up room: not the right side of the mark
+    /// ending the line (WPS squeezes neither a closing mark whose blank half is free there nor a
+    /// closing quote, whose isn't).
+    fn squeeze_marks(&self, c0: usize, c1: usize) -> &[Squeeze] {
         let from = self.squeeze.partition_point(|s| s.k < c0);
-        self.squeeze.get(from..).unwrap_or_default().iter().take_while(|s| s.k < c1).map(|s| s.room).sum()
+        let mut to = self.squeeze.partition_point(|s| s.k < c1).max(from);
+        // (nor the automatic space after it, which the line doesn't take).
+        while to > from && self.squeeze.get(to - 1).is_some_and(|s| c1 > 0 && s.k == c1 - 1 && !s.left) {
+            to -= 1;
+        }
+        self.squeeze.get(from..to).unwrap_or_default()
+    }
+    /// How much the clusters `c0..c1` may squeeze in all: each mark at most its blank half
+    /// ([`Squeeze::room`]), the line at most what its [`SqueezeRule`] allows.
+    fn squeeze_room(&self, c0: usize, c1: usize) -> f32 {
+        let marks = self.squeeze_marks(c0, c1);
+        if marks.is_empty() {
+            return 0.0;
+        }
+        let k = marks.len() as f32;
+        let rooms: f32 = marks.iter().map(|s| s.room).sum();
+        let em = marks.iter().map(|s| s.em).sum::<f32>() / k;
+        let (base, per_mark) = match self.squeeze_rule {
+            SqueezeRule::HalfEm => (0.5, 1.0),
+            SqueezeRule::Justified => (1.0 - 0.5 / k, 0.5),
+        };
+        // The last unit: the clusters after the line's last break opportunity before its end.
+        let unit = (c0..c1.saturating_sub(1)).rev().find(|&j| self.clusters.get(j).is_some_and(|c| c.break_after)).map_or(c0, |j| j + 1);
+        let in_unit = self.squeeze.iter().filter(|s| !s.gap && s.k >= unit && s.k < c1).count() as f32;
+        // A closing mark ending the line takes its blank half out of the pool.
+        let free = if self.ends_in_free_mark(c0, c1) { 0.5 } else { 0.0 };
+        ((base + per_mark * in_unit - free).max(0.0) * em).min(rooms)
     }
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)

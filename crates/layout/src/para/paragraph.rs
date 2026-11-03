@@ -571,8 +571,26 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Text on a character grid keeps to its cells; compression applies there too (WPS).
     let mut auto_space =
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
-    let squeeze = if doc.settings.char_spacing.compresses_punctuation() {
-        let (squeeze, end_blank) = compress_punct(&sh.b, &p.text);
+    // Compatibility mode 15 squeezes justified lines only, and only they get a closing mark's
+    // blank half free at the line end; older modes do both on every line (WPS).
+    let justified = matches!(rp.align, wordcraft_doc::props::Align::Justify | wordcraft_doc::props::Align::Distribute);
+    let squeeze_rule =
+        if doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT { super::SqueezeRule::Justified } else { super::SqueezeRule::HalfEm };
+    let compresses = doc.settings.char_spacing.compresses_punctuation() && (justified || squeeze_rule == super::SqueezeRule::HalfEm);
+    let mut end_marks = Vec::new();
+    let squeeze = if compresses {
+        let (mut squeeze, end_blank) = compress_punct(&sh.b, &p.text);
+        // Mode 14 and older squeeze an automatic space by up to half on an overflowing line, in
+        // the same pool as the marks (WPS, F13).
+        if squeeze_rule == super::SqueezeRule::HalfEm {
+            for &(k, gap) in &auto_space {
+                if gap > 0.0 {
+                    squeeze.push(super::Squeeze { k, room: gap / 2.0, left: false, em: gap * 4.0, gap: true });
+                }
+            }
+            squeeze.sort_by_key(|s| s.k);
+        }
+        end_marks = end_blank.iter().map(|e| e.0).collect();
         for (k, room) in end_blank {
             match auto_space.binary_search_by_key(&k, |a| a.0) {
                 Ok(i) => auto_space.get_mut(i).into_iter().for_each(|a| a.1 += room),
@@ -616,6 +634,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         auto_space,
         squeeze,
+        squeeze_rule,
+        end_marks,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

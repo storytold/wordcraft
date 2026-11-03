@@ -648,19 +648,20 @@ struct Measure {
 }
 
 /// Punctuation compression: a line that overflows (it fitted only by counting its marks' squeeze
-/// room) takes the overflow out of its compressible marks, each in proportion to its room and
-/// never more, so it ends at the margin as WPS lays it out. An opening mark moves left itself;
-/// after a closing mark the rest of the line does.
+/// room) takes the overflow out of its compressible marks, each in proportion to its blank half
+/// (the same share at one size), never more than the line's room, so it ends at the margin as
+/// WPS lays it out. An opening mark moves left itself; after a closing mark the rest of the line
+/// does.
 fn squeeze_line(pl: &ParaLayout, sc: &mut Scan, c1: usize) {
     let c0 = sc.c0;
     let over = content_end(pl, sc, c1) - sc.right_edge;
     let room = pl.squeeze_room(c0, c1);
-    if over <= 0.0 || room <= 0.0 {
+    let marks = pl.squeeze_marks(c0, c1);
+    let halves: f32 = marks.iter().map(|s| s.room).sum();
+    if over <= 0.0 || room <= 0.0 || halves <= 0.0 {
         return;
     }
-    let f = (over / room).min(1.0);
-    let from = pl.squeeze.partition_point(|s| s.k < c0);
-    let marks = pl.squeeze.get(from..).unwrap_or_default();
+    let f = (over.min(room) / halves).min(1.0);
     let (mut shift, mut m) = (0.0, 0);
     for k in c0..=c1 {
         let mut after = 0.0;
