@@ -1,0 +1,39 @@
+{
+  "baseline_commit": "b70c746f9bb70f830c5377f7710fc31dd3e8f195",
+  "candidate_runtime_commit": "1051bb2fffe91f7b8bd2bb43c64629c66e4f71e3",
+  "example_sha256": "613806f6ee9780e3fc669635ea1ccad1616ee70640aeab7d8b2d0a05cfb20d04",
+  "platform": "Linux aarch64, wc-dev-img, rustc 1.99.0 (b940084d7 2026-09-28)",
+  "font": {
+    "path": "assets/fonts/SourceSans3-Regular.ttf",
+    "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f"
+  },
+  "scale_px_per_pt": 2,
+  "page_size_pt": [
+    400,
+    200
+  ],
+  "input": "Synthetic model reproduced by crates/render/examples/table_shading.rs, matching tests_shading.rs builders",
+  "unchanged_controls": [
+    "cell: all three page PNGs byte-identical",
+    "equal: all three page PNGs byte-identical"
+  ],
+  "limits": "Raster paint evidence only. No new native Word comparison, general table or interaction parity claim.",
+  "files_sha256": {
+    "before-spacing-1.png": "72232070027a68eecfa96faae90a735d79ad781ad474ef774ebe2bd59f952814",
+    "before-spacing-2.png": "c7effc4cafe88d05784c89aab69477ff24bd7d4489b75c981b636ed78181f199",
+    "before-widow-1.png": "236f1a3af41eb200d5d896b6c0c63d50065c05e4be65c26143d6a8abd6731383",
+    "before-widow-2.png": "f2baf21fd77bf1ec36d73e5c6fdfa4e7673911c82168bbb869e495deb6524eec",
+    "before-partial-2.png": "50ea3ea208a36aeeb6958647a6a84aa9abae6bf12272fe078a323e5d014c9840",
+    "before-closing-2.png": "763ad5a527755dab78397ff38382e71a5e5d763a659df2aa974f9ab2accfc7a8",
+    "before-cell-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+    "before-equal-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+    "after-spacing-1.png": "139bd20bcfd4fae5bd4b3ab99b829be7996de1c89349bab79f74ba741c4abc48",
+    "after-spacing-2.png": "82803f2160d4770d4015e40c55bd4c017ceb6fdb4c5bdb37d6714db048edfd88",
+    "after-widow-1.png": "ce9ae1b410fafcef5c4026fbfe1bf457fe6d6970a777985d560c26ca48186f21",
+    "after-widow-2.png": "f2baf21fd77bf1ec36d73e5c6fdfa4e7673911c82168bbb869e495deb6524eec",
+    "after-partial-2.png": "78d67d17b24681a97c1c0bcfa75410f2aadfd98af8d16af4eb91c3ccc9b900cc",
+    "after-closing-2.png": "22569947e3538f42f7dd08e745b5ddc8fa4d206f4edec591887fae5f70e89c83",
+    "after-cell-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+    "after-equal-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df"
+  }
+}

@@ -699,6 +699,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 >
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.
 
+Table paragraph shading follows recognized line fragments; cell shading stays within the cell. Native Word and general table parity remain unqualified.
+
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
@@ -706,6 +708,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-10-21 | minor | Matched paragraph shading follows moved and split text in direct horizontal body-table cells; unsupported contexts retain geometric routing. Synthetic model and paint coverage; native Word and broad corpus parity remain unqualified. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |

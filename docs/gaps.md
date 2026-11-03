@@ -143,6 +143,8 @@ Recipient label generation (#4880) now includes all selected recipients across a
 
 Table rows and cells inside `mc:AlternateContent` use the same selected-branch policy as paragraphs and runs (#5219), rather than disappearing on open and save. Original synthetic fixtures cover Choice/Fallback selection, namespace aliases, mixed requirements, row/cell order and nested content controls through two DOCX saves. This fixes a focused preservation case; native Word and broader real-world corpus qualification remain open.
 
+Matched paragraph shading in direct horizontal body-table cells follows moved or split text; cell backgrounds keep their cell bounds. Recognition requires matching paragraph colour and emitted line geometry inside one row-contained cell. Nested, turned, clipped, foreign-story, ambiguous and out-of-row frames retain geometric routing. Native Word, broad corpus and general table parity remain unqualified.
+
 ## Revision history
 
 > 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
@@ -162,6 +164,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-01 | trivial | Gap 8's evidence names craft-proof (storytold/craft-libs `crates/proof`) and craft-i18n `language-data/` instead of WordCraft's removed `crates/proof` (#5202). No ranked gap changed. |
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. || 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle; no ranked gap changed; readiness estimates unchanged |
+| 2026-10-21 | minor | Matched paragraph shading follows moved and split text in direct horizontal body-table cells; unsupported contexts retain geometric routing. Synthetic model and paint coverage; native Word and broad corpus parity remain unqualified. |
 | 2026-10-31 | trivial | The .doc reader's default font is the stylesheet's standard font, not the font table's first entry (#5066); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | A middle or bottom cell of a row split across pages lines up on the first page; no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | Tab leader dots spaced and placed as in Word; no ranked gap changed; readiness estimates unchanged |

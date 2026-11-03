@@ -16,6 +16,12 @@ Additive paragraph spacing retains the full before-space after a section page br
 
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Synthetic control: `layout::tests::exact_math_keeps_run_baseline`.
 
+## Table paragraph shading across pages
+
+Matched paragraph shading in direct horizontal body-table cells follows moved or split text; cell backgrounds keep their cell bounds. Recognition requires matching paragraph colour and emitted line geometry inside one row-contained cell. Nested, turned, clipped, foreign-story, ambiguous and out-of-row frames retain geometric routing. Native Word, broad corpus and general table parity remain unqualified.
+
+[Historical synthetic paint comparison](evidence/table-shading-3428/README.md) records its build heads, OS, fonts and models. It covers spacing and widow moves, continuations, closing rules and cell/equal-colour controls.
+
 ## Checklist
 
 ✅ matches Word as far as our tests show · 🟡 implemented, differs or untested against Word · ❌ missing
@@ -278,6 +284,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | minor | Matched paragraph shading follows moved and split text in direct horizontal body-table cells; unsupported contexts retain geometric routing. Synthetic model and paint coverage; native Word and broad corpus parity remain unqualified. |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
 | 2026-10-31 | trivial | A table row that would leave a cell empty on a page that already holds something (its inline picture or first line runs past the room) moves on whole instead of leaving the other cells' text beside the empty cell; an at-least row grown by its picture no longer splits off the picture (#4272) |
 | 2026-11-01 | trivial | A cell aligned to the middle or bottom of a row split across pages is aligned within the part left on the page when its text fits there, and starts at the top of the cell otherwise, as measured in Word |

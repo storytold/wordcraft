@@ -1,0 +1,158 @@
+{
+  "baseline_main": "242e850aaad6bf38e1cd2be4122cc7cb9e5a15a8",
+  "candidate": "7e4c68ec8cc472e91ec6306ba7ad0f14da82ec29",
+  "harness_sha256": "492d9c45401859e514fe19405dd713fb8e7f9d57ed9afbc26c6cc44e3ef737da",
+  "page_size_pt": [
+    400,
+    200
+  ],
+  "pixels_per_point": 2,
+  "lanes": {
+    "before": {
+      "source_commit": "e33c75fe9aa4aa2ac75c6e21a04beee06eaa09ea",
+      "source_digest": "304f6649428a36c11bb171bcab55a474ab64cc194fc892b91a89a88464803e84",
+      "checker_image": "sha256:f1244dd48ee479f98908ee32a5c2353995d691d4e18f895b9d9166a1ca58d27e",
+      "runner_sha256": "30a1598e461921c6a9e51a00c519a72de24330dcda7aa1c96a00adb567b04683",
+      "binary_sha256": "63f719b58e7cbad58d303a4e5240c70159ada64bf7ce56425fc5bcbbd3404d05",
+      "fonts": {
+        "spacing-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "partial-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "widow-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "cell-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "equal-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "closing-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        }
+      },
+      "page_counts": {
+        "spacing": "2",
+        "partial": "3",
+        "widow": "2",
+        "cell": "3",
+        "equal": "3",
+        "closing": "3"
+      },
+      "png_sha256": {
+        "cell-1.png": "0f5f48ac51877818ef431f03ba62bcac3b77a75b6dae9b65fc185bf61acc6041",
+        "cell-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+        "cell-3.png": "6d3470e3d656cf57772dd651605627414cbefa04b82f789e179ecd6f33947c7c",
+        "closing-1.png": "4a4fad980fd1b1bde2f996a5434f8a1e5748df23b023e6a771c74d0dd1131708",
+        "closing-2.png": "763ad5a527755dab78397ff38382e71a5e5d763a659df2aa974f9ab2accfc7a8",
+        "closing-3.png": "4f00b84ce4508b3bd568b19ea949bdb70d9ae8a9ed3e9b8fac9533b7333cf334",
+        "equal-1.png": "0f5f48ac51877818ef431f03ba62bcac3b77a75b6dae9b65fc185bf61acc6041",
+        "equal-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+        "equal-3.png": "6d3470e3d656cf57772dd651605627414cbefa04b82f789e179ecd6f33947c7c",
+        "partial-1.png": "bc9a4d10624606d5f169385805b81c334b487037ff0e9c5474f1955f4a03d13b",
+        "partial-2.png": "50ea3ea208a36aeeb6958647a6a84aa9abae6bf12272fe078a323e5d014c9840",
+        "partial-3.png": "d38d85ae40fcf27dfce2920cd60b5541e21d0eecd27ac9da160dbb1a5f36c64a",
+        "spacing-1.png": "72232070027a68eecfa96faae90a735d79ad781ad474ef774ebe2bd59f952814",
+        "spacing-2.png": "c7effc4cafe88d05784c89aab69477ff24bd7d4489b75c981b636ed78181f199",
+        "widow-1.png": "236f1a3af41eb200d5d896b6c0c63d50065c05e4be65c26143d6a8abd6731383",
+        "widow-2.png": "f2baf21fd77bf1ec36d73e5c6fdfa4e7673911c82168bbb869e495deb6524eec"
+      },
+      "environment": "Linux 6c43dc9376a8 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Thu May  7 17:26:37 UTC 2026 aarch64 GNU/Linux\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\nVERSION=\"12 (bookworm)\"\nVERSION_CODENAME=bookworm\nID=debian\nHOME_URL=\"https://www.debian.org/\"\nSUPPORT_URL=\"https://www.debian.org/support\"\nBUG_REPORT_URL=\"https://bugs.debian.org/\"\nrustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2\ncargo 1.95.0 (f2d3ce0bd 2026-03-21)\nrelease: 1.95.0\ncommit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850\ncommit-date: 2026-03-21\nhost: aarch64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Debian 12.0.0 [64-bit]\nbf95944918a91a759fdcef5435876c4ba63631ab4f3046111c24b1d28611025c  Cargo.lock\n492d9c45401859e514fe19405dd713fb8e7f9d57ed9afbc26c6cc44e3ef737da  crates/render/examples/table_shading.rs\n"
+    },
+    "after": {
+      "source_commit": "7e4c68ec8cc472e91ec6306ba7ad0f14da82ec29",
+      "source_digest": "87d8c6a609f3fce3a960e9648c1c1242e31d98af97b11c6fde8109d6f08de021",
+      "checker_image": "sha256:f1244dd48ee479f98908ee32a5c2353995d691d4e18f895b9d9166a1ca58d27e",
+      "runner_sha256": "30a1598e461921c6a9e51a00c519a72de24330dcda7aa1c96a00adb567b04683",
+      "binary_sha256": "e0a44d1633ca04900d03b2324488c5b277a7fdd26dfb7c0ff9215c00496dd6ce",
+      "fonts": {
+        "spacing-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "partial-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "widow-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "cell-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "equal-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        },
+        "closing-font-0.bin": {
+          "sha256": "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+          "family": "Source Sans 3",
+          "source_path": "assets/fonts/SourceSans3-Regular.ttf"
+        }
+      },
+      "page_counts": {
+        "spacing": "2",
+        "partial": "3",
+        "widow": "2",
+        "cell": "3",
+        "equal": "3",
+        "closing": "3"
+      },
+      "png_sha256": {
+        "cell-1.png": "0f5f48ac51877818ef431f03ba62bcac3b77a75b6dae9b65fc185bf61acc6041",
+        "cell-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+        "cell-3.png": "6d3470e3d656cf57772dd651605627414cbefa04b82f789e179ecd6f33947c7c",
+        "closing-1.png": "58c3965c83ef0c24f0596216faf79c02f0d34465f5826f90505b5c330af6a9f7",
+        "closing-2.png": "22569947e3538f42f7dd08e745b5ddc8fa4d206f4edec591887fae5f70e89c83",
+        "closing-3.png": "709a1c84b380e3b5e4f77bf47bd7e0a19d9bfdcd480fd7232c74b828688d4ffb",
+        "equal-1.png": "0f5f48ac51877818ef431f03ba62bcac3b77a75b6dae9b65fc185bf61acc6041",
+        "equal-2.png": "acc636d9491a610a88a8982f7f6f70d51e787bb46073c25cf6147b38d6c6c5df",
+        "equal-3.png": "6d3470e3d656cf57772dd651605627414cbefa04b82f789e179ecd6f33947c7c",
+        "partial-1.png": "bc7f3292b02267b9b179d91e66a6b6c9fd2260197cd6acd6a76c96b014a97793",
+        "partial-2.png": "78d67d17b24681a97c1c0bcfa75410f2aadfd98af8d16af4eb91c3ccc9b900cc",
+        "partial-3.png": "77eb6c5e9e2114fed51dff4ceed9457fe259c43c8357b4b174e24ba5ce464edd",
+        "spacing-1.png": "139bd20bcfd4fae5bd4b3ab99b829be7996de1c89349bab79f74ba741c4abc48",
+        "spacing-2.png": "82803f2160d4770d4015e40c55bd4c017ceb6fdb4c5bdb37d6714db048edfd88",
+        "widow-1.png": "ce9ae1b410fafcef5c4026fbfe1bf457fe6d6970a777985d560c26ca48186f21",
+        "widow-2.png": "f2baf21fd77bf1ec36d73e5c6fdfa4e7673911c82168bbb869e495deb6524eec"
+      },
+      "environment": "Linux 27933f655902 6.8.0-117-generic #117-Ubuntu SMP PREEMPT_DYNAMIC Thu May  7 17:26:37 UTC 2026 aarch64 GNU/Linux\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\nVERSION=\"12 (bookworm)\"\nVERSION_CODENAME=bookworm\nID=debian\nHOME_URL=\"https://www.debian.org/\"\nSUPPORT_URL=\"https://www.debian.org/support\"\nBUG_REPORT_URL=\"https://bugs.debian.org/\"\nrustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: aarch64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2\ncargo 1.95.0 (f2d3ce0bd 2026-03-21)\nrelease: 1.95.0\ncommit-hash: f2d3ce0bd7f24a49f8f72d9000448f8838c4e850\ncommit-date: 2026-03-21\nhost: aarch64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Debian 12.0.0 [64-bit]\nbf95944918a91a759fdcef5435876c4ba63631ab4f3046111c24b1d28611025c  Cargo.lock\n492d9c45401859e514fe19405dd713fb8e7f9d57ed9afbc26c6cc44e3ef737da  crates/render/examples/table_shading.rs\n"
+    }
+  },
+  "limits": "Synthetic paint controls only. Not a new native Word or customer corpus qualification. Historical evidence retains its original binding.",
+  "changed_pngs": [
+    "closing-1.png",
+    "closing-2.png",
+    "closing-3.png",
+    "partial-1.png",
+    "partial-2.png",
+    "partial-3.png",
+    "spacing-1.png",
+    "spacing-2.png",
+    "widow-1.png"
+  ],
+  "schema_version": 1,
+  "font_capture": "Actual resolved face bytes were hashed privately. Only hashes and family names are published; source_path identifies the matching repository font."
+}
