@@ -5051,7 +5051,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h, c.adv);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
 
@@ -12326,6 +12326,105 @@ fn a_row_leaves_room_for_the_border_below_it() {
     }
 }
 
+/// A horizontal rule (VML `o:hr`) takes its whole line and is drawn across its share of it,
+/// placed by its alignment (Word, measured: 50 % centred, left, right). In a table cell it
+/// follows its column instead of widening the table.
+#[test]
+fn horizontal_rules_take_their_line() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let rule = |pct: f32, align: Align| {
+        let mut o = rect_shape(0.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align, standard: true });
+        }
+        o
+    };
+    let drawn = |d: &Document| -> Vec<wordcraft_geom::Rect> {
+        let l = lay(d);
+        display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
+            .iter()
+            .filter_map(
+                |i| if let display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } = i { Some(*rect) } else { None },
+            )
+            .collect()
+    };
+    let mut d = Document::from_text("a\nb");
+    d.insert_object(&Pos::body(1, 0), rule(50.0, Align::Center), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(0, 0), rule(100.0, Align::Left), &Default::default()).unwrap();
+    let s = drawn(&d);
+    let (full, half) = (s[0], s[1]);
+    assert!(full.w > 400.0, "the whole line: {full:?}");
+    assert!((half.w - full.w / 2.0).abs() < 0.01 && (half.x - (full.x + full.w / 4.0)).abs() < 0.01, "{half:?} in {full:?}");
+    let mut cell = Table::new(1, 1, 200.0);
+    let mut p = Paragraph::default();
+    p.insert_object(0, rule(100.0, Align::Left), &Default::default()).unwrap();
+    cell.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![Arc::new(Block::Table(cell))];
+    let s = drawn(&d);
+    assert!(s.first().is_some_and(|r| r.w > 150.0 && r.w < 200.0), "the cell's width, not the page's: {s:?}");
+    // Word's numbers (A4, 1 inch margins, a 100 pt float): beside a float a rule keeps its width
+    // and is placed in what the line has left, a first-line indent moving the end of that room
+    // along, so a whole-line rule runs past the margin as in Word.
+    let beside = |pct: f32, align: Align, side: Option<f32>, first: f32| {
+        use wordcraft_doc::para::{Anchor, Float, Wrap};
+        let mut d = Document::from_text("a");
+        if first != 0.0 {
+            let mut p = d.body[0].as_para().unwrap().clone();
+            p.props.indent_first = Some(first);
+            d.body[0] = Arc::new(Block::Para(p));
+        }
+        d.insert_object(&Pos::body(0, 0), rule(pct, align), &Default::default()).unwrap();
+        if let Some(x) = side {
+            let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, ..Default::default() };
+            d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 100.0, f), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions::default())
+            .iter()
+            .find_map(|i| match i {
+                display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } if rect.h < 10.0 => {
+                    Some((rect.x, rect.x + rect.w))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (x0, x1) = beside(100.0, Align::Left, None, 0.0);
+    let (tw, half) = (x1 - x0, (x1 - x0) / 2.0);
+    let near =
+        |got: (f32, f32), want: (f32, f32)| assert!((got.0 - want.0).abs() < 0.5 && (got.1 - want.1).abs() < 0.5, "{got:?}, Word's rule {want:?}");
+    // A float on the left: the room is from past it to the margin.
+    let lo = x0 + 109.0;
+    near(beside(50.0, Align::Left, Some(0.0), 0.0), (lo, lo + half));
+    near(beside(50.0, Align::Center, Some(0.0), 0.0), ((lo + x1 - half) / 2.0, (lo + x1 + half) / 2.0));
+    near(beside(50.0, Align::Right, Some(0.0), 0.0), (x1 - half, x1));
+    near(beside(100.0, Align::Left, Some(0.0), 0.0), (lo, lo + tw));
+    // A float on the right: from the margin to before it.
+    let hi = x1 - 109.0;
+    near(beside(50.0, Align::Center, Some(tw - 100.0), 0.0), ((x0 + hi - half) / 2.0, (x0 + hi + half) / 2.0));
+    near(beside(50.0, Align::Right, Some(tw - 100.0), 0.0), (hi - half, hi));
+    near(beside(100.0, Align::Left, Some(tw - 100.0), 0.0), (x0, x1));
+    // A first-line indent moves the room along.
+    near(beside(100.0, Align::Left, None, 36.0), (x0 + 36.0, x1 + 36.0));
+    near(beside(50.0, Align::Center, None, 36.0), (x0 + 36.0 + half / 2.0, x1 + 36.0 - half / 2.0));
+    near(beside(50.0, Align::Right, None, 36.0), (x1 + 36.0 - half, x1 + 36.0));
+    // Measuring a table column: a rule of its own width asks for it, a share of the line for none.
+    let measured = |pct: f32| {
+        let mut o = rect_shape(150.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align: Align::Left, standard: false });
+        }
+        let mut t = Table::new(1, 1, 200.0);
+        let mut p = Paragraph::default();
+        p.insert_object(0, o, &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        crate::autofit_widths(&crate::measure_table_columns(&d, &t), 451.0)[0]
+    };
+    assert!(measured(0.0) >= 150.0, "{}", measured(0.0));
+    assert!(measured(100.0) < 150.0, "{}", measured(100.0));
+}
+
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
 /// one of its lines, moves whole to the next page, where it fits (#3907 review).
 #[test]
@@ -12762,3 +12861,5 @@ fn header_margin_table_area() {
         }
     }
 }
+
+mod shape_alpha;
