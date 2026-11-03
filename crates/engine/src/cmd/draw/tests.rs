@@ -421,6 +421,34 @@ fn ink_replay_disabled_when_no_ink() {
     assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
     s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [150, 100]]})).unwrap();
     assert_eq!(s.why_disabled("draw.replay"), None);
+    s.view.hide_ink = true;
+    assert_eq!(s.why_disabled("draw.replay"), Some("ink is hidden"));
+    s.view.hide_ink = false;
+    assert_eq!(s.why_disabled("draw.replay"), None);
+}
+
+#[test]
+fn ink_replay_detects_ink_in_part_table_cell() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
+    let mut para = wordcraft_doc::Paragraph::new();
+    let obj = InlineObject::Shape {
+        kind: ShapeKind::Freeform,
+        w: 10.0,
+        h: 10.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+        freeform: Some(std::sync::Arc::new(wordcraft_doc::freeform::Freeform::ink(InkTool::Pen, 10.0, 10.0, vec![[0.0, 0.0], [10.0, 10.0]]))),
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    para.objects.push(obj);
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+    s.doc.add_part(wordcraft_doc::PartKind::Endnote, vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))]);
+    assert_eq!(s.why_disabled("draw.replay"), None);
 }
 
 #[test]

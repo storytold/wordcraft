@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::freeform::{FreePath, Freeform, InkTool, MAX_INK_PER_PAGE, MAX_POINTS};
 use wordcraft_doc::para::{Anchor, Float, InlineObject, OBJ, ShapeKind, Wrap};
 use wordcraft_doc::props::Rgb;
-use wordcraft_doc::{CharProps, Pos, StoryRef};
+use wordcraft_doc::{Block, CharProps, Pos, StoryRef};
 use wordcraft_geom::Rect;
 use wordcraft_layout::{DocLayout, Placed};
 
@@ -936,19 +936,27 @@ pub fn has_ink(s: &Session) -> bool {
     if found {
         return true;
     }
-    for part in s.doc.parts.values() {
-        for b in &part.blocks {
-            if b.as_para().is_some_and(|p| p.objects.iter().any(|o| o.ink().is_some())) {
-                return true;
-            }
-        }
-    }
-    false
+    s.doc.parts.values().any(|part| blocks_have_ink(&part.blocks))
+}
+
+fn blocks_have_ink(blocks: &[Arc<Block>]) -> bool {
+    blocks.iter().any(|b| match b.as_ref() {
+        Block::Para(p) => p.objects.iter().any(|o| o.ink().is_some()),
+        Block::Table(t) => t.rows.iter().any(|r| r.cells.iter().any(|c| blocks_have_ink(&c.blocks))),
+    })
 }
 
 /// Whether Ink Replay can be started or stopped: enabled when ink exists or replay is active.
 fn can_replay(s: &Session) -> Option<&'static str> {
-    if s.view.draw.replay || has_ink(s) { None } else { Some("there is no ink to replay") }
+    if s.view.draw.replay {
+        None
+    } else if s.view.hide_ink {
+        Some("ink is hidden")
+    } else if has_ink(s) {
+        None
+    } else {
+        Some("there is no ink to replay")
+    }
 }
 
 #[cfg(test)]
