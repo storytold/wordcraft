@@ -80,3 +80,6 @@ use picture::{load_image, load_image_within};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;
