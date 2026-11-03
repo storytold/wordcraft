@@ -150,7 +150,7 @@ fn default_font_is_deff_or_font_zero() {
 fn languages_come_from_their_language_ids() {
     // #4190: \deflang, \deflangfe and \adeflang are the defaults; \lang (and \langnp),
     // \langfe and \alang a run's, \noproof keeps it from being checked, and \plain goes
-    // back to the defaults. 1024 (the user's default) names no language and changes nothing.
+    // back to the defaults. 1024 is the legacy No Proofing: no language of its own, not proofed.
     let d = import(
         br"{\rtf1\ansi\deflang1029\deflangfe2052\adeflang1025 Ahoj {\lang1033\langnp1033\noproof Hello} {\langfe1041\alang1037 svete}{\lang1024 x}\par}",
     )
@@ -163,10 +163,30 @@ fn languages_come_from_their_language_ids() {
     assert_eq!((at("Ahoj").lang, at("Ahoj").no_proof), (None, None), "the default applies");
     assert_eq!((at("Hello").lang, at("Hello").no_proof), (s("en-US"), Some(true)));
     assert_eq!((at("svete").lang_ea, at("svete").lang_bidi), (s("ja-JP"), s("he-IL")));
-    assert_eq!(at("x").lang, None);
+    assert_eq!((at("x").lang, at("x").no_proof), (None, Some(true)));
     // No \deflang: our default stays.
     let d = import(br"{\rtf1\ansi x\par}").unwrap();
     assert_eq!(d.styles.default_chr.lang, wordcraft_doc::StyleSheet::builtin().default_chr.lang);
+}
+
+#[test]
+fn legacy_lang1024_is_no_proofing_and_keeps_the_langnp_language() {
+    // #4190: RTF 1.7+ writes `\lang1024` beside `\noproof` for older readers. On its own it
+    // still means No Proofing and clears the run's language, so the default applies; with
+    // `\langnp` (before or after it) the run keeps that language. The same for `\langfe1024`.
+    let d = import(
+        br"{\rtf1\ansi\deflang1029 {\lang1033\lang1024 One} {\lang1024\langnp1033 Two} {\langnp1033\lang1024 Three} {\langfe1041\langfe1024 Four} {\langfenp1041\langfe1024 Five} {\langnp1033\plain\lang1024 Six}\par}",
+    )
+    .unwrap();
+    let p = d.body.first().and_then(|b| b.as_para()).unwrap();
+    let at = |t: &str| p.props_of_char(p.text.find(t).unwrap()).clone();
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!((at("One").lang, at("One").no_proof), (None, Some(true)));
+    assert_eq!((at("Two").lang, at("Two").no_proof), (s("en-US"), Some(true)));
+    assert_eq!((at("Three").lang, at("Three").no_proof), (s("en-US"), Some(true)));
+    assert_eq!((at("Four").lang_ea, at("Four").no_proof), (None, Some(true)));
+    assert_eq!((at("Five").lang_ea, at("Five").no_proof), (s("ja-JP"), Some(true)));
+    assert_eq!((at("Six").lang, at("Six").no_proof), (None, Some(true)), "\\plain forgets \\langnp");
 }
 
 #[test]
