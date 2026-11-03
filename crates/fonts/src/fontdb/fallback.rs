@@ -26,7 +26,12 @@ impl FontDb {
             _ => "Italic",
         };
         let styled = self.face(&base.family, style);
-        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
+        let keeps_shaping = !crate::needs_layout_tables(c) || !base.has_layout_tables() || styled.has_layout_tables();
+        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude && keeps_shaping {
+            styled
+        } else {
+            base
+        })
     }
 
     /// The fallback search, cached per (character, excluded face) until more faces load.
@@ -227,11 +232,13 @@ impl FontDb {
             _ => "Italic",
         };
         let styled = self.face(&base.family, style);
-        let face = if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude {
-            styled
-        } else {
-            base
-        };
+        let keeps_shaping = !chars.iter().any(|c| crate::needs_layout_tables(*c)) || !base.has_layout_tables() || styled.has_layout_tables();
+        let face =
+            if styled.family.eq_ignore_ascii_case(&base.family) && chars.iter().all(|c| styled.covers(*c)) && styled.id != exclude && keeps_shaping {
+                styled
+            } else {
+                base
+            };
         (Some(face), checked)
     }
 

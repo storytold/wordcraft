@@ -100,6 +100,10 @@ probe timings are not packaged-app typing latency. See the evidence for scope.
 
 ## Acceptance and remaining decisions
 
+Document statistics retain the existing whitespace/CJK counting rules; this
+draft does not add dictionary-based Khmer word counts. Unspaced Khmer prose can
+therefore appear as one word in the status bar and Word Count dialog.
+
 The acceptance target is good Khmer wrapping: reject malformed cluster splits,
 detached marks and ignored valid manual opportunities; permit multiple reasonable
 compound divisions. Exact agreement is useful for regression detection but is not
@@ -119,6 +123,21 @@ product fork; SBBIC's language-data stewardship remains useful and necessary.
 ## Proofing menu fonts
 
 The right-click menu borrows installed document-script fonts for its explanation, suggestions and synonyms, independently of the proofing pane. When a new face is needed, the menu waits until the next UI pass before painting text. This prevents missing-glyph boxes and strict-renderer failures on the first opening. Fonts are reused on later openings; Latin-only menus do not preload Khmer fonts. No font files are bundled. The regression tests require an installed Khmer face for the Khmer rendering assertion; platform and font-specific human acceptance remains necessary.
+
+## Release edge cases (2026-11-03)
+
+Logical Left/Right keeps layout lazy in English, French, German, Japanese and
+Thai paragraphs. Khmer dictionary-wrap geometry is requested only where needed;
+right-to-left navigation keeps its existing visual path. Bold/italic fallback
+retains a shaping-capable regular face when the requested style lacks layout
+tables, while Latin styles keep their existing selection. Explicit page hints
+follow repeated headers and footers. Empty and failed edits preserve the visible
+wrap caret; real edits clear it. Command and font regressions cover these cases.
+
+The shared dependency also retains English grammar adjacent to Khmer and checks
+Khmer beside automatically detected Vietnamese. Explicit language and no-proof
+spans keep their boundaries. Installed French dictionaries are now a positive
+proofing fixture rather than an assumption that French is unavailable.
 
 ## Repetition-sign proofing
 

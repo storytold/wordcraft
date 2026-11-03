@@ -223,3 +223,27 @@ impl Session {
         }
     }
 }
+
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Logical arrows in unrelated scripts must not lay out and proof the whole document.
+    #[test]
+    fn ordinary_left_right_keeps_layout_lazy() {
+        for text in ["English words", "Français naïf", "Deutsch Wörter", "日本語の文章", "ภาษาไทย", "English\nខ្មែរ"]
+        {
+            let mut s = Session::new(Document::from_text(text));
+            for command in ["caret.right", "caret.left"] {
+                s.run(command, &json!({})).unwrap();
+                assert!(s.layout.iter().all(Option::is_none), "{command} forced a full layout for {text:?}");
+            }
+        }
+        if !wordcraft_proof::khmer::data_available() {
+            let mut s = Session::new(Document::from_text("ភាសាខ្មែរ"));
+            s.run("caret.right", &json!({})).unwrap();
+            assert!(s.layout.iter().all(Option::is_none), "no-data Khmer keeps logical navigation");
+        }
+    }
+}

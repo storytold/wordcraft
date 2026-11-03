@@ -474,3 +474,45 @@ fn unshaped_rtl_preference_does_not_reload_fonts_for_each_letter() {
         assert_eq!(db.read_faces().len(), loaded, "no system search while a loaded face shapes {c}");
     }
 }
+
+/// Requesting a style must not lose shaping found by the initial fallback search.
+#[test]
+fn styled_fallback_preserves_required_shaping() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    for c in ['ا', 'ខ', 'क', 'ก', 'A'] {
+        let Some(shaping) = probe.fallback_for(c, u32::MAX).filter(|f| f.has_layout_tables()) else { continue };
+        let db = FontDb::with_font_dirs(vec![]);
+        db.faces.write().unwrap().clear();
+        let family = "Styled shaping fixture";
+        let face = |bytes, style: &str, weight, italic| {
+            let mut f = make_face(FontBytes::Owned(Arc::new(bytes)), shaping.index, family.into(), style.into(), family.into(), Vec::new()).unwrap();
+            f.weight = weight;
+            f.italic = italic;
+            Arc::new(f)
+        };
+        let base = face(shaping.data().to_vec(), "Regular", 400.0, false);
+        let mut unshaped = shaping.data().to_vec();
+        for i in 0..unshaped.len().saturating_sub(3) {
+            if unshaped.get(i..i + 4) == Some(b"GSUB") {
+                unshaped.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+            }
+        }
+        db.faces.write().unwrap().extend([
+            base.clone(),
+            face(unshaped.clone(), "Bold", 700.0, false),
+            face(unshaped.clone(), "Italic", 400.0, true),
+            face(unshaped, "Bold Italic", 700.0, true),
+        ]);
+        for (bold, italic) in [(true, false), (false, true), (true, true)] {
+            for found in [db.fallback_styled(c, u32::MAX, bold, italic), db.fallback_for_run(&[c], u32::MAX, bold, italic)] {
+                let found = found.unwrap();
+                if crate::needs_layout_tables(c) {
+                    assert!(found.has_layout_tables(), "style lost shaping for {c}");
+                    assert_eq!(found.id, base.id);
+                } else {
+                    assert_ne!(found.id, base.id, "Latin styling must keep working without GSUB");
+                }
+            }
+        }
+    }
+}

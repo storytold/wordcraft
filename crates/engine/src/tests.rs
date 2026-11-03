@@ -12041,3 +12041,21 @@ fn khmer_repetition_corrections_preserve_suffix_formatting_and_undo() {
         assert_eq!(text(&s), original_text);
     }
 }
+
+/// Detecting Vietnamese must not disable Khmer rules or suppress adjacent English grammar.
+#[test]
+fn mixed_khmer_language_boundaries_keep_independent_proofing() {
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "hello  ខ្មែរ"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().unwrap().iter().any(|i| i["suggestions"] == json!(["Hello"])), "{issues}");
+    run(&mut s, "document.setText", json!({"text": "Tôi yêu tiếng Việt ពាក្យសំដី"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().unwrap().iter().any(|i| i["lang"] == "km" && i["suggestions"] == json!(["ពាក្យសម្ដី"])), "{issues}");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"noProof": true}));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
+}

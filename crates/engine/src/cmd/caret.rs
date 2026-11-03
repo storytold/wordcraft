@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("caret.pageUp", "Page Up", "Navigation", |s, v| page(s, v, -1)).key("PageUp").params(EXTEND).pure(),
         CommandSpec::new("caret.pageDown", "Page Down", "Navigation", |s, v| page(s, v, 1)).key("PageDown").params(EXTEND).pure(),
         CommandSpec::new("caret.set", "Set Caret", "Navigation", set)
-            .params(r#"{"pos": Pos, "extend"?: bool} | {"page": n, "x": pt, "y": pt}"#)
+            .params(r#"{"pos": Pos, "extend"?: bool, "page"?: n, "y"?: pt} | {"page": n, "x": pt, "y": pt}"#)
             .pure(),
         CommandSpec::new("select.all", "Select All", "Home › Editing › Select", select_all).key("Mod+A").pure(),
         CommandSpec::new("select.range", "Select Range", "Navigation", select_range).params(r#"{"anchor": Pos, "focus": Pos}"#).pure(),
@@ -116,6 +116,14 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
         s.line_end = None;
         s.goal_x = None;
         return sel_result(s);
+    }
+    // Other scripts retain logical navigation without laying out the document. In a
+    // headless or freshly edited session, one English arrow must not proof every page.
+    let needs_wrap_geometry = s.line_end.is_some()
+        || (s.doc.para_at(&s.sel.focus).is_some_and(|p| p.text.chars().any(|c| ('\u{1780}'..='\u{17ff}').contains(&c)))
+            && crate::proof::khmer::data_available());
+    if !needs_wrap_geometry {
+        return if bidi_para(s) { visual_lr(s, v, is_left) } else { mv(s, v, if is_left { left } else { right }) };
     }
     // Validate visual affinity against the current layout, including a pending reflow.
     let layout = s.layout();
@@ -358,8 +366,9 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
         let story = super::story_param(s, v);
         let l = s.layout();
         let page = usize::try_from(pg).unwrap_or(usize::MAX);
+        let to = l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?;
         s.page_hint = page;
-        l.hit(page, x, y, story).ok_or_else(|| CmdError::Params("no text on that page".into()))?
+        to
     } else {
         return Err(CmdError::Params("`pos` or `page`/`x`/`y` required".into()));
     };
@@ -368,9 +377,13 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, to.clone(), ext);
     // A click after the last letter of a line that wraps without a space puts the caret there,
     // at the end of that line, not at the start of the next one (the same place in the text).
-    if let (Some(pg), Some(y)) = (p::u64(v, "page"), p::f32(v, "y")) {
+    if let Some(pg) = p::u64(v, "page") {
         let l = s.layout();
         let page = usize::try_from(pg).unwrap_or(usize::MAX);
+        if page < l.pages.len() {
+            s.page_hint = page;
+        }
+        let Some(y) = p::f32(v, "y") else { return sel_result(s) };
         let mid = |c: &wordcraft_layout::hit::Caret| (c.top + c.height / 2.0 - y).abs();
         if let Some(end) = l.caret_at_line_end(&to, page).filter(|c| c.page == page)
             && l.caret_on(&to, page).is_none_or(|start| start.page != end.page || mid(&end) < mid(&start))

@@ -18,6 +18,7 @@ struct SuccessContext<'a> {
     ime_caret_before: ImeCaretState,
     rev_before: u64,
     sel_before: &'a Selection,
+    wrap_before: Option<&'a WrapSnapshot>,
 }
 
 struct ElsewhereContext {
@@ -27,14 +28,48 @@ struct ElsewhereContext {
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
     pending_application_change_before: bool,
+    wrap_before: Option<WrapSnapshot>,
+}
+
+struct WrapSnapshot {
+    pos: Pos,
+    page: usize,
+    dictionary: u64,
+    layout: std::sync::Arc<wordcraft_layout::DocLayout>,
 }
 
 impl Session {
-    /// Edits and a new selection discard the visual side of an unspaced wrap.
-    fn reset_wrap_affinity_for(&mut self, id: &str, mutates: bool) {
-        if mutates || id.starts_with("select.") {
+    /// A selection command explicitly chooses a new range. Edits clear affinity only once
+    /// they actually change something, so rejected and empty edits keep the visible caret.
+    fn reset_wrap_affinity_for(&mut self, id: &str) {
+        if id.starts_with("select.") {
             self.line_end = None;
         }
+    }
+
+    /// Restore a no-op or failed transaction's visual caret without reviving stale geometry.
+    fn restore_wrap_affinity(&mut self, home: u64, before: Option<&WrapSnapshot>) {
+        if self.document_id != home {
+            return;
+        }
+        self.line_end = None;
+        let Some(WrapSnapshot { pos, page, dictionary, layout }) = before else { return };
+        if self.sel.focus != *pos || *dictionary != wordcraft_proof::dictionary_generation() {
+            return;
+        }
+        if let Some(i) = self.layout.iter().position(|e| e.as_ref().is_some_and(|e| std::sync::Arc::ptr_eq(&e.5, layout))) {
+            // The next layout still validates its view key after a genuine reflow.
+            self.layout.swap(0, i);
+        } else {
+            // Nested edits may evict both entries before rollback. Rebuild against
+            // the restored document; never resurrect geometry invalidated by fonts.
+            let end = layout.caret_at_line_end(pos, *page);
+            if end.is_none() || self.layout().caret_at_line_end(pos, *page) != end {
+                return;
+            }
+        }
+        self.page_hint = *page;
+        self.line_end = Some(pos.clone());
     }
 
     fn leave_math_for_command(&mut self, id: &str) {
@@ -91,7 +126,11 @@ impl Session {
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
             self.doc.settings.track_changes = true;
         }
-        self.reset_wrap_affinity_for(id, spec.mutates);
+        let wrap_before = self
+            .line_end
+            .clone()
+            .and_then(|pos| self.layout[0].as_ref().map(|e| WrapSnapshot { pos, page: self.page_hint, dictionary: e.0.1, layout: e.5.clone() }));
+        self.reset_wrap_affinity_for(id);
         // Macro recording and Repeat.
         let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
             && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
@@ -203,7 +242,7 @@ impl Session {
         };
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
-                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before, wrap_before },
                 result,
             );
         }
@@ -230,6 +269,7 @@ impl Session {
                 ime_caret_before,
                 rev_before,
                 sel_before: &sel_before,
+                wrap_before: wrap_before.as_ref(),
             }),
             Err(e) => {
                 self.ime_edit_outcome = ImeEditOutcome::default();
@@ -278,6 +318,7 @@ impl Session {
                     self.building_blocks = b;
                 }
                 self.status = e.to_string();
+                self.restore_wrap_affinity(home, wrap_before.as_ref());
             }
         }
         result
@@ -298,6 +339,7 @@ impl Session {
             ime_caret_before,
             rev_before,
             sel_before,
+            wrap_before,
         } = context;
         let mut no_op = false;
         if spec.mutates {
@@ -358,6 +400,11 @@ impl Session {
                 }
             }
         }
+        if no_op {
+            self.restore_wrap_affinity(document_id_before, wrap_before);
+        } else if spec.mutates {
+            self.line_end = None;
+        }
         self.clamp_selection();
         let mut ime_outcome = self.ime_edit_outcome;
         if ime_outcome.content_changed {
@@ -409,7 +456,8 @@ impl Session {
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
     fn finish_elsewhere(&mut self, context: ElsewhereContext, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
-        let ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before } = context;
+        let ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before, wrap_before } =
+            context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
         match &result {
@@ -446,6 +494,7 @@ impl Session {
                     self.building_blocks = b;
                 }
                 self.status = e.to_string();
+                self.restore_wrap_affinity(home, wrap_before.as_ref());
             }
         }
         result

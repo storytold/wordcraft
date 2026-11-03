@@ -55,17 +55,16 @@ The combined model is slower and more memory intensive than both alternatives. T
 
 All 39,127 model weights and complete dictionaries remain: 714,343 compressed resource bytes from 4,230,002 canonical bytes. No linguistic pruning is proposed. Before the current-main reconciliation, 37,424 comparisons retained the previous optimized engine’s core/proof/suggestion output exactly; 3,331 contained private book paragraphs whose text is not published. This is preservation evidence, not independent accuracy. Historical native safety checks covered 480 book layouts and 10,707 continuation starts with no tested structural bad starts, not a linguistic verdict for every line.
 
-No general syntax/semantic grammar claim is made. Full Aksara web-plugin parity, runtime download support for this custom data format, Windows runtime acceptance and official signing remain outside this draft. See [integration details](khmer-integration.md).
+No general syntax/semantic grammar claim is made. Dictionary-based Khmer word counts, full Aksara web-plugin parity, runtime download support for this custom data format, Windows runtime acceptance and official signing remain outside this draft. See [integration details](khmer-integration.md).
 
 ## Validation scope
 
-The shared engine passes 27 core tests and 481 proofing tests, with one ignored.
-Three proofing failures were reproduced on unchanged craft-libs main `55332dd`
-and excluded from the selected run: `a_pack_proofs_a_language_without_its_own_tools`,
-`dictionary_lang_tags`, and `non_english_words_are_not_flagged`. They assume
-language dictionaries absent on this host. Strict Clippy for both changed shared
-crates/all targets and the missing-data checks pass. The complete shared workspace
-is not claimed green. The app passes all nine `cargo xtask ci` gates with the explicit Khmer pack
+The shared engine passes 30 core tests and 484 proofing tests, with one ignored.
+The three formerly excluded proofing tests now use stable unknown/non-linguistic
+absence tags and a synthetic positive French dictionary fixture; none is skipped
+because of installed host dictionaries. Strict Clippy for both changed shared
+crates/all targets passes. The complete shared workspace is not claimed green.
+The app passes all nine `cargo xtask ci` gates with the explicit Khmer pack
 and pinned companion commits: formatting, strict Clippy, tests, interface audit,
 language validation, doctests, assets, layers and WebAssembly (15 crates).
 Validation ran on macOS with Rust 1.99.1; Windows runtime acceptance remains open.
@@ -93,3 +92,9 @@ retain original model spans where the prior refinement added an extra break.
 These are conservative abstentions at the work limit, not removals of original
 model opportunities. The requested phrase and the independent short-suffix,
 known-word and correctable-typo regressions pass. No private text is included.
+
+The release audit adds regressions for lazy non-Khmer logical navigation, styled
+Arabic/Khmer/Indic/Thai shaping fallback with a Latin control, repeated header
+and footer page hints, empty/rejected edits, nested rollback, and mixed
+English/Vietnamese/Khmer proofing. These synthetic checks do not replace native
+platform and Khmer-reader acceptance.

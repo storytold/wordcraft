@@ -27,7 +27,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Khmer support is storytold/craft-libs#551, based on main 55332dd. GitHub serves
 # this companion PR head through the base repository. Keep the accepted commit
 # reachable when merging the coordinated proposals; see docs/khmer-integration.md.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "538ac6ccb02117406f7484bc1040437ae3b30751", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "2322f68f2e24bebb6e89e8333de3bbb7d02d1704", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }

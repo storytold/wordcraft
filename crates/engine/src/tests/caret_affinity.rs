@@ -423,3 +423,78 @@ fn other_scripts_hyphens_slashes_and_emergency_wraps_keep_existing_caret_stops()
         assert!(hit < wrap, "double-click beyond the line still hits its final word");
     }
 }
+
+/// Pos-plus-page pointer requests must retain the chosen occurrence of repeated stories.
+#[test]
+fn pointer_page_hints_follow_repeated_headers_and_footers() {
+    for kind in [wordcraft_doc::PartKind::Header, wordcraft_doc::PartKind::Footer] {
+        let mut doc = wordcraft_doc::Document::from_text("One\u{c}Two\u{c}Three");
+        let id = doc.add_part(kind, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Repeated text", Default::default()))]);
+        match kind {
+            wordcraft_doc::PartKind::Header => doc.last_section.headers.default = Some(id),
+            _ => doc.last_section.footers.default = Some(id),
+        }
+        let pos = doc.start_of(wordcraft_doc::StoryRef::Part(id));
+        let mut s = Session::new(doc);
+        let layout = s.layout();
+        assert_eq!(layout.pages.len(), 3);
+        let target = layout.caret_on(&pos, 2).unwrap();
+        assert_eq!(target.page, 2);
+        run(&mut s, "caret.set", json!({"pos": pos, "page": 2, "y": target.top + target.height / 2.0}));
+        assert_eq!(s.page_hint, 2, "{kind:?}: retain the clicked page");
+        assert_eq!(s.caret_geometry(&layout, &pos).unwrap().page, 2);
+        run(&mut s, "caret.set", json!({"pos": pos, "page": 1}));
+        assert_eq!(s.page_hint, 1, "page-only hints also choose the repeated occurrence");
+        assert!(s.run("caret.set", &json!({"page": u64::MAX, "x": target.x, "y": target.top})).is_err());
+        assert_eq!(s.page_hint, 1, "a failed hit test must not overwrite the last valid page");
+    }
+}
+
+/// A rejected or empty edit leaves the caret on the same visual line, like the document itself.
+#[test]
+fn non_edits_keep_the_visual_wrap_position() {
+    let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let (mut s, wrap) = khmer_wrap();
+    let pos = Pos::body(0, wrap);
+    let layout = s.layout();
+    let end = layout.caret_at_line_end(&pos, 0).unwrap();
+    for (text, valid) in [(json!(""), true), (json!(42), false)] {
+        run(&mut s, "caret.set", json!({"pos": pos, "page": end.page, "y": end.top + end.height / 2.0}));
+        assert_eq!(s.line_end, Some(pos.clone()));
+        let original = s.doc.clone();
+        assert_eq!(s.run("text.insert", &json!({"text": text})).is_ok(), valid);
+        assert_eq!(s.doc, original);
+        assert_eq!(s.line_end, Some(pos.clone()), "empty/failed edits cannot move the visual caret");
+        assert_eq!(s.caret_geometry(&layout, &pos), Some(end));
+    }
+}
+
+#[test]
+fn failed_transaction_keeps_wrap_affinity_after_nested_relayouts() {
+    let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let (mut s, wrap) = khmer_wrap();
+    let layout = s.layout();
+    let end = layout.caret_at_line_end(&Pos::body(0, wrap), 0).unwrap();
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, wrap), "page": end.page, "y": end.top + end.height / 2.0}));
+    let before = s.doc.clone();
+    let mut specs = s.registry.all().to_vec();
+    specs.push(crate::CommandSpec::new("test.failedEdits", "Failed edits", "Test", |s, _| {
+        for text in ["A", "B"] {
+            s.run("text.insert", &json!({"text": text}))?;
+            s.run("caret.end", &json!({}))?;
+        }
+        s.run("text.insert", &json!({"text": 42}))
+    }));
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    assert!(s.run("test.failedEdits", &json!({})).is_err());
+    assert!(s.doc.same_content(&before));
+    assert_eq!(s.line_end, Some(Pos::body(0, wrap)));
+    let current = s.layout();
+    assert_eq!(s.caret_geometry(&current, &s.sel.focus), Some(end));
+}
