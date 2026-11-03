@@ -131,6 +131,23 @@ fn saved(a: &WordApp) -> Value {
     v
 }
 
+/// #3622: each open document has its own Check Spelling as You Type view; an agent switching to
+/// one opened before the user turned spelling off neither is refused nor changes the saved choice.
+#[test]
+fn switching_documents_keeps_the_saved_spelling_choice() {
+    let mut a = app();
+    assert!(a.execute("file.options", json!({"protectPreferences": true})).is_ok());
+    let (first, _) = two_documents(&mut a);
+    assert!(a.execute("review.proofing", json!({"value": false})).is_ok());
+    let before = saved(&a);
+    let r = exec(&mut a, "view.switchWindows", json!({"id": first}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.session.document_id(), first);
+    assert!(a.session.view.proofing, "the first document keeps its own view");
+    assert_eq!(saved(&a), before, "the user's choice is what is saved");
+    assert_eq!(saved(&a)["checkSpelling"], false);
+}
+
 /// #3622: with File › Options › Agents › Keep agents from changing my preferences on, control
 /// requests can't change the user's saved preferences, whichever way they name the command
 /// (`engine.execute`, the bare id, or addressed to a background document), nor turn the setting
