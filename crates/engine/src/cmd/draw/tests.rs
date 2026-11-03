@@ -431,7 +431,7 @@ fn ink_replay_disabled_when_no_ink() {
 fn ink_replay_detects_ink_in_part_table_cell() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
-    let mut para = wordcraft_doc::Paragraph::new();
+    let mut cell_para = wordcraft_doc::Paragraph::new();
     let obj = InlineObject::Shape {
         kind: ShapeKind::Freeform,
         w: 10.0,
@@ -445,9 +445,25 @@ fn ink_replay_detects_ink_in_part_table_cell() {
         effects: Default::default(),
         extra: Default::default(),
     };
-    para.objects.push(obj);
-    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
-    s.doc.add_part(wordcraft_doc::PartKind::Endnote, vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))]);
+    cell_para.insert_object(0, obj, &wordcraft_doc::CharProps::default()).unwrap();
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell_para)];
+    let note_id = s.doc.add_part(wordcraft_doc::PartKind::Endnote, vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))]);
+
+    // Unreferenced endnote: ink is unplaced, so replay stays disabled.
+    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
+
+    // Reference the endnote in the document body through insert_object.
+    let note_ref = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: note_id, custom: String::new() };
+    let body_path = wordcraft_doc::Path::top(0);
+    s.doc.para_mut(wordcraft_doc::StoryRef::Body, &body_path).unwrap().insert_object(0, note_ref, &wordcraft_doc::CharProps::default()).unwrap();
+
+    // Now reachable in Print view: replay is enabled.
+    assert_eq!(s.why_disabled("draw.replay"), None);
+
+    // In Web view: endnotes are not placed, so replay is disabled.
+    s.view.mode = wordcraft_layout::ViewMode::Web;
+    assert_eq!(s.why_disabled("draw.replay"), Some("there is no ink to replay"));
+    s.view.mode = wordcraft_layout::ViewMode::Print;
     assert_eq!(s.why_disabled("draw.replay"), None);
 }
 
