@@ -11,6 +11,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
