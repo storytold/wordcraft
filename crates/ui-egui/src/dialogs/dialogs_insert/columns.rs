@@ -62,20 +62,29 @@ pub(super) fn drop_cap_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DropCapForm) -
     let preview = app.previews.font_preview_fn();
     let unit = crate::options::unit();
     ui.add_enabled_ui(f.position != "none", |ui| {
-        crate::rtl::grid(ui, egui::Grid::new("dropcap").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-            ui.label(tl!("Font:"));
-            if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
-                && v != crate::widgets::ADD_FONT
-            {
-                f.font = v;
-            }
-            ui.end_row();
-            ui.label(tl!("Lines to drop:"));
-            ui.add(egui::DragValue::new(&mut f.lines).range(1..=10));
-            ui.end_row();
-            ui.label(tl!("Distance from text:"));
-            ui.add(egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit.pt_per_unit()).measure(unit).max_decimals(2));
-            ui.end_row();
+        crate::rtl::Table::new("dropcap").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Font:")));
+                r.cell(|ui| {
+                    if let Some(v) = crate::widgets::font_combo(ui, "dropcap_font", 190.0, &f.font, &fams, Some(&*preview))
+                        && v != crate::widgets::ADD_FONT
+                    {
+                        f.font = v;
+                    }
+                });
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Lines to drop:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.lines).range(1..=10)));
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Distance from text:")));
+                r.cell(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit.pt_per_unit()).measure(unit).max_decimals(2),
+                    )
+                });
+            });
         });
     });
     let (ok, cancel) = buttons(ui, "OK", "Cancel", true);
