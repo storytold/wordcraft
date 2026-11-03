@@ -28,6 +28,13 @@ pub(crate) fn joined_boundaries(text: &str) -> Vec<usize> {
 /// Apply layout's safety policy to opportunities from every source, including manual ZWSP.
 /// Compute graphemes once: repeatedly querying a boundary can rescan long combining sequences.
 pub(crate) fn retain_safe(text: &str, opportunities: &mut Vec<usize>) {
+    if text.is_ascii() {
+        let bytes = text.as_bytes();
+        opportunities.retain(|&i| i <= bytes.len() && !(i > 0 && bytes.get(i - 1) == Some(&b'\r') && bytes.get(i) == Some(&b'\n')));
+        opportunities.sort_unstable();
+        opportunities.dedup();
+        return;
+    }
     let clusters = wordcraft_doc::cluster::cluster_starts(text);
     let joined = joined_boundaries(text);
     opportunities.retain(|&i| (i == text.len() || clusters.binary_search(&i).is_ok()) && joined.binary_search(&i).is_err());
@@ -38,6 +45,13 @@ pub(crate) fn retain_safe(text: &str, opportunities: &mut Vec<usize>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_safety_keeps_crlf_whole_and_sorts_valid_offsets() {
+        let mut opportunities = vec![5, 3, 2, 1, 0, 2, 4, usize::MAX];
+        retain_safe("a\r\nb", &mut opportunities);
+        assert_eq!(opportunities, vec![0, 1, 3, 4]);
+    }
 
     #[test]
     fn unrelated_text_gets_no_dictionary_boundaries() {

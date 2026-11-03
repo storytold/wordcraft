@@ -60,6 +60,8 @@ pub struct ParaLayout {
     joined_cluster_starts: Vec<usize>,
     /// Boundaries glued by wrapping controls or repetition signs, without removing caret stops.
     joined_wrap_starts: Vec<usize>,
+    /// Safe Khmer dictionary boundaries in paragraph offsets; other wraps retain prior caret behavior.
+    dictionary_wraps: Vec<usize>,
     /// Paragraph contains fields whose text depends on the page.
     pub has_page_fields: bool,
     /// Note references (part id) in this paragraph, by cluster index.
@@ -200,11 +202,12 @@ impl ParaLayout {
             })
             .collect()
     }
-    /// Whether an unspaced LTR wrap ends at `off`, which also starts the next line.
+    /// Whether an unspaced LTR Khmer dictionary wrap ends at `off`, which also starts the next line.
     /// Such a position has both an upstream and downstream visual caret.
     pub fn wraps_into(&self, li: usize, off: usize) -> bool {
         let (Some(l), Some(next)) = (self.lines.get(li), li.checked_add(1).and_then(|next| self.lines.get(next))) else { return false };
         l.end == LineEnd::Wrap
+            && self.dictionary_wraps.binary_search(&off).is_ok()
             && l.vis.is_empty()
             && l.c1 > l.c0
             && next.start == off

@@ -813,7 +813,7 @@
     "fourth": {
       "label": "Fourth · combined candidate",
       "short": "Fourth",
-      "source": "Local shared candidate on WordCraft 0a5b4221; exact patch digests in sibling submission/manifest.json"
+      "source": "Historical candidate on WordCraft 0a5b4221; artifact identities are recorded by binary_sha256 below"
     }
   },
   "local": false,

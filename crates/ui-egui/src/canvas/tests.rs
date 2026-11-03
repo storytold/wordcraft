@@ -1,6 +1,44 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+/// A secondary click at the other visual side of a wrap updates affinity even at the same offset.
+#[test]
+fn right_click_moves_between_dictionary_wrap_sides() {
+    if !wordcraft_engine::proof::khmer::data_available() {
+        return;
+    }
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&"ភាសា".repeat(100))), Default::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    let (pos, end) = (1.."ភាសា".len() * 100)
+        .find_map(|off| {
+            let pos = Pos::body(0, off);
+            layout.caret_at_line_end(&pos, 0).map(|c| (pos, c))
+        })
+        .unwrap();
+    let start = layout.caret_on(&pos, 0).unwrap();
+    h.state_mut().run("caret.set", json!({"pos": pos, "page": end.page, "y": end.top + end.height / 2.0})).unwrap();
+    assert_eq!(h.state().session.line_end, Some(pos.clone()));
+    let at = page_to_screen(h.state_mut(), start.page, start.x + 0.1, start.top + start.height / 2.0).unwrap();
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    assert_eq!(h.state().session.sel.focus, pos);
+    assert_eq!(h.state().session.line_end, None);
+    assert_eq!(h.state().session.caret_geometry(&layout, &pos), Some(start));
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.

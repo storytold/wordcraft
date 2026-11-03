@@ -479,7 +479,6 @@
     "scope": "human follow-up on the real-document short-word refinement",
     "reviewer": "@sungkhum",
     "verdict": "acceptable",
-    "user_statement": "Should be good",
     "source": "Contextual LOCAL review shown in this conversation",
     "private_text_included": false,
     "does_not_approve_unrated_synthetic_examples": true

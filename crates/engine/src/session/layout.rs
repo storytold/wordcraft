@@ -40,7 +40,7 @@ impl Session {
         // any other) proofs it again, open or parked.
         let rev = (self.rev, wordcraft_proof::dictionary_generation());
         let (proofing, numeral) = (self.view.proofing, self.view.numeral);
-        let fits = |e: &Option<LayoutEntry>| {
+        let fits = |e: &Option<LayoutEntry>, include_typing: bool| {
             e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
                 *r == rev
                     && (*w == width || mode == ViewMode::Print)
@@ -51,18 +51,19 @@ impl Session {
                     && *n == numeral
                     && *hd == deleted
                     && *o == outline
-                    && *t == typing
+                    && (!include_typing || *t == typing)
                     && *sh == shown
             })
         };
-        // A changed layout key also invalidates the visual side when its geometry is cached.
-        if !fits(&self.layout[0]) {
+        // Ending typing refreshes proofing, but does not move the visual wrap boundary.
+        // All other key changes still invalidate affinity, including cached reflows.
+        if !fits(&self.layout[0], false) {
             self.line_end = None;
         }
-        if !fits(&self.layout[0]) && fits(&self.layout[1]) {
+        if !fits(&self.layout[0], true) && fits(&self.layout[1], true) {
             self.layout.swap(0, 1);
         }
-        if fits(&self.layout[0])
+        if fits(&self.layout[0], true)
             && let Some(e) = &self.layout[0]
         {
             return e.5.clone();

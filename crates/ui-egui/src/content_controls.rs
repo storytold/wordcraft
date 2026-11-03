@@ -58,7 +58,7 @@ fn frames(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, r: &Con
         }
     }
     if out.is_empty()
-        && let Some(c) = layout.caret_on(&a, app.session.page_hint)
+        && let Some(c) = app.session.caret_geometry(layout, &a)
         && let Some(pr) = rects.get(c.page)
     {
         out.push((c.page, Rect::from_min_size(pos2(pr.min.x + c.x * scale, pr.min.y + c.top * scale), vec2(4.0, c.height * scale))));

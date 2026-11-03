@@ -85,7 +85,15 @@ The full language payload is 714,343 compressed bytes from 4,230,002 canonical
 bytes, with every dictionary record and all 39,127 f64 model weights retained.
 This is resource size, not an installer download delta. Lazy initialization
 can keep ordinary known-word layout from loading spelling data; rare short-word
-refinement consults the shared spelling index and bounded one-edit checks.
+refinement consults the shared spelling index and one-edit checks. A shared
+160,000-comparison budget bounds those scans per paragraph segmentation,
+including adjacent contexts. On exhaustion, refinement retains the original
+model span; cached, completed answers remain usable. Three independent layout
+queries therefore perform at most 480,000 such comparisons, regardless of the
+number of distinct candidate spans. In the no-ZWSP private-book stress test it
+conservatively suppresses two extra refinements from the prior candidate; all
+authored-boundary paragraphs and 34,104 public comparison records are unchanged.
+This budget does not change source data.
 The local warm probe for the requested short phrase increased from 0.010 ms
 to 0.89 ms; normal prose stayed around 0.040 ms. These optimized-development
 probe timings are not packaged-app typing latency. See the evidence for scope.
@@ -143,3 +151,29 @@ directory. Staging downloads only pinned files and verifies their hashes; the
 subsequent language engine runs offline. On Windows, set the same environment
 variables using PowerShell before the Cargo commands. For a no-Khmer-data build,
 leave both `CRAFT_KHMER_DIR` and `CRAFT_KHMER_REQUIRED` unset.
+
+## Data provenance and notices
+
+On 2026-11-03, SBBIC contributor @sungkhum identified SBBIC internal work,
+[SEAlang's frequency lists](http://sealang.net/project/list/), and
+[SIL NRSI's khmerlbdict](https://github.com/silnrsi/khmerlbdict) as sources for
+Aksara's language resources; SBBIC also contributed to khmerlbdict. SIL's
+[README](https://github.com/silnrsi/khmerlbdict/blob/master/README.md) independently
+records its use of the SEAlang Khmer frequency list and other named lists.
+SIL publishes its [MIT license](https://github.com/silnrsi/khmerlbdict/blob/master/LICENSE),
+Copyright (c) 2015 SIL NRSI. The contributor supplied SEAlang's MIT notice,
+Copyright (c) 2010, Doug Cooper, with a screenshot of the project's License page.
+Aksara's pinned repository carries the MIT notice, Copyright (c) 2025 SBBIC Khmer.
+All three copyright lines and the full permission notice ship in WordCraft's `NOTICE`.
+
+This establishes the reported resource lineage and published/supplied license
+notices. It is not a reconstructed, source-by-source training-data manifest:
+the exact tagger training-corpus composition and its split from frequency-list
+inputs have not been separately identified. No private source corpus is shipped
+in this PR. The pinned raw-file hashes identify the distributed Aksara artifacts.
+
+The `craft-i18n.rev` update retains the companion Khmer manifest together with
+its upstream catalog history; unrelated catalog commits are not Khmer translations.
+The `fr-FR` to `zxx` test-fixture adjustment is intentional: French is supported
+by the newer shared proofing dependency, so a no-proof fixture must explicitly
+request non-linguistic content rather than depend on French tools being absent.

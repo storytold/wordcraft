@@ -119,7 +119,7 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
     }
     // Validate visual affinity against the current layout, including a pending reflow.
     let layout = s.layout();
-    // Where a line wraps without a space (Khmer, Thai, Chinese…), its end and the next line's
+    // At a Khmer dictionary wrap, the line's end and the next line's
     // start are one place in the text drawn twice: Right steps from before the last letter to
     // the line's end, then to the next line's start, then on; Left goes back the same way.
     let from = s.sel.focus.clone();
@@ -331,6 +331,9 @@ fn page(s: &mut Session, v: &Value, dir: i32) -> CmdResult {
     }
     let Some(c) = s.caret_geometry(&l, &from) else { return sel_result(s) };
     let np = if dir < 0 { c.page.saturating_sub(1) } else { (c.page + 1).min(l.pages.len().saturating_sub(1)) };
+    if np == c.page && s.line_end.as_ref() == Some(&from) {
+        return sel_result(s);
+    }
     let to = l.hit(np, c.x, c.top + 1.0, from.story).unwrap_or(from);
     s.page_hint = np;
     apply(s, to, ext);

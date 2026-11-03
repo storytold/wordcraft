@@ -124,11 +124,22 @@ impl FontDb {
                 0
             }
         };
+        // Shaping capability outranks even RTL family preference: an AAT-only preferred
+        // family must not mask a loaded GSUB face and trigger another system search.
         // Complex scripts (Myanmar, Khmer, Indic…): a font with OpenType layout tables, preferring
         // the script's own families, so syllables reorder and stack (#604).
         let complex = crate::needs_layout_tables(c);
         let shaping = |f: &FontFace| if complex { (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)) } else { (false, 0) };
-        order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
+        order.sort_by_key(|f| {
+            (
+                complex && !f.has_layout_tables(),
+                rank(f),
+                shaping(f),
+                !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY),
+                f.italic,
+                (f.weight - 400.0).abs() as i32,
+            )
+        });
         (order.into_iter().find(|f| f.covers(c)).cloned(), faces.len())
     }
 

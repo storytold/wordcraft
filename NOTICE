@@ -162,6 +162,45 @@ list (author, source, license) is in ATTRIBUTION.md.
 - Application-drawn UI icons (crates/ui-egui/src/icons.rs) are original work, MIT OR Apache-2.0;
   the bundled egui font icons have the separate notice below.
 
+Optional Khmer language data (Aksara)
+
+Builds made with CRAFT_KHMER_DIR include Aksara's language model and proofing
+lexicons from SBBIC Khmer (https://github.com/sbbic-khmer/aksara-khmer-word-processor).
+SBBIC identifies internal work, the SEAlang frequency lists
+(http://sealang.net/project/list/), and SIL NRSI's Khmer line-breaking dictionary
+(https://github.com/silnrsi/khmerlbdict) as sources. These materials are MIT licensed;
+their copyright and permission notices follow. Builds without CRAFT_KHMER_DIR
+omit this data. See docs/khmer-integration.md for provenance and its limits.
+
+MIT License
+
+Copyright (c) 2025 SBBIC Khmer
+Copyright (c) 2015 SIL NRSI
+Copyright (c) 2010, Doug Cooper
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Khmer integration credits: The dictionary adapter follows the separation introduced by NguyenDuc2309 in
+WordCraft #1579. Boundary safeguards and wrapped-line caret work build on
+touchde's WordCraft #3110 (MIT, WordCraft contributors). No ICU Khmer data
+is copied into this contribution. Contributor: @sungkhum, with Sol-agent assistance.
+
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)
 are permissively licensed (MIT/Apache-2.0/BSD/ISC/Zlib) and fetched through crates.io or pinned Git sources.
 The craft-pdf writer and Krilla 0.8.2 backend are pinned to storytold/craft-libs revision
@@ -188,10 +227,3 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-Khmer integration credits: SBBIC Khmer's Aksara (MIT) supplies the optional
-shared language model and proofing data; see craft-khmer/LICENSE-AKSARA.
-The dictionary adapter follows the separation introduced by NguyenDuc2309 in
-WordCraft #1579. Boundary safeguards and wrapped-line caret work build on
-touchde's WordCraft #3110 (MIT, WordCraft contributors). No ICU Khmer data
-is copied into this contribution. Contributor: @sungkhum, with Sol-agent assistance.

@@ -20,6 +20,9 @@ fn khmer_wrap() -> (Session, usize) {
 #[test]
 fn end_on_a_line_wrapped_without_a_space_goes_after_its_last_syllable() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let l = s.layout();
     let last = s.doc.para_at(&Pos::body(0, wrap)).map(|p| p.prev_boundary(wrap)).unwrap();
@@ -50,6 +53,9 @@ fn end_on_a_line_wrapped_without_a_space_goes_after_its_last_syllable() {
 #[test]
 fn right_stops_at_the_end_of_a_line_wrapped_without_a_space() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let l = s.layout();
     let para = s.doc.para_at(&Pos::body(0, wrap)).unwrap().clone();
@@ -87,6 +93,9 @@ fn right_stops_at_the_end_of_a_line_wrapped_without_a_space() {
 #[test]
 fn a_click_after_the_last_letter_of_a_line_wrapped_without_a_space_stays_on_that_line() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let l = s.layout();
     let end = l.caret_at_line_end(&Pos::body(0, wrap), 0).unwrap();
@@ -116,6 +125,9 @@ fn end_and_right_on_spaced_text_are_unchanged() {
 #[test]
 fn edits_selection_and_reflow_clear_wrap_affinity() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": wrap}}));
     run(&mut s, "caret.left", json!({}));
@@ -139,6 +151,9 @@ fn edits_selection_and_reflow_clear_wrap_affinity() {
 #[test]
 fn hostile_page_does_not_wrap_to_an_existing_page() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let layout = s.layout();
     let end = layout.caret_at_line_end(&Pos::body(0, wrap), 0).unwrap();
@@ -157,6 +172,9 @@ fn hostile_page_does_not_wrap_to_an_existing_page() {
 #[test]
 fn cached_reflow_and_window_views_do_not_leak_affinity() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     // Prime a second layout; switching back must clear affinity even on a cache hit.
     s.view.mode = wordcraft_layout::ViewMode::Web;
@@ -181,6 +199,9 @@ fn cached_reflow_and_window_views_do_not_leak_affinity() {
 #[test]
 fn affinity_is_owned_by_its_document() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let first = s.document_id();
     run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": wrap}}));
@@ -199,6 +220,9 @@ fn affinity_is_owned_by_its_document() {
 #[test]
 fn later_hebrew_does_not_skip_an_earlier_ltr_wrap_affinity() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let text = format!("{} שלום", "សិស្សានុសិស្សត្រូវបានលើកទឹកចិត្តឱ្យអានសៀវភៅជារៀងរាល់ថ្ងៃ".repeat(8));
     let mut s = Session::new(wordcraft_doc::Document::from_text(&text));
     let layout = s.layout();
@@ -223,6 +247,9 @@ fn later_hebrew_does_not_skip_an_earlier_ltr_wrap_affinity() {
 #[test]
 fn pointer_selection_can_change_visual_side_without_changing_range() {
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     let (mut s, wrap) = khmer_wrap();
     let layout = s.layout();
     let pos = Pos::body(0, wrap);
@@ -239,7 +266,24 @@ fn pointer_selection_can_change_visual_side_without_changing_range() {
 
 #[test]
 fn page_movement_and_reporting_use_the_visible_side_of_a_wrap() {
+    // This longer geometry check spans several commands. Pack and personal-dictionary tests
+    // can change the process-wide generation without taking DICTIONARIES; that deliberately
+    // clears affinity on the next layout. A child running only this test keeps that unrelated
+    // invalidation out of the assertion, without serializing the whole engine suite.
+    const ISOLATED: &str = "WORDCRAFT_ISOLATED_CARET_PAGE_TEST";
+    if std::env::var_os(ISOLATED).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::caret_affinity::page_movement_and_reporting_use_the_visible_side_of_a_wrap"])
+            .env(ISOLATED, "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
     let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
     for view in ["view.webLayout", "view.draft", "view.outline"] {
         let (mut s, _) = khmer_wrap();
         run(&mut s, view, json!({}));
@@ -264,10 +308,20 @@ fn page_movement_and_reporting_use_the_visible_side_of_a_wrap() {
     }
 
     let (mut s, _) = khmer_wrap();
-    let text = s.doc.para_at(&Pos::body(0, 0)).unwrap().text.repeat(8);
-    run(&mut s, "document.setText", json!({"text": text}));
-    let layout = s.layout();
-    assert!(layout.pages.len() >= 3, "relative Go To must not be hidden by last-page clamping");
+    let base = s.doc.para_at(&Pos::body(0, 0)).unwrap().text.clone();
+    let mut repeats = 8;
+    let (text, layout) = loop {
+        let text = base.repeat(repeats);
+        run(&mut s, "document.setText", json!({"text": text}));
+        let layout = s.layout();
+        if layout.pages.len() >= 3 {
+            break (text, layout);
+        }
+        // Linux's Noto Sans Khmer fits more text per page than the macOS fallback.
+        // Size the fixture from the measured layout instead of assuming font metrics.
+        assert!(repeats < 64, "need three pages to avoid relative Go To clamping");
+        repeats *= 2;
+    };
     let (wrap, end) = text
         .char_indices()
         .find_map(|(off, _)| {
@@ -285,4 +339,87 @@ fn page_movement_and_reporting_use_the_visible_side_of_a_wrap() {
     assert_eq!(summary["caret"]["page"], end.page, "reported and drawn caret pages agree");
     run(&mut s, "edit.goto", json!({"pageBy": 1}));
     assert_eq!(s.caret_geometry(&layout, &s.sel.focus).unwrap().page, end.page + 1, "Go To advances one visible page");
+}
+
+#[test]
+fn ending_typing_refreshes_proofing_without_losing_dictionary_wrap_affinity() {
+    let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let (mut s, _) = khmer_wrap();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "text.insert", json!({"text": "ក"}));
+    let typing_layout = s.layout();
+    let wrap = s
+        .doc
+        .para_at(&Pos::body(0, 0))
+        .unwrap()
+        .text
+        .char_indices()
+        .find_map(|(off, _)| typing_layout.caret_at_line_end(&Pos::body(0, off), 0).map(|end| (off, end)))
+        .unwrap();
+    run(&mut s, "caret.end", json!({}));
+    assert_eq!(s.line_end, Some(Pos::body(0, wrap.0)));
+    let refreshed = s.layout();
+    assert!(!std::sync::Arc::ptr_eq(&typing_layout, &refreshed), "proofing must be recomputed");
+    assert_eq!(s.line_end, Some(Pos::body(0, wrap.0)), "affinity survives that recomputation");
+    assert_eq!(s.caret_geometry(&refreshed, &s.sel.focus), Some(wrap.1));
+}
+
+#[test]
+fn clamped_print_page_movement_preserves_both_selection_and_affinity() {
+    let _dictionaries = dictionaries_turn();
+    if !wordcraft_proof::khmer::data_available() {
+        return;
+    }
+    let (mut s, wrap) = khmer_wrap();
+    let layout = s.layout();
+    assert_eq!(layout.pages.len(), 1);
+    let end = layout.caret_at_line_end(&Pos::body(0, wrap), 0).unwrap();
+    for command in ["caret.pageUp", "caret.pageDown"] {
+        for extend in [false, true] {
+            run(&mut s, "caret.set", json!({"pos": Pos::body(0, wrap), "page": end.page, "y": end.top + end.height / 2.0}));
+            let before = s.sel.clone();
+            run(&mut s, command, json!({"extend": extend}));
+            let current = s.layout();
+            assert_eq!(s.sel, before);
+            assert_eq!(s.caret_geometry(&current, &s.sel.focus), Some(end), "{command}, extend={extend}");
+        }
+    }
+}
+
+#[test]
+fn other_scripts_hyphens_slashes_and_emergency_wraps_keep_existing_caret_stops() {
+    let _dictionaries = dictionaries_turn();
+    for text in [
+        "日本語の文章を書きます".repeat(40),
+        "ภาษาไทย".repeat(80),
+        "alpha-beta-gamma-".repeat(40),
+        "https://example.com/a/".repeat(40),
+        "abcdefghij".repeat(100),
+        "ខ្មែរ alpha\u{200b}beta ".repeat(40),
+    ] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&text));
+        let layout = s.layout();
+        let para = layout
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .find_map(|item| if let wordcraft_layout::Placed::Lines { para, .. } = item { Some(para) } else { None })
+            .unwrap();
+        assert!(para.lines.len() > 1);
+        assert!((0..text.len()).all(|off| layout.caret_at_line_end(&Pos::body(0, off), 0).is_none()));
+        let wrap = para.lines[1].start;
+        let p = s.doc.para_at(&Pos::body(0, wrap)).unwrap();
+        let (before, after) = (p.prev_boundary(wrap), p.next_boundary(wrap));
+        run(&mut s, "caret.set", json!({"pos": Pos::body(0, before)}));
+        run(&mut s, "caret.right", json!({}));
+        assert_eq!(s.sel.focus.off, wrap);
+        run(&mut s, "caret.right", json!({}));
+        assert_eq!(s.sel.focus.off, after, "no extra stop at the wrap");
+        let first = &para.lines[0];
+        let hit = para.off_at_x(0, first.right + 100.0);
+        assert!(hit < wrap, "double-click beyond the line still hits its final word");
+    }
 }

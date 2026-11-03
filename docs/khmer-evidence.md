@@ -69,3 +69,27 @@ is not claimed green. The app passes all nine `cargo xtask ci` gates with the ex
 and pinned companion commits: formatting, strict Clippy, tests, interface audit,
 language validation, doctests, assets, layers and WebAssembly (15 crates).
 Validation ran on macOS with Rust 1.99.1; Windows runtime acceptance remains open.
+
+## Review follow-up (2026-11-03)
+
+Refinement now shares a 160,000-entry dictionary-comparison budget across a
+paragraph's candidate spans and adjacent contexts. A depleted budget conservatively
+retains original model spans. The corpus counts and timings above describe the
+historical unlimited-scan candidate; they are retained as historical evidence,
+not a new latency or accuracy claim. Raw repeated benchmark runs and conversational
+metadata have been removed from the published JSON; the summaries, pinned inputs
+and artifact hashes remain.
+
+Caret affinity is restricted to safe Khmer dictionary wraps. Other scripts,
+hyphens, slashes and emergency wraps retain existing navigation and hit testing.
+The multi-page regression sizes its text from measured pagination rather than
+macOS font metrics. Runtime acceptance on Linux and Windows remains separate
+from the local synthetic tests.
+
+[Budget preservation results](khmer-evidence/refinement-budget.json): all 34,104
+public records are identical to the prior candidate, as are all 3,331 private
+paragraphs with authored boundaries. With U+200B removed, two long paragraphs
+retain original model spans where the prior refinement added an extra break.
+These are conservative abstentions at the work limit, not removals of original
+model opportunities. The requested phrase and the independent short-suffix,
+known-word and correctable-typo regressions pass. No private text is included.

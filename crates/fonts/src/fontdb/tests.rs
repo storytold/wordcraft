@@ -442,3 +442,35 @@ fn loaded_unshaped_khmer_does_not_mask_a_system_shaping_font() {
     let run = run_db.fallback_for_run(&['ខ', '្', 'ម', 'ែ'], 0, false, false).expect("installed Khmer run face");
     assert!(run.has_layout_tables(), "{} masks the installed run shaping face", run.family);
 }
+
+/// Script-family preference must never outrank the ability to shape Arabic.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn unshaped_rtl_preference_does_not_reload_fonts_for_each_letter() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    let Some(shaping) = probe.fallback_for('ا', u32::MAX).filter(|f| f.has_layout_tables()) else {
+        eprintln!("skipped: no installed Arabic OpenType font");
+        return;
+    };
+    let letters: Vec<char> = "ابتثجحخدذرزسشصضطظ".chars().filter(|&c| shaping.covers(c)).collect();
+    assert!(letters.len() >= 8);
+    let mut unshaped = shaping.data().to_vec();
+    for i in 0..unshaped.len().saturating_sub(3) {
+        if unshaped.get(i..i + 4) == Some(b"GSUB") {
+            unshaped.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+        }
+    }
+    let db = FontDb::with_font_dirs(system_font_dirs());
+    db.faces.write().unwrap().retain(|f| !letters.iter().any(|&c| f.covers(c)));
+    let preferred = super::fallback_data::RTL_FALLBACKS[0];
+    assert!(db.add_fonts(vec![(unshaped, Some(preferred.into())), (shaping.data().to_vec(), Some("Shaping fixture".into()))]) >= 2);
+    assert!(db.read_faces().iter().any(|f| f.family == preferred && !f.has_layout_tables()));
+    let loaded = db.read_faces().len();
+    for c in letters {
+        let face = db.fallback_for(c, u32::MAX).unwrap();
+        assert!(face.has_layout_tables(), "{} must shape {c}", face.family);
+        let run = db.fallback_for_run(&[c, 'ا'], u32::MAX, false, false).unwrap();
+        assert!(run.has_layout_tables(), "{} must shape the whole run", run.family);
+        assert_eq!(db.read_faces().len(), loaded, "no system search while a loaded face shapes {c}");
+    }
+}

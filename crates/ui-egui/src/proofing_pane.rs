@@ -22,6 +22,8 @@ pub struct SpellingForm {
     epoch: u64,
     #[serde(skip)]
     selection: Selection,
+    #[serde(skip)]
+    pub(crate) font_generation: Option<u64>,
 }
 
 impl SpellingForm {
@@ -43,6 +45,7 @@ impl SpellingForm {
             document: app.session.document_id(),
             epoch: app.session.ime_body_epoch(),
             selection: app.session.sel.clone(),
+            font_generation: None,
         }
     }
 

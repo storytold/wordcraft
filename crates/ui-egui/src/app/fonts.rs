@@ -191,7 +191,10 @@ impl WordApp {
     pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         // Proofing context and suggestions can use a script the interface fonts lack.
         // Borrow faces only while that text is shown; ordinary Latin windows stay lazy.
-        if let Some(form) = self.spelling_review.as_ref() {
+        let db = wordcraft_fonts::FontDb::global();
+        if let Some(form) = self.spelling_review.as_mut()
+            && form.font_generation != Some(db.generation())
+        {
             let text = form.content_text().concat();
             if text.chars().any(wordcraft_fonts::is_cjk) {
                 self.want_system_cjk = true;
@@ -203,6 +206,7 @@ impl WordApp {
                 self.canvas.ime_faces.extend(new);
                 self.styled = false;
             }
+            form.font_generation = Some(db.generation());
         }
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
         // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
