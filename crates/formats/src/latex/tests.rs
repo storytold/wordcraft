@@ -475,6 +475,6 @@ fn ligature_characters_split_across_runs_stay_apart() {
     );
     let tex = export(&d);
     assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
-    let back = import(tex.as_bytes());
+    let back = import(tex.as_bytes()).unwrap();
     assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
 }
