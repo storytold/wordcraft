@@ -179,9 +179,18 @@ fn char_prop(w: &mut W, name: &str, c: Option<char>) {
     val(w, name, &s);
 }
 
+/// Most cells a matrix is padded out to (rows × its widest row). A ragged matrix past it (a
+/// native document's, or one parsed from a few bytes of text) writes each row as it is, rather
+/// than output that grows with the square of its size.
+const MAX_PADDED_CELLS: usize = 1 << 20;
+
 fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
     let MNode::Matrix { rows, col_jc } = n else { return };
     let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    let pad = rows.len().saturating_mul(cols) <= MAX_PADDED_CELLS;
+    if !pad {
+        log::warn!("docx: a {} × {cols} matrix is too large to pad; its rows are written as they are", rows.len());
+    }
     w.open("m:m", &[]);
     w.open("m:mPr", &[]);
     w.open("m:mcs", &[]);
@@ -203,7 +212,7 @@ fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
     w.close("m:mPr");
     for row in rows {
         w.open("m:mr", &[]);
-        for c in 0..cols {
+        for c in 0..if pad { cols } else { row.len().max(1) } {
             arg(w, "m:e", row.get(c).map(|v| v.as_slice()).unwrap_or(&[]), depth);
         }
         w.close("m:mr");
@@ -479,4 +488,25 @@ fn run(w: &mut W, r: &MRun) {
     w.close("w:rPr");
     w.leaf("m:t", &[("xml:space", "preserve")], &r.text);
     w.close("m:r");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cells(rows: Vec<Vec<Arg>>) -> usize {
+        let mut w = W::new();
+        write_matrix(&mut w, &MNode::Matrix { rows, col_jc: Vec::new() }, 0);
+        w.s.matches("<m:e/>").count() + w.s.matches("<m:e>").count()
+    }
+
+    #[test]
+    fn a_ragged_matrix_is_padded_within_a_cell_budget() {
+        // A small ragged matrix is padded to a rectangle, as before.
+        assert_eq!(cells(vec![vec![Vec::new(); 3], vec![Vec::new()]]), 6);
+        // 2,000 one-cell rows and one 2,000-cell row: 4 million cells padded, past the budget.
+        let mut rows = vec![vec![Vec::new()]; 2000];
+        rows.push(vec![Vec::new(); 2000]);
+        assert_eq!(cells(rows), 4000);
+    }
 }
