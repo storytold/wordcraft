@@ -632,11 +632,8 @@ pub(crate) fn push_para(
     // The outer edges of the side borders.
     let sides = pl.rp.borders.unwrap_or_default();
     let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
-    // A line narrowed by a floating object beside it: Word stops the top or bottom border drawn
-    // along that line at the line's edges, so the rule does not run under the object. Each line
-    // is compared with the edges it has without floats (its indent, or the room beside a drop
-    // cap, as the line breaker sets them), so indents and drop caps keep the full box. On a
-    // narrowed side the rule ends at the text's edge, never past it toward the object.
+    // Beside a float, top and bottom borders stop at the line's edges (Word); `start_of` mirrors
+    // the line breaker's edges without floats.
     let first_left = pl.rp.indent_left + pl.rp.indent_first;
     let start_of = |k: usize| match pl.drop_cap {
         Some((_, dl, dw)) if dw > 0.0 && k < usize::from(dl) => first_left.max(pl.rp.indent_left) + dw,
@@ -657,15 +654,23 @@ pub(crate) fn push_para(
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
+        // A row split by a float is several lines; the rule runs along each.
+        let beside = |k: usize| pl.lines.get(k).is_some_and(|l| l.beside);
+        let first_row = l0..(l0 + 1..l1).find(|&k| !beside(k)).unwrap_or(l1);
+        let last_row = (l0..l1).rev().find(|&k| !beside(k)).unwrap_or(l0)..l1;
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
-            let (x0, x1) = along(l0, first);
-            items.push(Placed::Rule { x0, y0: ty, x1, y1: ty, border: t });
+            for (k, line) in first_row.clone().zip(pl.lines.get(first_row).unwrap_or_default()) {
+                let (x0, x1) = along(k, line);
+                items.push(Placed::Rule { x0, y0: ty, x1, y1: ty, border: t });
+            }
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
             let by = y + h + t.space + t.width / 2.0;
-            let (x0, x1) = along(l1.saturating_sub(1), last);
-            items.push(Placed::Rule { x0, y0: by, x1, y1: by, border: t });
+            for (k, line) in last_row.clone().zip(pl.lines.get(last_row).unwrap_or_default()) {
+                let (x0, x1) = along(k, line);
+                items.push(Placed::Rule { x0, y0: by, x1, y1: by, border: t });
+            }
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
             let bx = lx + t.width / 2.0;

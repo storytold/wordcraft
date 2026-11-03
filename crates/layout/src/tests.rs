@@ -5869,8 +5869,7 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
-/// A paragraph beside a floating table: Word stops its top and bottom borders where its text
-/// stops, at the table's wrap distance, instead of running them under the table.
+/// Beside a floating table, a paragraph's top and bottom borders stop where its text stops.
 #[test]
 fn a_paragraph_border_beside_a_floating_table_stops_at_the_table() {
     use wordcraft_doc::para::{Anchor, FloatAlign};
@@ -5894,7 +5893,6 @@ fn a_paragraph_border_beside_a_floating_table_stops_at_the_table() {
         l.pages[0].items.iter().filter_map(|i| if let Placed::Rule { x1, y0, y1, .. } = i { (y0 == y1).then_some(*x1) } else { None }).collect();
     let table_left = 72.0 + 468.0 - 150.0;
     assert!(ends.len() >= 2, "rules {ends:?}");
-    // The table's own borders end at the right margin; the paragraph's two stop before the table.
     let short: Vec<_> = ends.iter().filter(|x| **x <= table_left - 13.0).collect();
     assert_eq!(short.len(), 2, "paragraph rules end at {ends:?}, table starts at {table_left}");
 }
@@ -5909,18 +5907,17 @@ fn horizontal_rules(l: &DocLayout) -> Vec<(f32, f32, f32)> {
 }
 
 /// A one-cell table floated against the margin at `align`, `dist` from the text.
-fn side_table(width: f32, align: wordcraft_doc::para::FloatAlign, dist: [f32; 4]) -> wordcraft_doc::Block {
+fn side_table(width: f32, align: wordcraft_doc::para::FloatAlign, dist: [f32; 4]) -> Table {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
     let mut t = Table::new(1, 1, width);
     t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("S", Default::default()))];
     t.props.float =
         Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Margin, h_align: Some(align), dist, overlap: false, ..Default::default() });
-    wordcraft_doc::Block::Table(t)
+    t
 }
 
-/// A hanging indent starts the first line left of the others; a float that pushes the first
-/// line in, though not as far as the other lines' indent, still shortens the top border.
+/// A left float shortens a hanging paragraph's top border even short of the other lines' indent.
 #[test]
 fn a_hanging_paragraph_border_beside_a_left_float_stops_at_it() {
     use wordcraft_doc::para::FloatAlign;
@@ -5929,11 +5926,36 @@ fn a_hanging_paragraph_border_beside_a_left_float_stops_at_it() {
     p.props.indent_left = Some(72.0);
     p.props.indent_first = Some(-72.0);
     p.props.borders = Some(Borders { top: Some(Border::single(1.0)), ..Borders::default() });
-    d.insert_block(StoryRef::Body, &Path::top(0), side_table(20.0, FloatAlign::Start, [0.0, 0.0, 10.0, 0.0])).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(side_table(20.0, FloatAlign::Start, [0.0, 0.0, 10.0, 0.0]))).unwrap();
     let l = lay(&d);
     let starts: Vec<f32> = horizontal_rules(&l).iter().map(|r| r.0).filter(|x| *x < 200.0).collect();
-    // The table's own rules start at the margin (72); the paragraph's starts beside the table.
     assert!(starts.iter().any(|x| *x >= 72.0 + 20.0), "rules start at {starts:?}");
+}
+
+/// A row split by a centred float gets its top and bottom borders on both sides.
+#[test]
+fn a_paragraph_border_runs_on_both_sides_of_a_centred_float() {
+    use wordcraft_doc::para::FloatAlign;
+    let mut d = Document::from_text(&"word ".repeat(8));
+    let rule = Some(Border::single(1.0));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: rule, bottom: rule, ..Borders::default() });
+    let mut t = side_table(100.0, FloatAlign::Center, [10.0, 0.0, 10.0, 0.0]);
+    t.rows[0].cells[0].blocks = (0..12).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("S", Default::default()))).collect();
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let (table_left, table_right) = (72.0 + 184.0, 72.0 + 284.0);
+    let rules = horizontal_rules(&l);
+    let both = |y: f32| {
+        rules.iter().any(|r| (r.2 - y).abs() < 0.01 && r.1 <= table_left + 0.01)
+            && rules.iter().any(|r| (r.2 - y).abs() < 0.01 && r.0 >= table_right - 0.01)
+    };
+    let levels = rules.iter().map(|r| r.2).filter(|y| both(*y)).fold(Vec::<f32>::new(), |mut v, y| {
+        if !v.iter().any(|w| (w - y).abs() < 0.01) {
+            v.push(y);
+        }
+        v
+    });
+    assert_eq!(levels.len(), 2, "top and bottom rules on both sides of the table; rules {rules:?}");
 }
 
 /// A drop cap shortens the lines beside it, not the paragraph's border box.
@@ -5950,14 +5972,14 @@ fn a_drop_cap_keeps_the_full_top_border() {
     assert!(rules.iter().any(|r| (r.0 - 72.0).abs() < 0.5 && (r.1 - 540.0).abs() < 0.5), "rules {rules:?}");
 }
 
-/// A right border's room never carries the top border past the text's edge under the float.
+/// A side border's room never carries the top border under the float.
 #[test]
 fn a_side_bordered_paragraph_border_stays_off_a_float_with_no_distance() {
     use wordcraft_doc::para::FloatAlign;
     let mut d = Document::from_text("Ruled paragraph");
     let b = Some(Border { space: 4.0, ..Border::single(2.0) });
     d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: b, right: b, ..Borders::default() });
-    d.insert_block(StoryRef::Body, &Path::top(0), side_table(150.0, FloatAlign::End, [0.0; 4])).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(side_table(150.0, FloatAlign::End, [0.0; 4]))).unwrap();
     let l = lay(&d);
     let table_left = 72.0 + 468.0 - 150.0;
     let ends: Vec<f32> = horizontal_rules(&l).iter().map(|r| r.1).collect();
