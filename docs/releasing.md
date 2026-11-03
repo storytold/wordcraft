@@ -22,13 +22,14 @@ produce unsigned builds with a warning, so forks still build.
 
 ## Shared workflow trust
 
-`release.yml`, `freebsd.yml`, `packaging-lint.yml` and `windows-arm64.yml` call
-`storytold/craft-common-actions` at `@main`. That is deliberate: a fix to the shared pipeline
-reaches every craft app without a pull request in each repository. The decision is recorded in
-[craft-common-actions#6](https://github.com/storytold/craft-common-actions/issues/6); the remaining
-hardening is [WordCraft #1358](https://github.com/storytold/wordcraft/issues/1358). The trade-off is
-that the code which builds and signs a release can change outside this repository's history, so a
-release cannot be reproduced from its WordCraft commit alone.
+Every workflow here that calls `storytold/craft-common-actions` does so at `@main`: `ci.yml`,
+`release.yml`, `freebsd.yml`, `nix.yml`, `packaging-lint.yml`, `sonarcloud.yml`, `windows-arm64.yml`
+and the craft-i18n and craft-fonts checkout steps in `printing.yml`. That is deliberate: a fix to
+the shared pipeline reaches every craft app without a pull request in each repository. The decision
+is recorded in [craft-common-actions#6](https://github.com/storytold/craft-common-actions/issues/6);
+the remaining hardening is [WordCraft #1358](https://github.com/storytold/wordcraft/issues/1358).
+The trade-off is that the code which builds and signs a release can change outside this
+repository's history, so a release cannot be reproduced from its WordCraft commit alone.
 
 What limits the risk:
 

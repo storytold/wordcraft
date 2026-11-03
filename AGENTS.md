@@ -20,7 +20,7 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 - Never copy, trace, screenshot-crop or recreate icons, images, templates, themes, clip art, fonts, cursors, sounds or any other asset from Microsoft Word/Office or any Microsoft, Adobe, Avid or Autodesk product. Not even "temporarily".
 - Every asset must be **original** (drawn in code — prefer this: `crates/ui-egui/src/icons.rs`), **public domain / CC0**, **OSI open source**, or **Creative Commons that allows redistribution**, or licensed open source by a contributor who made it.
 - **Every asset file has a row in [`ATTRIBUTION.md`](ATTRIBUTION.md)** (author, source, licence). `cargo xtask assets` (part of `cargo xtask ci`) fails otherwise. Add the row in the same commit as the file.
-- Fonts: new font files go to [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), never this repo; it's an optional build input (`CRAFT_FONTS_DIR`). Documents asking for proprietary fonts (Calibri, Aptos, Cambria…) are rendered with installed system fonts or metric-compatible open substitutes (`crates/fonts/src/word.rs`) — never bundle proprietary fonts.
+- Fonts: new font files go to [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), never this repo; it's an optional build input (`CRAFT_FONTS_DIR`). Spelling word lists and hyphenation patterns live in [`storytold/craft-i18n`](https://github.com/storytold/craft-i18n) `language-data/`, never this repo; they are embedded from `CRAFT_I18N_DIR` (pinned by `craft-i18n.rev`, which CI checks out). Without it the app builds, but English spelling falls back to an installed Hunspell English or the built-in Moby word list (with no American/British variant table) and pattern hyphenation is off (Bulgarian, Turkish and Russian still hyphenate by rule), so proofing tests need it. Documents asking for proprietary fonts (Calibri, Aptos, Cambria…) are rendered with installed system fonts or metric-compatible open substitutes (`crates/fonts/src/word.rs`) — never bundle proprietary fonts.
 - Templates, sample documents and themes are our own text and colours (`crates/engine/src/sample.rs`, `cmd/design.rs`). Demo images are public domain, with sources recorded.
 
 ## Clean room
@@ -34,11 +34,12 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 | L0 | `geom` | units, rects, measurement parsing |
 | L1 | `doc`, `fonts` | document model + edit primitives; font DB, shaping, Word font substitution |
 | L2 | `layout`, `docx`, `formats` | line breaking, pagination, tables, headers/footers, hit testing; OOXML I/O; TXT/MD/HTML/RTF/ODT |
-| L3 | `render`, `pdf`, `proof` | vello_cpu rasteriser; krilla PDF; proofing |
+| L3 | `render`, `pdf` | vello_cpu rasteriser; krilla PDF |
 | L4 | `engine` | Session, undo, **command registry**, Word feature catalog, samples, I/O dispatch |
 | L5 | `mcp` | MCP server (headless or bridged to the app) |
 | L6 | `ui-egui` | Word-style egui front end (swappable) |
 | apps | `apps/wordcraft`, `apps/wordcraft-cli`, `apps/wordcraft-web` | binaries |
+| external | `craft-proof` (craft-libs, used as `wordcraft-proof`, sits at L1) | proofing: spelling, grammar, hyphenation; its word lists and patterns are craft-i18n's `language-data/` (`CRAFT_I18N_DIR`) |
 
 - **Everything is a command.** User-visible behaviour = a `CommandSpec` in `crates/engine/src/cmd/*.rs` (id, label, ribbon location, shortcut, params doc, `enabled`, `run`) + tests. UI-only commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search, CLI, control channel and MCP all dispatch by id. Programmatic calls never open dialogs.
 - **Parity is measured:** `crates/engine/src/catalog.rs` lists Word's ribbon/menu features with command ids. `cargo xtask parity` writes `docs/parity-checklist.md`; a test enforces a floor that only rises. Implement missing ids to raise it.
