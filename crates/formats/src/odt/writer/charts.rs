@@ -200,8 +200,9 @@ impl Writer {
         // Always placed by a style (see `image_frame`).
         let (anchor, props, xy) = placement(place, c.w, c.h);
         let (anchor, style) = (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)));
+        let z = place.z_index();
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Chart{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
+            "<draw:frame draw:name=\"{}Chart{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"{z}\">{inner}",
             self.prefix,
             pt(c.w),
             pt(c.h),

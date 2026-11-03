@@ -171,3 +171,19 @@ fn a_footnote_keeps_its_text_beside_a_footer() {
     assert_eq!(note.map(text).as_deref(), Some("The note."));
     assert_eq!(d.last_section.footers.default.map(text).as_deref(), Some("Footer text"));
 }
+
+#[test]
+fn citations_are_numbered_as_the_document_numbers_its_notes() {
+    // §6.3.3: the citation is the text shown. Footnotes in A, B, C from the third (ODF counts the
+    // first number from 0), endnotes as configured; without a configuration 1, 2, 3 and i, ii.
+    let mut d = import(&body(r#"<text:p>One<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>a</text:p></text:note-body></text:note> two<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>b</text:p></text:note-body></text:note> three<text:note text:note-class="endnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>c</text:p></text:note-body></text:note></text:p>"#)).unwrap();
+    let citations = |d: &Document| {
+        let c = crate::odt::tests::entry(&export(d).unwrap(), "content.xml");
+        c.split("<text:note-citation>").skip(1).filter_map(|s| s.split('<').next()).map(str::to_string).collect::<Vec<_>>()
+    };
+    assert_eq!(citations(&d), ["1", "2", "i"]);
+    d.settings.footnote_format = wordcraft_doc::section::NumFormat::UpperLetter;
+    d.settings.footnote_pr.num_start = Some(3);
+    d.settings.endnote_format = wordcraft_doc::section::NumFormat::Decimal;
+    assert_eq!(citations(&d), ["C", "D", "1"]);
+}

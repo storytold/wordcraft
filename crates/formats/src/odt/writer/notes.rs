@@ -74,15 +74,17 @@ impl Writer {
         if body.is_empty() {
             body.push_str(&format!("<text:p text:style-name=\"{parent}\"/>"));
         }
-        // The number LibreOffice shows by default (footnotes 1, 2, 3; endnotes i, ii, iii) until it
-        // renumbers them itself.
-        let number = if endnote {
-            self.endnotes = self.endnotes.saturating_add(1);
-            wordcraft_doc::section::roman(self.endnotes)
-        } else {
-            self.footnotes = self.footnotes.saturating_add(1);
-            self.footnotes.to_string()
+        // Its number in document order, in the document's format from its first number (§6.3.3:
+        // the citation is the text shown; LibreOffice renumbers on opening, other readers may
+        // not). Without the document's numbering, LibreOffice's defaults: 1, 2, 3 and i, ii, iii.
+        let nth = if endnote { &mut self.endnotes } else { &mut self.footnotes };
+        *nth = nth.saturating_add(1);
+        let (fmt, start) = match self.note_numbers {
+            Some(n) => n[usize::from(endnote)],
+            None if endnote => (wordcraft_doc::section::NumFormat::LowerRoman, 1),
+            None => (wordcraft_doc::section::NumFormat::Decimal, 1),
         };
+        let number = fmt.format(start.max(1).saturating_add(*nth - 1));
         let (label, citation) = if custom.is_empty() { (String::new(), number) } else { (format!(" text:label=\"{}\"", x(custom)), x(custom)) };
         out.push_str(&format!(
             "<text:note text:id=\"{id}\" text:note-class=\"{class}\"><text:note-citation{label}>{citation}</text:note-citation><text:note-body>{body}</text:note-body></text:note>"

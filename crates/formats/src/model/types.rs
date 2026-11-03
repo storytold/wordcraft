@@ -879,6 +879,9 @@ pub struct FTable {
     /// The table's markup in the file it came from, while it still is what was read
     /// ([`wordcraft_doc::kept`]): a format that keeps it (ODT) writes it as it was.
     pub kept: Option<std::sync::Arc<str>>,
+    /// Wrappers kept as read around it (sections): the start tags opening before it and how
+    /// many close after it, as a paragraph's (`Para::wrap`).
+    pub wrap: Option<Box<(Vec<std::sync::Arc<str>>, u32)>>,
 }
 
 /// A table's placement and row heights ([`FTable::extra`]).

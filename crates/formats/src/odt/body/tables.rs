@@ -88,6 +88,6 @@ impl TableB {
         let borderless = stated && rows.iter().flatten().all(|c| !c.borders.is_some_and(|b| b.any_visible()));
         let extra = self.extra;
         let kept = extra.fixed || extra.align.is_some() || extra.width_pct.is_some() || extra.heights.iter().any(Option::is_some);
-        FTable { rows, widths, borderless, extra: kept.then(|| Box::new(extra)), kept: None }
+        FTable { rows, widths, borderless, extra: kept.then(|| Box::new(extra)), kept: None, wrap: None }
     }
 }

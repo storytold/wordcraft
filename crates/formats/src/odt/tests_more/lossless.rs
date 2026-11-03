@@ -100,11 +100,13 @@ fn inventory(bytes: &[u8]) -> BTreeMap<String, usize> {
     inv
 }
 
-/// What `saved` lacks that `orig` has (none of it allowed).
+/// What `saved` lacks that `orig` has (none of it allowed): fewer of a word or an element, or
+/// an attribute or a value it has none of.
 fn losses(orig: &[u8], saved: &[u8]) -> Vec<String> {
     let (a, b) = (inventory(orig), inventory(saved));
     a.into_iter()
-        .filter(|(k, n)| b.get(k).copied().unwrap_or(0) < *n && (k.starts_with("word ") || !b.contains_key(k)))
+        // Fewer words or elements (a section of three), or an attribute or value gone.
+        .filter(|(k, n)| b.get(k).copied().unwrap_or(0) < *n && (k.starts_with("word ") || k.starts_with("el ") || !b.contains_key(k)))
         .map(|(k, _)| k)
         .filter(|k| !ALLOWED.iter().any(|(p, _)| k.starts_with(p)))
         .collect()
@@ -135,7 +137,7 @@ const TEXT: Sample = Sample {
 const STYLES: Sample = Sample {
     name: "styles",
     content: r##"<office:body><office:text><text:p text:style-name="Standard">Only text.</text:p></office:text></office:body>"##,
-    styles: r##"<office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="0.5in" wcx:grid="on"/><style:text-properties fo:font-size="11pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text" wcx:origin="sample"><style:paragraph-properties fo:text-align="justify"/></style:style><style:style style:name="Marginal" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-style="italic"/></style:style><text:list-style style:name="Ticks"><text:list-level-style-bullet text:level="1" text:bullet-char="✓"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:margin-left="0.25in"/></style:list-level-properties></text:list-level-style-bullet></text:list-style><text:notes-configuration text:note-class="footnote" style:num-format="a" text:start-value="0" text:footnotes-position="page" text:start-numbering-at="document"/><text:linenumbering-configuration text:number-lines="false" text:offset="0.2in" style:num-format="1" text:number-position="left" text:increment="5"/></office:styles>"##,
+    styles: r##"<office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="0.5in" wcx:grid="on"/><style:text-properties fo:font-size="11pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text" wcx:origin="sample"><style:paragraph-properties fo:text-align="justify"/></style:style><style:style style:name="Marginal" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-style="italic"/></style:style><text:list-style style:name="Marginal"><text:list-level-style-number text:level="1" style:num-format="i" style:num-suffix=")"/></text:list-style><text:list-style style:name="Ticks"><text:list-level-style-bullet text:level="1" text:bullet-char="✓"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:margin-left="0.25in"/></style:list-level-properties></text:list-level-style-bullet></text:list-style><text:notes-configuration text:note-class="footnote" style:num-format="a" text:start-value="0" text:footnotes-position="page" text:start-numbering-at="document"/><text:linenumbering-configuration text:number-lines="false" text:offset="0.2in" style:num-format="1" text:number-position="left" text:increment="5"/></office:styles>"##,
     meta: "",
 };
 
@@ -196,7 +198,7 @@ const TABLE: Sample = Sample {
 /// Named sections, one protected.
 const SECTIONS: Sample = Sample {
     name: "sections",
-    content: r##"<office:automatic-styles><style:style style:name="Sect1" style:family="section"><style:section-properties style:editable="false" wcx:tint="none"><style:columns fo:column-count="1" fo:column-gap="0in"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:section text:style-name="Sect1" text:name="Terms"><text:p>Inside the terms.</text:p></text:section><text:section text:name="Locked" text:protected="true"><text:p>Inside the lock.</text:p></text:section><text:p>After.</text:p></office:text></office:body>"##,
+    content: r##"<office:automatic-styles><style:style style:name="Sect1" style:family="section"><style:section-properties style:editable="false" wcx:tint="none"><style:columns fo:column-count="1" fo:column-gap="0in"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:section text:style-name="Sect1" text:name="Terms"><text:p>Inside the terms.</text:p></text:section><text:section text:name="Locked" text:protected="true"><text:p>Inside the lock.</text:p></text:section><text:section text:style-name="Sect1" text:name="Grouped"><table:table table:name="Group"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>A cell alone.</text:p></table:table-cell></table:table-row></table:table></text:section><text:section text:name="Outer"><text:section text:name="Inner"><table:table table:name="Agenda"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>Item one.</text:p></table:table-cell></table:table-row></table:table><text:p>Notes under the agenda.</text:p></text:section><text:p>Closing the outer one.</text:p></text:section><text:p>After.</text:p></office:text></office:body>"##,
     styles: "",
     meta: "",
 };

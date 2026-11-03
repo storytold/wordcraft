@@ -1100,7 +1100,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     // Kept whole for formats that ask for it: its header rows count even without the rest.
     let extra = extra.map(Box::new);
     let kept = (tracked.paras && depth == 0).then(|| doc.kept.of("odt").and_then(|k| k.table(t)).cloned()).flatten();
-    FTable { rows, widths: t.grid.clone(), borderless, extra, kept }
+    let wrap = (tracked.paras && depth == 0).then(|| doc.kept.of("odt").and_then(|k| k.table_wrap(t)).cloned().map(Box::new)).flatten();
+    FTable { rows, widths: t.grid.clone(), borderless, extra, kept, wrap }
 }
 
 /// The document body as a flow.

@@ -403,10 +403,22 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32, profile: 
     if let Some((.., rot)) = turned {
         f.rot = rot;
     }
+    f.z = z_of(a);
     if f.wrap == Wrap::Inline {
         f.y = inline_raise(g, y.as_deref().and_then(length), h, size, profile);
     }
     f
+}
+
+/// A drawing's place in the stacking order (§19.231 `draw:z-index`, from 0 at the bottom) as
+/// WordCraft's [`Float::z`] (higher on top, 0 for unknown): one more.
+pub(super) fn z_of(a: &Attrs) -> u32 {
+    get(a, "draw:z-index").and_then(|v| v.trim().parse::<u32>().ok()).map_or(0, |z| z.saturating_add(1))
+}
+
+/// `float`'s place in the stacking order as `draw:z-index` (see [`z_of`]): 0 when unknown.
+pub(crate) fn z_index(float: Option<&Float>) -> u32 {
+    float.map_or(0, |f| f.z.saturating_sub(1))
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the

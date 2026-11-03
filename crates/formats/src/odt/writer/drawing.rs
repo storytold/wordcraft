@@ -70,6 +70,11 @@ pub(in crate::odt) enum Place<'a> {
 }
 
 impl<'a> Place<'a> {
+    /// Its place in the stacking order (§19.231 `draw:z-index`, see `frames::z_of`).
+    pub(in crate::odt) fn z_index(self) -> u32 {
+        crate::odt::frames::z_index(self.float())
+    }
+
     /// What turns or mirrors the object, and places it in the text.
     pub(in crate::odt) fn float(self) -> Option<&'a wordcraft_doc::para::Float> {
         match self {
@@ -295,8 +300,9 @@ impl Writer {
         let (anchor, props, xy) = placement(place, img.w, img.h);
         let (anchor, style) =
             (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{}{props}{clip}", super::GRAPHICS_PARENT))));
+        let z = place.z_index();
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"0\">{inner}",
+            "<draw:frame draw:name=\"{}Image{n}\"{style}{anchor} svg:width=\"{}\" svg:height=\"{}\" draw:z-index=\"{z}\">{inner}",
             self.prefix,
             pt(img.w),
             pt(img.h)
@@ -390,8 +396,9 @@ impl Writer {
             .and_then(|c| c.next.as_deref())
             .map(|n| format!(" draw:chain-next-name=\"{}{}\"", self.prefix, x(n)))
             .unwrap_or_default();
+        let z = place.z_index();
         out.push_str(&format!(
-            "<draw:frame draw:name=\"{}\" draw:style-name=\"{style}\"{anchor} svg:width=\"{}\"{height}{xy} draw:z-index=\"0\"><draw:text-box{min}{next}>{body}</draw:text-box></draw:frame>",
+            "<draw:frame draw:name=\"{}\" draw:style-name=\"{style}\"{anchor} svg:width=\"{}\"{height}{xy} draw:z-index=\"{z}\"><draw:text-box{min}{next}>{body}</draw:text-box></draw:frame>",
             x(&name),
             pt(fit(size.0)),
         ));
@@ -493,8 +500,9 @@ impl Writer {
             })
             .unwrap_or_default();
         let conn = self.conn_attrs(kind, look);
+        let z = place.z_index();
         out.push_str(&format!(
-            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\"{anchor}{at}{conn} draw:z-index=\"0\">{body}{geometry}</{element}>",
+            "<{element} draw:name=\"{}Shape{}\" draw:style-name=\"{style}\"{anchor}{at}{conn} draw:z-index=\"{z}\">{body}{geometry}</{element}>",
             self.prefix, self.boxes,
         ));
         if let Some(m) = reopen {

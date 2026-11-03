@@ -830,9 +830,8 @@ fn with_kept_defs(
             .collect();
         xml.insert_str(at, &missing);
     }
-    let defined = |xml: &str, name: &str| xml.contains(&format!("style:name=\"{}\"", x(name)));
     let add = |xml: &mut String, close: &str, defs: &std::collections::BTreeMap<String, std::sync::Arc<str>>| {
-        let missing: String = defs.iter().filter(|(n, _)| !defined(xml, n)).map(|(_, d)| &**d).collect();
+        let missing: String = defs.iter().filter(|(_, d)| !super::kept::defined(xml, d)).map(|(_, d)| &**d).collect();
         if missing.is_empty() {
             return;
         }
@@ -882,6 +881,10 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.note_numbers = Some([false, true].map(|endnote| {
+        let o = doc.note_options(&doc.last_section, endnote);
+        (o.num_fmt, o.num_start)
+    }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));

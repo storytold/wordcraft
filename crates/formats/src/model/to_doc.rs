@@ -870,12 +870,17 @@ impl<'a> Builder<'a> {
         }
         // Its markup kept for the writer, by its place among the top's tables.
         if depth == 0 {
-            if let Some(xml) = &t.kept {
+            if t.kept.is_some() || t.wrap.is_some() {
                 if self.doc.kept.get().is_none() {
                     self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
                 }
                 if let Some(k) = self.doc.kept.get_mut() {
-                    k.keep_pending_table(self.top_tables, xml.clone());
+                    if let Some(xml) = &t.kept {
+                        k.keep_pending_table(self.top_tables, xml.clone());
+                    }
+                    if let Some(w) = &t.wrap {
+                        k.keep_pending_table_wrap(self.top_tables, (**w).clone());
+                    }
                 }
             }
             self.top_tables += 1;

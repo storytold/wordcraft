@@ -368,3 +368,17 @@ fn a_drawing_outside_any_paragraph_belongs_to_the_next_one() {
     let d = import(&crate::odt::tests::package(&tail, Some(&styles))).unwrap();
     assert_eq!(d.body.iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum::<usize>(), 1);
 }
+
+#[test]
+fn a_frame_keeps_its_place_in_the_stacking_order() {
+    // §19.231 `draw:z-index`: 0 at the bottom; WordCraft's z counts from 1 (0 is unknown).
+    let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph" draw:z-index="3""#);
+    assert_eq!(float(&d).z, 4);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(r#"draw:z-index="3""#));
+    assert_eq!(float(&import(&saved).unwrap()).z, 4);
+    // Unknown (inserted in WordCraft): at the bottom, in document order.
+    let d = open(r#"style:wrap="run-through""#, r#"text:anchor-type="paragraph""#);
+    assert_eq!(float(&d).z, 0);
+    assert!(crate::odt::tests::entry(&export(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
+}

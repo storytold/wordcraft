@@ -133,6 +133,9 @@ pub(super) struct Writer {
     notes: usize,
     footnotes: u32,
     endnotes: u32,
+    /// The footnotes' and endnotes' number format and first number (see `writer::notes`); unset,
+    /// LibreOffice's defaults.
+    pub(super) note_numbers: Option<[(wordcraft_doc::section::NumFormat, u32); 2]>,
     /// Paragraph style that plain paragraphs get: the note style inside a note.
     note_parent: Option<&'static str>,
     /// Prefix of every name it makes (styles, lists, tables, pictures): headers and footers are
@@ -652,6 +655,13 @@ impl Writer {
     /// kept as read that open before it and close after it, at the top only.
     fn wrapped_para(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String, depth: usize) {
         let wrap = p.wrap.as_deref().filter(|_| depth == 0);
+        self.open_wrap(wrap, out);
+        self.para_in(p, chain, out);
+        self.close_wrap(wrap, out);
+    }
+
+    /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`).
+    fn open_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) {
         for tag in wrap.map(|w| w.0.as_slice()).unwrap_or(&[]) {
             self.close_ins(out);
             // With the section style it names.
@@ -659,7 +669,11 @@ impl Writer {
             out.push_str(tag);
             self.sections_open += 1;
         }
-        self.para_in(p, chain, out);
+    }
+
+    /// The sections kept as read that close after a top-level block: only those open (one
+    /// whose start was edited away isn't), so what is written stays balanced.
+    fn close_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) {
         for _ in 0..wrap.map_or(0, |w| w.1) {
             if self.sections_open > 0 {
                 self.close_ins(out);
@@ -706,7 +720,10 @@ impl Writer {
             match b {
                 FBlock::Table(t) => {
                     if depth < model::MAX_DEPTH {
+                        let wrap = t.wrap.as_deref().filter(|_| depth == 0);
+                        self.open_wrap(wrap, out);
                         self.table(t, out, depth);
+                        self.close_wrap(wrap, out);
                     }
                     i += 1;
                 }

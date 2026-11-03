@@ -37,6 +37,11 @@ pub struct KeptXml {
     pub wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
     /// While reading: the same by paragraph `rev`, until [`Kept::seal`].
     pub pending_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
+    /// The same wrappers around the body's tables, by [`table_fingerprint`] (tables that are
+    /// the only one of their kind).
+    pub table_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
+    /// While reading: those of the body's `n`th table, until `seal_kept`.
+    pub pending_table_wraps: Vec<(usize, (Vec<Arc<str>>, u32))>,
     /// Indexes kept as read: by their first paragraph's fingerprint, how many top-level
     /// paragraphs they take, those paragraphs' fingerprint together ([`run_fingerprint`]),
     /// and the index's markup. Written as read while those paragraphs are all as read.
@@ -121,6 +126,13 @@ impl KeptXml {
         }
         self.tables.get(&table_fingerprint(t))
     }
+    /// The wrappers kept around table `t`, while it still is what was read.
+    pub fn table_wrap(&self, t: &crate::Table) -> Option<&(Vec<Arc<str>>, u32)> {
+        if self.table_wraps.is_empty() {
+            return None;
+        }
+        self.table_wraps.get(&table_fingerprint(t))
+    }
     /// The wrappers kept around paragraph `p`, while it still is what was read.
     pub fn wrap(&self, p: &Paragraph) -> Option<&(Vec<Arc<str>>, u32)> {
         if self.wraps.is_empty() {
@@ -149,6 +161,14 @@ impl KeptXml {
         if self.bytes.saturating_add(n) <= MAX_KEPT_BYTES {
             self.bytes += n;
             self.pending_wraps.insert(rev, wrap);
+        }
+    }
+    /// Keep wrapper markup for the body's `n`th table, within the budget.
+    pub fn keep_pending_table_wrap(&mut self, n: usize, wrap: (Vec<Arc<str>>, u32)) {
+        let size: usize = wrap.0.iter().map(|t| t.len()).sum();
+        if self.bytes.saturating_add(size) <= MAX_KEPT_BYTES {
+            self.bytes += size;
+            self.pending_table_wraps.push((n, wrap));
         }
     }
     /// Keep `xml` for the body's `n`th table, within the budget.
@@ -295,6 +315,19 @@ impl crate::Document {
             for (n, xml) in pending {
                 if let Some(t) = tables.get(n) {
                     k.tables.entry(table_fingerprint(t)).or_insert(xml);
+                }
+            }
+            // Wrappers, for tables that are the only one of their kind (a copy can't open a
+            // section twice).
+            let pending = std::mem::take(&mut k.pending_table_wraps);
+            if !pending.is_empty() {
+                let fps: Vec<u64> = tables.iter().map(|t| table_fingerprint(t)).collect();
+                for (n, w) in pending {
+                    if let Some(fp) = fps.get(n)
+                        && fps.iter().filter(|f| *f == fp).count() == 1
+                    {
+                        k.table_wraps.insert(*fp, w);
+                    }
                 }
             }
         }

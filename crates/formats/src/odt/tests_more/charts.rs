@@ -306,11 +306,28 @@ fn an_unchanged_chart_is_written_back_as_it_was_and_an_edited_one_anew() {
         "</office:automatic-styles>",
         r#"<style:style style:name="look" style:family="chart"><style:text-properties fo:font-size="18pt"/></style:style></office:automatic-styles>"#,
     );
-    let frame = r#"<draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="5.9055in" svg:height="2.9528in"><draw:object xlink:href="./Object 1" xlink:type="simple"/></draw:frame>"#;
+    // With its replacement picture (what a reader that can't draw charts shows).
+    let frame = r#"<draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="5.9055in" svg:height="2.9528in"><draw:object xlink:href="./Object 1" xlink:type="simple"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame>"#;
     let content = format!(
         r#"<office:document-content {NS_T} xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink"><office:body><office:text><text:p>Before {frame}</text:p></office:text></office:body></office:document-content>"#
     );
-    let doc = crate::odt::import(&zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", original.as_bytes())])).unwrap();
+    let picture: &[u8] = b"VCLMTF the chart as drawn";
+    let doc = crate::odt::import(&zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("Object 1/content.xml", original.as_bytes()),
+        ("ObjectReplacements/Object 1", picture),
+    ]))
+    .unwrap();
+    let replacement_of = |bytes: &[u8]| {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let name = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|f| f.name().to_string())).find(|n| n.starts_with("ObjectReplacements/"))?;
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut z.by_name(&name).unwrap(), &mut out).unwrap();
+        Some(out)
+    };
+    let saved = crate::odt::export(&doc).unwrap();
+    assert_eq!(replacement_of(&saved).as_deref(), Some(picture));
+    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(r#"<draw:image xlink:href="./ObjectReplacements/"#));
     let chart_of = |bytes: &[u8]| {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
         let name = (0..z.len())
@@ -336,6 +353,9 @@ fn an_unchanged_chart_is_written_back_as_it_was_and_an_edited_one_anew() {
             }
         }
     }
-    let out = chart_of(&crate::odt::export(&edited).unwrap());
+    let saved = crate::odt::export(&edited).unwrap();
+    let out = chart_of(&saved);
     assert!(out.contains("Revenue") && !out.contains(r#"fo:font-size="18pt""#), "{out}");
+    // The old picture would show the old chart.
+    assert_eq!(replacement_of(&saved), None);
 }

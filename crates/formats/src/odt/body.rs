@@ -372,14 +372,16 @@ impl<'a> Body<'a> {
                 if let Some(Some((tag, _, from))) = self.kept_sections.pop().filter(|s| s.as_ref().is_none_or(|s| s.1 == depth))
                     && self.containers.len() == 1
                 {
+                    // Around top-level paragraphs and tables: the first opens it, the last closes it.
                     let blocks = self.container();
-                    let plain = |b: Option<&FBlock>| matches!(b, Some(FBlock::Para(p)) if p.list.is_none());
-                    if blocks.len() > from && plain(blocks.get(from)) && plain(blocks.last()) {
-                        if let Some(FBlock::Para(p)) = blocks.get_mut(from) {
-                            p.wrap.get_or_insert_with(Default::default).0.insert(0, tag);
+                    // (Not a list item: a list is written around its items.)
+                    let wrappable = |b: Option<&FBlock>| !matches!(b, None | Some(FBlock::Para(Para { list: Some(_), .. })));
+                    if blocks.len() > from && wrappable(blocks.get(from)) && wrappable(blocks.last()) {
+                        if let Some(b) = blocks.get_mut(from) {
+                            block_wrap(b).0.insert(0, tag);
                         }
-                        if let Some(FBlock::Para(p)) = blocks.last_mut() {
-                            let w = p.wrap.get_or_insert_with(Default::default);
+                        if let Some(b) = blocks.last_mut() {
+                            let w = block_wrap(b);
                             w.1 = w.1.saturating_add(1);
                         }
                     }
@@ -1218,6 +1220,16 @@ impl Body<'_> {
     fn frame_part(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "image" => {
+                // A chart's replacement picture (what readers that can't draw it show): kept with
+                // the chart as read, written back with it while it is unchanged.
+                if let Some(href) = get(a, "xlink:href")
+                    && let Some(fr) = &mut self.frame
+                    && fr.5.is_some()
+                    && let Some(o) = fr.6.as_mut().filter(|o| o.replacement.is_none())
+                {
+                    o.replacement = (self.zip)(href.trim_start_matches("./")).map(std::sync::Arc::new);
+                    return;
+                }
                 if let Some(href) = get(a, "xlink:href")
                     && let Some(fr) = &mut self.frame
                     && fr.2.is_none()
@@ -1660,4 +1672,13 @@ fn keepable(q: &str) -> bool {
         || q.ends_with("-start")
         || q.ends_with("-end")
         || q == "text:bookmark")
+}
+
+/// The section wrappers kept around top-level block `b` (a paragraph or a table), made empty
+/// when it has none yet.
+fn block_wrap(b: &mut FBlock) -> &mut (Vec<std::sync::Arc<str>>, u32) {
+    match b {
+        FBlock::Para(p) => p.wrap.get_or_insert_with(Default::default),
+        FBlock::Table(t) => t.wrap.get_or_insert_with(Default::default),
+    }
 }

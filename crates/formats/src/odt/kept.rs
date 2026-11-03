@@ -123,12 +123,40 @@ fn to_1_3(xml: &str) -> String {
 fn child_key(g: &str, q: &str, a: &super::xml::Attrs) -> Option<String> {
     // Drawing definitions (dashes, gradients, arrowheads…) are named by `draw:name`.
     match get(a, "style:name").or_else(|| get(a, "draw:name")).filter(|n| !n.is_empty()) {
-        Some(name) => Some(format!("{g}:{name}")),
+        Some(name) => Some(format!("{g}:{name}{}", space(q))),
         None => {
             let which = get(a, "style:family").or_else(|| get(a, "text:note-class")).unwrap_or("");
             Some(format!("{g}~{q}~{which}"))
         }
     }
+}
+
+/// The name space a definition (element `q`) belongs to, as a key's suffix: names are unique
+/// only within one (§16.2: a style's within its family; a list style, a data style, a gradient
+/// may share a paragraph style's name). Styles (`style:style`), font faces and master pages
+/// have none; a list style is `|list`, a data style `|data`, another definition `|<element>`.
+fn space(q: &str) -> String {
+    match q {
+        "style:style" | "style:font-face" | "style:master-page" => String::new(),
+        "text:list-style" => "|list".to_string(),
+        q if q.starts_with("number:") => "|data".to_string(),
+        q => format!("|{}", q.split_once(':').map_or(q, |(_, l)| l)),
+    }
+}
+
+/// Whether `xml` (a part WordCraft wrote) already defines what `def` (a kept definition) does:
+/// an element of its kind by its name (a list style and a paragraph style may share one).
+pub(super) fn defined(xml: &str, def: &str) -> bool {
+    let head = def.split('>').next().unwrap_or("");
+    let el = head.trim_start_matches('<').split([' ', '/', '\t', '\n', '\r']).next().unwrap_or("");
+    let name = ["style:name=\"", "draw:name=\""].into_iter().find_map(|a| {
+        let at = head.find(a)? + a.len();
+        let len = head.get(at..)?.find('"')?;
+        head.get(at - a.len()..at + len + 1)
+    });
+    let (Some(name), false) = (name, el.is_empty()) else { return false };
+    let open = format!("<{el} ");
+    xml.match_indices(&open).any(|(i, _)| xml.get(i..).and_then(|t| t.split('>').next()).is_some_and(|tag| tag.contains(name)))
 }
 
 /// The children of `container` (a child of the root) in `xml` (a part WordCraft wrote): each
@@ -562,7 +590,7 @@ pub(super) fn sequences(xml: &str) -> BTreeSet<String> {
 }
 
 /// The kept definitions markup naming `start` needs, each once, what they name included:
-/// `(automatic, common, font faces)`, by name, as kept. `None` when one of them makes a page
+/// `(automatic, common, font faces)`, by name (with its name space's suffix, see `space`), as kept. `None` when one of them makes a page
 /// start (`style:master-page-name`): WordCraft names its master pages afresh, so such markup is
 /// written from the model instead.
 pub(super) type Needed = (BTreeMap<String, Arc<str>>, BTreeMap<String, Arc<str>>, BTreeMap<String, Arc<str>>);
@@ -575,20 +603,24 @@ pub(super) fn needed(defs: &BTreeMap<String, Arc<str>>, start: BTreeSet<String>,
         if !seen.insert(n.clone()) || seen.len() > MAX_DEFS {
             continue;
         }
-        let (def, into) = if let Some(d) = defs.get(&format!("auto:{n}")) {
-            (d, &mut auto)
-        } else if let Some(d) = defs.get(&format!("common:{n}")) {
-            (d, &mut common)
-        } else if let Some(d) = defs.get(&format!("font:{n}")) {
-            (d, &mut fonts)
-        } else {
-            continue;
-        };
-        if !masters && def.contains("style:master-page-name=\"") && !def.contains("style:master-page-name=\"\"") {
-            return None;
+        // Every definition by that name (in any name space: see `space`), from the first group
+        // that has one: automatic styles, then common ones, then font faces.
+        let mut found = false;
+        for (group, into) in [("auto", &mut auto), ("common", &mut common), ("font", &mut fonts)] {
+            let base = format!("{group}:{n}");
+            for (k, def) in defs.range(base.clone()..).take_while(|(k, _)| k.starts_with(&base)) {
+                let Some(rest) = k.strip_prefix(&base).filter(|r| r.is_empty() || r.starts_with('|')) else { continue };
+                if !masters && def.contains("style:master-page-name=\"") && !def.contains("style:master-page-name=\"\"") {
+                    return None;
+                }
+                into.insert(format!("{n}{rest}"), def.clone());
+                todo.extend(names(def));
+                found = true;
+            }
+            if found {
+                break;
+            }
         }
-        into.insert(n, def.clone());
-        todo.extend(names(def));
     }
     Some((auto, common, fonts))
 }
@@ -602,10 +634,10 @@ mod tests {
     #[test]
     fn definitions_are_kept_by_name_and_followed() {
         let d: BTreeMap<String, Arc<str>> = defs(CONTENT.as_bytes(), true).into_iter().collect();
-        assert_eq!(d.keys().cloned().collect::<Vec<_>>(), ["auto:L1", "auto:P1", "auto:P2", "font:Liberation Serif"]);
+        assert_eq!(d.keys().cloned().collect::<Vec<_>>(), ["auto:L1|list", "auto:P1", "auto:P2", "font:Liberation Serif"]);
         assert!(d["auto:P1"].starts_with("<style:style style:name=\"P1\"") && d["auto:P1"].ends_with("</style:style>"));
         let (auto, common, fonts) = needed(&d, names(r#"<text:p text:style-name="P1">x</text:p>"#), false).unwrap();
-        assert_eq!(auto.keys().cloned().collect::<Vec<_>>(), ["L1", "P1"]);
+        assert_eq!(auto.keys().cloned().collect::<Vec<_>>(), ["L1|list", "P1"]);
         // "Body" and "Bullets" weren't kept here (they're common styles in styles.xml).
         assert!(common.is_empty());
         assert_eq!(fonts.keys().cloned().collect::<Vec<_>>(), ["Liberation Serif"]);
@@ -617,12 +649,27 @@ mod tests {
     fn angles_from_an_older_file_get_their_unit() {
         let xml = r#"<office:document-styles office:version="1.2"><office:styles><draw:gradient draw:name="G" draw:angle="300" draw:style="linear"/><draw:hatch draw:name="H" draw:rotation="450"/><draw:gradient draw:name="D" draw:angle="45deg"/></office:styles></office:document-styles>"#;
         let d: BTreeMap<String, Arc<str>> = defs(xml.as_bytes(), false).into_iter().collect();
-        assert!(d["common:G"].contains(r#"draw:angle="30deg""#), "{}", d["common:G"]);
-        assert!(d["common:H"].contains(r#"draw:rotation="45deg""#));
-        assert!(d["common:D"].contains(r#"draw:angle="45deg""#));
+        assert!(d["common:G|gradient"].contains(r#"draw:angle="30deg""#), "{}", d["common:G|gradient"]);
+        assert!(d["common:H|hatch"].contains(r#"draw:rotation="45deg""#));
+        assert!(d["common:D|gradient"].contains(r#"draw:angle="45deg""#));
         // From a 1.3 file: as it is.
         let d: BTreeMap<String, Arc<str>> = defs(xml.replace("1.2", "1.3").as_bytes(), false).into_iter().collect();
-        assert!(d["common:G"].contains(r#"draw:angle="300""#));
+        assert!(d["common:G|gradient"].contains(r#"draw:angle="300""#));
+    }
+
+    #[test]
+    fn definitions_sharing_a_name_are_each_kept() {
+        // A list style may have a paragraph style's name (§16.2: names are unique within a kind
+        // of definition), as LibreOffice's "Numbering 1" both are; each is kept, and markup
+        // naming it needs both.
+        let xml = r#"<office:document-styles><office:styles><style:style style:name="N" style:family="paragraph"/><text:list-style style:name="N"><text:list-level-style-number text:level="1"/></text:list-style></office:styles></office:document-styles>"#;
+        let d: BTreeMap<String, Arc<str>> = defs(xml.as_bytes(), false).into_iter().collect();
+        assert!(d["common:N"].starts_with("<style:style ") && d["common:N|list"].starts_with("<text:list-style "));
+        let (_, common, _) = needed(&d, names(r#"<text:p text:style-name="N"/>"#), false).unwrap();
+        assert_eq!(common.keys().cloned().collect::<Vec<_>>(), ["N", "N|list"]);
+        // One is defined where an element of its kind has the name, not the other kind.
+        let ours = r#"<office:styles><style:style style:name="N" style:family="paragraph"/></office:styles>"#;
+        assert!(defined(ours, &d["common:N"]) && !defined(ours, &d["common:N|list"]));
     }
 
     #[test]
