@@ -295,6 +295,70 @@ fn legacy_table_contextual_spacing_flag_is_scoped_to_cells_and_legacy_mode() {
     }
 }
 
+/// Baseline of the paragraph after a one-row table, less that of the first cell's last
+/// paragraph, which has 12 pt after in `style`, contextual or not. `next_cell` adds a second cell
+/// whose paragraph has that style; `after_table` styles the paragraph after the table.
+fn cell_end_gap(style: &str, contextual: bool) -> f32 {
+    cell_end_gap_in(Document::new(), style, contextual, None, None)
+}
+
+fn cell_end_gap_in(mut d: Document, style: &str, contextual: bool, next_cell: Option<&str>, after_table: Option<&str>) -> f32 {
+    use wordcraft_doc::props::LineSpacing;
+    d.styles.upsert(wordcraft_doc::Style { id: "Other".into(), name: "Other".into(), based_on: Some("Normal".into()), ..Default::default() });
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(24.0)), ..Default::default() };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let styled = |s: Option<&str>| ParaProps { style: s.map(Into::into), ..props.clone() };
+    let mut table = Table::new(1, if next_cell.is_some() { 2 } else { 1 }, 468.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0; 4]);
+    let last = ParaProps { style: Some(style.into()), space_after: Some(12.0), contextual_spacing: Some(contextual), ..props.clone() };
+    table.rows[0].cells[0].blocks = vec![para("Alpha probe", props.clone()), para("Beta probe", last)];
+    if let Some(cell) = table.rows[0].cells.get_mut(1) {
+        cell.blocks = vec![para("Delta probe", styled(next_cell))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table)), para("Gamma probe", styled(after_table))];
+    let l = lay(&d);
+    let baseline = |at: &[u32]| {
+        l.pages[0].items.iter().find_map(|i| match i {
+            Placed::Lines { para, y, path, .. } if path.0 == at => Some(y + para.lines[0].baseline),
+            _ => None,
+        })
+    };
+    let (Some(cell), Some(after)) = (baseline(&[0, 0, 0, 1]), baseline(&[1])) else { panic!("probe lines missing") };
+    after - cell
+}
+
+#[test]
+fn contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph() {
+    // The end-of-cell mark is a Normal paragraph: contextual spacing drops the 12 pt after a
+    // Normal last paragraph (docxide-pdf `cell-end-text-context`, `cell-end-empty-context`), not
+    // after one in another style (`cell-end-other-style`) or without contextual spacing.
+    let kept = cell_end_gap("Normal", false);
+    assert!((cell_end_gap("Other", true) - kept).abs() < 0.01);
+    let dropped = cell_end_gap("Normal", true);
+    assert!((kept - dropped - 12.0).abs() < 0.01, "kept {kept}, dropped {dropped}");
+    // An undefined style is formatted as Normal, and drops it too.
+    assert!((cell_end_gap("Missing", true) - dropped).abs() < 0.01);
+    // The mark decides, not a neighbour: another style in the next cell or after the table
+    // leaves the drop as it is.
+    for (next_cell, after_table) in [(Some("Other"), None), (None, Some("Other"))] {
+        let gap = cell_end_gap_in(Document::new(), "Normal", true, next_cell, after_table);
+        assert!((gap - dropped).abs() < 0.01, "{next_cell:?} {after_table:?}: {gap}, dropped {dropped}");
+    }
+    // Where `allowSpaceOfSameStyleInTable` keeps same-style space in cells (modes 11/12/14), the
+    // 12 pt stays.
+    let mut legacy = Document::new();
+    legacy.settings.compat_mode = 14;
+    legacy.settings.allow_space_of_same_style_in_table = true;
+    let gap = cell_end_gap_in(legacy, "Normal", true, None, None);
+    assert!((gap - kept).abs() < 0.01, "legacy {gap}, kept {kept}");
+}
+
 fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_style: bool, header: bool) -> f32 {
     use wordcraft_doc::props::LineSpacing;
     let mut d = Document::new();
@@ -10795,6 +10859,58 @@ fn a_middle_or_bottom_cell_of_a_split_row_lines_up_on_the_first_page() {
     assert_eq!(labels.first(), lines.first(), "a centred cell too long for the page starts at the top: {pages:?}");
     assert_eq!(labels.len(), lines.len(), "{pages:?}");
     assert_eq!(pages[1][0].len(), 25 - labels.len(), "{pages:?}");
+}
+
+#[test]
+fn a_bottom_cell_of_a_split_row_ignores_a_dropped_space_after_beside_it() {
+    use wordcraft_doc::props::{LineSpacing, VAlign};
+    // Cells: a bottom-aligned label, 30 lines that split, and a 160 pt spacer above a note whose
+    // space after (contextual 300 pt, or automatic) drops at the cell's end and would otherwise
+    // reach below the split lines: the label lines up with those.
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(LineSpacing::Exactly(12.0)),
+        widow_control: Some(false),
+        ..Default::default()
+    };
+    let para = |text: &str, props: ParaProps| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        wordcraft_doc::para_block(p)
+    };
+    let contextual = ParaProps { space_after: Some(300.0), contextual_spacing: Some(true), ..plain.clone() };
+    let automatic = ParaProps { space_after_auto: Some(true), ..plain.clone() };
+    for note in [contextual, automatic] {
+        let mut d = Document::new();
+        (d.last_section.page_w, d.last_section.page_h) = (400.0, 360.0);
+        d.last_section.margin_top = 36.0;
+        d.last_section.margin_bottom = 36.0;
+        let mut t = Table::new(1, 3, 328.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].cells[0].props.valign = Some(VAlign::Bottom);
+        t.rows[0].cells[0].blocks = vec![para("Label", plain.clone())];
+        t.rows[0].cells[1].blocks = (0..30).map(|i| para(&format!("Line {i}"), plain.clone())).collect();
+        let spacer = ParaProps { line_spacing: Some(LineSpacing::Exactly(160.0)), ..plain.clone() };
+        t.rows[0].cells[2].blocks = vec![para("Spacer", spacer), para("Note", note.clone())];
+        d.body = vec![para("Filler", ParaProps { line_spacing: Some(LineSpacing::Exactly(100.0)), ..plain.clone() }), Arc::new(Block::Table(t))];
+        let l = lay(&d);
+        let tops = |cell: u32| -> Vec<f32> {
+            l.pages[0]
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Placed::Lines { path, y, .. } if path.0.len() == 4 && path.0[0] == 1 && path.0[2] == cell => Some(*y),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (labels, lines, notes) = (tops(0), tops(1), tops(2));
+        assert!(lines.len() > 5 && lines.len() < 30, "the row splits: {lines:?}");
+        assert_eq!(notes.len(), 2, "the note stays on the page: {notes:?}");
+        assert_eq!(labels.last(), lines.last(), "{note:?}: labels {labels:?}, lines {lines:?}");
+    }
 }
 
 fn row_keep_pages(d: &Document) -> Vec<usize> {
