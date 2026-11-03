@@ -160,6 +160,15 @@ impl Exporter<'_> {
                 }
                 s.pop();
             }
+            // A turned picture cut at its line's top and bottom.
+            Draw::Clip { rect, items } => {
+                let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.rotated_pictures(s, it);
+                }
+                s.pop();
+            }
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
             Draw::Figure { alt, draws, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| {
@@ -222,7 +231,9 @@ impl Exporter<'_> {
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
                             // A rotated inline picture, or a rotated group holding pictures: turned as a
                             // whole, each picture tagged on its own (see `rotated_pictures`).
-                            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
+                            Draw::Rotated { .. } if holds_picture(d) => self.rotated_pictures(s, d),
+                            // A turned picture cut at its line (or a canvas's members): each part tagged on its own.
+                            Draw::Clip { .. } => self.rotated_pictures(s, d),
                             // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
                             Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                                 for d in inner {

@@ -5,11 +5,12 @@ pub(crate) fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {
     if alt.trim().is_empty() { kind.noun() } else { alt }
 }
 
-/// A picture, or a rotation holding one at any depth (a rotated group's turned members).
+/// A picture, or a rotation or clip holding one at any depth (a rotated group's turned members, a
+/// turned picture cut at its line).
 pub(crate) fn holds_picture(d: &Draw) -> bool {
     match d {
         Draw::Image { .. } => true,
-        Draw::Rotated { items, .. } => items.iter().any(holds_picture),
+        Draw::Rotated { items, .. } | Draw::Clip { items, .. } => items.iter().any(holds_picture),
         _ => false,
     }
 }
