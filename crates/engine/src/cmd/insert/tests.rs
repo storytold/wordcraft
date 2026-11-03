@@ -354,3 +354,54 @@ fn date_pictures() {
     assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
     assert_eq!(date_picture("DATE"), None);
 }
+
+/// Each paragraph of `lines` bookmarked whole, as Word keys them (`K0`, `K1`...).
+fn keyed(lines: &[&str]) -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&lines.join("\n")));
+    for (i, line) in lines.iter().enumerate() {
+        s.run("select.text", &json!({"text": line})).unwrap();
+        s.run("insert.bookmark", &json!({"name": format!("K{i}")})).unwrap();
+    }
+    s
+}
+
+/// The words of the paragraph each bookmark starts in, in order.
+fn bookmark_starts(s: &Session) -> Vec<(String, String)> {
+    let paths = s.doc.para_paths(StoryRef::Body);
+    bookmark_marks(s)
+        .into_iter()
+        .filter(|m| m.1)
+        .map(|(i, _, name)| {
+            let p = s.doc.para(StoryRef::Body, &paths[i]).unwrap();
+            (name, p.text.replace(wordcraft_doc::para::OBJ, ""))
+        })
+        .collect()
+}
+
+/// Paragraphs copied or cut and pasted in front of a bookmarked paragraph: its bookmark stays
+/// with its text, as in Word. The caret sits after the bookmark's start, and the paste split
+/// the paragraph there, so the start went onto the pasted paragraph.
+#[test]
+fn pasting_in_front_of_a_bookmarked_paragraph_leaves_its_bookmark() {
+    let lines = ["Upon termination return it", "Upon renewal bring it", "All personnel will keep it", "It is the duty to hold it", "Keep this copy"];
+    let mut s = keyed(&lines);
+    for (cmd, from, before) in [("edit.copy", "Upon termination", "Upon renewal"), ("edit.cut", "It is the duty", "All personnel")] {
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": from})).unwrap();
+        s.run("select.paragraph", &json!({})).unwrap();
+        s.run(cmd, &json!({})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": before})).unwrap();
+        s.run("caret.left", &json!({})).unwrap();
+        s.run("edit.paste", &json!({})).unwrap();
+    }
+    let starts = bookmark_starts(&s);
+    for (i, line) in lines.iter().enumerate() {
+        let on: Vec<&str> = starts.iter().filter(|(n, _)| *n == format!("K{i}")).map(|(_, t)| t.as_str()).collect();
+        // The copy of the copied paragraph carries its bookmark too; every other stays alone.
+        assert!(!on.is_empty() && on.iter().all(|t| t == line), "K{i}: {starts:?}");
+        assert!(i == 0 || on.len() == 1, "K{i}: {starts:?}");
+    }
+    let order: Vec<String> = s.doc.plain_text(StoryRef::Body).lines().map(str::to_owned).collect();
+    assert_eq!(order, [lines[0], lines[0], lines[1], lines[3], lines[2], lines[4]], "the paste lands in front of the paragraph");
+}

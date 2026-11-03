@@ -682,6 +682,49 @@ fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
     d.delete_range(&Pos { story: StoryRef::Body, path: first, off: 0 }, &Pos::body(2, 0)).unwrap();
     assert!(d.body.get(1).is_some_and(|b| b.as_table().is_some()), "a table with paragraphs the walk never saw was removed");
 }
+
+/// Whole paragraphs pasted at a caret with only bookmark starts before it go in front of them,
+/// so the bookmarks stay with the paragraph's text; past any other mark or text, the paste goes
+/// at the caret as before.
+#[test]
+fn pasted_paragraphs_leave_the_bookmarks_that_start_a_paragraph() {
+    let obj = crate::para::OBJ.len_utf8();
+    let start = |n: &str| InlineObject::BookmarkStart { name: n.into() };
+    let end = |n: &str| InlineObject::BookmarkEnd { name: n.into() };
+    let src = doc(&["new", "x"]);
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(1, 0));
+    // (marks at the start of "kept", caret offset, the paragraph each start ends up in)
+    let cases: [(Vec<InlineObject>, usize, &[&str]); 4] = [
+        (vec![start("a")], obj, &["kept"]),
+        (vec![start("a"), start("b")], 2 * obj, &["kept", "kept"]),
+        (vec![end("z"), start("a")], 2 * obj, &["new"]),
+        (vec![start("a")], obj + 2, &["kenew"]),
+    ];
+    for (marks, off, want) in cases {
+        let mut d = doc(&["first", "kept"]);
+        let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        for (i, m) in marks.into_iter().enumerate() {
+            p.insert_object(i * obj, m, &CharProps::default()).unwrap();
+        }
+        d.insert_fragment(&Pos::body(1, off), &f).unwrap();
+        let mut got = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            let words = p.text.replace(crate::para::OBJ, "");
+            got.extend(p.objects.iter().filter(|o| matches!(o, InlineObject::BookmarkStart { .. })).map(|_| words.clone()));
+        }
+        assert_eq!(got, want, "caret at {off}");
+    }
+    // The last pasted paragraph has words: they join the front of the paragraph, the bookmark
+    // staying just before its own words.
+    let two = doc(&["new", "more", "x"]).copy_range(&Pos::body(0, 0), &Pos::body(1, 4));
+    let mut d = doc(&["first", "kept"]);
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, start("a"), &CharProps::default()).unwrap();
+    d.insert_fragment(&Pos::body(1, obj), &two).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(2)).unwrap();
+    assert_eq!(p.text, format!("more{}kept", crate::para::OBJ));
+    assert!(matches!(p.object_at(4), Some(InlineObject::BookmarkStart { .. })));
+}
 #[test]
 fn adopting_a_document_renumbers_what_it_refers_to() {
     use crate::para::NoteKind;
