@@ -21,6 +21,7 @@ File|Backstage|Export PDF|file.exportPdf
 File|Backstage|Export Image|file.exportPng
 File|Backstage|Options|file.options
 File|Options|Numerals|view.numeral
+File|Options|Field Shading|view.fieldShading
 File|Backstage|Share|file.share
 File|Backstage|Protect Document|file.protect
 File|Backstage|Inspect Document|file.inspect

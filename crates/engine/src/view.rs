@@ -1,6 +1,52 @@
 use serde::{Deserialize, Serialize};
 use wordcraft_layout::{NumeralMode, ViewMode};
 
+/// How field results are shaded on screen (File › Options › Advanced › Field shading, Word's
+/// Never / When selected / Always, #4290). Screen only: print, PDF export and page images are
+/// unchanged, as in Word.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FieldShading {
+    Never,
+    /// Shade a field while the caret is in it or the selection intersects it (Word's default).
+    #[default]
+    WhenSelected,
+    Always,
+}
+
+impl FieldShading {
+    /// The values the options page offers, in Word's order.
+    pub const ALL: [FieldShading; 3] = [Self::Never, Self::WhenSelected, Self::Always];
+
+    /// A command value (`"never"`, `"whenSelected"` or `"always"`, any case).
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "never" => Some(Self::Never),
+            "whenselected" => Some(Self::WhenSelected),
+            "always" => Some(Self::Always),
+            _ => None,
+        }
+    }
+
+    /// The command value and the JSON form (camelCase).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Never => "never",
+            Self::WhenSelected => "whenSelected",
+            Self::Always => "always",
+        }
+    }
+
+    /// The option's label, as Word writes it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Never => "Never",
+            Self::WhenSelected => "When selected",
+            Self::Always => "Always",
+        }
+    }
+}
+
 /// View state that commands can change (ribbon View tab, status bar).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +135,10 @@ pub struct ViewState {
     /// Show field codes instead of their results (`view.fieldCodes`, Alt+F9).
     #[serde(default)]
     pub field_codes: bool,
+    /// Shade field results on screen (`view.fieldShading`, File › Options › Advanced › Field
+    /// shading, #4290). Screen only, as in Word.
+    #[serde(default)]
+    pub field_shading: FieldShading,
     /// Print Layout › Hide White Space: pages run together, the top and bottom margins (with
     /// headers and footers) between pages collapse to a thin line. On screen only; the layout
     /// and page count are unchanged.
@@ -201,6 +251,7 @@ impl Default for ViewState {
             hide_ink: false,
             draw: Default::default(),
             field_codes: false,
+            field_shading: FieldShading::default(),
             hide_white_space: false,
             outline: Default::default(),
             design_mode: false,

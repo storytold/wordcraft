@@ -263,6 +263,9 @@ pub struct Tokens {
     pub selection: Color32,
     /// Find › Reading Highlight.
     pub find_highlight: Color32,
+    /// Field results while File › Options › Advanced › Field shading shades them (#4290):
+    /// a low-alpha grey drawn on screen only, behind the selection.
+    pub field_shading: Color32,
     pub page_shadow: Color32,
     /// Selection-frame handles (pictures, shapes, text boxes) and their shadow.
     pub handle: Color32,
@@ -331,6 +334,7 @@ impl Tokens {
             status_bar: Color32::from_rgb(0xF0, 0xF0, 0xF0),
             selection: Color32::from_rgba_unmultiplied(0x3B, 0x5B, 0xDB, 0x48),
             find_highlight: Color32::from_rgba_unmultiplied(0xFF, 0xE0, 0x3D, 0x90),
+            field_shading: Color32::from_rgba_unmultiplied(0xD9, 0xD9, 0xD9, 0x80),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x22),
             handle: Color32::WHITE,
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),
@@ -398,6 +402,7 @@ impl Tokens {
             status_bar: Color32::from_rgb(0x1F, 0x1F, 0x1F),
             selection: Color32::from_rgba_unmultiplied(0x7A, 0x93, 0xF0, 0x55),
             find_highlight: Color32::from_rgba_unmultiplied(0xC8, 0xA8, 0x00, 0x70),
+            field_shading: Color32::from_rgba_unmultiplied(0x4D, 0x4D, 0x4D, 0x80),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x60),
             handle: Color32::from_rgb(0xF2, 0xF2, 0xF2),
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x5A),
