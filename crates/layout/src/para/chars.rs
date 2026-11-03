@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, FaceRef, ResolvedChar, SOFT_HYPHEN};
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
 #[derive(Clone, Copy)]

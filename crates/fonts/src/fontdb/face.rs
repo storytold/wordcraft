@@ -1,5 +1,8 @@
 use super::names::{LocalName, east_asian_font};
-use super::*;
+use super::{
+    Arc, AtomicU32, BezPath, DrawSettings, Engine, GlyphId, Hinting, HintingInstance, HintingOptions, Location, LocationRef, MetadataProvider,
+    Ordering, OutlinePen, RwLock, Size, Target,
+};
 
 /// The family used when a requested family is unknown (the UI sans).
 pub const FALLBACK_FAMILY: &str = "Source Sans 3";
