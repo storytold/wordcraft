@@ -26,6 +26,64 @@ impl Align {
     }
 }
 
+/// Paragraph-level text flow (`w:pPr/w:textDirection`, ECMA-376 §17.3.1.41).
+///
+/// Kept separate from [`super::TextDirection`], whose three values model the table-cell direction
+/// control. These values preserve the exact OOXML direction through JSON and DOCX saves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParagraphTextDirection {
+    LrTb,
+    LrTbV,
+    TbRl,
+    TbRlV,
+    TbLr,
+    TbLrV,
+    BtLr,
+    TbV,
+    Rl,
+    RlV,
+    Lr,
+    LrV,
+}
+
+impl ParagraphTextDirection {
+    pub fn from_ooxml(value: &str) -> Option<Self> {
+        match value {
+            "lrTb" => Some(Self::LrTb),
+            "lrTbV" => Some(Self::LrTbV),
+            "tbRl" => Some(Self::TbRl),
+            "tbRlV" => Some(Self::TbRlV),
+            "tbLr" => Some(Self::TbLr),
+            "tbLrV" => Some(Self::TbLrV),
+            "btLr" => Some(Self::BtLr),
+            "tbV" => Some(Self::TbV),
+            "rl" => Some(Self::Rl),
+            "rlV" => Some(Self::RlV),
+            "lr" => Some(Self::Lr),
+            "lrV" => Some(Self::LrV),
+            _ => None,
+        }
+    }
+
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::LrTb => "lrTb",
+            Self::LrTbV => "lrTbV",
+            Self::TbRl => "tbRl",
+            Self::TbRlV => "tbRlV",
+            Self::TbLr => "tbLr",
+            Self::TbLrV => "tbLrV",
+            Self::BtLr => "btLr",
+            Self::TbV => "tbV",
+            Self::Rl => "rl",
+            Self::RlV => "rlV",
+            Self::Lr => "lr",
+            Self::LrV => "lrV",
+        }
+    }
+}
+
 /// Line spacing rule.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "rule", content = "value")]
@@ -318,7 +376,7 @@ pub struct ParaProps {
     pub bidi: Option<bool>,
     /// Paragraph text direction (`w:textDirection`); `None` inherits from the paragraph style.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_direction: Option<super::TextDirection>,
+    pub text_direction: Option<ParagraphTextDirection>,
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,

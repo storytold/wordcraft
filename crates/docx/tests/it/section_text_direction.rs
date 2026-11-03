@@ -82,32 +82,35 @@ fn explicit_horizontal_direction_is_kept_in_sections_and_cells() {
 #[test]
 fn paragraph_text_direction_round_trips_through_two_saves_and_json() {
     use wordcraft_doc::props::ParaProps;
-    use wordcraft_doc::props::TextDirection::{Down, Horizontal, Up};
+    use wordcraft_doc::props::ParagraphTextDirection;
 
-    let body = r#"<w:p><w:pPr><w:textDirection w:val="tbRl"/></w:pPr><w:r><w:t>Down</w:t></w:r></w:p><w:p><w:pPr><w:textDirection w:val="btLr"/></w:pPr><w:r><w:t>Up</w:t></w:r></w:p><w:p><w:pPr><w:textDirection w:val="lrTb"/></w:pPr><w:r><w:t>Horizontal</w:t></w:r></w:p><w:p><w:r><w:t>Inherited</w:t></w:r></w:p>"#;
-    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let values = ["lrTb", "lrTbV", "tbRl", "tbRlV", "tbLr", "tbLrV", "btLr", "tbV", "rl", "rlV", "lr", "lrV"];
+    let mut body: String =
+        values.iter().map(|value| format!(r#"<w:p><w:pPr><w:textDirection w:val="{value}"/></w:pPr><w:r><w:t>{value}</w:t></w:r></w:p>"#)).collect();
+    body.push_str(r#"<w:p><w:r><w:t>Inherited</w:t></w:r></w:p>"#);
+    let d = wordcraft_docx::read(&docx(&body)).unwrap();
     let paras: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
-    assert_eq!(paras[0].props.text_direction, Some(Down));
-    assert_eq!(paras[1].props.text_direction, Some(Up));
-    assert_eq!(paras[2].props.text_direction, Some(Horizontal));
-    assert_eq!(paras[3].props.text_direction, None);
+    for (para, value) in paras.iter().zip(values) {
+        assert_eq!(para.props.text_direction, ParagraphTextDirection::from_ooxml(value), "{value}");
+    }
+    assert_eq!(paras[values.len()].props.text_direction, None);
     let json = serde_json::to_value(&paras[0].props).unwrap();
-    assert_eq!(json["textDirection"], "down");
+    assert_eq!(json["textDirection"], "lrTb");
     let decoded: ParaProps = serde_json::from_value(json).unwrap();
-    assert_eq!(decoded.text_direction, Some(Down));
+    assert_eq!(decoded.text_direction, Some(ParagraphTextDirection::LrTb));
 
     let first = wordcraft_docx::write(&d).unwrap();
     let xml = document_xml(&first);
-    assert!(xml.contains(r#"<w:textDirection w:val="tbRl"/>"#), "{xml}");
-    assert!(xml.contains(r#"<w:textDirection w:val="btLr"/>"#), "{xml}");
-    assert!(xml.contains(r#"<w:textDirection w:val="lrTb"/>"#), "{xml}");
-    assert_eq!(xml.matches("w:textDirection").count(), 3, "inherited direction stays absent: {xml}");
+    for value in values {
+        assert!(xml.contains(&format!(r#"<w:textDirection w:val="{value}"/>"#)), "{xml}");
+    }
+    assert_eq!(xml.matches("w:textDirection").count(), values.len(), "inherited direction stays absent: {xml}");
     let second = wordcraft_docx::write(&wordcraft_docx::read(&first).unwrap()).unwrap();
     let twice = document_xml(&second);
-    assert_eq!(twice.matches("w:textDirection").count(), 3, "{twice}");
-    assert!(twice.contains(r#"<w:textDirection w:val="tbRl"/>"#), "{twice}");
-    assert!(twice.contains(r#"<w:textDirection w:val="btLr"/>"#), "{twice}");
-    assert!(twice.contains(r#"<w:textDirection w:val="lrTb"/>"#), "{twice}");
+    assert_eq!(twice.matches("w:textDirection").count(), values.len(), "{twice}");
+    for value in values {
+        assert!(twice.contains(&format!(r#"<w:textDirection w:val="{value}"/>"#)), "{twice}");
+    }
 }
 
 #[test]
