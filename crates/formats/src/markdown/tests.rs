@@ -853,11 +853,17 @@ fn list_item_display_equations_keep_their_own_line() {
         assert!(!eqs.is_empty() && eqs.iter().all(|e| e.1), "{src:?}");
         assert_eq!(export(&import(src)), format!("{src}\n"));
     }
-    // After an empty line it stays `$…$`: a `\` break before a `$$` line reads back as a backslash.
-    let inlines = vec![Inline::Text("a\n\n".into(), Fmt::default()), Inline::Equation { linear: "x".into(), display: true }];
-    let p = Para { list: Some(ListInfo { ordered: false, level: 0, start: 1 }), inlines, ..Default::default() };
-    let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
-    assert!(para_texts(&model::from_doc(&import(&md))).iter().all(|t| !t.contains('\\')), "{md:?}");
+    // After an empty line, or two, it is a `$$` line too: the `\` break written before it reads
+    // back as a break, and the equation as an equation (CodeRabbit on #4500).
+    for before in ["a\n\n", "a\n\n\n"] {
+        let inlines = vec![Inline::Text(before.into(), Fmt::default()), Inline::Equation { linear: "x".into(), display: true }];
+        let p = Para { list: Some(ListInfo { ordered: false, level: 0, start: 1 }), inlines: inlines.clone(), ..Default::default() };
+        let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
+        assert!(md.lines().any(|l| l.trim() == "$$x$$"), "{md:?}");
+        let back = model::from_doc(&import(&md));
+        let [FBlock::Para(q)] = back.blocks.as_slice() else { panic!("{md:?}: {:?}", back.blocks) };
+        assert_eq!(q.inlines, inlines, "{md:?}");
+    }
     // A break next to an item's only equation still gives a `$$` line.
     let eq = Inline::Equation { linear: "x".into(), display: true };
     let br = Inline::Text("\n".into(), Fmt::default());
@@ -865,5 +871,39 @@ fn list_item_display_equations_keep_their_own_line() {
         let p = Para { list: Some(ListInfo { ordered: false, level: 0, start: 1 }), inlines, ..Default::default() };
         let md = export(&model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
         assert_eq!(md, "- $$x$$\n");
+    }
+}
+
+/// A `$$` equation line ends a list item's or a quote's lazy continuation, as it ends a paragraph
+/// at the top level, and a break before it stays a break (CodeRabbit on #4500). A line that only
+/// starts with `$$` still continues the text.
+#[test]
+fn display_math_ends_a_lazy_continuation() {
+    for src in ["- intro\n$$x^2$$", "> intro\n$$x^2$$", "intro\n$$x^2$$"] {
+        let flow = parse(src);
+        let [FBlock::Para(text), FBlock::Para(eq)] = flow.blocks.as_slice() else { panic!("{src:?}: {:?}", flow.blocks) };
+        assert_eq!(text.text(), "intro", "{src:?}");
+        assert_eq!(eq.inlines, [Inline::Equation { linear: "x^2".into(), display: true }], "{src:?}");
+        assert!(eq.list.is_none() && eq.kind == Kind::Normal, "{src:?}: the equation stands on its own");
+    }
+    for src in ["- intro\n$$ a price", "> intro\n$$ a price"] {
+        let flow = parse(src);
+        assert!(equations(&flow).is_empty() && flow.blocks.len() == 1, "{src:?}: {:?}", flow.blocks);
+    }
+    // A `$$` line ends a table too, even with a `|` in it.
+    let flow = parse("| a |\n|---|\n$$x|y$$");
+    let [FBlock::Table(t), FBlock::Para(_)] = flow.blocks.as_slice() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 1);
+    assert!(equations(&flow).iter().all(|e| e.1) && equations(&flow).len() == 1, "{:?}", equations(&flow));
+    // No backslash is left, and a save reads back the same. Only a list item keeps the break: it
+    // joins its paragraphs with one, where a paragraph of its own can't end in a break.
+    for (src, texts) in
+        [("a\\\n$$x$$", vec!["a", "x"]), ("a  \n$$x$$", vec!["a", "x"]), ("> a\\\n> $$x$$", vec!["a", "x"]), ("- a\\\n  $$x$$", vec!["a\n\nx"])]
+    {
+        let flow = parse(src);
+        assert_eq!(para_texts(&flow), texts, "{src:?}");
+        assert_eq!(equations(&flow), [("x".to_string(), true)], "{src:?}");
+        let again = model::from_doc(&import(&export(&import(src))));
+        assert_eq!(para_texts(&again), texts, "{src:?} after a save");
     }
 }

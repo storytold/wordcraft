@@ -343,6 +343,12 @@ fn interrupts(l: &str) -> bool {
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
+/// [`interrupts`], or a display equation opening at `lines[i]`: it ends a paragraph at the top
+/// level, so it ends a list item's or a quote's lazy continuation too.
+fn interrupts_at(lines: &[String], i: usize) -> bool {
+    lines.get(i).is_some_and(|l| interrupts(l) || (indent(l) < 4 && display_math(lines, i).is_some()))
+}
+
 fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
     if lines.is_empty() {
         return;
@@ -481,6 +487,14 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
             continue;
         }
         if let Some((linear, next)) = display_math(lines, i) {
+            // A break before it: kept in a list item, which joins its paragraphs, else dropped.
+            let breaks = para.last().is_some_and(|l| l.ends_with("  ") || (l.ends_with('\\') && !l.ends_with("\\\\")));
+            if breaks && level > 0 {
+                para.push(String::new());
+            } else if breaks && let Some(last) = para.last_mut() {
+                let text = last.trim_end();
+                *last = text.strip_suffix('\\').unwrap_or(text).to_string();
+            }
             flush_para(&mut para, &mut out, depth, refs);
             let p = Para { inlines: vec![Inline::Equation { linear, display: true }], ..Default::default() };
             out.push(FBlock::Para(p));
@@ -516,7 +530,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                 table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
                 i += 2;
                 while let Some(l) = lines.get(i) {
-                    if is_blank(l) || !l.contains('|') || interrupts(l) {
+                    if is_blank(l) || !l.contains('|') || interrupts_at(lines, i) {
                         break;
                     }
                     let mut cells = split_row(l);
@@ -567,7 +581,7 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
         if indent(line) < 4 && trimmed.starts_with('>') {
             let content = &trimmed[1..];
             inner.push(content.strip_prefix(' ').unwrap_or(content).to_string());
-        } else if !is_blank(line) && !interrupts(line) && inner.last().is_some_and(|line| !is_blank(line)) {
+        } else if !is_blank(line) && !interrupts_at(lines, *i) && inner.last().is_some_and(|line| !is_blank(line)) {
             inner.push(line.clone());
         } else {
             break;
@@ -647,7 +661,10 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                 item.push(String::new());
             } else if indent(l) >= content_indent {
                 item.push(strip_indent(l, content_indent).to_string());
-            } else if item.last().is_some_and(|x| !is_blank(x)) && !interrupts(l) && list_marker(l.trim_start_matches([' ', '\t'])).is_none() {
+            } else if item.last().is_some_and(|x| !is_blank(x))
+                && !interrupts_at(lines, i)
+                && list_marker(l.trim_start_matches([' ', '\t'])).is_none()
+            {
                 // Lazy continuation of the item's paragraph.
                 item.push(l.trim_start_matches([' ', '\t']).to_string());
             } else {

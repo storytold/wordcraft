@@ -100,12 +100,12 @@ fn inlines_md_table(inlines: &[Inline]) -> String {
 }
 
 /// A list item's inlines split around each display equation with a line of its own, so it can
-/// be written as a `$$` line. The reader joins an item's later paragraphs back with a break.
+/// be written as a `$$` line. The reader joins an item's later paragraphs back with a break, and
+/// keeps a hard break written before a `$$` line.
 fn item_lines(inlines: &[Inline]) -> Vec<Vec<Inline>> {
     let own_line = |k: usize| {
         let before = match k.checked_sub(1).and_then(|j| inlines.get(j)) {
-            // A hard break left before a `$$` line would read back as a backslash.
-            Some(Inline::Text(t, _)) => t.ends_with('\n') && !t.ends_with("\n\n"),
+            Some(Inline::Text(t, _)) => t.ends_with('\n'),
             Some(_) => false,
             None => true,
         };
@@ -463,7 +463,15 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             let item = |b: String| escape_lines(b).replace("\\\n", &format!("\\\n{cont}"));
                             let lines = item_lines(&p.inlines);
                             let body = if lines.len() > 1 || lines.first().is_some_and(|l| *l != p.inlines) {
-                                lines.iter().map(|l| item(inlines_md(l))).collect::<Vec<_>>().join(&format!("\n{cont}"))
+                                let line = |l: &Vec<Inline>| {
+                                    // A line ending in a break keeps its `\`; the join gives the newline.
+                                    let mut md = inlines_md(l);
+                                    if md.ends_with('\n') {
+                                        md.pop();
+                                    }
+                                    item(md)
+                                };
+                                lines.iter().map(line).collect::<Vec<_>>().join(&format!("\n{cont}"))
                             } else {
                                 item(body)
                             };
