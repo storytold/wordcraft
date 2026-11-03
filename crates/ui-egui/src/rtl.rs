@@ -64,6 +64,12 @@ pub fn horizontal_top<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> InnerRe
     if flows(ui) { ui.scope_builder(UiBuilder::new().layout(Layout::right_to_left(Align::Min)), add) } else { ui.horizontal_top(add) }
 }
 
+/// A button's text whose `>>` or `<<` points the way things move across the window (Add >>, <<
+/// Remove): in a mirrored interface the two swap, because the list items move to is on the other side.
+pub fn arrows(text: &str) -> String {
+    if on() { text.replace(">>", "\u{1}").replace("<<", ">>").replace('\u{1}', "<<") } else { text.to_string() }
+}
+
 /// The layout for a row's items that belong at its far end (the side rows end on): filled from
 /// that end inwards.
 pub fn far_side(ui: &Ui, align: Align) -> Layout {

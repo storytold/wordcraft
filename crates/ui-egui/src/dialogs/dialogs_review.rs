@@ -230,7 +230,7 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
         });
     });
     ui.add_space(4.0);
-    if ui.button(if f.more { tl!("<< Less") } else { tl!("More >>") }).clicked() {
+    if ui.button(crate::rtl::arrows(if f.more { tl!("<< Less") } else { tl!("More >>") })).clicked() {
         f.more = !f.more;
     }
     if f.more {

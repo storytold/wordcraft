@@ -282,60 +282,66 @@ pub(crate) fn recipient_list(
     let mut remove_row = None;
     let mut x_w = X_W;
     let mut focused = None;
-    egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
-        crate::rtl::vertical(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                for (i, f) in fields.iter_mut().enumerate() {
-                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")))
-                        .accessible_name(format!("{} {}", tl!("Field name"), i + 1));
-                    let x = ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
-                    x_w = x.rect.width();
-                    if x.clicked() {
-                        remove_field = Some(i);
+    crate::rtl::island(ui, |ui| {
+        egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
+            crate::rtl::vertical(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
+                    for (i, f) in fields.iter_mut().enumerate() {
+                        ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")))
+                            .accessible_name(format!("{} {}", tl!("Field name"), i + 1));
+                        let x =
+                            ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
+                        x_w = x.rect.width();
+                        if x.clicked() {
+                            remove_field = Some(i);
+                        }
                     }
-                }
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
-                for k in range {
-                    let Some(&r) = visible.get(k) else { continue };
-                    let Some(row) = rows.get_mut(r) else { continue };
-                    // Striped rows, like a data grid: painted under the row once its size is known.
-                    let stripe = ui.painter().add(egui::Shape::Noop);
-                    let line = ui.horizontal(|ui| {
-                        // The record's number in the merge, a dash when the filter leaves it out.
-                        let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
-                            None => ((r + 1).to_string(), true),
-                            Some(Some(n)) => (n.to_string(), true),
-                            Some(None) => ("–".to_string(), false),
-                        };
-                        let num = egui::RichText::new(num).weak();
-                        let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                        ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
-                        for (j, c) in row.iter_mut().enumerate() {
-                            // Keyed on the record, not its place in the grid: when the view hides
-                            // or moves rows, the keyboard can't land in another record (#1576).
-                            let field_name = fields.get(j).map_or("", String::as_str);
-                            let cell = ui
-                                .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
-                                .accessible_name(crate::i18n::fmt(tl!("{field}, record {n}"), &[("field", field_name), ("n", &(r + 1).to_string())]));
-                            if cell.has_focus() {
-                                focused = Some(cell.id);
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
+                    for k in range {
+                        let Some(&r) = visible.get(k) else { continue };
+                        let Some(row) = rows.get_mut(r) else { continue };
+                        // Striped rows, like a data grid: painted under the row once its size is known.
+                        let stripe = ui.painter().add(egui::Shape::Noop);
+                        let line = ui.horizontal(|ui| {
+                            // The record's number in the merge, a dash when the filter leaves it out.
+                            let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
+                                None => ((r + 1).to_string(), true),
+                                Some(Some(n)) => (n.to_string(), true),
+                                Some(None) => ("–".to_string(), false),
+                            };
+                            let num = egui::RichText::new(num).weak();
+                            let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
+                            ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
+                            for (j, c) in row.iter_mut().enumerate() {
+                                // Keyed on the record, not its place in the grid: when the view hides
+                                // or moves rows, the keyboard can't land in another record (#1576).
+                                let field_name = fields.get(j).map_or("", String::as_str);
+                                let cell = ui
+                                    .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
+                                    .accessible_name(crate::i18n::fmt(
+                                        tl!("{field}, record {n}"),
+                                        &[("field", field_name), ("n", &(r + 1).to_string())],
+                                    ));
+                                if cell.has_focus() {
+                                    focused = Some(cell.id);
+                                }
+                                // Under the field's remove button.
+                                ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
                             }
-                            // Under the field's remove button.
-                            ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
+                            if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
+                                remove_row = Some(r);
+                            }
+                        });
+                        if k % 2 == 1 {
+                            let half = ui.spacing().item_spacing.y / 2.0;
+                            let rect = line.response.rect.expand2(vec2(0.0, half));
+                            ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
                         }
-                        if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
-                            remove_row = Some(r);
-                        }
-                    });
-                    if k % 2 == 1 {
-                        let half = ui.spacing().item_spacing.y / 2.0;
-                        let rect = line.response.rect.expand2(vec2(0.0, half));
-                        ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
                     }
-                }
+                });
             });
         });
     });
