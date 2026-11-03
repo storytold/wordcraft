@@ -196,7 +196,7 @@ impl Reader {
             "clcbpat" => self.def_cur.shading = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "sb" => self.st.sb = Some(pv),
             "sa" => self.st.sa = Some(pv),
-            "sl" => self.st.sl = pv,
+            "sl" => self.st.sl = Some(pv),
             "slmult" => self.st.slmult = on,
             "li" | "lin" => self.st.li = Some(pv),
             "ri" | "rin" => self.st.ri = Some(pv),

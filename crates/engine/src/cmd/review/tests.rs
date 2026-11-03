@@ -1086,15 +1086,22 @@ fn rtf_reopened_paragraph_change_restores_layout_on_reject() {
     }
 }
 
-/// App-supported sub-point exact spacing survives RTF saves and Reject.
+/// App-supported exact spacing and an explicit minimum of zero survive RTF saves and Reject.
 #[test]
-fn rtf_reject_restores_subpoint_exact_spacing() {
+fn rtf_reject_restores_supported_line_spacing() {
     use wordcraft_doc::props::LineSpacing;
-    for points in [0.7, 0.95, 1.0, 18.0, 1584.0] {
+    for (params, line) in [
+        (json!({"exactly": 0.7}), LineSpacing::Exactly(0.7)),
+        (json!({"exactly": 0.95}), LineSpacing::Exactly(0.95)),
+        (json!({"exactly": 1.0}), LineSpacing::Exactly(1.0)),
+        (json!({"exactly": 18.0}), LineSpacing::Exactly(18.0)),
+        (json!({"exactly": 1584.0}), LineSpacing::Exactly(1584.0)),
+        (json!({"atLeast": 0}), LineSpacing::AtLeast(0.0)),
+    ] {
         let mut s = Session::new(wordcraft_formats::rtf::import(br"{\rtf1\pard\ql Boundary\par\pard\ql Neighbor\par}").unwrap());
-        s.run("para.lineSpacing", &json!({"exactly": points})).unwrap();
+        s.run("para.lineSpacing", &params).unwrap();
         let old = body_para(&s).props.formatting();
-        assert_eq!(old.line_spacing, Some(LineSpacing::Exactly(points)));
+        assert_eq!(old.line_spacing, Some(line));
         let neighbor = s.doc.body[1].clone();
         s.run("review.trackChanges", &json!({"value": true})).unwrap();
         s.run("review.trackingOptions", &json!({"trackFormatting": true})).unwrap();

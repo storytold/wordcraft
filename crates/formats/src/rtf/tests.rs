@@ -819,6 +819,23 @@ fn saving_keeps_prior_paragraph_spacing() {
     }
 }
 
+/// An explicit old minimum of zero survives saves without leaking through resets or groups.
+#[test]
+fn prior_zero_line_spacing_is_explicit_and_scoped() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, expected) in
+        [("", None), (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))), (r"\sl0\slmult1", None), (r"\sl0\pard\ql", None), (r"{\sl0\slmult0}", None)]
+    {
+        let mut doc = prior_layout_document(words);
+        for _ in 0..3 {
+            assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().props.line_spacing, None);
+            doc = import(export(&doc).as_bytes()).unwrap();
+        }
+    }
+}
+
 /// Prior visible borders stay inside oldpprops and retain their colour and geometry.
 #[test]
 fn saving_keeps_prior_paragraph_borders() {

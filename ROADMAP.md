@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-03: RTF: saving a tracked paragraph-formatting change retains its prior spacing, indents and visible side borders, including app-supported exact line spacing down to 0.7 pt, so Reject after reopening restores those properties (#2915). Ordinary current-paragraph export, list definitions and readiness estimates are unchanged.
+- 2026-11-03: RTF: saving a tracked paragraph-formatting change retains its prior spacing, indents and visible side borders, including app-supported exact line spacing down to 0.7 pt and an explicit AtLeast zero, so Reject after reopening restores those properties (#2915). Ordinary current-paragraph export, list definitions and readiness estimates are unchanged.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import keeps one width, shading, alignment and merge override per table cell, the last one winning as before, instead of a copy every time a paragraph's properties repeat the sprm, so a shared PAPX can't pile up copies on every paragraph mark. Readiness unchanged.
 - 2026-11-03: Security: `.doc` import attaches each section to the paragraph that ends it through an index of paragraph ends, instead of scanning every paragraph for every section, so a file with a thousand sections that end nowhere can't multiply the work over its paragraphs. Readiness unchanged.
