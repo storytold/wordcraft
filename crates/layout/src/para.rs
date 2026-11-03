@@ -97,6 +97,19 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
+    /// what the line has left. A first-line indent moves that end along (Word, measured with
+    /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging
+    /// indents: 36 pt of first-line indent ends the room 36 pt past the right margin).
+    pub(crate) fn rule_room(&self, line: &Line, k: usize) -> f32 {
+        let adv = self.clusters.get(k).map_or(0.0, |c| c.adv);
+        if line.rtl {
+            return adv;
+        }
+        let first = if line.c0 == 0 { self.rp.indent_first } else { 0.0 };
+        (line.right + first - line.cl_left(k).unwrap_or(0.0)).max(0.0)
+    }
+
     /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
     /// joined grapheme cluster.
     fn is_edit_boundary(&self, off: usize) -> bool {
