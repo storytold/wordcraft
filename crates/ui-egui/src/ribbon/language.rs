@@ -165,7 +165,7 @@ pub(crate) fn caret_language_proofed(app: &WordApp) -> bool {
 
 /// The Hunspell dictionary the caret's language needs but doesn't have (`pl_PL`), if any (#1167).
 pub(crate) fn caret_missing_dictionary(app: &WordApp) -> Option<&'static str> {
-    wordcraft_engine::proof::missing_dictionary(caret_lang_tag(app).as_deref())
+    wordcraft_engine::packs::missing_dictionary(caret_lang_tag(app).as_deref())
 }
 
 /// The dictionary file and reason when the caret's language has a dictionary installed that
