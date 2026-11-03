@@ -77,6 +77,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         cmaps: HashMap::new(),
         images: HashMap::new(),
         vectors: HashMap::new(),
+        vector_bytes_left: crate::exporter::MAX_CACHED_VECTOR_BYTES,
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),

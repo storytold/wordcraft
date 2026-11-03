@@ -1367,6 +1367,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         cmaps: HashMap::new(),
         images: HashMap::new(),
         vectors: HashMap::new(),
+        vector_bytes_left: crate::exporter::MAX_CACHED_VECTOR_BYTES,
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
@@ -2487,4 +2488,38 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+#[test]
+fn parsed_metafiles_are_kept_only_within_the_cache_budget() {
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let outlined = HashSet::new();
+    let mut ex = Exporter {
+        doc: &d,
+        lay: &lay,
+        opts: &PdfOptions::default(),
+        out_index: HashMap::new(),
+        fonts: HashMap::new(),
+        font_error: None,
+        outlined: &outlined,
+        cmaps: HashMap::new(),
+        images: HashMap::new(),
+        vectors: HashMap::new(),
+        vector_bytes_left: crate::exporter::MAX_CACHED_VECTOR_BYTES,
+        tags: Vec::new(),
+        tag_index: HashMap::new(),
+        links: Vec::new(),
+        bookmarks: std::cell::OnceCell::new(),
+    };
+    let v = ex.vector(&media).expect("parses");
+    assert!(v.heap_bytes() > 0);
+    assert_eq!(ex.vectors.len(), 1, "kept while the budget has room");
+    assert_eq!(ex.vector_bytes_left, crate::exporter::MAX_CACHED_VECTOR_BYTES - v.heap_bytes());
+    // With the budget spent, a metafile is still drawn, just not kept.
+    ex.vectors.clear();
+    ex.vector_bytes_left = 0;
+    assert!(ex.vector(&media).is_some());
+    assert!(ex.vectors.is_empty());
 }

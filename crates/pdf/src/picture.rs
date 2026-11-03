@@ -14,6 +14,19 @@ pub(crate) struct Vector {
     images: Vec<Option<Image>>,
 }
 
+impl Vector {
+    /// Bytes the parsed picture holds: its paths' segments, its text and its bitmaps' pixels.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let item = |it: &wordcraft_metafile::Item| match it {
+            wordcraft_metafile::Item::Path { segs, .. } => segs.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Seg>()),
+            wordcraft_metafile::Item::Bitmap { width, height, .. } => (*width as usize).saturating_mul(*height as usize).saturating_mul(4),
+            wordcraft_metafile::Item::Text(t) => t.text.len().saturating_add(t.font.len()),
+        };
+        let items = self.pic.items.iter().fold(self.pic.items.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Item>()), |n, it| n.saturating_add(item(it)));
+        items.saturating_add(self.images.len().saturating_mul(std::mem::size_of::<Option<Image>>()))
+    }
+}
+
 /// Parses a metafile and embeds its bitmaps. None when the picture has no usable size.
 pub(crate) fn build_vector(bytes: &[u8]) -> Option<Vector> {
     let mut pic = wordcraft_metafile::parse(bytes).ok()?;

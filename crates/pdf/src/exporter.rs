@@ -15,6 +15,9 @@ mod draw;
 mod nav;
 mod text;
 
+/// Most bytes of parsed metafiles (geometry, text and pixels) one export keeps between pages.
+pub(crate) const MAX_CACHED_VECTOR_BYTES: usize = 256 << 20;
+
 pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
@@ -30,6 +33,8 @@ pub(crate) struct Exporter<'a> {
     pub(crate) images: HashMap<String, Option<Image>>,
     /// Parsed metafiles by media key (`None`: not readable).
     pub(crate) vectors: HashMap<String, Option<Arc<Vector>>>,
+    /// Bytes of parsed metafiles `vectors` may still keep ([`MAX_CACHED_VECTOR_BYTES`]).
+    pub(crate) vector_bytes_left: usize,
     pub(crate) tags: Vec<TagEntry>,
     pub(crate) tag_index: HashMap<(StoryRef, DocPath), usize>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
@@ -84,7 +89,7 @@ impl Exporter<'_> {
 
     /// The metafile picture for a media key, parsed once. None when the bytes are not a metafile
     /// (the raster path takes them) or do not parse (the raster path then draws the grey box).
-    fn vector(&mut self, key: &str) -> Option<Arc<Vector>> {
+    pub(crate) fn vector(&mut self, key: &str) -> Option<Arc<Vector>> {
         let doc = self.doc;
         let bytes = doc.media.get(key)?;
         if !wordcraft_metafile::is_metafile(bytes) {
@@ -97,7 +102,16 @@ impl Exporter<'_> {
         if v.is_none() {
             log::warn!("PDF: metafile `{key}` could not be read");
         }
-        self.vectors.insert(key.to_string(), v.clone());
+        // Kept for the pages that draw it again while the cache has room; past that it is parsed
+        // again when it is next drawn, rather than every metafile's geometry piling up.
+        let size = v.as_ref().map_or(0, |v| v.heap_bytes());
+        match self.vector_bytes_left.checked_sub(size) {
+            Some(left) => {
+                self.vector_bytes_left = left;
+                self.vectors.insert(key.to_string(), v.clone());
+            }
+            None => log::debug!("PDF: metafile `{key}` ({size} bytes parsed) is not kept between pages"),
+        }
         v
     }
 
