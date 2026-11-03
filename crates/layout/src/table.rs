@@ -744,6 +744,15 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             {
                 items.push(Placed::Fill { rect, color: f });
             }
+            // Its background picture, over the shading and under the text, cut off at its edges.
+            if c.vmerge != VMerge::Continue
+                && let Some(pic) = t.rows.get(ri).and_then(|r| r.cells.get(ci)).and_then(|cell| cell.props.picture.as_deref())
+            {
+                let images = cell_picture(pic, rect, story, path);
+                if !images.is_empty() {
+                    items.push(Placed::Clip { rect, spin: wordcraft_geom::Spin::default(), items: images });
+                }
+            }
             // Behind-text frames count towards vertical alignment even without inline content.
             // They do not increase the row's flow height.
             let align_h = c
@@ -1107,7 +1116,45 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
     k
 }
 
-/// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
+/// Most copies of a tiled cell picture drawn.
+const MAX_TILES: usize = 400;
+
+/// A cell's background picture in `rect` (the cell's area): once at its own size where its
+/// alignment puts it, tiled from the cell's top left, or stretched over the cell.
+fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: StoryRef, path: &[u32]) -> Vec<Placed> {
+    use wordcraft_doc::props::PictureRepeat;
+    let [w, h] = pic.size;
+    let image = |r: Rect| Placed::Image {
+        rect: r,
+        media: pic.media.clone(),
+        crop: [0.0; 4],
+        story,
+        path: wordcraft_doc::Path(path.to_vec()),
+        off: usize::MAX,
+        spin: wordcraft_geom::Spin::default(),
+    };
+    let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
+    match pic.repeat {
+        PictureRepeat::Stretch => vec![image(rect)],
+        PictureRepeat::Tile if sized => {
+            let (cols, rows) = ((rect.w / w).ceil().clamp(1.0, 400.0) as usize, (rect.h / h).ceil().clamp(1.0, 400.0) as usize);
+            (0..rows)
+                .flat_map(|r| (0..cols).map(move |c| (r, c)))
+                .take(MAX_TILES)
+                .map(|(r, c)| image(Rect::new(rect.x + c as f32 * w, rect.y + r as f32 * h, w, h)))
+                .collect()
+        }
+        _ if sized => {
+            let at = |a: f32| if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
+            let x = rect.x + (rect.w - w) * at(pic.align[0]);
+            let y = rect.y + (rect.h - h) * at(pic.align[1]);
+            vec![image(Rect::new(x, y, w, h))]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The parts of `r` above `cut` and below it/// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
 /// continuation of a row split at `cut`).
 fn split_rect(r: Rect, cut: f32, shift: f32) -> (Option<Rect>, Option<Rect>) {
     let above = (r.y < cut).then(|| Rect::new(r.x, r.y, r.w, (r.bottom().min(cut) - r.y).max(0.0)));

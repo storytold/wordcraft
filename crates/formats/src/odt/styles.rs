@@ -226,6 +226,9 @@ struct StyleInfo {
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
     cell_background: Option<Rgb>,
+    /// A table-cell style's background picture (§17.3 `style:background-image`): its package
+    /// path, `style:repeat` and `style:position`.
+    cell_picture: Option<(String, String, String)>,
     /// `style:vertical-align` of a table-cell style's `style:table-cell-properties`.
     cell_valign: Option<VAlign>,
     cell_direction: Option<wordcraft_doc::props::TextDirection>,
@@ -643,6 +646,12 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "graphic-properties" => s.graphic = Some(super::frames::Graphic::read(a)),
+        "background-image" if q.starts_with("style:") && s.family.as_deref() == Some("table-cell") => {
+            if let Some(href) = get(a, "xlink:href").filter(|h| !h.trim().is_empty() && h.len() < 1024) {
+                let attr = |k: &str| get(a, k).unwrap_or_default().trim().to_string();
+                s.cell_picture = Some((href.trim().to_string(), attr("style:repeat"), attr("style:position")));
+            }
+        }
         _ => return false,
     }
     true
@@ -1319,6 +1328,11 @@ impl Styles {
     }
 
     /// Background colour of a table-cell style (whole chain).
+    /// A table-cell style's background picture: its package path, repeat and position.
+    pub(super) fn cell_picture(&self, name: &str) -> Option<(String, String, String)> {
+        self.chain(name).iter().find_map(|(_, s)| s.cell_picture.clone())
+    }
+
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_background)
     }

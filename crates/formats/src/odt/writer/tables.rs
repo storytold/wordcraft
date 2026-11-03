@@ -74,7 +74,42 @@ pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Ce
     p
 }
 
+/// Separates a cell style's `style:table-cell-properties` attributes from its content (a
+/// background picture) in [`Writer::cell_style`]'s key.
+pub(in crate::odt) const CELL_CHILD: char = '\u{1}';
+
 impl Writer {
+    /// A cell's background picture (§17.3 `style:background-image`), the picture written into
+    /// the package (once for the same bytes).
+    fn cell_picture(&mut self, pic: &model::CellPic) -> String {
+        // The same picture in many cells is one file.
+        let hash = pic.img.data.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+        let name = format!("Pictures/cell-{hash:016x}.{}", pic.img.ext);
+        if !self.pictures.iter().any(|(n, _, _)| *n == name) {
+            self.pictures.push((name.clone(), pic.img.data.clone(), super::mime_of(&pic.img.ext).to_string()));
+        }
+        let repeat = match pic.repeat {
+            wordcraft_doc::props::PictureRepeat::None => "no-repeat",
+            wordcraft_doc::props::PictureRepeat::Tile => "repeat",
+            wordcraft_doc::props::PictureRepeat::Stretch => "stretch",
+        };
+        let pos = |a: f32, words: [&'static str; 3]| {
+            if a < 0.25 {
+                words[0]
+            } else if a > 0.75 {
+                words[2]
+            } else {
+                words[1]
+            }
+        };
+        format!(
+            "<style:background-image xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\" style:position=\"{} {}\" style:repeat=\"{repeat}\"/>",
+            x(&name),
+            pos(pic.align[1], ["top", "center", "bottom"]),
+            pos(pic.align[0], ["left", "center", "right"]),
+        )
+    }
+
     /// The automatic style of a cell with `props` (its `style:table-cell-properties` attributes).
     pub(in crate::odt) fn cell_style(&mut self, props: String) -> String {
         let k = match self.cell_styles.iter().position(|s| *s == props) {
@@ -141,7 +176,12 @@ impl Writer {
                     }
                     continue;
                 }
-                let st = self.cell_style(cell_props(t, ri, g - span, c, cols));
+                let mut props = cell_props(t, ri, g - span, c, cols);
+                if let Some(pic) = &c.picture {
+                    props.push(CELL_CHILD);
+                    props.push_str(&self.cell_picture(pic));
+                }
+                let st = self.cell_style(props);
                 // A formula field: the cell's formula, and the value it shows (§19.646, §19.388).
                 let formula = crate::odt::cell_formula::of_cell(&c.blocks)
                     .and_then(|(instr, result)| Some((crate::odt::cell_formula::odf_of(instr, (ri, g - span), (t.rows.len(), cols))?, result)));

@@ -893,10 +893,11 @@ impl Body<'_> {
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
                 let direction = get(a, "table:style-name").map(|s| self.styles.cell_direction(s)).unwrap_or_default();
+                let picture = get(a, "table:style-name").and_then(|s| self.styles.cell_picture(s)).and_then(|p| self.cell_picture(p));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
                 }
-                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, direction, ..Default::default() });
+                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, direction, picture, ..Default::default() });
                 self.formulas.push(get(a, "table:formula").and_then(super::cell_formula::word_of));
                 self.containers.push(Vec::new());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
@@ -1233,6 +1234,30 @@ impl Body<'_> {
             _ => return false,
         }
         true
+    }
+
+    /// A cell's background picture from its package path, `style:repeat` (§20.349: no-repeat,
+    /// repeat, stretch; unstated, repeat) and `style:position` (§20.335: two of left, center,
+    /// right, top, bottom; unstated, center).
+    fn cell_picture(&mut self, (href, repeat, position): (String, String, String)) -> Option<Box<model::CellPic>> {
+        let data = (self.zip)(href.trim_start_matches("./"))?;
+        let img = model::make_img(data, None, None, "")?;
+        let repeat = match repeat.as_str() {
+            "no-repeat" => wordcraft_doc::props::PictureRepeat::None,
+            "stretch" => wordcraft_doc::props::PictureRepeat::Stretch,
+            _ => wordcraft_doc::props::PictureRepeat::Tile,
+        };
+        let mut align = [0.5, 0.5];
+        for word in position.split_whitespace() {
+            match word {
+                "left" => align[0] = 0.0,
+                "right" => align[0] = 1.0,
+                "top" => align[1] = 0.0,
+                "bottom" => align[1] = 1.0,
+                _ => {}
+            }
+        }
+        Some(Box::new(model::CellPic { img, repeat, align }))
     }
 
     /// A skipped element ends; the end of a custom shape's geometry works out its path and

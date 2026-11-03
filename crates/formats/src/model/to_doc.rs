@@ -809,6 +809,11 @@ impl<'a> Builder<'a> {
                 } else {
                     VMerge::None
                 };
+                // A background picture goes into the document's media.
+                let picture = c.picture.as_deref().map(|p| {
+                    let media = self.doc.add_media(p.img.data.as_ref().clone(), &p.img.ext);
+                    Box::new(wordcraft_doc::props::CellPicture { media, size: [p.img.w, p.img.h], repeat: p.repeat, align: p.align })
+                });
                 row.cells.push(wordcraft_doc::Cell {
                     props: CellProps {
                         width: Some(w),
@@ -819,6 +824,7 @@ impl<'a> Builder<'a> {
                         margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
                         valign: c.valign,
                         text_direction: c.direction,
+                        picture,
                         ..Default::default()
                     },
                     blocks,

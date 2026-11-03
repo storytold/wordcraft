@@ -756,6 +756,22 @@ impl Writer {
         format!("<office:automatic-styles>{}</office:automatic-styles>", self.style_defs())
     }
 
+    /// The cells' automatic styles: each one's attributes, and what goes inside (a background
+    /// picture).
+    fn cell_style_defs(&self) -> String {
+        let mut s = String::new();
+        for (i, key) in self.cell_styles.iter().enumerate() {
+            let (props, child) = key.split_once(tables::CELL_CHILD).unwrap_or((key.as_str(), ""));
+            let inner = if child.is_empty() { "/>".to_string() } else { format!(">{child}</style:table-cell-properties>") };
+            s.push_str(&format!(
+                "<style:style style:name=\"{}Cell{}\" style:family=\"table-cell\"><style:table-cell-properties{props}{inner}</style:style>",
+                self.prefix,
+                i + 1
+            ));
+        }
+        s
+    }
+
     /// The automatic styles made so far, without their `office:automatic-styles` element.
     pub(super) fn style_defs(&self) -> String {
         let mut s: String = self.data_styles.iter().map(|(.., xml)| xml.as_str()).collect();
@@ -899,13 +915,7 @@ impl Writer {
                 i + 1
             ));
         }
-        for (i, props) in self.cell_styles.iter().enumerate() {
-            s.push_str(&format!(
-                "<style:style style:name=\"{}Cell{}\" style:family=\"table-cell\"><style:table-cell-properties{props}/></style:style>",
-                self.prefix,
-                i + 1
-            ));
-        }
+        s.push_str(&self.cell_style_defs());
         for st in &self.section_styles {
             s.push_str(st);
         }

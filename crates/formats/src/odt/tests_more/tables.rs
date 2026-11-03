@@ -142,3 +142,37 @@ fn a_table_styles_look_is_written_into_its_cells() {
     let body = t.rows[1].cells[1].blocks[0].as_para().unwrap();
     assert_ne!(body.runs[0].props.bold, Some(true));
 }
+
+#[test]
+fn a_cells_background_picture_is_read_drawn_and_written() {
+    // LibreOffice's elegant agenda: a small gradient at the top left of a cell (§17.3
+    // `style:background-image`, no-repeat, top left), under its text.
+    let png = {
+        let img = image::RgbImage::from_pixel(40, 8, image::Rgb([40, 60, 200]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let styles = r#"<style:style style:name="C1" style:family="table-cell"><style:table-cell-properties fo:border="none"><style:background-image xlink:href="Pictures/g.png" xlink:type="simple" xlink:actuate="onLoad" style:position="top left" style:repeat="no-repeat"/></style:table-cell-properties></style:style>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text><table:table><table:table-column/><table:table-row><table:table-cell table:style-name="C1"><text:p>Title</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", o).unwrap();
+    std::io::Write::write_all(&mut z, b"application/vnd.oasis.opendocument.text").unwrap();
+    z.start_file("content.xml", o).unwrap();
+    std::io::Write::write_all(&mut z, content.as_bytes()).unwrap();
+    z.start_file("Pictures/g.png", o).unwrap();
+    std::io::Write::write_all(&mut z, &png).unwrap();
+    let d = import(&z.finish().unwrap().into_inner()).unwrap();
+    let pic = cells(&d)[0].picture.clone().expect("the cell's picture");
+    assert_eq!((pic.repeat, pic.align), (wordcraft_doc::props::PictureRepeat::None, [0.0, 0.0]));
+    assert_eq!(pic.size, [30.0, 6.0], "its own size: 40 × 8 pixels at 96 per inch");
+    assert!(d.media.contains_key(&pic.media));
+    // Written back with the picture in the package.
+    let saved = export(&d).unwrap();
+    let back = import(&saved).unwrap();
+    let again = cells(&back)[0].picture.clone().expect("kept");
+    assert_eq!((again.repeat, again.align, again.size), (pic.repeat, pic.align, pic.size));
+}

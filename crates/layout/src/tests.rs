@@ -12338,3 +12338,42 @@ fn a_page_break_in_a_tables_first_row_moves_the_table() {
     d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
     assert_eq!(lay(&d).pages.len(), 1);
 }
+
+#[test]
+fn a_cells_background_picture_is_drawn_clipped_to_the_cell() {
+    // An ODF cell's background picture: once at its own size at the cell's top left, under the
+    // text and cut off at the cell's edges; tiled, as many copies as cover the cell.
+    use wordcraft_doc::props::{CellPicture, PictureRepeat};
+    let mut d = Document::new();
+    let mut t = wordcraft_doc::Table::new(1, 1, 200.0);
+    let media = d.add_media(vec![0u8; 8], "png");
+    let pic = |repeat| Some(Box::new(CellPicture { media: media.clone(), size: [30.0, 6.0], repeat, align: [0.0, 0.0] }));
+    t.rows[0].cells[0].props.picture = pic(PictureRepeat::None);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t.clone())), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+    let clips = |l: &DocLayout| -> Vec<(Rect, Vec<Rect>)> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Clip { rect, items, .. } => {
+                    Some((*rect, items.iter().filter_map(|i| if let Placed::Image { rect, .. } = i { Some(*rect) } else { None }).collect()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let c = clips(&lay(&d));
+    assert_eq!(c.len(), 1);
+    let (cell, images) = &c[0];
+    assert_eq!(images.len(), 1);
+    assert!(
+        (images[0].x - cell.x).abs() < 0.01 && (images[0].y - cell.y).abs() < 0.01 && (images[0].w - 30.0).abs() < 0.01,
+        "{images:?} in {cell:?}"
+    );
+    t.rows[0].cells[0].props.picture = pic(PictureRepeat::Tile);
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+    let c = clips(&lay(&d));
+    let (cell, images) = &c[0];
+    let want = (cell.w / 30.0).ceil() as usize * (cell.h / 6.0).ceil() as usize;
+    assert_eq!(images.len(), want, "{cell:?}");
+}

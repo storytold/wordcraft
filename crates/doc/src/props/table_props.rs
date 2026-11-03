@@ -300,6 +300,38 @@ pub struct CellProps {
     /// Tracked formatting change (`w:tcPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<CellProps>>>,
+    /// A picture behind the cell's content (an ODF cell's `style:background-image`; Word has
+    /// none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Box<CellPicture>>,
+}
+
+/// A cell's background picture: drawn at its own size where `align` puts it, tiled, or stretched
+/// over the cell, and cut off at the cell's edges.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CellPicture {
+    /// Key into [`crate::Document::media`].
+    pub media: String,
+    /// Its own size, points.
+    pub size: [f32; 2],
+    pub repeat: PictureRepeat,
+    /// Where an unrepeated picture sits: 0 the left (top) edge, 0.5 the middle, 1 the right
+    /// (bottom) edge.
+    pub align: [f32; 2],
+}
+
+/// How a background picture fills its area (ODF §20.348 `style:repeat`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PictureRepeat {
+    /// Once, at its own size.
+    #[default]
+    None,
+    /// Repeated across the area.
+    Tile,
+    /// Stretched over the area.
+    Stretch,
 }
 
 impl CellProps {

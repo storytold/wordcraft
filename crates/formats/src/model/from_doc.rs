@@ -965,6 +965,21 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 // Formats that keep cell padding get each cell's, its table's or Word's default.
                 margins: tracked.paras.then(|| c.props.resolved_margins(t.props.cell_margins.unwrap_or(WORD_CELL_MARGINS))),
                 direction: c.props.text_direction,
+                // Its background picture, for formats that keep cell formatting (ODT).
+                picture: c.props.picture.as_deref().filter(|_| tracked.paras).and_then(|p| {
+                    let data = doc.media.get(&p.media)?;
+                    let img = Img {
+                        data: data.clone(),
+                        ext: media_ext(&p.media, data),
+                        w: p.size[0],
+                        h: p.size[1],
+                        alt: String::new(),
+                        float: None,
+                        object: None,
+                        crop: [0.0; 4],
+                    };
+                    Some(Box::new(crate::model::CellPic { img, repeat: p.repeat, align: p.align }))
+                }),
             });
         }
         rows.push(cells);

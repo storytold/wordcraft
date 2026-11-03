@@ -237,7 +237,12 @@ impl Exporter<'_> {
                 }
                 Placed::Image { story, path, off, .. } => {
                     let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
-                    let role = if obj.is_some_and(InlineObject::is_decorative) { Role::Artifact(ArtifactType::Other) } else { Role::Figure };
+                    // A cell's background picture (no object of its own) is decoration too.
+                    let role = if obj.is_some_and(InlineObject::is_decorative) || *off == usize::MAX {
+                        Role::Artifact(ArtifactType::Other)
+                    } else {
+                        Role::Figure
+                    };
                     let alt = match obj {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
