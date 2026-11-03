@@ -434,7 +434,35 @@ mod label_spacing_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::justify::space_break_end;
     use super::*;
+
+    #[test]
+    fn break_cost_omits_end_spacing() {
+        let mut doc = Document::new();
+        let p = Paragraph::with_text("a a a", wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), ..Default::default() });
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let laid = crate::layout(&doc, &mut crate::LayoutCache::new(), &crate::LayoutOptions::default());
+        let mut para = laid.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::Placed::Lines { para, .. } => Some((**para).clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(para.clusters.len(), 5);
+        for (cluster, advance) in para.clusters.iter_mut().zip([20.0, 10.0, 20.0, 10.0, 30.0]) {
+            cluster.adv = advance;
+        }
+        let xs = [0.0, 20.0, 30.0, 50.0, 60.0];
+        para.auto_space = vec![(4, 10.0)];
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 5, "automatic spacing after the final cluster does not consume line width");
+        para.auto_space.clear();
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 4, "ordinary advance still counts toward the compression cap");
+        para.auto_space = vec![(2, 10.0)];
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 4, "interior automatic spacing remains in the line width");
+    }
 
     /// The ASCII shortcuts give the bidi class's answer for every character.
     #[test]

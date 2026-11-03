@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_break_end, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -336,6 +336,19 @@ impl<'e> Breaker<'e> {
         }
         if sc.j >= self.n && sc.end != LineEnd::Wrap && !matches!(sc.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
             sc.end = LineEnd::Para;
+        }
+        if self.shrink_spaces
+            && !sc.has_tab
+            && matches!(sc.end, LineEnd::Para | LineEnd::Wrap)
+            && pl.hyph_after.binary_search(&(sc.j.saturating_sub(1) as u32)).is_err()
+            && !pl.displays.iter().any(|(ci, _)| *ci >= sc.c0 && *ci < sc.j)
+        {
+            let cut = space_break_end(pl, &sc.xs, sc.c0, sc.j, sc.right_edge);
+            if cut < sc.j {
+                sc.j = cut;
+                sc.xs.truncate(sc.j - sc.c0);
+                sc.end = LineEnd::Wrap;
+            }
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
         let v = self.measure(pl, (sc.c0, c1));

@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Justified break update:** 2026-11-02 · Justified lines in compatibility mode15 choose eligible space breaks by normalized spacing cost, with compression weighted twice expansion. Final automatic Asian-Latin spacing is excluded; interior spacing, compression limits and excluded break paths remain. Existing synthetic controls cover body and table cells. No new native or corpus measurement; readiness estimates unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -704,6 +706,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
+| 2026-11-02 | trivial | #2604: Retain spacing-cost break choice in current paragraph modules, including final automatic-spacing exclusion. Native/corpus limits and readiness unchanged. |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
