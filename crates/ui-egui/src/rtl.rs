@@ -193,11 +193,12 @@ pub struct Table {
     id: &'static str,
     columns: usize,
     spacing: Option<egui::Vec2>,
+    striped: bool,
 }
 
 impl Table {
     pub fn new(id: &'static str) -> Self {
-        Self { id, columns: 2, spacing: None }
+        Self { id, columns: 2, spacing: None, striped: false }
     }
 
     pub fn columns(mut self, columns: usize) -> Self {
@@ -210,9 +211,16 @@ impl Table {
         self
     }
 
+    /// Shade every other row (only where the table is an `egui::Grid`: a mirrored table has no stripes).
+    pub fn striped(mut self, striped: bool) -> Self {
+        self.striped = striped;
+        self
+    }
+
     pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Rows) -> R) -> R {
         if !flows(ui) {
             let spec = egui::Grid::new(self.id).num_columns(self.columns);
+            let spec = if self.striped { spec.striped(true) } else { spec };
             let spec = match self.spacing {
                 Some(spacing) => spec.spacing(spacing),
                 None => spec,
