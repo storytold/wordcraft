@@ -6925,55 +6925,23 @@ fn border_sides_apply_exactly() {
 fn border_side_updates_preserve_flags_per_target() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
     for (index, shadow, frame) in [(0, false, true), (1, true, false)] {
-        let side = wordcraft_doc::props::Border {
-            shadow: Some(shadow),
-            frame: Some(frame),
-            ..wordcraft_doc::props::Border::single(0.5)
-        };
-        s.doc
-            .para_mut(StoryRef::Body, &wordcraft_doc::Path::top(index))
-            .unwrap()
-            .props
-            .borders = Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
+        let side = wordcraft_doc::props::Border { shadow: Some(shadow), frame: Some(frame), ..wordcraft_doc::props::Border::single(0.5) };
+        s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(index)).unwrap().props.borders =
+            Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
     }
-    s.sel = crate::Selection {
-        anchor: Pos::body(0, 0),
-        focus: Pos::body(1, 3),
-    };
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 3) };
 
-    run(
-        &mut s,
-        "para.borders",
-        json!({"sides": {"top": {"style": "double", "width": 2.0}}}),
-    );
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "double", "width": 2.0}}}));
     for (index, shadow, frame) in [(0, false, true), (1, true, false)] {
-        let side = s
-            .doc
-            .para_at(&Pos::body(index, 0))
-            .and_then(|p| p.props.borders)
-            .and_then(|b| b.top)
-            .unwrap();
+        let side = s.doc.para_at(&Pos::body(index, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
         assert_eq!((side.style, side.width), (BorderStyle::Double, 2.0));
         assert_eq!((side.shadow, side.frame), (Some(shadow), Some(frame)));
     }
 
-    run(
-        &mut s,
-        "para.borders",
-        json!({"sides": {"top": {"style": "single", "shadow": true, "frame": null}}}),
-    );
+    run(&mut s, "para.borders", json!({"sides": {"top": {"style": "single", "shadow": true, "frame": null}}}));
     for index in 0..2 {
-        let side = s
-            .doc
-            .para_at(&Pos::body(index, 0))
-            .and_then(|p| p.props.borders)
-            .and_then(|b| b.top)
-            .unwrap();
-    assert_eq!(
-        (side.shadow, side.frame),
-        (Some(true), None),
-        "explicit flags apply to each target"
-    );
+        let side = s.doc.para_at(&Pos::body(index, 0)).and_then(|p| p.props.borders).and_then(|b| b.top).unwrap();
+        assert_eq!((side.shadow, side.frame), (Some(true), None), "explicit flags apply to each target");
     }
 }
 
@@ -6982,23 +6950,11 @@ fn document_page_border_updates_preserve_flags_per_section() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
     run(&mut s, "select.text", json!({"text": "one"}));
     run(&mut s, "layout.break", json!({"kind": "continuous"}));
-    let sections = s
-        .doc
-        .sections()
-        .iter()
-        .map(|(end, _)| *end)
-        .collect::<Vec<_>>();
+    let sections = s.doc.sections().iter().map(|(end, _)| *end).collect::<Vec<_>>();
     assert_eq!(sections.len(), 2);
     for (block, shadow, frame) in [(sections[0], false, true), (sections[1], true, false)] {
-        let side = wordcraft_doc::props::Border {
-            shadow: Some(shadow),
-            frame: Some(frame),
-            ..wordcraft_doc::props::Border::single(0.5)
-        };
-        s.doc.section_mut(block).page_borders = Some(wordcraft_doc::props::Borders {
-            top: Some(side),
-            ..Default::default()
-        });
+        let side = wordcraft_doc::props::Border { shadow: Some(shadow), frame: Some(frame), ..wordcraft_doc::props::Border::single(0.5) };
+        s.doc.section_mut(block).page_borders = Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
     }
 
     run(&mut s, "design.pageBorders", json!({
@@ -7006,13 +6962,7 @@ fn document_page_border_updates_preserve_flags_per_section() {
         "applyTo": "document"
     }));
     for (block, shadow, frame) in [(sections[0], false, true), (sections[1], true, false)] {
-        let side = s
-            .doc
-            .section_mut(block)
-            .page_borders
-            .unwrap()
-            .top
-            .unwrap();
+        let side = s.doc.section_mut(block).page_borders.unwrap().top.unwrap();
         assert_eq!((side.style, side.width), (BorderStyle::Dashed, 2.0));
         assert_eq!((side.shadow, side.frame), (Some(shadow), Some(frame)));
     }
