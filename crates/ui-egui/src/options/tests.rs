@@ -259,9 +259,11 @@ fn options_panes_open_and_change_settings() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
     h.state_mut().dialog = None;
     h.run_steps(2);
-    // #1063: the dictionaries folder and the dictionary each language found.
-    assert!(h.query_by_label("Dictionaries folder:").is_some());
-    assert!(h.query_by_label_contains("Polish: ").is_some(), "the Polish dictionary's line");
+    // #1063: the dictionaries folder moved to Language (CP4.3); Proofing has no Dictionaries section.
+    assert!(h.query_by_label("Dictionaries folder:").is_none() && h.query_by_label("Folder:").is_none());
+    h.get_by_label("Language").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Folder:").is_some(), "Your own dictionaries folder");
     h.get_by_label("Advanced").click();
     h.run_steps(4);
     h.get_by_label("Typing replaces selected text").click();

@@ -724,6 +724,169 @@ pub fn missing(s: &Session) -> Vec<Pack> {
     out
 }
 
+/// Where a language's proofing comes from (Options › Language › Your languages).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Proofing {
+    /// English: the embedded dictionaries.
+    BuiltIn,
+    /// An installed Language pack.
+    Installed,
+    /// A Hunspell dictionary in the person's own dictionaries folder.
+    OwnDictionary,
+    /// A Hunspell dictionary the system has.
+    SystemDictionary,
+    /// No dictionary yet; a Language pack can be installed.
+    Install,
+    /// Grammar and hyphenation rules built in; a Language pack adds spelling.
+    GrammarBuiltIn,
+    /// No dictionary and no pack for it.
+    NotAvailable,
+}
+
+/// A row of Options › Language › Your languages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LanguageRow {
+    /// The tags the default proofing language or the open document use for this language (the
+    /// first is what Set as default sets); empty for a language listed for its installed pack.
+    pub tags: Vec<String>,
+    /// The pack locale: the installed pack, else the one the index offers.
+    pub pack: Option<String>,
+    /// Is the pack installed?
+    pub installed: bool,
+    /// Bytes of the offered pack (0 when the index has none).
+    pub size: u64,
+    pub proofing: Proofing,
+    /// Is this the default proofing language?
+    pub default: bool,
+}
+
+impl LanguageRow {
+    /// Is `tag` (the insertion point's language) one of this row's languages?
+    pub fn is_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
+    }
+}
+
+/// The first locale `has` accepts for `tag`: the whole tag, then each shorter prefix of it (as
+/// [`pack_for_tag`]). `None` for English and junk.
+fn locale_for_tag(tag: &str, has: &dyn Fn(&str) -> bool) -> Option<String> {
+    let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
+    let base = tag.split('-').next().unwrap_or("");
+    if base.is_empty() || base == "en" {
+        return None;
+    }
+    let mut prefix = tag.as_str();
+    loop {
+        if has(prefix) {
+            return Some(prefix.to_string());
+        }
+        prefix = prefix.rsplit_once('-')?.0;
+    }
+}
+
+/// [`your_languages_with`] against the dictionaries on this computer.
+pub fn your_languages(s: &Session) -> Vec<LanguageRow> {
+    let folder = s.prefs.dictionaries_folder.clone();
+    your_languages_with(s, folder.as_deref(), &dictionary_file)
+}
+
+/// The Hunspell `.dic` file proofing reads for `tag`'s language now (a built-in-rules language's
+/// own, or a pack language's), if any.
+fn dictionary_file(tag: &str) -> Option<PathBuf> {
+    let lang = wordcraft_proof::ProofLang::from_tag(Some(tag));
+    if let Some((_, f)) = wordcraft_proof::installed_dictionaries().into_iter().find(|(l, _)| *l == lang) {
+        return f;
+    }
+    wordcraft_proof::pack_dictionary_file(lang)
+}
+
+/// Options › Language › Your languages (unsorted; the window names and sorts them): each English
+/// variant in use (the default proofing language, American English and any in the open document), every language
+/// with an installed Language pack, and every proofing language of the open document. One row per
+/// language: tags one pack proofs share a row. `folder` is the person's own dictionaries folder;
+/// `dictionary` finds the `.dic` file proofing reads for a tag.
+pub fn your_languages_with(s: &Session, folder: Option<&str>, dictionary: &dyn Fn(&str) -> Option<PathBuf>) -> Vec<LanguageRow> {
+    let index = available();
+    let installed = installed();
+    let default_tag = s
+        .prefs
+        .default_language
+        .clone()
+        .or_else(|| s.editing_lang.clone())
+        .or_else(|| s.doc.styles.default_chr.lang.clone())
+        .unwrap_or_else(|| "en-US".to_string());
+    // American English stays listed whatever the default is, so it can always be set back.
+    let mut tags = vec![default_tag.clone(), "en-US".to_string()];
+    tags.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for t in document_languages(s) {
+        if !tags.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
+            tags.push(t);
+        }
+    }
+    let mut rows: Vec<LanguageRow> = Vec::new();
+    let mut add = |tag: Option<&str>, locale: Option<String>| {
+        let english = tag.is_some_and(|t| wordcraft_proof::ProofLang::from_tag(Some(t)).is_english());
+        // English variants stay apart (en-GB and en-US are two rows); a pack's tags share one.
+        let existing = rows.iter().position(|r| match (&locale, &r.pack) {
+            (Some(l), Some(p)) if !english => l == p,
+            _ => tag.is_some_and(|t| r.is_tag(t)),
+        });
+        let i = existing.unwrap_or_else(|| {
+            rows.push(LanguageRow {
+                tags: Vec::new(),
+                pack: locale.clone(),
+                installed: false,
+                size: 0,
+                proofing: Proofing::NotAvailable,
+                default: false,
+            });
+            rows.len() - 1
+        });
+        if let (Some(t), Some(row)) = (tag, rows.get_mut(i))
+            && !row.is_tag(t)
+        {
+            row.tags.push(t.to_string());
+        }
+    };
+    for t in &tags {
+        if !proofable(t) {
+            continue;
+        }
+        let locale =
+            locale_for_tag(t, &|l| installed.iter().any(|i| i.locale == l)).or_else(|| locale_for_tag(t, &|l| index.iter().any(|p| p.locale == l)));
+        add(Some(t), locale);
+    }
+    for i in &installed {
+        add(None, Some(i.locale.clone()));
+    }
+    for row in &mut rows {
+        let installed_here = row.pack.as_ref().is_some_and(|l| installed.iter().any(|i| &i.locale == l));
+        let offered = row.pack.as_ref().and_then(|l| index.iter().find(|p| &p.locale == l));
+        row.installed = installed_here;
+        row.size = offered.map_or(0, |p| p.size);
+        row.default = row.is_tag(&default_tag);
+        let tag = row.tags.first().cloned().or_else(|| row.pack.clone()).unwrap_or_default();
+        let lang = wordcraft_proof::ProofLang::from_tag(Some(&tag));
+        let file = if lang.is_english() { None } else { dictionary(&tag) };
+        let own = file.as_ref().is_some_and(|f| folder.is_some_and(|d| !d.trim().is_empty() && f.starts_with(d.trim())));
+        row.proofing = if lang.is_english() {
+            Proofing::BuiltIn
+        } else if own {
+            Proofing::OwnDictionary
+        } else if installed_here {
+            Proofing::Installed
+        } else if file.is_some() {
+            Proofing::SystemDictionary
+        } else if offered.is_some() {
+            if matches!(lang, wordcraft_proof::ProofLang::Pack(_)) { Proofing::Install } else { Proofing::GrammarBuiltIn }
+        } else {
+            Proofing::NotAvailable
+        };
+    }
+    rows
+}
+
 /// A backend with a fixed list and installs that only record themselves: tests and `ui_shot`.
 #[derive(Default)]
 pub struct FixedBackend {

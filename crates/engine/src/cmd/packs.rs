@@ -33,7 +33,7 @@ fn locale_param(v: &Value) -> Result<String, CmdError> {
     packs::parse_locale(raw)
 }
 
-fn list(_: &mut Session, v: &Value) -> CmdResult {
+fn list(s: &mut Session, v: &Value) -> CmdResult {
     if p::bool(v, "refresh") == Some(true) {
         packs::start_refresh().map_err(CmdError::Failed)?;
         if let Some(e) = packs::error("") {
@@ -55,6 +55,7 @@ fn list(_: &mut Session, v: &Value) -> CmdResult {
         .collect();
     Ok(json!({
         "packs": rows,
+        "languages": packs::your_languages(s),
         "installed": installed.iter().map(|i| json!({"locale": i.locale, "name": i.name, "licence": i.licence})).collect::<Vec<_>>(),
         "installing": packs::installing(),
         "refreshing": packs::fetching(),
@@ -160,6 +161,119 @@ mod tests {
             assert_eq!(packs::available_len(), n, "same length");
             assert_ne!(packs::index_generation(), before);
         });
+    }
+
+    /// Options › Language › Your languages: fresh, with Dutch installed, a document with Thai,
+    /// Turkish without a pack, and en-GB as the default.
+    mod your_languages {
+        use super::*;
+        use crate::packs::Proofing;
+
+        fn none(_: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+
+        fn row<'a>(rows: &'a [packs::LanguageRow], tag: &str) -> &'a packs::LanguageRow {
+            rows.iter().find(|r| r.is_tag(tag) || r.pack.as_deref() == Some(tag)).unwrap_or_else(|| panic!("no row for {tag}: {rows:?}"))
+        }
+
+        fn mark(s: &mut Session, para: usize, lang: &str) {
+            s.run("caret.set", &json!({"pos": {"block": para, "off": 0}})).unwrap();
+            s.run("select.paragraph", &json!({})).unwrap();
+            s.run("review.language", &json!({"lang": lang})).unwrap();
+        }
+
+        #[test]
+        fn a_fresh_install_lists_only_english() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(rows.len(), 1, "{rows:?}");
+                assert_eq!(rows[0].proofing, Proofing::BuiltIn);
+                assert!(rows[0].default);
+                assert_eq!(rows[0].pack, None);
+            });
+        }
+
+        #[test]
+        fn an_installed_pack_is_a_row_with_remove() {
+            with_backend(FixedBackend::sample(), |s, b| {
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(rows.len(), 2);
+                let nl = row(&rows, "nl");
+                assert!(nl.installed && nl.tags.is_empty() && !nl.default);
+                assert_eq!(nl.proofing, Proofing::Installed);
+                let r = s.run("proof.packs", &json!({})).unwrap();
+                assert_eq!(r["languages"].as_array().unwrap().len(), 2, "MCP sees the same rows");
+            });
+        }
+
+        #[test]
+        fn document_languages_show_install_grammar_and_not_available() {
+            with_backend(FixedBackend::sample(), |s, b| {
+                s.run("document.setText", &json!({"text": "Hallo\nMerhaba\nสวัสดี\nCześć\nBonjour"})).unwrap();
+                mark(s, 0, "nl-NL");
+                mark(s, 1, "tr-TR");
+                mark(s, 2, "th-TH");
+                mark(s, 3, "pl-PL");
+                mark(s, 4, "fr-FR");
+                let rows = packs::your_languages_with(s, None, &none);
+                let nl = row(&rows, "nl-NL");
+                assert_eq!((nl.proofing, nl.size, nl.installed), (Proofing::Install, 1_950_000, false));
+                // Turkish has grammar rules built in and no pack in the sample index.
+                assert_eq!(row(&rows, "tr-TR").proofing, Proofing::NotAvailable);
+                assert_eq!(row(&rows, "th-TH").proofing, Proofing::NotAvailable);
+                let pl = row(&rows, "pl-PL");
+                assert_eq!((pl.proofing, pl.size), (Proofing::GrammarBuiltIn, 4_620_000));
+                // Installing turns Install into Installed; the document keeps the row.
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "nl-NL").proofing, Proofing::Installed);
+                s.run("proof.removePack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "nl-NL").proofing, Proofing::Install, "still used by the document");
+            });
+        }
+
+        #[test]
+        fn the_own_folder_and_the_default_language() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "Cześć\nMerhaba"})).unwrap();
+                mark(s, 0, "pl-PL");
+                mark(s, 1, "tr-TR");
+                let dic = |tag: &str| {
+                    if tag.starts_with("pl") {
+                        Some(std::path::PathBuf::from("/mine/dicts/pl_PL.dic"))
+                    } else if tag.starts_with("tr") {
+                        Some(std::path::PathBuf::from("/usr/share/hunspell/tr_TR.dic"))
+                    } else {
+                        None
+                    }
+                };
+                let rows = packs::your_languages_with(s, Some("/mine/dicts"), &dic);
+                assert_eq!(row(&rows, "pl-PL").proofing, Proofing::OwnDictionary);
+                assert_eq!(row(&rows, "tr-TR").proofing, Proofing::SystemDictionary);
+                // en-GB as the default is its own row, the default one; en-US stays if the document uses it.
+                s.run("review.language", &json!({"lang": "en-GB", "default": true})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                let gb = row(&rows, "en-GB");
+                assert!(gb.default && gb.proofing == Proofing::BuiltIn);
+                assert_eq!(rows.iter().filter(|r| r.default).count(), 1);
+            });
+        }
+
+        #[test]
+        fn hostile_tags_never_panic() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "a b"})).unwrap();
+                s.prefs.default_language = Some("x".repeat(10_000));
+                let _ = packs::your_languages_with(s, Some(""), &none);
+                s.prefs.default_language = Some("\u{0}-\u{202e}".into());
+                let _ = packs::your_languages_with(s, None, &none);
+            });
+        }
     }
 
     #[test]

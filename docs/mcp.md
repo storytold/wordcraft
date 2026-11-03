@@ -134,7 +134,7 @@ command returns `"started": true` at once, and `proof.packs` shows it under `ins
 pack's install ends. Headless, they act on the same font store folder and return when done. The
 web build has no packs.
 
-A click or key sent with `click`/`key` on Install, Show available languages or Refresh never turns
+A click or key sent with `click`/`key` on Add a language…, Install or Refresh never turns
 downloading on either: only the person's own click does; the app shows why instead.
 
 Installing reads the pinned index of craft-i18n's language-packs-2 release (75 languages). For
