@@ -48,9 +48,9 @@ fn padding_without_a_border_keeps_its_room() {
     assert_eq!(d.styles.resolve_para(&p).padding, [36.0; 4]);
     assert!(d.settings.odf.is_some());
     // Written back as padding.
-    let out = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"fo:border-top="none" fo:padding-top="36pt""#), "{out}");
-    let back = crate::odt::import(&crate::odt::export(&d).unwrap()).unwrap();
+    let back = crate::odt::import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(back.styles.resolve_para(&props(&back)).padding, [36.0; 4]);
 }
 

@@ -76,6 +76,7 @@ impl Document {
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
+            kept: Default::default(),
         }
     }
 
@@ -152,6 +153,7 @@ impl Document {
             passthrough,
             glossary,
             media_index: _,
+            kept: _,
         } = self;
         let Document {
             body: other_body,
@@ -171,6 +173,7 @@ impl Document {
             passthrough: other_passthrough,
             glossary: other_glossary,
             media_index: _,
+            kept: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)

@@ -60,7 +60,7 @@ fn heading_numbering_round_trips() {
 #[test]
 fn exported_heading_numbers_are_followed_by_a_tab() {
     // Without label alignment LibreOffice set the number against the heading's text.
-    let xml = crate::odt::tests::styles_of(&export(&open(NUMBERED)).unwrap());
+    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open(NUMBERED)).unwrap());
     let outline = xml.split("<text:outline-style").nth(1).unwrap_or("");
     assert!(outline.contains(r#"text:label-followed-by="listtab""#), "{outline}");
     assert!(outline.contains(r#"text:list-level-position-and-space-mode="label-alignment""#));
@@ -78,11 +78,11 @@ fn numbered_headings_are_not_written_as_list_items() {
 fn unnumbered_heading_styles_are_detached_from_the_outline() {
     // LibreOffice gives a heading style the outline's numbering unless it names no list style;
     // an unnumbered level then still indented the heading.
-    let xml = crate::odt::tests::styles_of(&export(&open("")).unwrap());
+    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open("")).unwrap());
     let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
     assert!(h1.contains(r#"style:list-style-name="""#), "{h1}");
     // A numbered level stays attached.
-    let xml = crate::odt::tests::styles_of(&export(&open(NUMBERED)).unwrap());
+    let xml = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&open(NUMBERED)).unwrap());
     let h1 = xml.split("<style:style ").find(|s| s.starts_with(r#"style:name="Heading_20_1""#)).unwrap_or("");
     assert!(!h1.contains("style:list-style-name"), "{h1}");
 }
@@ -106,7 +106,7 @@ fn a_heading_looks_as_its_style_and_has_the_level_its_element_gives() {
     assert_eq!(p.style.as_deref(), Some("Heading2"));
     assert!(p.outline_level.is_none() || p.outline_level == Some(1));
     assert_eq!(d.styles.resolve_char(p.style.as_deref(), &Default::default()).size, 18.0);
-    let saved = export(&d).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let c = crate::odt::tests::content_of(&saved);
     assert!(c.contains(r#"text:outline-level="1">Clarifying"#) || c.contains(r#"text:outline-level="1"><"#), "{c}");
     let back = import(&saved).unwrap();

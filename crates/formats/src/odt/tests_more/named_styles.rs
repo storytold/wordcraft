@@ -141,7 +141,7 @@ fn a_style_based_on_libreoffices_heading_keeps_it() {
         crate::odt::tests::NS_T
     );
     let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
-    let s = crate::odt::tests::styles_of(&export(&d).unwrap());
+    let s = crate::odt::tests::styles_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(
         s.contains(r#"style:name="Heading""#)
             && s.contains(r#"style:name="Plaque" style:display-name="Plaque" style:family="paragraph" style:parent-style-name="Heading""#),

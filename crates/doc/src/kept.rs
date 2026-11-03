@@ -1,0 +1,226 @@
+//! Markup kept from the file a document was opened from, so that what isn't edited is written
+//! back as it was: a paragraph keeps its source XML, which a writer uses as long as the
+//! paragraph still is what the reader made of it (its [`fingerprint`] unchanged). Anything the
+//! model has no place for (an unknown element, an attribute nobody reads) survives a save that
+//! way. Never saved with the document (WordCraft's own format), and not part of its content
+//! (`==` ignores it).
+
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use crate::Paragraph;
+
+/// Most kept markup per document, bytes (a hostile file can't make the kept copy grow without
+/// bound: past it, paragraphs are written from the model as before).
+pub const MAX_KEPT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The kept markup of a document (see the module docs).
+#[derive(Clone, Debug, Default)]
+pub struct Kept(Option<Arc<KeptXml>>);
+
+/// What a reader kept.
+#[derive(Clone, Debug, Default)]
+pub struct KeptXml {
+    /// The format it came from (`"odt"`): only that format's writer uses it.
+    pub format: String,
+    /// Paragraph [`fingerprint`] → the paragraph's markup, in the order read (identical
+    /// paragraphs keep the first's).
+    pub paras: HashMap<u64, Arc<str>>,
+    /// Named definitions the kept markup refers to (styles, font faces…), by a key the format
+    /// chooses (`"auto:P12"`, `"style:Heading_20_1"`), as read.
+    pub defs: BTreeMap<String, Arc<str>>,
+    /// While reading: paragraph [`Paragraph::rev`] → its markup, until [`Kept::seal`] turns
+    /// them into fingerprints.
+    pub pending: HashMap<u64, Arc<str>>,
+    /// Bytes kept so far.
+    pub bytes: usize,
+    /// The keys of [`KeptXml::defs`] in the order the file had them.
+    pub order: Vec<String>,
+    /// Files of the package kept definitions refer to (a style's fill picture), by path.
+    pub files: BTreeMap<String, Arc<Vec<u8>>>,
+    /// The document's style definitions' [`styles_fingerprint`] when read: while it is the
+    /// same, the file's own style definitions can be written as they were.
+    pub styles_fp: Option<u64>,
+}
+
+impl PartialEq for Kept {
+    /// Not part of the document's content.
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Kept {
+    pub fn new(x: KeptXml) -> Kept {
+        Kept(Some(Arc::new(x)))
+    }
+    pub fn get(&self) -> Option<&KeptXml> {
+        self.0.as_deref()
+    }
+    /// What `format`'s writer may use, if anything was kept from such a file.
+    pub fn of(&self, format: &str) -> Option<&KeptXml> {
+        self.get().filter(|k| k.format == format)
+    }
+    pub fn get_mut(&mut self) -> Option<&mut KeptXml> {
+        self.0.as_mut().map(Arc::make_mut)
+    }
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+    /// After reading: each paragraph still marked pending (by its `rev`, which any change after
+    /// the reader made it would have moved on) gets its markup under its fingerprint.
+    pub fn seal(&mut self, paras: &mut dyn Iterator<Item = &Paragraph>) {
+        let Some(k) = self.get_mut() else { return };
+        if k.pending.is_empty() {
+            return;
+        }
+        for p in paras {
+            if let Some(xml) = k.pending.remove(&p.rev) {
+                k.paras.entry(fingerprint(p)).or_insert(xml);
+            }
+        }
+        k.pending.clear();
+    }
+}
+
+impl KeptXml {
+    /// The markup kept for paragraph `p`, while it still is what was read.
+    pub fn para(&self, p: &Paragraph) -> Option<&Arc<str>> {
+        if self.paras.is_empty() {
+            return None;
+        }
+        self.paras.get(&fingerprint(p))
+    }
+    /// Keep `xml` for the paragraph whose `rev` is `rev`, within the budget.
+    pub fn keep_pending(&mut self, rev: u64, xml: Arc<str>) {
+        if self.bytes.saturating_add(xml.len()) <= MAX_KEPT_BYTES {
+            self.bytes += xml.len();
+            self.pending.insert(rev, xml);
+        }
+    }
+    /// Keep a named definition, within the budget.
+    pub fn keep_def(&mut self, key: String, xml: Arc<str>) {
+        if self.bytes.saturating_add(xml.len()) <= MAX_KEPT_BYTES && !self.defs.contains_key(&key) {
+            self.bytes += xml.len();
+            self.order.push(key.clone());
+            self.defs.insert(key, xml);
+        }
+    }
+    /// Keep a file kept definitions refer to, within the budget.
+    pub fn keep_file(&mut self, path: String, bytes: Vec<u8>) {
+        if self.bytes.saturating_add(bytes.len()) <= MAX_KEPT_BYTES && !self.files.contains_key(&path) {
+            self.bytes += bytes.len();
+            self.files.insert(path, Arc::new(bytes));
+        }
+    }
+    /// Whether `doc`'s style definitions are still as they were read.
+    pub fn styles_as_read(&self, doc: &crate::Document) -> bool {
+        self.styles_fp.is_some_and(|fp| fp == styles_fingerprint(doc))
+    }
+}
+
+/// What `doc`'s style definitions are: its styles, lists and default tab interval.
+pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
+        Ok(v) => v.hash(&mut h),
+        Err(_) => u64::MAX.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// What paragraph `p` is in the model (its text, runs, objects and properties, not its `rev`):
+/// equal for a paragraph nobody changed.
+pub fn fingerprint(p: &Paragraph) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::to_vec(p) {
+        Ok(v) => v.hash(&mut h),
+        // Unserializable (no paragraph is): a value no paragraph's markup is kept under.
+        Err(_) => u64::MAX.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// Deepest table nesting [`crate::Document::seal_kept`] looks into.
+const MAX_SEAL_DEPTH: usize = 16;
+
+fn paras<'a>(bl: &'a crate::Blocks, depth: usize, out: &mut Vec<&'a Paragraph>) {
+    for b in bl {
+        match &**b {
+            crate::Block::Para(p) => out.push(p),
+            crate::Block::Table(t) if depth < MAX_SEAL_DEPTH => {
+                for r in &t.rows {
+                    for c in &r.cells {
+                        paras(&c.blocks, depth + 1, out);
+                    }
+                }
+            }
+            crate::Block::Table(_) => {}
+        }
+    }
+}
+
+impl crate::Document {
+    /// After reading: the markup kept for paragraphs still as the reader made them is filed
+    /// under their fingerprints (see [`Kept::seal`]); the rest is dropped.
+    pub fn seal_kept(&mut self) {
+        if self.kept.get().is_none_or(|k| k.pending.is_empty()) {
+            return;
+        }
+        let mut all = Vec::new();
+        paras(&self.body, 0, &mut all);
+        for p in self.parts.values() {
+            paras(&p.blocks, 0, &mut all);
+        }
+        let mut kept = std::mem::take(&mut self.kept);
+        kept.seal(&mut all.into_iter());
+        self.kept = kept;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_paragraph_keeps_its_markup_until_it_changes() {
+        let mut p = Paragraph::with_text("Hello", Default::default());
+        let mut kept = Kept::new(KeptXml { format: "odt".into(), ..Default::default() });
+        if let Some(k) = kept.get_mut() {
+            k.keep_pending(p.rev, Arc::from("<text:p>Hello</text:p>"));
+        }
+        kept.seal(&mut std::iter::once(&p));
+        let k = kept.of("odt").unwrap();
+        assert_eq!(k.para(&p).map(|x| &**x), Some("<text:p>Hello</text:p>"));
+        assert!(k.pending.is_empty());
+        // The same paragraph again (a copy, its rev moved on): still what was read.
+        p.touch();
+        assert!(k.para(&p).is_some());
+        // Changed: written from the model.
+        p.text.push('!');
+        assert!(k.para(&p).is_none());
+        assert!(kept.of("docx").is_none());
+    }
+
+    #[test]
+    fn a_paragraph_changed_while_reading_keeps_nothing() {
+        let mut p = Paragraph::with_text("Hi", Default::default());
+        let mut kept = Kept::new(KeptXml { format: "odt".into(), ..Default::default() });
+        if let Some(k) = kept.get_mut() {
+            k.keep_pending(p.rev, Arc::from("<text:p>Hi</text:p>"));
+        }
+        p.touch();
+        kept.seal(&mut std::iter::once(&p));
+        assert!(kept.of("odt").unwrap().paras.is_empty());
+    }
+
+    #[test]
+    fn kept_markup_is_bounded() {
+        let mut k = KeptXml::default();
+        let big: Arc<str> = Arc::from("x".repeat(MAX_KEPT_BYTES / 2 + 1));
+        k.keep_pending(1, big.clone());
+        k.keep_pending(2, big);
+        assert_eq!(k.pending.len(), 1);
+    }
+}

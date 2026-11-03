@@ -169,6 +169,10 @@ pub(super) struct Writer {
     last_list: Option<String>,
     /// The page the block being written starts.
     master: Option<SecStart>,
+    /// The definitions kept paragraphs may refer to (see `super::kept`), and those the kept
+    /// paragraphs written so far need: automatic, common, font faces.
+    pub(super) kept_defs: std::sync::Arc<std::collections::BTreeMap<String, std::sync::Arc<str>>>,
+    pub(super) kept_used: super::kept::Needed,
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<String>,
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
@@ -551,7 +555,24 @@ impl Writer {
 
     /// Paragraph `p`, or with `chain` the paragraphs joined at deleted paragraph marks (`p`
     /// is the first).
+    /// Paragraph `p` as it was read, when it still is and what it refers to was kept too (see
+    /// `super::kept`); false when it is written from the model.
+    fn kept_para(&mut self, p: &Para, out: &mut String) -> bool {
+        let Some(xml) = &p.kept else { return false };
+        let Some((auto, common, fonts)) = super::kept::needed(&self.kept_defs, super::kept::names(xml)) else { return false };
+        self.close_ins(out);
+        self.kept_used.0.extend(auto);
+        self.kept_used.1.extend(common);
+        self.kept_used.2.extend(fonts);
+        self.sequences.extend(super::kept::sequences(xml));
+        out.push_str(xml);
+        true
+    }
+
     fn para_in(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String) {
+        if chain.is_none() && self.master.is_none() && self.kept_para(p, out) {
+            return;
+        }
         let paras: &[Para] = chain.map(Vec::as_slice).unwrap_or(std::slice::from_ref(p));
         let start = self.master.take();
         self.chain = chain.map(|c| c.iter().map(|q| self.para_style(q)).collect()).unwrap_or_default();

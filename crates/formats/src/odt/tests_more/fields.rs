@@ -65,7 +65,7 @@ fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
     assert!(locked);
     // Written back: with no picture to read its value under, as its text (a reader would show a
     // fixed date without a value as today's).
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(!c.contains("<text:date") && c.contains("1 May"), "{c}");
     // With a picture, fixed at the value it shows (§19.871).
     let n = r#"xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0""#;
@@ -76,7 +76,7 @@ fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
         None,
     ))
     .unwrap();
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"text:date-value="2026-05-01""#) && c.contains(">1 May 2026</text:date>"), "{c}");
     assert!(c.contains(r#"text:time-value="1899-12-30T14:30:00""#) && c.contains(">14:30</text:time>"), "{c}");
     assert_eq!(c.matches(r#"text:fixed="true""#).count(), 2, "{c}");
@@ -280,7 +280,7 @@ fn variables_open_as_set_and_ref_fields() {
 #[test]
 fn variables_are_written_back_declared() {
     let d = import(&body(VARIABLES)).unwrap();
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     for want in [
         r#"<text:variable-decls><text:variable-decl office:value-type="string" text:name="n"/><text:variable-decl office:value-type="string" text:name="who"/></text:variable-decls>"#,
         r#"<text:variable-set text:name="who" text:display="none" office:value-type="string" office:string-value="Ada &quot;AL&quot;"/>"#,
@@ -288,7 +288,7 @@ fn variables_are_written_back_declared() {
     ] {
         assert!(c.contains(want), "{want} in {c}");
     }
-    assert_eq!(fields(&import(&export(&d).unwrap()).unwrap()), fields(&d));
+    assert_eq!(fields(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), fields(&d));
 }
 
 #[test]

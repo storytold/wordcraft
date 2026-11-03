@@ -231,7 +231,7 @@ fn a_border_around_text_is_read_and_written() {
     let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
     let b = p.runs.iter().find_map(|r| r.props.border).expect("a text border");
     assert_eq!((b.color, (b.width * 100.0).round(), (b.space * 100.0).round()), (Some(wordcraft_doc::props::Rgb(255, 0, 0)), 74.0, 144.0));
-    let c = crate::odt::tests::content_of(&crate::odt::export(&d).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"loext:border="0.74pt solid #ff0000" loext:padding="1.44pt""#), "{c}");
 }
 
@@ -258,7 +258,7 @@ fn emphasis_marks_are_read_and_written() {
     let d = crate::odt::import(&crate::odt::tests::package(&content, None)).unwrap();
     let marks: Vec<Option<E>> = d.body[0].as_para().unwrap().runs.iter().map(|r| r.props.emphasis).collect();
     assert_eq!(marks, [E::Dot, E::Comma, E::Circle, E::UnderDot, E::Dot, E::None].map(Some));
-    let saved = crate::odt::export(&d).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let c = crate::odt::tests::content_of(&saved);
     for v in ["dot above", "accent above", "circle above", "dot below"] {
         assert!(c.contains(&format!(r#"style:text-emphasize="{v}""#)), "{v} in {c}");

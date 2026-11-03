@@ -27,7 +27,7 @@ fn a_drop_cap_opens() {
 #[test]
 fn drop_caps_round_trip() {
     let d = open(r#"<style:drop-cap style:lines="2" style:distance="4pt"/>"#);
-    let bytes = export(&d).unwrap();
+    let bytes = crate::odt::tests::export_model(&d).unwrap();
     assert!(content_of(&bytes).contains(r#"<style:drop-cap style:lines="2" style:length="1" style:distance="4pt"/>"#), "{}", content_of(&bytes));
     assert_eq!(caps(&import(&bytes).unwrap()), caps(&d));
 }

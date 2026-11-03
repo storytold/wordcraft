@@ -667,7 +667,7 @@ fn a_list_cut_at_a_section_boundary_goes_on_numbering() {
         r#"<office:document-content {NS_T}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
     );
     let doc = import(&package(&content, Some(&cols_styles()))).unwrap();
-    let bytes = export(&doc).unwrap();
+    let bytes = crate::odt::tests::export_model(&doc).unwrap();
     let xml = String::from_utf8(read_entry(&mut archive(&bytes), "content.xml").unwrap()).unwrap();
     assert_eq!(xml.matches("text:continue-list=\"").count(), 1, "{xml}");
     // The continuation points at the first list's xml:id.
@@ -1177,6 +1177,14 @@ pub(super) fn content_of(bytes: &[u8]) -> String {
 }
 
 /// Entry `name` of a package, as text.
+/// `d` saved from its model alone, as after an edit: nothing written as it was read (for tests
+/// of how WordCraft writes what it models).
+pub(crate) fn export_model(d: &wordcraft_doc::Document) -> Result<Vec<u8>, String> {
+    let mut d = d.clone();
+    d.kept.clear();
+    super::export(&d)
+}
+
 pub(super) fn entry(bytes: &[u8], name: &str) -> String {
     let mut z = archive(bytes);
     String::from_utf8(read_entry(&mut z, name).unwrap()).unwrap()
@@ -1211,16 +1219,16 @@ fn the_default_styles_font_size_is_the_documents() {
     let p = d.body[0].as_para().unwrap();
     assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
     // Written back as the default style's.
-    let s = entry(&export(&doc).unwrap(), "styles.xml");
+    let s = entry(&crate::odt::tests::export_model(&doc).unwrap(), "styles.xml");
     assert!(s.contains(r#"fo:font-size="10pt""#), "{s}");
     // Standard's 11 pt too: LibreOffice's letters grew a page at 12 pt.
-    let s = entry(&export(&d).unwrap(), "styles.xml");
+    let s = entry(&crate::odt::tests::export_model(&d).unwrap(), "styles.xml");
     assert!(
         s.contains(r#"<style:text-properties fo:font-family="'Liberation Serif'" fo:font-size="11pt""#)
             || s.contains(r#"fo:font-size="11pt" style:letter-kerning"#),
         "{s}"
     );
-    let back = import(&export(&d).unwrap()).unwrap();
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
     let p = back.body[0].as_para().unwrap();
     assert_eq!(back.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 11.0);
 }

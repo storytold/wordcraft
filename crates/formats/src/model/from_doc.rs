@@ -461,6 +461,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         fmt_change: None,
         extra: None,
         mark: None,
+        kept: None,
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -499,6 +500,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         fmt_change: None,
                         extra: None,
                         mark: None,
+                        kept: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -612,6 +614,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     // The paragraph that ends a section carries its properties (the last piece of it does).
     out.section.clone_from(&p.section);
     out.mark = empty_mark(&out, p, opts);
+    // Still what the file it came from had (a whole paragraph): its markup, for its format. Not
+    // for one starting a page: the break may be its element's or the one before's (a break after
+    // it), and only the model says which is written where.
+    if opts.paras && done.is_empty() && p.props.page_break_before != Some(true) {
+        out.kept = doc.kept.of("odt").and_then(|k| k.para(p)).cloned();
+    }
     done.push(out);
     done
 }

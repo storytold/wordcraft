@@ -755,6 +755,98 @@ fn conn_kinds(blocks: &[FBlock]) -> super::HashMap<u32, wordcraft_doc::para::Sha
     out
 }
 
+/// `styles` with the file's own style definitions while `doc`'s are as read (see
+/// `super::kept`), and the font faces they name added to those kept paragraphs need (`used`).
+fn styles_as_read(doc: &Document, kept: Option<&wordcraft_doc::kept::KeptXml>, styles: String, used: &mut super::kept::Needed) -> String {
+    let Some(k) = kept.filter(|k| k.styles_as_read(doc)) else { return styles };
+    // With the font faces they name (any of the file's, by its names).
+    for (key, d) in &k.defs {
+        if let Some(name) = key.strip_prefix("font:") {
+            used.2.entry(name.to_string()).or_insert_with(|| d.clone());
+        }
+    }
+    super::kept::with_common_as_read(&styles, &k.defs, &k.order)
+}
+
+/// The package files the file's own definitions refer to, written as read with them (added to
+/// `files` and `manifest` where no file `taken` has the path).
+fn with_kept_files(
+    kept: Option<&wordcraft_doc::kept::KeptXml>,
+    taken: &dyn Fn(&str) -> bool,
+    files: &mut Vec<(String, std::sync::Arc<Vec<u8>>)>,
+    manifest: &mut String,
+) {
+    let Some(k) = kept else { return };
+    for (path, bytes) in &k.files {
+        if !taken(path) && !files.iter().any(|(p, _)| p == path) {
+            let ext = path.rsplit('.').next().unwrap_or("");
+            manifest.push_str(&format!(
+                "<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n",
+                x(path),
+                x(model::mime_of(ext))
+            ));
+            files.push((path.clone(), bytes.clone()));
+        }
+    }
+}
+
+/// The prefix of WordCraft's own automatic style names in a document with paragraphs kept as
+/// read (theirs keep the names they were read with).
+const KEPT_PREFIX: &str = "wc";
+
+/// `content` and `styles` with the definitions kept paragraphs need (`used`: automatic, common,
+/// font faces), each where it goes and only where its name isn't defined already.
+fn with_kept_defs(
+    mut content: String,
+    mut styles: String,
+    used: &super::kept::Needed,
+    defs: &std::collections::BTreeMap<String, std::sync::Arc<str>>,
+) -> (String, String) {
+    let (auto, common, fonts) = used;
+    if auto.is_empty() && common.is_empty() && fonts.is_empty() && defs.is_empty() {
+        return (content, styles);
+    }
+    // The namespaces the file declared (kept markup may use any), where they aren't declared.
+    for (xml, root) in [(&mut content, "<office:document-content "), (&mut styles, "<office:document-styles ")] {
+        let Some(at) = xml.find(root).map(|i| i + root.len()) else { continue };
+        let head_end = xml.get(at..).and_then(|r| r.find('>')).map_or(at, |e| at + e);
+        let head = xml.get(at..head_end).unwrap_or("").to_string();
+        let missing: String = defs
+            .iter()
+            .filter_map(|(k, uri)| k.strip_prefix("ns:").map(|p| (p, uri)))
+            .filter(|(p, _)| !head.contains(&format!("xmlns:{p}=")))
+            .map(|(p, uri)| format!("xmlns:{p}=\"{}\" ", x(uri)))
+            .collect();
+        xml.insert_str(at, &missing);
+    }
+    let defined = |xml: &str, name: &str| xml.contains(&format!("style:name=\"{}\"", x(name)));
+    let add = |xml: &mut String, close: &str, defs: &std::collections::BTreeMap<String, std::sync::Arc<str>>| {
+        let missing: String = defs.iter().filter(|(n, _)| !defined(xml, n)).map(|(_, d)| &**d).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let empty = close.replacen("</", "<", 1).replacen('>', "/>", 1);
+        if let Some(at) = xml.find(close) {
+            xml.insert_str(at, &missing);
+        } else if let Some(at) = xml.find(&empty) {
+            xml.replace_range(at..at + empty.len(), &format!("{}{missing}{close}", close.replacen("</", "<", 1)));
+        }
+    };
+    add(&mut content, "</office:automatic-styles>", auto);
+    add(&mut styles, "</office:styles>", common);
+    for (xml, before) in [(&mut content, "<office:automatic-styles"), (&mut styles, "<office:styles")] {
+        // No declarations yet: the element they go in, where it belongs (before the styles).
+        if !fonts.is_empty()
+            && !xml.contains("<office:font-face-decls")
+            && let Some(at) = xml.find(before)
+        {
+            xml.insert_str(at, "<office:font-face-decls></office:font-face-decls>");
+        }
+        add(xml, "</office:font-face-decls>", fonts);
+    }
+    (content, styles)
+}
+
 /// An OpenDocument text document's media type, and a template's (ODF 1.3 Part 2 §3.3, Appendix C).
 pub const TEXT_MIME: &str = "application/vnd.oasis.opendocument.text";
 pub const TEMPLATE_MIME: &str = "application/vnd.oasis.opendocument.text-template";
@@ -776,7 +868,10 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         model::FlowOpts { tracked: true, fields: true, notes: true, comments: true, lists: true, chars: true, paras: true, boxes: true },
     );
     let accents = doc.settings.theme_colors.get(4..10).map(<[_]>::to_vec).unwrap_or_default();
-    let mut w = Writer::default();
+    // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
+    let kept = doc.kept.of("odt");
+    let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.accents.clone_from(&accents);
     w.conn_kinds = conn_kinds(&flow.blocks);
     w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
@@ -867,6 +962,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
+    // A custom style kept paragraphs name is written from the model (as edited), not as read.
+    for st in &doc.styles.styles {
+        if w.kept_used.1.contains_key(&super::writer::odf_name(&st.id)) {
+            if model::is_custom_style(doc, &st.id) {
+                w.named.insert(st.id.clone());
+            } else if model::is_custom_char_style(doc, &st.id) {
+                w.named_text.insert(st.id.clone());
+            }
+        }
+    }
     let mut named = std::mem::take(&mut w.named);
     named.append(&mut hw.named);
     let mut named_text = std::mem::take(&mut w.named_text);
@@ -915,7 +1020,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let dirs: Vec<String> =
         w.objects.iter().map(|(d, _, _)| d).chain(w.object_dirs.iter().map(|(d, _)| d)).map(|d| format!("{}/", d.trim_end_matches('/'))).collect();
     let taken = |p: &str| w.pictures.iter().any(|(n, _, _)| n == p) || dirs.iter().any(|d| p.starts_with(d.as_str()));
-    let kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
+    let mut kept_files: Vec<_> = kept_files.into_iter().filter(|(p, _)| !taken(p)).collect();
+    with_kept_files(kept, &taken, &mut kept_files, &mut manifest);
     for (path, mime) in &kept_entries {
         if (path.ends_with('/') && kept_files.iter().any(|(p, _)| p.starts_with(path.as_str()))) || kept_files.iter().any(|(p, _)| p == path) {
             manifest.push_str(&format!("<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n", x(path), x(mime)));
@@ -932,6 +1038,10 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     z.write_all(mime.as_bytes()).map_err(ioerr)?;
     // Each font declared, for readers without it (§16.21).
     let (content, styles) = (with_font_faces(&content), with_font_faces(&styles));
+    // What the paragraphs written as read need, as read (see `super::kept`).
+    // Style definitions as read while nobody changed them: the file's own `office:styles`.
+    let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
+    let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
         ("content.xml", content.as_bytes()),

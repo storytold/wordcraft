@@ -431,6 +431,10 @@ struct Parsed {
     flow: Flow,
     /// Who changed it last, when, and how often it was saved (`meta.xml`).
     changes: (String, String, u32),
+    /// The style and font definitions kept paragraphs may refer to (see `super::kept`).
+    kept_defs: Vec<(String, std::sync::Arc<str>)>,
+    /// The package files those definitions refer to.
+    kept_files: Vec<(String, Vec<u8>)>,
     /// The space between paragraphs is their spacings' sum (else the larger).
     sum_spacing: bool,
     /// The last section's properties.
@@ -583,8 +587,13 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
-    events(&content, |ev| body.feed(ev));
+    body.raw = &content;
+    super::xml::events_at(&content, |ev, at| body.feed_at(ev, at));
     let mut blocks = body.take_blocks();
+    // The file's own definitions: what kept paragraphs refer to, and the style definitions
+    // written as read while they stay unchanged.
+    let mut kept_defs = super::kept::defs(&content, true);
+    kept_defs.extend(styles_xml.as_deref().map(|x| super::kept::defs(x, false)).unwrap_or_default());
     let hidden_controls = body.take_hidden_controls();
     let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());
     for b in parts.blocks_mut() {
@@ -614,6 +623,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
     let sources = std::mem::take(&mut body.sources);
+    let kept_files = super::kept::files(&kept_defs, &mut fetch);
     Ok(Parsed {
         flow: Flow { blocks, meta },
         last,
@@ -644,6 +654,8 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         page_image,
         sum_spacing,
         changes,
+        kept_defs,
+        kept_files,
     })
 }
 
@@ -692,6 +704,8 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         page_image,
         sum_spacing,
         changes,
+        kept_defs,
+        kept_files,
     } = parse_tracked(bytes, (page.page_w, page.page_h), profile)?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
@@ -754,6 +768,24 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     page_parts::add(&mut doc, parts);
     if let Some(t) = track {
         doc.settings.track_changes = t;
+    }
+    // The markup kept for paragraphs nothing changed while reading, filed for the writer.
+    if doc.kept.get().is_none() {
+        doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
+    }
+    if let Some(k) = doc.kept.get_mut() {
+        k.format = "odt".into();
+        for (key, xml) in kept_defs {
+            k.keep_def(key, xml);
+        }
+        for (path, bytes) in kept_files {
+            k.keep_file(path, bytes);
+        }
+    }
+    doc.seal_kept();
+    let fp = wordcraft_doc::kept::styles_fingerprint(&doc);
+    if let Some(k) = doc.kept.get_mut() {
+        k.styles_fp = Some(fp);
     }
     Ok(doc)
 }

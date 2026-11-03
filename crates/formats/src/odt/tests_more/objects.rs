@@ -57,7 +57,7 @@ fn an_embedded_spreadsheet_is_kept_with_a_placeholder_picture() {
 #[test]
 fn embedded_objects_are_saved_back_whole() {
     let doc = import(&package()).unwrap();
-    let saved = export(&doc).unwrap();
+    let saved = crate::odt::tests::export_model(&doc).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
     let names: Vec<&str> = z.file_names().collect();
     for n in ["Object 1/content.xml", "Object 1/styles.xml", "Object 2", "ObjectReplacements/Object 1", "ObjectReplacements/Object 2"] {

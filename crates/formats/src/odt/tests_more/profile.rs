@@ -136,7 +136,8 @@ fn widow_control_is_the_files_else_the_profiles() {
     // `fo:widows`/`fo:orphans` refer to XSL's (initial value 2); LibreOffice reads none stated as
     // none, so a first line alone at a page's foot stayed there in LibreOffice and moved on after
     // a save. Stated in the default style (or Standard), it is the file's under every preset;
-    // written back stated either way.
+    // written from the model (after an edit), stated either way. An unedited file keeps its
+    // own statement, or its silence (see `kept`).
     let doc = |default: &str| {
         let styles = format!(
             r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties {default}/></style:default-style></office:styles></office:document-styles>"#
@@ -155,7 +156,7 @@ fn widow_control_is_the_files_else_the_profiles() {
     assert!(!on(&doc(""), &OdfProfile::libreoffice()));
     for (p, written) in [(OdfProfile::wordcraft(), r#"fo:widows="2" fo:orphans="2""#), (OdfProfile::libreoffice(), r#"fo:widows="0" fo:orphans="0""#)]
     {
-        let saved = crate::odt::export(&import_as(&doc(""), &p)).unwrap();
+        let saved = crate::odt::tests::export_model(&import_as(&doc(""), &p)).unwrap();
         let styles = crate::odt::tests::entry(&saved, "styles.xml");
         assert!(styles.contains(written), "{:?}: {styles}", p.preset);
         assert_eq!(on(&saved, &OdfProfile::of(OdfPreset::Custom)), p.widow_control);

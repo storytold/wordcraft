@@ -620,6 +620,16 @@ impl<'a> Builder<'a> {
         out.mark.del = p.mark_del.as_deref().map(|m| self.revision(RevisionKind::Delete, m));
         out.normalize();
         out.touch();
+        // Its markup kept for the writer, as long as nothing changes the paragraph from here on
+        // (see `wordcraft_doc::kept`: the reader seals it once the document is done).
+        if let Some(xml) = &p.kept {
+            if self.doc.kept.get().is_none() {
+                self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
+            }
+            if let Some(k) = self.doc.kept.get_mut() {
+                k.keep_pending(out.rev, xml.clone());
+            }
+        }
         out
     }
 

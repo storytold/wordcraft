@@ -667,6 +667,9 @@ pub struct Para {
     /// ([`FlowOpts::paras`]) hold it, and only for paragraphs without text ([`Para::textless`]),
     /// whose drawings' runs take it too.
     pub mark: Option<Box<wordcraft_doc::props::CharProps>>,
+    /// The paragraph's markup in the file it came from, while it still is what was read
+    /// ([`wordcraft_doc::kept`]): a format that keeps it (ODT) writes it as it was.
+    pub kept: Option<std::sync::Arc<str>>,
 }
 
 impl Para {
@@ -938,6 +941,9 @@ impl FTable {
     }
 }
 
+/// A block of a flow. (Most are paragraphs: boxing them for the tables' sake would cost every
+/// paragraph an allocation, so the size difference is fine.)
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FBlock {
     Para(Para),

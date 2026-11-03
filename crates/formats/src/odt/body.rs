@@ -86,6 +86,12 @@ pub(super) struct Body<'a> {
     pub(super) in_text: bool,
     skip: usize,
     depth: usize,
+    /// The markup being read (`content.xml`), for keeping paragraphs' own (empty: none kept).
+    pub(super) raw: &'a [u8],
+    /// The paragraph whose markup is being kept (see [`KeptOpen`]).
+    kept_open: Option<KeptOpen>,
+    /// Paragraphs finished so far (a kept paragraph must come out of its element whole).
+    paras_done: usize,
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
     frame: Option<Frame>,
     in_desc: bool,
@@ -202,6 +208,9 @@ impl<'a> Body<'a> {
             in_text: false,
             skip: 0,
             depth: 0,
+            raw: &[],
+            kept_open: None,
+            paras_done: 0,
             frame: None,
             in_desc: false,
             pages,
@@ -272,6 +281,45 @@ impl<'a> Body<'a> {
         self.list_id = id;
         self.last_list = Some(id);
         self.item_start = None;
+    }
+
+    /// [`Body::feed`], `at` the event's markup in [`Body::raw`]: a body paragraph that comes out
+    /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
+    /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
+    pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        match &ev {
+            Ev::Start(q, _) => match &mut self.kept_open {
+                Some(k) => k.clean &= keepable(q),
+                None if (q == "text:p" || q == "text:h")
+                    && !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.para.is_none()
+                    && self.note.is_none()
+                    && self.frame.is_none()
+                    && self.del.is_none()
+                    && self.field.is_none()
+                    && !self.in_desc =>
+                {
+                    // Drawings read before it that join it aren't in its markup.
+                    let clean = self.loose.is_empty();
+                    self.kept_open = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean, done: self.paras_done });
+                }
+                None => {}
+            },
+            Ev::End(q) if (q == "text:p" || q == "text:h") && self.kept_open.as_ref().is_some_and(|k| k.depth == self.depth) => {
+                if let Some(k) = self.kept_open.take()
+                    && k.clean
+                    && k.done == self.paras_done
+                    && let Some(p) = &mut self.para
+                    && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    p.kept = Some(std::sync::Arc::from(xml));
+                }
+            }
+            _ => {}
+        }
+        self.feed(ev);
     }
 
     pub(super) fn feed(&mut self, ev: Ev) {
@@ -637,6 +685,7 @@ impl Body<'_> {
                 }
             }
         }
+        self.paras_done += 1;
         let cont = std::mem::take(&mut self.para_cont);
         let level = p.list.map(|l| l.level);
         let c = self.container();
@@ -647,6 +696,8 @@ impl Body<'_> {
         {
             prev.push_text("\n", &Fmt::default());
             prev.inlines.extend(p.inlines);
+            // Two elements made one paragraph: neither's markup is it.
+            prev.kept = None;
             return;
         }
         c.push(FBlock::Para(p));
@@ -1440,4 +1491,28 @@ const MAX_GEOMETRY_XML: usize = 256 * 1024;
 fn element_xml(q: &str, a: &Attrs, empty: bool) -> String {
     let attrs: String = a.iter().map(|(k, v)| format!(" {k}=\"{}\"", super::writer::x(v))).collect();
     format!("<{q}{attrs}{}>", if empty { "/" } else { "" })
+}
+
+/// A body paragraph whose markup is being kept: where its element starts in the markup, its
+/// depth, whether everything in it so far can be kept, and how many paragraphs were finished
+/// before it.
+struct KeptOpen {
+    from: usize,
+    depth: usize,
+    clean: bool,
+    done: usize,
+}
+
+/// Whether a paragraph holding element `q` can be written back as it was read: not when the
+/// element refers to something outside the paragraph that the writer names afresh (drawings and
+/// their pictures, comments, tracked changes, marks and bookmarks that span paragraphs, form
+/// controls).
+fn keepable(q: &str) -> bool {
+    !(q.starts_with("draw:")
+        || q.starts_with("office:annotation")
+        || q.starts_with("text:change")
+        || q.starts_with("form:")
+        || q.ends_with("-start")
+        || q.ends_with("-end")
+        || q == "text:bookmark")
 }

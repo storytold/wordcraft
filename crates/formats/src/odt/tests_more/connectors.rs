@@ -2,8 +2,8 @@
 //! (§9.2.19), read as WordCraft connectors glued to the shapes' connection sites, placed between
 //! them, and written back glued.
 
+use crate::odt::import;
 use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 
 const NS_D: &str =
@@ -57,13 +57,13 @@ fn a_connector_is_glued_between_its_shapes() {
 #[test]
 fn connectors_are_written_glued_and_read_back() {
     let d = doc("");
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"<draw:rect"#) && c.contains(r#"xml:id="shape1" draw:id="shape1""#), "{c}");
     assert!(
         c.contains(r#"draw:type="standard" draw:start-shape="shape1" draw:start-glue-point="2" draw:end-shape="shape2" draw:end-glue-point="0""#),
         "{c}"
     );
-    assert_eq!(shapes(&import(&export(&d).unwrap()).unwrap()), shapes(&d));
+    assert_eq!(shapes(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), shapes(&d));
 }
 
 #[test]

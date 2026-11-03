@@ -68,7 +68,7 @@ fn a_placeholders_type_is_kept_and_typed_text_is_text() {
     let bytes = doc(
         r#"<text:p><text:placeholder text:placeholder-type="image" text:description="Your logo &amp; mark">&lt;Logo&gt;</text:placeholder> and <text:placeholder text:placeholder-type="nonsense">&lt;X&gt;</text:placeholder></text:p>"#,
     );
-    let c = content_of(&export(&import(&bytes).unwrap()).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap());
     // Its description is the control's title, written back.
     assert!(
         c.contains(r#"<text:placeholder text:placeholder-type="image" text:description="Your logo &amp; mark">&lt;Logo&gt;</text:placeholder>"#),
@@ -87,6 +87,6 @@ fn a_placeholders_type_is_kept_and_typed_text_is_text() {
             }
         }
     }
-    let c = content_of(&export(&crate::model::to_doc(&flow)).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&crate::model::to_doc(&flow)).unwrap());
     assert!(!c.contains("<text:placeholder") && c.contains(r#"Acme <text:s text:c="1"/>Ltd"#), "{c}");
 }

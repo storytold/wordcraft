@@ -180,7 +180,7 @@ fn linked_text_boxes_stay_linked() {
     let l = links(&d);
     assert_eq!(l.len(), 2);
     assert_eq!(l[0].1, Some(l[1].0), "{l:?}");
-    let saved = export(&d).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let c = crate::odt::tests::content_of(&saved);
     assert!(c.contains(&format!(r#"draw:chain-next-name="Frame{}""#, l[1].0)), "{c}");
     let back = links(&import(&saved).unwrap());
