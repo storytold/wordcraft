@@ -578,6 +578,7 @@ fn personal_error_id() -> egui::Id {
 
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
+/// Availability comes from cached worker results; painting never probes the filesystem.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
@@ -590,34 +591,57 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     if app.ui.recent.is_empty() {
         ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
     }
-    let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
-    let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
-    let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
-    for (p, name) in shown.iter().zip(&names) {
+    let recent: Vec<_> = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    app.recent_files.refresh(ui.ctx(), &recent, std::time::Instant::now());
+    let names: Vec<_> =
+        recent.iter().map(|p| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone())).collect();
+    for p in recent {
+        let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let missing = app.recent_files.missing(&p);
+        // Browser recent entries are names, not OS paths; there is no filesystem to probe.
+        #[cfg(target_arch = "wasm32")]
+        let missing = false;
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
-        // The row shows a name and a path that may not fit: the path in full is its tooltip.
-        let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
-        // Two documents with the same file name are told apart by their path, as on screen.
-        let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
+        let status = if missing { tl!("File not found") } else { "" };
+        let spoken = if names.iter().filter(|n| **n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
+        let label = if missing { format!("{spoken}. {status}") } else { spoken };
+        let tooltip = crate::i18n::isolate_path(&p);
+        let resp = resp.on_hover_text(if missing { format!("{tooltip}\n{status}") } else { tooltip });
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &label));
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        // Names and paths are set apart (a right-to-left line would scramble their marks and
-        // folders) and the row starts at the side reading starts from.
         let rtl = crate::rtl::on();
+        let fade = |color: egui::Color32| if missing { color.gamma_multiply(0.55) } else { color };
         icons::paint(
             ui.painter(),
             Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
             "printLayout",
-            t.icon,
-            t.accent,
+            fade(t.icon),
+            fade(t.accent),
         );
+        let status_galley = ui.painter().layout_no_wrap(status.into(), regular(11.0), t.text_dim);
+        let text_rect = if missing {
+            if rtl {
+                Rect::from_min_max(pos2(r.min.x + status_galley.size().x + 12.0, r.min.y), r.max)
+            } else {
+                Rect::from_min_max(r.min, pos2(r.max.x - status_galley.size().x - 12.0, r.max.y))
+            }
+        } else {
+            r
+        };
+        let text = ui.painter().with_clip_rect(r.intersect(text_rect));
         let side = crate::rtl::lead_center(rtl);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        text.text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(&name), medium(13.0), fade(t.text));
+        text.text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(&p), regular(11.0), fade(t.text_dim));
+        if missing {
+            let x = if rtl { r.min.x } else { r.max.x - status_galley.size().x };
+            ui.painter().galley(pos2(x, r.center().y - status_galley.size().y / 2.0), status_galley, t.text_dim);
+        }
         if resp.clicked() {
-            let failed = open_recent(app, p).err();
+            let failed = open_recent(app, &p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
     }
