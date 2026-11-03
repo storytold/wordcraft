@@ -182,65 +182,7 @@ impl WordApp {
         }
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
-            let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
-            let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
-            // A save with a password encrypts this and later saves (`file.save`'s `password`).
-            if matches!(id, "file.save" | "file.saveAs")
-                && let Some(pw) = params.get("password").filter(|v| !v.is_null())
-            {
-                if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
-                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
-                }
-                self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
-            }
-            // A save is a save, download or not: advance the revision and modified stamp (#262).
-            if matches!(id, "file.save" | "file.saveAs") {
-                self.session.stamp_save();
-            }
-            // Word documents are encrypted with the document's password, if it has one.
-            let password =
-                if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
-            let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
-            // A ticket left over from an earlier call isn't this save's.
-            let saves = self.services.async_saves.clone();
-            if let Some(saves) = &saves {
-                let _ = saves.take_started();
-            }
-            // An export is a copy, and so is a save in a format that doesn't keep everything (a
-            // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
-            // Save As tells the host page the document is now this file, which it only is when the
-            // save marks it saved. A Save under a name the page never sent (an untitled document,
-            // an imported .doc saved as .docx) is a new file too, never an overwrite.
-            let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
-            let new_file = id == "file.saveAs" || opened_name.as_deref() != Some(name.as_str());
-            let delivered = match (&self.services.host_save, &self.services.download) {
-                (Some(host), _) => host(&name, &bytes, marked_saved && new_file),
-                (None, Some(download)) => download(&name, &bytes),
-                (None, None) => Ok(()),
-            };
-            if let Err(e) = delivered {
-                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
-                log::error!("download of {name} failed: {e}");
-                self.status(msg.clone());
-                return Err(msg);
-            }
-            if marked_saved {
-                self.session.dirty = false;
-                // The host page keeps the file under this name now, as a desktop save would.
-                if self.services.host_save.is_some() {
-                    self.session.path = Some(std::path::PathBuf::from(&name));
-                }
-            }
-            // The browser's picker writes the file later (#1315): until it says how that went,
-            // the document's save isn't confirmed.
-            if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
-                let document = self.session.document_id();
-                self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
-                return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
-            }
-            return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
+            return self.web_save(id, &params);
         }
         let document = self.session.document_id();
         let body_epoch = self.session.ime_body_epoch();
@@ -317,6 +259,70 @@ impl WordApp {
             self.status(e.clone());
         }
         r
+    }
+
+    /// Web: a save or export becomes a download (or the host page's save), since the browser has
+    /// no file path to write. Returns the command's result.
+    fn web_save(&mut self, id: &str, params: &Value) -> Result<Value, String> {
+        let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
+        let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+        // A save with a password encrypts this and later saves (`file.save`'s `password`).
+        if matches!(id, "file.save" | "file.saveAs")
+            && let Some(pw) = params.get("password").filter(|v| !v.is_null())
+        {
+            if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
+                return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
+            }
+            self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+        }
+        // A save is a save, download or not: advance the revision and modified stamp (#262).
+        if matches!(id, "file.save" | "file.saveAs") {
+            self.session.stamp_save();
+        }
+        // Word documents are encrypted with the document's password, if it has one.
+        let password =
+            if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
+        let opts = wordcraft_engine::cmd::file::export_options(&self.session, params);
+        let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+        // A ticket left over from an earlier call isn't this save's.
+        let saves = self.services.async_saves.clone();
+        if let Some(saves) = &saves {
+            let _ = saves.take_started();
+        }
+        // An export is a copy, and so is a save in a format that doesn't keep everything (a
+        // page image, plain text): the document itself still has unsaved changes.
+        let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+        // Save As tells the host page the document is now this file, which it only is when the
+        // save marks it saved. A Save under a name the page never sent (an untitled document,
+        // an imported .doc saved as .docx) is a new file too, never an overwrite.
+        let opened_name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        let new_file = id == "file.saveAs" || opened_name.as_deref() != Some(name.as_str());
+        let delivered = match (&self.services.host_save, &self.services.download) {
+            (Some(host), _) => host(&name, &bytes, marked_saved && new_file),
+            (None, Some(download)) => download(&name, &bytes),
+            (None, None) => Ok(()),
+        };
+        if let Err(e) = delivered {
+            let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
+            log::error!("download of {name} failed: {e}");
+            self.status(msg.clone());
+            return Err(msg);
+        }
+        if marked_saved {
+            self.session.dirty = false;
+            // The host page keeps the file under this name now, as a desktop save would.
+            if self.services.host_save.is_some() {
+                self.session.path = Some(std::path::PathBuf::from(&name));
+            }
+        }
+        // The browser's picker writes the file later (#1315): until it says how that went,
+        // the document's save isn't confirmed.
+        if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
+            let document = self.session.document_id();
+            self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
+            return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
+        }
+        Ok(json!({"downloaded": name, "bytes": bytes.len()}))
     }
 
     /// Web: store a font added from bytes, or forget the removed ones ([`Services::store_font`]).
