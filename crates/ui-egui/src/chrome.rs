@@ -281,6 +281,9 @@ pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: imp
     let (title, suffix) = if width(suffix) > available { (suffix.trim_start(), "") } else { (title, suffix) };
     let mut shown: String = title.chars().take(240).collect();
     if width(&format!("{shown}{suffix}")) > available {
+        if width(&format!("…{suffix}")) > available {
+            return suffix.to_string();
+        }
         while !shown.is_empty() && width(&format!("{shown}…{suffix}")) > available {
             shown.pop();
         }

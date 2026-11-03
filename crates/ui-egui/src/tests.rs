@@ -493,6 +493,12 @@ fn title_elision_retains_a_fitting_build_label() {
     let shown = chrome::fitted_title(&title, " (Preview)", 24.0, width);
     assert!(shown.ends_with("… (Preview)"));
     assert!(width(&shown) <= 24.0);
+    for available in [10.0, 10.5] {
+        let shown = chrome::fitted_title(&title, " (Preview)", available, width);
+        assert_eq!(shown, " (Preview)", "omit the ellipsis when only the label fits");
+        assert!(width(&shown) <= available);
+    }
+    assert_eq!(chrome::fitted_title(&title, " (Preview)", 0.0, width), "");
     assert_eq!(chrome::fitted_title("Notes", "", 24.0, width), "Notes");
     assert_eq!(chrome::fitted_title("Document1 — Not saved", "", 12.0, width), "Document1 —…");
     let narrow = chrome::fitted_title(&title, " (A very long build label)", 12.0, width);
