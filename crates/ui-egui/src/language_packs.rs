@@ -32,10 +32,33 @@ fn shown_text(text: &str) -> String {
     shown_keeping(text, usize::MAX, true)
 }
 
+/// Most characters of a failure the window shows: the font store's errors can quote the index
+/// URL or the server's answer, which aren't ours to trust either.
+const MAX_ERROR: usize = 500;
+
+/// A failure from the engine or the font store as shown: [`shown`], at most [`MAX_ERROR`]
+/// characters.
+fn shown_error(e: &str) -> String {
+    shown(e, MAX_ERROR)
+}
+
 fn shown_keeping(text: &str, max: usize, lines: bool) -> String {
+    // Line and paragraph separators (U+2028/9) break lines even where `lines` is off, and tag
+    // characters (U+E0000–U+E007F) are invisible text an index could hide words in.
     let format = |c: char| {
         (c.is_control() && !(lines && matches!(c, '\n' | '\t')))
-            || matches!(c, '\u{061C}' | '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+            || matches!(
+                c,
+                '\u{061C}'
+                    | '\u{00AD}'
+                    | '\u{180E}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{2028}'..='\u{202E}'
+                    | '\u{2060}'..='\u{206F}'
+                    | '\u{FEFF}'
+                    | '\u{FFF9}'..='\u{FFFB}'
+                    | '\u{E0000}'..='\u{E007F}'
+            )
     };
     let clean: String = text.chars().filter(|c| !format(*c)).collect();
     if clean.chars().count() <= max {
@@ -165,9 +188,9 @@ fn error_of(app: &WordApp, locale: &str) -> Option<String> {
     }
     let e = packs::error(locale)?;
     Some(if locale.is_empty() {
-        crate::i18n::fmt(tl!("Couldn't get the list of languages: {error}"), &[("error", &e)])
+        crate::i18n::fmt(tl!("Couldn't get the list of languages: {error}"), &[("error", &shown_error(&e))])
     } else {
-        crate::i18n::fmt(tl!("Couldn't install: {error}"), &[("error", &e)])
+        crate::i18n::fmt(tl!("Couldn't install: {error}"), &[("error", &shown_error(&e))])
     })
 }
 
@@ -184,7 +207,7 @@ fn consent(app: &mut WordApp, ctx: &egui::Context, key: &str) -> bool {
         return false;
     }
     if let Err(e) = backend.enable_network() {
-        app.packs_rt.errors.insert(key.to_string(), crate::i18n::fmt(tl!("Couldn't turn on downloading: {error}"), &[("error", &e)]));
+        app.packs_rt.errors.insert(key.to_string(), crate::i18n::fmt(tl!("Couldn't turn on downloading: {error}"), &[("error", &shown_error(&e))]));
         return false;
     }
     true
@@ -197,7 +220,7 @@ fn start_install(app: &mut WordApp, ctx: &egui::Context, pack: &Pack) {
         return;
     }
     if let Err(e) = packs::start_install(&pack.locale) {
-        app.packs_rt.errors.insert(pack.locale.clone(), crate::i18n::fmt(tl!("Couldn't install: {error}"), &[("error", &e)]));
+        app.packs_rt.errors.insert(pack.locale.clone(), crate::i18n::fmt(tl!("Couldn't install: {error}"), &[("error", &shown_error(&e))]));
     }
     app.packs_rt.missing = None;
 }
@@ -210,7 +233,9 @@ fn start_fetch(app: &mut WordApp, ctx: &egui::Context) {
         return;
     }
     if let Err(e) = packs::start_refresh() {
-        app.packs_rt.errors.insert(String::new(), crate::i18n::fmt(tl!("Couldn't get the list of languages: {error}"), &[("error", &e)]));
+        app.packs_rt
+            .errors
+            .insert(String::new(), crate::i18n::fmt(tl!("Couldn't get the list of languages: {error}"), &[("error", &shown_error(&e))]));
     }
 }
 
@@ -221,7 +246,7 @@ fn remove(app: &mut WordApp, locale: &str) {
             app.packs_rt.missing = None;
         }
         Err(e) => {
-            app.packs_rt.errors.insert(locale.to_string(), crate::i18n::fmt(tl!("Couldn't remove: {error}"), &[("error", &e)]));
+            app.packs_rt.errors.insert(locale.to_string(), crate::i18n::fmt(tl!("Couldn't remove: {error}"), &[("error", &shown_error(&e))]));
         }
     }
 }
@@ -312,6 +337,8 @@ fn licence_hover(pack: &Pack) -> String {
 /// File › Options › Language › Language packs: every available and installed pack with its
 /// name, size, licence and source, and Install or Remove.
 pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
+    // Pack names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
+    app.want_system_arabic = true;
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Language packs")).font(semibold(15.0)));
     ui.add_space(2.0);
@@ -382,7 +409,7 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
     let mut install = None;
     let mut removal = None;
     egui::ScrollArea::vertical().id_salt("options_language_packs").max_height(260.0).show(ui, |ui| {
-        egui::Grid::new("options_language_packs_grid").num_columns(5).spacing(vec2(14.0, 6.0)).striped(true).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("options_language_packs_grid").num_columns(5).spacing(vec2(14.0, 6.0)).striped(true), |ui| {
             for h in ["Language", "Size", "Licence", "Source", ""] {
                 ui.label(RichText::new(if h.is_empty() { "" } else { tl!(h) }).small().color(t.text_dim));
             }
@@ -556,11 +583,109 @@ mod tests {
         assert_eq!(super::language_of("ja", "日本語"), "Japanese");
     }
 
+    /// Tests that set the process-wide pack backend take turns.
+    static BACKEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Characters a pack index or a server's answer could use to hide, reorder or break text.
+    fn hostile(c: char) -> bool {
+        matches!(c, '\u{2028}' | '\u{2029}' | '\u{202E}' | '\u{E0000}'..='\u{E007F}') || (c.is_control() && c != '\n' && c != '\t')
+    }
+
+    /// FU.2: tag characters (U+E0000–U+E007F) and line/paragraph separators (U+2028/9) are
+    /// stripped like the other format characters, from names and from licence texts alike.
+    #[test]
+    fn shown_strips_tag_characters_and_separators() {
+        let name = "Ned\u{E0001}\u{E0041}\u{E007F}erlands\u{2028}\u{2029}";
+        assert_eq!(super::shown(name, 100), "Nederlands");
+        assert_eq!(super::shown_text("one\u{2028}two\nthree\u{2029}\tfour\u{E0020}"), "onetwo\nthree\tfour");
+        // A cut never splits what's left, and counts characters, not bytes.
+        assert_eq!(super::shown("\u{E0041}ab\u{2028}cd", 3), "ab…");
+    }
+
+    /// A store that fails with a hostile message: the index URL with a right-to-left override,
+    /// separators, tag characters, and far too long.
+    struct Hostile {
+        inner: FixedBackend,
+        message: String,
+    }
+
+    impl Backend for Hostile {
+        fn index(&self) -> Result<Vec<packs::Pack>, String> {
+            self.inner.index()
+        }
+        fn fetch_index(&self, _: &packs::Cancel) -> Result<Vec<packs::Pack>, String> {
+            Err(self.message.clone())
+        }
+        fn network_on(&self) -> bool {
+            self.inner.network_on()
+        }
+        fn enable_network(&self) -> Result<(), String> {
+            Err(self.message.clone())
+        }
+        fn install(&self, _: &packs::Pack, _: &packs::Cancel, _: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+            Err(self.message.clone())
+        }
+        fn remove(&self, _: &str) -> Result<(), String> {
+            Err(self.message.clone())
+        }
+        fn packs_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    /// FU.2: the font store's failures (which can quote the index URL and the server's answer)
+    /// are shown through the same sanitiser as the index's text, whether the window had them
+    /// (turning downloading on) or the engine did (an install, the list).
+    #[test]
+    fn font_store_errors_are_sanitised() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                packs::set_background(None);
+                packs::set_backend(None);
+            }
+        }
+        let _reset = Reset;
+        let message = format!("https://evil.example/\u{202E}gnp.exe\u{2028}second line\u{E0041}\u{E0042}{}", "x".repeat(5000));
+        let backend = std::sync::Arc::new(Hostile { inner: FixedBackend::sample(), message });
+        packs::set_backend(Some(backend.clone() as std::sync::Arc<dyn Backend>));
+        let ctx = egui::Context::default();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let clean = |shown: &str| {
+            assert!(!shown.chars().any(hostile), "{shown:?}");
+            assert!(shown.contains("https://evil.example/gnp.exe"), "{shown:?}");
+            assert!(shown.chars().count() < super::MAX_ERROR + 100, "capped: {} characters", shown.chars().count());
+        };
+        // Turning downloading on fails: the window's own failure.
+        assert!(!super::consent(&mut a, &ctx, "nl"));
+        clean(&super::error_of(&a, "nl").expect("a failure is shown"));
+        // An install and the list fail in the engine. Another test's window, drawn meanwhile,
+        // can move them onto the engine's thread (`tick`): the call then starts the job, and its
+        // failure is recorded when the job ends.
+        let failed = |r: Result<bool, String>| {
+            if r == Ok(true) {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while super::busy() && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+            r != Ok(false)
+        };
+        a.packs_rt.errors.clear();
+        backend.inner.network.store(true, Ordering::Relaxed);
+        assert!(failed(packs::start_install("nl")));
+        clean(&super::error_of(&a, "nl").expect("the install's failure is shown"));
+        assert!(failed(packs::start_refresh()));
+        clean(&super::error_of(&a, "").expect("the list's failure is shown"));
+    }
+
     /// CP4.3 review: a click the control channel made (MCP's `click`, `ui.click`) on the bar's
     /// Install never turns on downloading, which is the font store's one setting for fonts too;
     /// it says why instead. The person's own click on the same button does, and installs.
     #[test]
     fn a_faked_click_never_turns_on_downloading() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         crate::theme::apply(&ctx, crate::theme::Appearance::Light);
