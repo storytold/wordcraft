@@ -28,6 +28,7 @@ pub mod moves;
 pub mod objects;
 pub mod options;
 pub mod outline;
+pub mod packs;
 pub mod page;
 pub mod para;
 pub mod paste;
@@ -84,6 +85,7 @@ pub fn registry() -> Registry {
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(options::specs());
+    v.extend(packs::specs());
     v.extend(design::specs());
     v.extend(references::specs());
     v.extend(fields::specs());

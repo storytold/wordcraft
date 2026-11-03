@@ -491,6 +491,8 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            // Language packs from the suite's font store; an Install click is the person's own.
+            wordcraft_engine::packs::use_font_store(true);
             // GeenioAI, the AI assistant (Home › GeenioAI): its account key lives in the settings folder.
             // Runs without preferences get no assistant, so they never touch the key.
             if prefs_enabled()
