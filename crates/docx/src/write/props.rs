@@ -281,9 +281,6 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
 /// `w:pPr` content (without the wrapper); `num_change` are the attributes of a tracked list
 /// numbering change (`w:numberingChange`, written in `w:numPr`).
 pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>) {
-    if let Some(v) = &p.cnf_style {
-        cnf_style(w, v);
-    }
     if let Some(s) = &p.style {
         w.val("w:pStyle", s);
     }
@@ -320,6 +317,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     }
     if let Some(l) = p.outline_level {
         w.val("w:outlineLvl", &n(l.min(9) as i64));
+    }
+    if let Some(v) = &p.cnf_style {
+        cnf_style(w, v);
     }
 }
 

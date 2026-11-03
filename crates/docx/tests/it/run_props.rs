@@ -80,7 +80,7 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
         <w:style w:type="paragraph" w:styleId="ParaFlags"><w:pPr><w:cnfStyle w:val="010000000000" w:lastRow="0"/></w:pPr></w:style>
     "#;
     let body = r#"
-        <w:p><w:pPr><w:pStyle w:val="ParaFlags"/><w:cnfStyle w:firstColumn="0"/></w:pPr>
+        <w:p><w:pPr><w:pStyle w:val="ParaFlags"/><w:cnfStyle w:firstColumn="0"/><w:outlineLvl w:val="2"/></w:pPr>
           <w:r><w:rPr><w:rStyle w:val="RunFlags"/><w:cnfStyle w:val="000100000000" w:lastColumn="0"/></w:rPr><w:t>flags</w:t></w:r>
         </w:p>
         <w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>
@@ -113,6 +113,8 @@ fn conditional_table_flags_survive_two_saves_in_all_property_locations() {
         assert!(style_xml.contains(r#"w:cnfStyle w:val="100000000000" w:firstRow="1" w:oddVBand="0""#), "pass {pass}: {style_xml}");
         assert!(style_xml.contains(r#"w:cnfStyle w:val="010000000000" w:lastRow="0""#), "pass {pass}: {style_xml}");
         let document_xml = part(&out, "word/document.xml");
+        let ppr = document_xml.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
+        assert!(ppr.find("w:outlineLvl").unwrap() < ppr.find("w:cnfStyle").unwrap(), "pass {pass}: {ppr}");
         for flag in [
             r#"w:cnfStyle w:firstColumn="0""#,
             r#"w:cnfStyle w:val="000100000000" w:lastColumn="0""#,
