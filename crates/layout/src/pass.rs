@@ -1,3 +1,4 @@
+use super::{BackBodyWraps, PriorBodyWraps, ReplayInput};
 use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
@@ -64,6 +65,8 @@ fn new_ctx<'a>(
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
     (note_pages, totals): (&HashMap<u32, usize>, &Totals),
+    prior_wraps: &'a PriorBodyWraps,
+    back_wraps: &'a mut BackBodyWraps,
 ) -> Ctx<'a> {
     let notes = note_info(doc, opts.hides_deleted(StoryRef::Body), note_pages);
     let notes_hash = hash_of(&{
@@ -102,7 +105,14 @@ fn new_ctx<'a>(
         stacked_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        prior_wraps,
+        back_wraps,
+        frames: Default::default(),
         fitted: HashMap::new(),
+        fitted_order: Vec::new(),
+        measure_left: 0,
+        measure_depth: 0,
+        measure_exhausted: false,
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
@@ -471,10 +481,11 @@ pub(crate) fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
-    (early, may_rewrap): (&EarlyFloats, bool),
+    replay: ReplayInput<'_>,
 ) -> Pass {
+    let ReplayInput { prior: prior_wraps, found: back_wraps, early, may_rewrap } = replay;
     reset_cache(doc, cache, opts);
-    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
+    let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals), prior_wraps, back_wraps);
     let hf = Arc::clone(&ctx.hf);
     let sections = &hf.sections;
     let mode = Mode::of(opts.view);

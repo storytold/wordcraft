@@ -3,6 +3,7 @@ use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, S
 
 /// Largest object offset or move, points.
 pub(super) const MAX_OFFSET: f32 = 4000.0;
+const MODERN_TEXTBOX_MODE: u32 = 15;
 
 /// Resize and/or move the selected object (dragging its frame or handles).
 pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
@@ -116,8 +117,10 @@ pub(super) fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
 /// Put the object at `pos` with its top-left at (x, y) on `page` (default: where it is), as a
 /// drag does in Word: it floats (an inline object gets Square wrapping) and anchors to the
 /// paragraph under its top edge, positioned relative to that paragraph's column and top. So the
-/// text it lands on flows around it, and it moves with that text. On a page where no paragraph
-/// starts, it anchors to the nearest line and is positioned on the page. Returns the object's
+/// text it lands on flows around it, and it moves with that text. A modern textbox dropped
+/// across body margins keeps its vertical Page anchor so its bounds do not snap the drop.
+/// On a page where no paragraph starts, it anchors to the nearest line and is positioned on
+/// the page. Returns the object's
 /// position afterwards.
 ///
 /// A drop across pages can be thrown back: while the object sits on its old page it wraps text
@@ -193,12 +196,15 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     }
     // Then offsets from its paragraph, as laid out with the object there.
     s.touch();
-    let origin = s.layout().object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin;
+    let placed = s.layout();
+    let hit = placed.object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
+    let origin = hit.origin;
+    let page_y = keep_drop_page_y(s, &at, hit.rect);
     edit_float(s, &at, |f| {
         f.h_rel = Anchor::Column;
-        f.v_rel = Anchor::Paragraph;
+        f.v_rel = if page_y { Anchor::Page } else { Anchor::Paragraph };
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
-        f.y = (y - origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
+        f.y = (if page_y { y } else { y - origin.y }).clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
     Ok(at)
 }
@@ -213,7 +219,9 @@ pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let v_rel = if moves_with_text(float) { Anchor::Paragraph } else { Anchor::Page };
+    let ox = hit.rect.x - hit.origin.x;
+    let oy = if v_rel == Anchor::Page { hit.rect.y } else { hit.rect.y - hit.origin.y };
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
@@ -222,7 +230,7 @@ pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            f.v_rel = v_rel;
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
@@ -312,4 +320,25 @@ pub(crate) fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y:
     })?;
     let off = best.para.lines.get(best.li)?.start;
     Some(Pos { story, path: best.path.clone(), off })
+}
+
+fn keep_drop_page_y(s: &Session, at: &Pos, rect: wordcraft_geom::Rect) -> bool {
+    if at.story != StoryRef::Body || s.view.mode != wordcraft_layout::ViewMode::Print || s.doc.settings.compat_mode < MODERN_TEXTBOX_MODE {
+        return false;
+    }
+    let Some(o) = s.doc.para_at(at).and_then(|p| p.object_at(at.off)) else { return false };
+    let Some((_, _, float)) = o.frame() else { return false };
+    if !o.text_box().is_some_and(|id| s.doc.parts.get(&id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::TextBox))
+        || float.spin().deg != 0.0
+        || matches!(float.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
+    {
+        return false;
+    }
+    // Continuous sections share a page but retain their own textbox bounds.
+    let Some(&block) = at.path.0.first() else { return false };
+    let section = s.doc.section_index_of(block as usize);
+    s.doc.sections().get(section).is_some_and(|(_, sect)| {
+        let (top, bottom) = (sect.margin_top, sect.page_h - sect.margin_bottom);
+        top.is_finite() && bottom.is_finite() && bottom >= top && (rect.y < top || rect.bottom() > bottom)
+    })
 }

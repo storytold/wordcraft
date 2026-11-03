@@ -16,6 +16,8 @@ pub(crate) struct Key {
     pub(crate) table: u64,
     pub(crate) notes: u64,
     pub(crate) excl: u64,
+    pub(crate) split: Vec<usize>,
+    pub(crate) relay: Option<u32>,
     pub(crate) eq: u32,
     pub(crate) read_spacing: Option<u32>,
     pub(crate) grid: (u32, u32, u32, bool),

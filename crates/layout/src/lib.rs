@@ -24,7 +24,7 @@ mod vertical;
 pub mod wordart;
 mod work;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -60,7 +60,7 @@ use cache::{MAX_TOTAL_PASSES, Totals};
 #[cfg(test)]
 use ctx::picture_outline;
 use ctx::{Ctx, Pass};
-use floats::{EarlyFloats, MAX_REWRAP_PASSES, merge_early};
+use floats::{EarlyFloats, MAX_REWRAP_PASSES, WrapArea, merge_early};
 pub use floats::{is_floating, shape_figure_alt};
 #[cfg(test)]
 use floats::{left_out_objects, wrap_area};
@@ -318,13 +318,58 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
+    let mut back_passes = 0;
+    let mut back_wraps = BackBodyWraps::new();
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        #[cfg(test)]
+        REPLAY_STATS.with(|c| c.borrow_mut().passes += 1);
+        let mut prior = PriorBodyWraps::new();
+        for (&(block, _), (page, area)) in &back_wraps {
+            prior.entry(*page).or_default().push((block, area.clone()));
+        }
+        let mut found = BackBodyWraps::new();
+        let pass = layout_pass(
+            doc,
+            cache,
+            opts,
+            &note_pages,
+            &totals,
+            passes < MAX_TOTAL_PASSES,
+            ReplayInput { prior: &prior, found: &mut found, early: &early, may_rewrap: rewraps < MAX_REWRAP_PASSES },
+        );
+        #[cfg(test)]
+        if found != back_wraps && back_passes == MAX_BACK_WRAP_PASSES {
+            REPLAY_STATS.with(|c| c.borrow_mut().cap_fallbacks += 1);
+        }
+        if found != back_wraps && back_passes < MAX_BACK_WRAP_PASSES {
+            #[cfg(test)]
+            REPLAY_STATS.with(|c| c.borrow_mut().back_retries += 1);
+            back_wraps = found;
+            back_passes += 1;
+            if let Pass::Rewrap(found) = &pass {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().early_with_back += 1);
+                merge_early(&mut early, found.clone());
+                rewraps += 1;
+            }
+            if let Pass::Again(t) = pass {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().totals_with_back += 1);
+                totals = t;
+                passes += 1;
+            }
+            continue;
+        }
+        match pass {
             Pass::Again(t) => {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().total_retries += 1);
                 totals = t;
                 passes += 1;
             }
             Pass::Rewrap(found) => {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().early_retries += 1);
                 merge_early(&mut early, found);
                 rewraps += 1;
             }
@@ -333,6 +378,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
                     // Number each page's footnotes from where the pass before placed them, until they stay.
                     let placed = footnote_pages(doc, &l.pages);
                     if placed != note_pages {
+                        #[cfg(test)]
+                        REPLAY_STATS.with(|c| c.borrow_mut().note_retries += 1);
                         note_pages = placed;
                         note_passes += 1;
                         continue;
@@ -355,3 +402,81 @@ thread_local! {
 
 #[cfg(test)]
 mod tests;
+
+// A corrected frame reaching earlier body text is supplied before that text on the next pass.
+type BackBodyWraps = BTreeMap<(usize, usize), (usize, WrapArea)>;
+type PriorBodyWraps = HashMap<usize, Vec<(usize, WrapArea)>>;
+const MAX_BACK_WRAP_PASSES: usize = 4;
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct ReplayStats {
+    passes: usize,
+    back_retries: usize,
+    total_retries: usize,
+    early_retries: usize,
+    early_with_back: usize,
+    totals_with_back: usize,
+    note_retries: usize,
+    cap_fallbacks: usize,
+    wrap_attempts: usize,
+    wrap_accepted: usize,
+    wrap_rejected: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static REPLAY_STATS: std::cell::RefCell<ReplayStats> = const { std::cell::RefCell::new(ReplayStats {
+        passes: 0, back_retries: 0, total_retries: 0, early_retries: 0, early_with_back: 0, totals_with_back: 0, note_retries: 0,
+        cap_fallbacks: 0, wrap_attempts: 0, wrap_accepted: 0, wrap_rejected: 0,
+    }) };
+}
+
+/// Per-paragraph replay policy travels with its geometry, including through continuation.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct BodyExclusions {
+    areas: Vec<para::Exclusion>,
+    split: Vec<usize>,
+}
+
+impl BodyExclusions {
+    fn wait(areas: Vec<para::Exclusion>) -> Self {
+        Self { areas, split: Vec::new() }
+    }
+
+    fn append_wait(&mut self, areas: impl IntoIterator<Item = para::Exclusion>) {
+        self.areas.extend(areas);
+    }
+
+    fn append_split(&mut self, areas: impl IntoIterator<Item = para::Exclusion>) {
+        for area in areas {
+            self.split.push(self.areas.len());
+            self.areas.push(area);
+        }
+    }
+}
+
+fn accept_wrap_relay(
+    pl: &mut Arc<ParaLayout>,
+    rel: &mut BodyExclusions,
+    relaid: Arc<ParaLayout>,
+    here: BodyExclusions,
+    resume: usize,
+    top: f32,
+) -> Option<usize> {
+    let k = relaid.lines.iter().position(|l| l.start == resume)?;
+    if !relaid.lines.get(k).is_some_and(|l| (l.top - top).abs() < 0.01) {
+        return None;
+    }
+    (*pl, *rel) = (relaid, here);
+    Some(k)
+}
+#[cfg(test)]
+use floats::continued_exclusions;
+
+struct ReplayInput<'a> {
+    prior: &'a PriorBodyWraps,
+    found: &'a mut BackBodyWraps,
+    early: &'a EarlyFloats,
+    may_rewrap: bool,
+}

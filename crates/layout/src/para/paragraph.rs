@@ -564,6 +564,14 @@ fn joined_cluster_starts(p: &Paragraph, clusters: &[Cluster]) -> Vec<usize> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    layout_para_with_wrap(p, env, &[])
+}
+
+pub(crate) fn layout_para_with_wrap(p: &Paragraph, env: &ParaEnv, split: &[usize]) -> ParaLayout {
+    layout_para_relay(p, env, split, None)
+}
+
+pub(crate) fn layout_para_relay(p: &Paragraph, env: &ParaEnv, split: &[usize], relay: Option<f32>) -> ParaLayout {
     let doc = env.doc;
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
@@ -625,7 +633,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l), split, relay);
     if gone {
         collapse(&mut pl);
     }

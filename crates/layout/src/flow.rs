@@ -1,7 +1,10 @@
+#[cfg(test)]
+use super::REPLAY_STATS;
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
-use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
+use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, continued_exclusions, place_objects};
+use super::floats::{body_exclusions, oversized_body_float};
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
@@ -9,6 +12,7 @@ use super::{
     Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
     ViewMode, outline, para,
 };
+use super::{BodyExclusions, accept_wrap_relay};
 #[cfg(test)]
 use crate::WRAP_RELAYS;
 
@@ -156,7 +160,7 @@ struct Flow<'a> {
     eq_start: u32,
     float_rects: HashMap<usize, Rect>,
     pl: Arc<ParaLayout>,
-    rel: Vec<para::Exclusion>,
+    rel: BodyExclusions,
     /// The page its fields were laid out for, and the width.
     laid_page: u32,
     laid_width: f32,
@@ -227,9 +231,11 @@ impl<'a> Flow<'a> {
     }
 
     /// Lay the paragraph out again around the wrap areas `rel`, with its fields on their pages.
-    fn relay(&mut self, ctx: &mut Ctx, rel: &[para::Exclusion]) -> Arc<ParaLayout> {
+    fn relay(&mut self, ctx: &mut Ctx, rel: &BodyExclusions, boundary: Option<f32>) -> Arc<ParaLayout> {
         let (p, width, eq_start, label) = (self.p, self.laid_width, self.eq_start, &self.label);
-        with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width, None, rel, label.clone())))
+        with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| ctx.para_relay(p, width, None, &rel.areas, label.clone(), (&rel.split, boundary)))
+        })
     }
 
     /// The space before the paragraph, after the one between it and the previous paragraph is
@@ -328,7 +334,8 @@ impl<'a> Flow<'a> {
             return;
         }
         let Some((resume, t)) = self.pl.lines.get(self.l0).map(|l| (l.start, l.top)) else { return };
-        let here = continued_exclusions(&self.rel, &body_wraps(ctx, pb), pb.col_x(), pb.y, t, self.laid_width);
+        let areas = body_exclusions(ctx, pb, self.block, pb.y - t);
+        let here = continued_exclusions(&self.rel, &areas, t, self.laid_width);
         if here == self.rel {
             return;
         }
@@ -336,13 +343,18 @@ impl<'a> Flow<'a> {
         ctx.fields.page = self.laid_page;
         #[cfg(test)]
         WRAP_RELAYS.with(|c| c.set(c.get() + 1));
-        let relaid = self.relay(ctx, &here);
+        #[cfg(test)]
+        REPLAY_STATS.with(|c| c.borrow_mut().wrap_attempts += 1);
+        let relaid = self.relay(ctx, &here, Some(t));
         // Only if the rest still starts at the same line, at the same height (an outline
         // reaching above it could move the lines before down, and the column's areas with them).
-        if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
-            && relaid.lines.get(k).is_some_and(|l| (l.top - t).abs() < 0.01)
-        {
-            (self.pl, self.rel, self.l0) = (relaid, here, k);
+        if let Some(k) = accept_wrap_relay(&mut self.pl, &mut self.rel, relaid, here, resume, t) {
+            #[cfg(test)]
+            REPLAY_STATS.with(|c| c.borrow_mut().wrap_accepted += 1);
+            self.l0 = k;
+        } else {
+            #[cfg(test)]
+            REPLAY_STATS.with(|c| c.borrow_mut().wrap_rejected += 1);
         }
     }
 
@@ -362,7 +374,7 @@ impl<'a> Flow<'a> {
         self.page_map.push((resume, pb.number));
         ctx.fields.page = self.laid_page;
         let rel = self.rel.clone();
-        let relaid = self.relay(ctx, &rel);
+        let relaid = self.relay(ctx, &rel, None);
         match relaid.lines.iter().position(|l| l.start == resume) {
             Some(k) => (self.pl, self.l0) = (relaid, k),
             None => {
@@ -716,6 +728,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let broke_before = f.pl.rp.page_break_before && !pb.at_top() && !pb.web;
     if broke_before {
         pb.new_page(block, body_top);
+    }
+    // Oversized corrected frames begin in fresh body room, after their anchor line.
+    if ctx.opts.view == ViewMode::Print
+        && !pb.at_top()
+        && f.float_rects.iter().any(|(&i, rect)| p.objects.get(i).is_some_and(|o| oversized_body_float(ctx.doc, o, rect.h, pb.sect)))
+    {
+        pb.advance(block, body_top);
     }
     let before = f.gap_before(ctx, pb, broke_before);
     pb.y += before;

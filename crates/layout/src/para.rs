@@ -39,6 +39,7 @@ pub use grid::{Exclusion, Grid, is_east_asian};
 use lines::break_lines;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
+pub(crate) use paragraph::layout_para_relay;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
 pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text};
@@ -363,7 +364,7 @@ mod label_spacing_tests {
             (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
-        break_lines(&mut pl, &env, mark_style, Some(&level));
+        break_lines(&mut pl, &env, mark_style, Some(&level), &[], None);
         pl.lines
     }
 

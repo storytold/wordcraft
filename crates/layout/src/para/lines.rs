@@ -16,6 +16,8 @@ struct Breaker<'e> {
     rp: wordcraft_doc::resolve::ResolvedPara,
     mark_style: u32,
     exclusions: &'e [Exclusion],
+    split: &'e [usize],
+    relay: Option<f32>,
     n: usize,
     width: f32,
     base_right: f32,
@@ -145,11 +147,11 @@ fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
-pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>, split: &[usize], relay: Option<f32>) {
     let width = env.width.max(MIN_LINE_WIDTH);
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
-    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+    let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level, split, relay);
     loop {
         let mut sc = bk.begin_line(pl);
         sc.scan(&mut bk, pl);
@@ -166,7 +168,14 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
 }
 
 impl<'e> Breaker<'e> {
-    fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
+    fn new(
+        pl: &ParaLayout,
+        (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]),
+        mark_style: u32,
+        level: Option<&'e Level>,
+        split: &'e [usize],
+        relay: Option<f32>,
+    ) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);
         let settings = &env.doc.settings;
@@ -180,6 +189,8 @@ impl<'e> Breaker<'e> {
             level,
             mark_style,
             exclusions,
+            split,
+            relay,
             n: pl.clusters.len(),
             width,
             base_right: (width - rp.indent_right).max(1.0),
@@ -233,7 +244,9 @@ impl<'e> Breaker<'e> {
         let mut guard = 0;
         loop {
             let lo = self.row_left(pl);
-            match row_spans(self.exclusions, self.top, self.est_h, self.table_h, lo, self.base_right).map(|mut spans| (spans.pop_front(), spans)) {
+            match row_spans(self.exclusions, self.top, self.est_h, self.table_h, lo, self.base_right, self.relay)
+                .map(|mut spans| (spans.pop_front(), spans))
+            {
                 Ok((Some((a, b)), rest)) => {
                     let narrowed = !rest.is_empty() || a > lo || b < self.base_right;
                     self.row_rest = rest;
@@ -320,7 +333,9 @@ impl<'e> Breaker<'e> {
             // Nothing on this row: go below the first object that ends, as when no span is wide enough.
             self.exclusions
                 .iter()
-                .filter(|e| e.intersects_row(self.top, self.est_h, self.table_h, sc.row_lo, self.base_right))
+                .filter(|e| {
+                    active_on_row(e, self.top, self.relay) && e.intersects_row(self.top, self.est_h, self.table_h, sc.row_lo, self.base_right)
+                })
                 .map(|e| e.bottom)
                 .reduce(f32::min)
                 .unwrap_or(self.top + self.est_h)
@@ -935,7 +950,12 @@ impl Scan {
     fn break_long_word(&mut self, bk: &Breaker, pl: &ParaLayout) {
         let (c0, j) = (self.c0, self.j);
         let full = bk.base_right - self.row_lo;
-        self.skip = self.narrowed && bk.skipped < 50 && bk.widths.get(c0).is_some_and(|w| *w <= full + 0.01);
+        let must_split = bk
+            .split
+            .iter()
+            .filter_map(|&index| bk.exclusions.get(index))
+            .any(|e| active_on_row(e, bk.top, bk.relay) && e.intersects_row(bk.top, bk.est_h, bk.table_h, self.row_lo, bk.base_right));
+        self.skip = self.narrowed && bk.skipped < 50 && bk.widths.get(c0).is_some_and(|w| *w <= full + 0.01) && !must_split;
         // Never split a ligature's letters or a grapheme's drawing segments across
         // lines: back up to their first segment (unless it starts the line).
         let glyphless = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Text && c.g1 <= c.g0);
@@ -974,11 +994,15 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
     }
 }
 
+fn active_on_row(e: &Exclusion, top: f32, relay: Option<f32>) -> bool {
+    relay.is_none_or(|boundary| top >= boundary || e.top < boundary)
+}
+
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
-    let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
+fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32, relay: Option<f32>) -> Result<VecDeque<(f32, f32)>, f32> {
+    let here: Vec<&Exclusion> = exclusions.iter().filter(|e| active_on_row(e, top, relay) && e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);
     }

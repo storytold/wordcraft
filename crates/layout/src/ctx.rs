@@ -6,6 +6,7 @@ use super::{
     Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
     ParaLayout, Paragraph, Rect, Rgb, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
 };
+use super::{BackBodyWraps, PriorBodyWraps};
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -54,14 +55,24 @@ pub(crate) struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     pub(crate) table_keys: Vec<(para::CellText, u64)>,
+    pub(super) prior_wraps: &'a PriorBodyWraps,
+    pub(super) back_wraps: &'a mut BackBodyWraps,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pub(crate) pin: Option<Pin>,
     pub(crate) footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     pub(crate) header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
+    /// Extents of source-stable outer floating boxes for this pass.
+    pub(super) frames: textbox::FrameCache,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Insertion order permits rolling back speculative fitted heights without copying the cache.
+    pub(super) fitted_order: Vec<(u32, u32)>,
+    /// Monotonic speculative work within one outer box, independent of placement allowance.
+    pub(super) measure_left: usize,
+    pub(super) measure_depth: usize,
+    pub(super) measure_exhausted: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -238,8 +249,34 @@ impl Ctx<'_> {
         exclusions: &[para::Exclusion],
         label: Option<(String, Level)>,
     ) -> Arc<ParaLayout> {
+        self.para_with_wrap(p, width, table, exclusions, label, &[])
+    }
+
+    pub(super) fn para_with_wrap(
+        &mut self,
+        p: &Paragraph,
+        width: f32,
+        table: Option<&para::CellText>,
+        exclusions: &[para::Exclusion],
+        label: Option<(String, Level)>,
+        split: &[usize],
+    ) -> Arc<ParaLayout> {
+        self.para_relay(p, width, table, exclusions, label, (split, None))
+    }
+
+    pub(super) fn para_relay(
+        &mut self,
+        p: &Paragraph,
+        width: f32,
+        table: Option<&para::CellText>,
+        exclusions: &[para::Exclusion],
+        label: Option<(String, Level)>,
+        (split, relay): (&[usize], Option<f32>),
+    ) -> Arc<ParaLayout> {
         let fitted = self.fitted_boxes(p);
-        let (key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), &fitted);
+        let (mut key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), &fitted);
+        key.split = split.to_vec();
+        key.relay = relay.map(f32::to_bits);
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
             self.cache.hits += 1;
@@ -247,9 +284,11 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(
+        let pl = Arc::new(para::layout_para_relay(
             p,
             &self.para_env(ParaEnvInput { width, label, table, exclusions, eq_number, typing_word: typing, fitted: &fitted }),
+            split,
+            relay,
         ));
         self.cache.paras.insert(key, pl.clone());
         pl
@@ -329,8 +368,12 @@ impl Ctx<'_> {
             let h = match self.fitted.get(&key) {
                 Some(h) => *h,
                 None => {
+                    let fresh = self.measure_depth == 0 && !self.boxes.inside();
                     let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
+                    if fresh || !self.measure_exhausted {
+                        self.fitted.insert(key, h);
+                        self.fitted_order.push(key);
+                    }
                     h
                 }
             };
@@ -376,6 +419,8 @@ impl Ctx<'_> {
             table: table.map(|t| self.table_key(t)).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
+            split: Vec::new(),
+            relay: None,
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
             grid: self.grid.key(),
@@ -434,3 +479,11 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
     ctx.pct_base = before;
     out
 }
+
+#[cfg(test)]
+#[path = "tests/ctx_textbox.rs"]
+mod textbox_tests;
+
+#[cfg(test)]
+#[path = "tests/body_wrap.rs"]
+mod body_wrap_tests;
