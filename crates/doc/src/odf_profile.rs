@@ -100,6 +100,10 @@ pub struct OdfProfile {
     /// before (`true`), else the larger of the two, when the document doesn't say (the
     /// standard doesn't; LibreOffice's own `AddParaTableSpacing` setting does when present).
     pub sum_paragraph_spacing: bool,
+    /// Widow and orphan control when no style states `fo:widows` or `fo:orphans` (§20.312,
+    /// §20.244 refer to XSL's, whose initial value is 2 lines; whether that initial value comes
+    /// with the reference the standard doesn't say, and LibreOffice reads none stated as none).
+    pub widow_control: bool,
 }
 
 impl Default for OdfProfile {
@@ -127,6 +131,7 @@ impl OdfProfile {
             picture_lines_fit_pictures: false,
             balance_section_columns: false,
             sum_paragraph_spacing: false,
+            widow_control: true,
         }
     }
 
@@ -148,6 +153,7 @@ impl OdfProfile {
             picture_lines_fit_pictures: true,
             balance_section_columns: true,
             sum_paragraph_spacing: true,
+            widow_control: false,
         }
     }
 
@@ -177,7 +183,8 @@ impl OdfProfile {
 
     /// What the layout needs to know of it for a document opened from ODF.
     pub fn layout(&self) -> OdfLayout {
-        OdfLayout { picture_lines_fit_pictures: self.effective().picture_lines_fit_pictures }
+        let e = self.effective();
+        OdfLayout { picture_lines_fit_pictures: e.picture_lines_fit_pictures, tabs_from_indent: e.tabs_from_indent }
     }
 }
 
@@ -189,6 +196,10 @@ impl OdfProfile {
 pub struct OdfLayout {
     /// See [`OdfProfile::picture_lines_fit_pictures`].
     pub picture_lines_fit_pictures: bool,
+    /// Tab stops are measured from the paragraph's left indent, default ones too (LibreOffice's
+    /// `TabsRelativeToIndent`, else [`OdfProfile::tabs_from_indent`]). The document's explicit
+    /// stops are held from the margin either way; the default ones are counted from the indent.
+    pub tabs_from_indent: bool,
 }
 
 #[cfg(test)]

@@ -873,11 +873,8 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
         Some("auto") => s.keep_lines = Some(false),
         _ => {}
     }
-    let lines = |k: &str| get(a, k).and_then(|v| v.trim().parse::<u32>().ok());
-    if let (w, o) = (lines("fo:widows"), lines("fo:orphans"))
-        && (w.is_some() || o.is_some())
-    {
-        s.widow_control = Some(w.unwrap_or(0) > 0 || o.unwrap_or(0) > 0);
+    if let Some(w) = widows(a) {
+        s.widow_control = Some(w);
     }
     match get(a, "fo:keep-with-next") {
         Some("always") => s.keep_next = Some(true),
@@ -1008,6 +1005,14 @@ fn list_level(local: &str, a: &Attrs) -> ListLevel {
     }
 }
 
+/// Widow and orphan control as `fo:widows`/`fo:orphans` state it (on with either above 0, off
+/// with both 0); `None` when neither is stated.
+fn widows(a: &Attrs) -> Option<bool> {
+    let lines = |k: &str| get(a, k).and_then(|v| v.trim().parse::<u32>().ok());
+    let (w, o) = (lines("fo:widows"), lines("fo:orphans"));
+    (w.is_some() || o.is_some()).then(|| w.unwrap_or(0) > 0 || o.unwrap_or(0) > 0)
+}
+
 /// Most font faces kept from `office:font-face-decls` (hostile input).
 const MAX_FACES: usize = 10_000;
 
@@ -1035,6 +1040,8 @@ pub(super) struct Styles {
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
+    /// Widow and orphan control `style:default-style` for paragraphs states, if it does.
+    default_widows: Option<bool>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
     /// The named dashes and gradients graphic styles use.
@@ -1089,6 +1096,7 @@ impl Styles {
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
+                    self.default_widows = widows(&a);
                     if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|d| d.is_finite() && *d > 0.0) {
                         self.default_tab = Some(d.clamp(1.0, MAX_LEN));
                     }
@@ -1429,6 +1437,12 @@ impl Styles {
         // Text stand for them), are no custom styles.
         let special = |n: &str| kind_named(n).is_some() || matches!(n, "footnote" | "endnote");
         !(special(&lower(odt)) || s.display.as_deref().is_some_and(|d| special(&lower(d))))
+    }
+
+    /// Widow and orphan control the document states for every paragraph: in its default style,
+    /// else in Standard; `None` when neither says.
+    pub(super) fn stated_widows(&self) -> Option<bool> {
+        self.default_widows.or_else(|| self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.widow_control))
     }
 
     pub(super) fn named_style(&self, odt: &str) -> Option<NamedStyle> {

@@ -130,3 +130,34 @@ fn paragraph_spacing_adds_up_as_the_document_says_else_as_the_profile_does() {
         assert!(settings.contains("xmlns:ooo="), "LibreOffice reads the set only with its namespace");
     }
 }
+
+#[test]
+fn widow_control_is_the_files_else_the_profiles() {
+    // `fo:widows`/`fo:orphans` refer to XSL's (initial value 2); LibreOffice reads none stated as
+    // none, so a first line alone at a page's foot stayed there in LibreOffice and moved on after
+    // a save. Stated in the default style (or Standard), it is the file's under every preset;
+    // written back stated either way.
+    let doc = |default: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:paragraph-properties {default}/></style:default-style></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            "<office:document-content {NS_T}><office:body><office:text><text:p>a</text:p></office:text></office:body></office:document-content>"
+        );
+        crate::odt::tests::package(&content, Some(&styles))
+    };
+    let on = |bytes: &[u8], p: &OdfProfile| import_as(bytes, p).styles.resolve_para(&Default::default()).widow_control;
+    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+        assert!(on(&doc(r#"fo:widows="2" fo:orphans="2""#), &p));
+        assert!(!on(&doc(r#"fo:widows="0" fo:orphans="0""#), &p));
+    }
+    assert!(on(&doc(""), &OdfProfile::wordcraft()));
+    assert!(!on(&doc(""), &OdfProfile::libreoffice()));
+    for (p, written) in [(OdfProfile::wordcraft(), r#"fo:widows="2" fo:orphans="2""#), (OdfProfile::libreoffice(), r#"fo:widows="0" fo:orphans="0""#)]
+    {
+        let saved = crate::odt::export(&import_as(&doc(""), &p)).unwrap();
+        let styles = crate::odt::tests::entry(&saved, "styles.xml");
+        assert!(styles.contains(written), "{:?}: {styles}", p.preset);
+        assert_eq!(on(&saved, &OdfProfile::of(OdfPreset::Custom)), p.widow_control);
+    }
+}

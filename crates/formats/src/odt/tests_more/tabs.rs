@@ -157,3 +157,23 @@ fn tab_stops_and_other_paragraph_properties_together() {
     assert_eq!(props.tabs.as_ref().map(|t| t.iter().map(|t| t.pos).collect::<Vec<_>>()), Some(vec![100.0]));
     assert_eq!((props.shading, props.contextual_spacing), (Some(wordcraft_doc::props::Rgb(200, 220, 240)), Some(true)));
 }
+
+#[test]
+fn tabs_measured_from_the_indent_are_written_so() {
+    // A file measuring tabs from the indent (LibreOffice's own) is written back so, its stops
+    // from the indent again: LibreOffice's default stops then count from the indent as before
+    // (measured: with the setting false they moved to the margin's grid).
+    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true)), &OdfProfile::wordcraft());
+    assert!(d.settings.odf.is_some_and(|o| o.tabs_from_indent));
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "settings.xml");
+    assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">true<"#), "{s}");
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"style:position="1in""#) || c.contains(r#"style:position="72pt""#), "{c}");
+    let back = import(&saved).unwrap();
+    assert_eq!(tabs(&back).first().map(|t| t.pos), Some(108.0));
+    // One measuring them from the margin stays so.
+    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false)), &OdfProfile::wordcraft());
+    let s = crate::odt::tests::entry(&export(&d).unwrap(), "settings.xml");
+    assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">false<"#), "{s}");
+}

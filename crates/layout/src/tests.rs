@@ -4987,7 +4987,7 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
     // Word keeps the font's ascent and descent around it.
     let height = |fit: bool, h: f32| {
         let mut d = Document::from_text("");
-        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: fit });
+        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: fit, ..Default::default() });
         if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
             p.props.space_after = Some(0.0);
             p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
@@ -5004,7 +5004,7 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
     assert!(height(false, 40.0) > 42.0);
     // Text on the line: its font counts either way.
     let mut d = Document::from_text("Text");
-    d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: true });
+    d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: true, ..Default::default() });
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
         p.insert_object(0, picture(20.0, 3.5, Default::default()), &Default::default()).unwrap();
     }
@@ -12376,4 +12376,27 @@ fn a_cells_background_picture_is_drawn_clipped_to_the_cell() {
     let (cell, images) = &c[0];
     let want = (cell.w / 30.0).ceil() as usize * (cell.h / 6.0).ceil() as usize;
     assert_eq!(images.len(), want, "{cell:?}");
+}
+
+#[test]
+fn default_tab_stops_count_from_the_indent_in_odt_documents_that_say_so() {
+    // LibreOffice with `TabsRelativeToIndent` (its default), measured: default stops every
+    // interval from the paragraph's left indent; the hanging indent still a stop. Word, and ODT
+    // documents measuring from the margin: from the margin.
+    let x_of_b = |from_indent: bool, left: f32, first: f32| {
+        let mut d = Document::from_text("a\tb");
+        d.settings.default_tab = 36.0;
+        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { tabs_from_indent: from_indent, ..Default::default() });
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.indent_left = Some(left);
+            p.indent_first = Some(first);
+        })
+        .unwrap();
+        let l = lay(&d);
+        l.caret(&Pos::body(0, 2)).unwrap().x - 72.0
+    };
+    assert!((x_of_b(true, 17.0, 0.0) - 53.0).abs() < 0.5, "{}", x_of_b(true, 17.0, 0.0));
+    assert!((x_of_b(false, 17.0, 0.0) - 36.0).abs() < 0.5, "{}", x_of_b(false, 17.0, 0.0));
+    // Hanging: the indent is the first stop either way.
+    assert!((x_of_b(true, 85.0, -85.0) - 85.0).abs() < 0.5, "{}", x_of_b(true, 85.0, -85.0));
 }

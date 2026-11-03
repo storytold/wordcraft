@@ -47,7 +47,7 @@ Where to set it:
 | Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | `headerMinHeight` | 0 (as tall as its text) | 0.5 cm |
 | *(meaning)* Whether a header's stated minimum height includes its stated spacing from the body | §20.212.2, §20.207: not said | `headerHeightIncludesSpacing` | no: spacing comes after the height | yes |
 | A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | `dynamicSpacing` | off: the spacing is kept (on, with no height stated, would always drop the spacing the file states) | off |
-| Where paragraph tab stops are measured from when `settings.xml` doesn't say | §19.512.3 `style:position` doesn't say; §19.861 covers only indexes | `tabsFromIndent` | the margin (as Word; ONLYOFFICE's files mean this too) | the paragraph's indent (its `TabsRelativeToIndent` default) |
+| Where paragraph tab stops, default ones too, are measured from when `settings.xml` doesn't say | §19.512.3 `style:position` doesn't say; §19.861 covers only indexes | `tabsFromIndent` | the margin (as Word; ONLYOFFICE's files mean this too) | the paragraph's left indent (its `TabsRelativeToIndent` default): explicit stops, the default stops every interval and the hanging indent's stop all move with the indent (measured) |
 | Gap between columns when `style:columns` states none | §19.233 `fo:column-gap`: no default (and explicitly not XSL's) | `columnGap` | 0.5 in (Word's) | 0 |
 | A drawing shape's fill colour when no style gives one | §20.119 `draw:fill-color`: no default | `shapeFill` | `#156082` (WordCraft's shape blue) | `#729FCF` |
 | A drawing shape's line colour when no style gives one | §20.408 `svg:stroke-color`: no default | `shapeLine` | `#0E405A` | `#3465A4` |
@@ -56,6 +56,7 @@ Where to set it:
 | *(meaning)* An in-line frame positioned against a paragraph or page | §20.398 Table 23: combination not defined | `inlineInvalidRelationIsBaseline` | stands on the baseline | positioned against the baseline (raised by its offset) |
 | Height of a line holding only in-line pictures | no line-height algorithm in the standard | `pictureLinesFitPictures` | as tall as its text would be too | as tall as the pictures |
 | How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | `sumParagraphSpacing` | the larger of the two (as Word) | their sum |
+| Widow and orphan control when neither the default paragraph style, Standard nor the paragraph's style states `fo:widows`/`fo:orphans` | §20.312, §20.244 refer to XSL's widows and orphans (initial value 2); whether that default comes with the reference is not said | `widowControl` | on: 2 lines (XSL's initial value, and Word's) | off (a first or last line can stand alone at a page's edge) |
 | *(meaning)* Whether a columned section's columns end balanced when nothing follows it on the page, and when it doesn't say | §20.428 `text:dont-balance-text-columns`: no default, and its value descriptions contradict its name (WordCraft reads the name; so does LibreOffice) | `balanceSectionColumns` | as Word: only when text follows on the same page | balanced |
 
 ## Law: what the standard defines and WordCraft follows whatever the profile
@@ -85,7 +86,9 @@ open instead of relying on any application's default:
 - header and footer heights, with `style:dynamic-spacing="false"` when there is spacing;
 - a frame's placement as an explicit position against the page or paragraph;
 - in-line pictures standing on the baseline;
-- tab stops measured as `settings.xml` says.
+- tab stops measured as the file it was opened from measured them (`TabsRelativeToIndent` in
+  `settings.xml`), from the margin for WordCraft's own documents;
+- widow and orphan control, on or off, in the default paragraph style.
 
 ## Known differences between WordCraft's and LibreOffice's layout of the same file
 
@@ -134,6 +137,8 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Tabs measured from the indent: default stops count from the indent too (measured in LibreOffice), in WordCraft's layout, and a file measuring tabs so is written back so (it was written from the margin, moving LibreOffice's default stops). |
+| 2026-11-03 | Widow and orphan control a file doesn't state (`widowControl`): WordCraft as XSL's initial value, LibreOffice off. WordCraft writes it on its default style either way. |
 | 2026-11-03 | Known layout differences listed. |
 | 2026-11-03 | Paragraph spacing (`sumParagraphSpacing`); a file's `AddParaTableSpacing` is followed, and WordCraft writes it. WordCraft's `settings.xml` now declares the `ooo` namespace, without which LibreOffice ignored all of its settings. |
 | 2026-11-03 | Section column balancing (`balanceSectionColumns`); §20.428's contradiction recorded. WordCraft writes `text:dont-balance-text-columns` on every columned section. |

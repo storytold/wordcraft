@@ -45,7 +45,7 @@ fn a_files_own_settings_survive_a_save() {
     assert_eq!(item(&s, "AddParaTableSpacing").as_deref(), Some("true"), "{s}");
     // Not Word's switches over the file's own.
     assert_eq!(item(&s, "AddParaSpacingToTableCells"), None);
-    // Tabs are written from the margin, whatever the file said.
-    assert_eq!(item(&s, "TabsRelativeToIndent").as_deref(), Some("false"));
+    // Tabs measured as the file measured them: from the indent here (its default stops too).
+    assert_eq!(item(&s, "TabsRelativeToIndent").as_deref(), Some("true"));
     let _ = package;
 }

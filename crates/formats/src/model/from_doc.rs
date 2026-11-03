@@ -163,9 +163,25 @@ pub fn is_custom_style(doc: &Document, id: &str) -> bool {
     !heading && !kinds.contains(&id) && doc.styles.get(id).is_some_and(|s| s.kind == wordcraft_doc::styles::StyleKind::Paragraph)
 }
 
+/// Whether `doc`'s tab stops are measured from each paragraph's indent (an ODF document whose
+/// file says so, or that was opened with a profile saying so): [`Para::extra`]'s tab stops then
+/// are too.
+pub fn tabs_from_indent(doc: &Document) -> bool {
+    doc.settings.odf.is_some_and(|o| o.tabs_from_indent)
+}
+
 /// The paragraph formatting only [`Para::extra`] holds that `p` sets itself; `None` when none.
 fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box<wordcraft_doc::props::ParaProps>> {
-    let tabs = p.tabs.clone().filter(|t| !t.is_empty());
+    let tabs = p.tabs.clone().filter(|t| !t.is_empty()).map(|mut tabs| {
+        // Measured from the paragraph's indent where the document measures them so (ODT).
+        if tabs_from_indent(doc) {
+            let indent = doc.styles.resolve_para(p).indent_left;
+            for t in &mut tabs {
+                t.pos = (t.pos - indent).clamp(-1584.0, 1584.0);
+            }
+        }
+        tabs
+    });
     let style = p.style.clone().filter(|id| is_custom_style(doc, id));
     let x = wordcraft_doc::props::ParaProps {
         tabs,

@@ -132,7 +132,17 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
-        let tabs = pp.tabs.as_deref().map(super::writer::tab_stops).unwrap_or_default();
+        let tabs = pp
+            .tabs
+            .as_deref()
+            .map(|tabs| {
+                // From the style's indent where the document measures them so (as they are read).
+                let indent = if model::tabs_from_indent(doc) { pp.indent_left.unwrap_or(0.0) } else { 0.0 };
+                let tabs: Vec<_> =
+                    tabs.iter().map(|t| wordcraft_doc::props::TabStop { pos: (t.pos - indent).clamp(-1584.0, 1584.0), ..*t }).collect();
+                super::writer::tab_stops(&tabs)
+            })
+            .unwrap_or_default();
         let parent = odf_parent(doc, st.based_on.as_deref());
         s.push_str(&format!(
             "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
@@ -334,8 +344,9 @@ fn styles_xml(
         "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:letter-kerning=\"{kern}\"{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
-        // Widow and orphan control as Normal has it, said (LibreOffice reads none unsaid as off).
-        widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { "" },
+        // Widow and orphan control as Normal has it, said either way (the standard leaves it open
+        // when unsaid: see `OdfProfile::widow_control`).
+        widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { " fo:widows=\"0\" fo:orphans=\"0\"" },
         size = pt(size),
         tab = pt(tab),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
@@ -559,7 +570,7 @@ fn settings_xml(doc: &Document) -> String {
     // What WordCraft's own layout of the document needs LibreOffice to do the same: tab stops
     // from the margin (as written), and the space between paragraphs as WordCraft lays it out
     // (ODF leaves it open; LibreOffice's `AddParaTableSpacing` false takes the larger of the two).
-    let ours = [("TabsRelativeToIndent", false), ("AddParaTableSpacing", doc.settings.sum_paragraph_spacing)];
+    let ours = [("TabsRelativeToIndent", model::tabs_from_indent(doc)), ("AddParaTableSpacing", doc.settings.sum_paragraph_spacing)];
     let item = |name: &str, on: bool| format!("<config:config-item config:name=\"{name}\" config:type=\"boolean\">{on}</config:config-item>");
     if let Some(own) = doc.passthrough.get(SETTINGS_PART).filter(|b| b.len() <= MAX_SETTINGS).and_then(|b| std::str::from_utf8(b).ok()) {
         let mut out = own.to_string();

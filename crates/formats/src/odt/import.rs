@@ -459,6 +459,8 @@ struct Parsed {
     spacing: model::Spacing,
     /// Whether the document kerns pairs of letters by default.
     kern: bool,
+    /// Widow and orphan control the document states for every paragraph, if it does.
+    widows: Option<bool>,
     /// The document's default Asian and complex-script fonts and languages.
     scripts: wordcraft_doc::props::CharProps,
     /// The default tab interval, points.
@@ -625,6 +627,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         settings: settings.filter(|s| s.len() <= super::package::MAX_SETTINGS),
         outline: styles.outline.clone(),
         kern: styles.default_kern,
+        widows: styles.stated_widows(),
         scripts: styles.default_scripts.clone(),
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
@@ -671,6 +674,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         settings,
         outline,
         kern,
+        widows,
         scripts,
         default_tab,
         tabs_from_indent,
@@ -708,7 +712,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     }
     doc.settings.page_color = page_doc.page_color;
     // Laid out with the standard's rules, and the profile's choices made as it is laid out.
-    doc.settings.odf = Some(profile.layout());
+    doc.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { tabs_from_indent, ..profile.layout() });
     doc.settings.sum_paragraph_spacing = sum_spacing;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
     if let Some((bytes, fill)) = page_image
@@ -726,6 +730,8 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     let d = &mut doc.styles.default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
+    // Unstated, as the profile says (`widowControl`).
+    d.widow_control = Some(widows.unwrap_or(profile.widow_control));
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
     }
