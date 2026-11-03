@@ -145,7 +145,7 @@ pub(super) fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, wa
     // A solid scroll bar takes its own room beside the list instead of floating over the level boxes.
     ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-        egui::Grid::new("toc_styles").num_columns(2).spacing(vec2(10.0, 3.0)).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("toc_styles").num_columns(2).spacing(vec2(10.0, 3.0)), |ui| {
             for (name, level) in f.style_levels.iter_mut() {
                 // Built-in styles read in the interface language; the document keeps the English name.
                 let shown = app.session.doc.styles.styles.iter().find(|st| st.name == *name).map_or_else(|| name.clone(), crate::i18n::style_name);
