@@ -175,6 +175,35 @@ impl Session {
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
+    /// How wide a picture put in at `pos` may be, as Word fits an inserted or pasted picture
+    /// (#5428): the room its paragraph's lines have (inside a table cell, the innermost cell's
+    /// text area, nested tables included; the paragraph's indents left out), never wider than the
+    /// column it is in, of its own section. The first section's text width when `pos` isn't laid
+    /// out.
+    pub(crate) fn room_at(&mut self, pos: &wordcraft_doc::Pos) -> f32 {
+        let first = self.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+        let l = self.layout();
+        let Some((caret, page)) = l.caret(pos).and_then(|c| Some((c.clone(), l.pages.get(c.page)?))) else { return first };
+        let section = self.doc.sections().get(page.section).map(|(_, sp)| sp.clone());
+        let column = match (&section, pos.story) {
+            (Some(sp), StoryRef::Body) => {
+                let boxes = sp.column_boxes();
+                let x = caret.x - page.body.x;
+                boxes.iter().find(|(cx, w)| x >= cx - 0.5 && x <= cx + w + 0.5).map_or_else(|| sp.text_width(), |(_, w)| *w)
+            }
+            (Some(sp), StoryRef::Part(_)) => sp.text_width(),
+            (None, _) => first,
+        };
+        let lines = wordcraft_layout::hit::page_lines(page, pos.story)
+            .iter()
+            .filter(|h| *h.path == pos.path)
+            .map(|h| h.right - h.left)
+            .filter(|w| w.is_finite())
+            .fold(0.0f32, f32::max);
+        let room = if lines >= 1.0 { lines.min(column) } else { column };
+        if room.is_finite() && room >= 1.0 { room } else { first }
+    }
+
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
         self.layout = Default::default();
