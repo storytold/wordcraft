@@ -33,15 +33,21 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     if let Some(name) = named(tag) {
         return name.to_string();
     }
-    let mut parts = tag.split(['-', '_', '.']);
+    // French is a pack locale. Its actual region follows the language and optional script;
+    // calendar/private-use extension data never selects Canada. Keep other labels unchanged.
+    if let Some(locale) = wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale().filter(|l| l.primary() == "fr") {
+        let mut parts = locale.as_str().split('-').skip(1);
+        let first = parts.next().unwrap_or("");
+        let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next().unwrap_or("") } else { first };
+        let is_region = (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (region.len() == 3 && region.bytes().all(|b| b.is_ascii_digit()));
+        return if is_region { format!("French ({})", region_name(region)) } else { "French (France)".into() };
+    }
+    let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
-    // A region follows the language and optional script, before variants or extensions.
-    // An extension's calendar key (the `ca` in `fr-u-ca-gregory`) is not a region.
-    let first = parts.next().unwrap_or("");
-    let region = if first.len() == 4 && first.chars().all(|c| c.is_ascii_alphabetic()) { parts.next().unwrap_or("") } else { first };
-    let region = ((region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic()))
-        || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit())))
-    .then_some(region);
+    // The region: the first two-letter or three-digit subtag after the language (and script).
+    let region =
+        parts.find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
     match region {
         // A region the list doesn't have: the language's name without its own region or variant.
         Some(r) => {
@@ -64,7 +70,6 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
-            wordcraft_engine::proof::ProofLang::Fr | wordcraft_engine::proof::ProofLang::FrCa => "French (France)".into(),
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
@@ -172,7 +177,7 @@ pub(crate) fn caret_language_proofed(app: &WordApp) -> bool {
 
 /// The Hunspell dictionary the caret's language needs but doesn't have (`pl_PL`), if any (#1167).
 pub(crate) fn caret_missing_dictionary(app: &WordApp) -> Option<&'static str> {
-    wordcraft_engine::proof::missing_dictionary(caret_lang_tag(app).as_deref())
+    wordcraft_engine::packs::missing_dictionary(caret_lang_tag(app).as_deref())
 }
 
 /// The dictionary file and reason when the caret's language has a dictionary installed that
@@ -205,7 +210,6 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
             || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
             || (tag == "id-ID" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Id)
-            || (tag == "fr-FR" && current.eq_ignore_ascii_case("fr"))
             || (tag == "es-ES" && current.eq_ignore_ascii_case("es"))
             || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
     };

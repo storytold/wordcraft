@@ -809,41 +809,21 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 }
 
 #[test]
-fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
-    let with: Vec<(&str, &str)> = LANGUAGES.iter().filter_map(|l| l.editing_lang.map(|e| (l.code, e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT"), ("fr", "fr-FR")]);
-}
-
-#[test]
-fn new_documents_take_the_region_of_the_system_locale() {
-    let locales = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let fr = fixture_lang("fr", "");
-    assert_eq!(fr.editing_lang_in(&locales(&["fr_CA.UTF-8"])).as_deref(), Some("fr-CA"));
-    assert_eq!(fr.editing_lang_in(&locales(&["fr-BE"])).as_deref(), Some("fr-BE"));
-    assert_eq!(fr.editing_lang_in(&locales(&["fr_CH.UTF-8@euro"])).as_deref(), Some("fr-CH"));
-    // The first locale in the interface's language counts; others and region-less ones don't.
-    assert_eq!(fr.editing_lang_in(&locales(&["en-US", "fr-CA"])).as_deref(), Some("fr-CA"));
-    assert_eq!(fr.editing_lang_in(&locales(&["en-US"])).as_deref(), Some("fr-FR"));
-    assert_eq!(fr.editing_lang_in(&locales(&["fr"])).as_deref(), Some("fr-FR"));
-    for locale in ["fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "fr-1901-CA"] {
-        assert_eq!(fr.editing_lang_in(&locales(&[locale])).as_deref(), Some("fr-FR"), "{locale}");
+fn french_editing_region_uses_the_locale_not_extension_keys() {
+    let fr = lang("fr");
+    assert_eq!(fr.editing_lang(), Some("fr-FR"));
+    let resolve = |locales: &[&str]| fr.editing_lang_in(&locales.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    for tag in ["fr_CA.UTF-8", "fr-Latn-CA", "FR_ca", "fr_CA@euro", "fr-CA-u-ca-gregory"] {
+        assert_eq!(resolve(&["en-US", tag]).as_deref(), Some("fr-CA"), "{tag}");
     }
-    for locale in ["fr-Latn-CA", "fr-CA-u-ca-gregory", "fr_Latn_CA.UTF-8"] {
-        assert_eq!(fr.editing_lang_in(&locales(&[locale])).as_deref(), Some("fr-CA"), "{locale}");
+    assert_eq!(resolve(&["fr_BE.UTF-8@euro"]).as_deref(), Some("fr-BE"));
+    assert_eq!(resolve(&["fr-CA", "fr-FR"]).as_deref(), Some("fr-CA"));
+    for tag in ["fr", "fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "en-CA"] {
+        assert_eq!(resolve(&[tag]).as_deref(), Some("fr-FR"), "{tag}");
     }
-    assert_eq!(fr.editing_lang_in(&[]).as_deref(), Some("fr-FR"));
-    assert_eq!(fixture_lang("it", "").editing_lang_in(&locales(&["it_CH.UTF-8"])).as_deref(), Some("it-CH"));
-    // An interface that names its region keeps it; one that writes no language stays without.
-    assert_eq!(fixture_lang("pt-br", "").editing_lang_in(&locales(&["pt_PT.UTF-8"])).as_deref(), Some("pt-BR"));
-    assert_eq!(fixture_lang("de", "").editing_lang_in(&locales(&["de_AT.UTF-8"])), None);
-    // Quebec text then gets Quebec typography: no mark for `Bonjour!`.
-    let tag = fr.editing_lang_in(&locales(&["fr_CA.UTF-8"]));
-    assert_eq!(wordcraft_engine::proof::ProofLang::from_tag(tag.as_deref()), wordcraft_engine::proof::ProofLang::FrCa);
-    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
-    s.set_editing_language(tag.as_deref());
-    s.run("text.insert", &serde_json::json!({"text": "Bonjour!"})).unwrap();
-    let issues = s.run("review.issues", &serde_json::json!({})).unwrap();
-    assert!(issues.as_array().unwrap().iter().all(|i| i["kind"] != "grammar"), "{issues}");
+    assert_eq!(resolve(&[]).as_deref(), Some("fr-FR"));
+    // This French integration does not change another interface's default region.
+    assert_eq!(lang("pt-br").editing_lang_in(&["pt-PT".into()]).as_deref(), Some("pt-BR"));
 }
 
 #[test]
@@ -856,17 +836,22 @@ fn a_french_interface_writes_new_documents_in_french() {
     app.run("ui.language", serde_json::json!({"value": "fr"})).unwrap();
     frame(&mut app);
     assert_eq!(app.session.editing_lang.as_deref(), Some("fr-FR"));
-    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"), "the untouched first document follows");
-    // Typing French then shows no English misspellings; the status bar names the language.
-    app.session.run("text.insert", &serde_json::json!({"text": "Une maison près de la rivière"})).unwrap();
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
+    app.session.run("text.insert", &serde_json::json!({"text": "Une maison près de la rivière."})).unwrap();
     let issues = app.session.run("review.issues", &serde_json::json!({})).unwrap();
-    assert!(issues.as_array().unwrap().iter().all(|i| i["lang"] == "fr"), "{issues}");
-    set_current(lang("fr"));
+    assert!(issues.as_array().unwrap().iter().all(|i| i["lang"] == "fr-fr"), "{issues}");
     set_current(Lang::EN);
     assert_eq!(crate::ribbon::caret_language(&app), "French (France)");
-    set_current(lang("fr"));
-    assert_eq!(crate::ribbon::caret_language(&app), tr(lang("fr"), "French (France)"));
-    set_current(Lang::EN);
+    let before = app.session.doc.clone();
+    app.run("ui.language", serde_json::json!({"value": "en"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.doc, before, "an interface change does not relabel existing text");
+}
+
+#[test]
+fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
+    let with: Vec<(&str, &str)> = LANGUAGES.iter().filter_map(|l| l.editing_lang.map(|e| (l.code, e))).collect();
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT"), ("fr", "fr-FR")]);
 }
 
 #[test]

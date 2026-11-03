@@ -188,28 +188,25 @@ impl Lang {
         self.info().and_then(|l| l.editing_lang)
     }
 
-    /// [`Lang::editing_lang`] in the region of the first of the system's `locales` in the same
-    /// language: a French interface writes `fr-CA` in Quebec, `fr-BE` in Belgium and `fr-FR`
-    /// elsewhere. Interfaces that name a region themselves (`pt-br`) keep theirs.
+    /// The language of new documents, with the first French system locale's actual region.
+    /// Other interfaces keep their existing default; extension keys are never regions.
     pub fn editing_lang_in(self, locales: &[String]) -> Option<String> {
         let default = self.editing_lang()?;
-        if self.code().contains('-') {
+        if self.code() != "fr" {
             return Some(default.to_string());
         }
-        let regional = locales.iter().find_map(|l| {
-            let base = l.split(['.', '@']).next().unwrap_or("");
-            let mut parts = base.split(['-', '_']);
-            if !parts.next()?.eq_ignore_ascii_case(self.code()) {
+        let regional = locales.iter().find_map(|tag| {
+            let locale = wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale()?;
+            if locale.primary() != "fr" {
                 return None;
             }
+            let mut parts = locale.as_str().split('-').skip(1);
             let first = parts.next()?;
-            let region = if first.len() == 4 && first.chars().all(|c| c.is_ascii_alphabetic()) { parts.next()? } else { first };
-            // A region follows the language and optional script. Later extension keys (such
-            // as `ca` in `fr-u-ca-gregory`) must never change the proofing region.
-            if region.len() != 2 || !region.chars().all(|c| c.is_ascii_alphabetic()) {
+            let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next()? } else { first };
+            if region.len() != 2 || !region.bytes().all(|b| b.is_ascii_alphabetic()) {
                 return None;
             }
-            wordcraft_engine::proof::lang::normalize_tag(&format!("{}-{region}", self.code()))
+            wordcraft_engine::proof::lang::normalize_tag(&format!("fr-{region}"))
         });
         Some(regional.unwrap_or_else(|| default.to_string()))
     }
@@ -324,8 +321,7 @@ pub fn system_lang() -> Lang {
     *SYSTEM.get_or_init(detect_system_lang)
 }
 
-/// The system's preferred locales (`fr_CA.UTF-8`…), looked up once; they give new documents their
-/// region ([`Lang::editing_lang_in`]). None in tests, so they don't depend on the machine.
+/// Preferred system locales for new French documents; tests are independent of the host.
 pub fn system_locales() -> &'static [String] {
     if cfg!(test) {
         return &[];
