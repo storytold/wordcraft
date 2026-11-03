@@ -460,6 +460,13 @@ fn alt_code_types_its_character_in_a_text_box() {
         want.push_str(&format!("{}\u{1E9E}\u{2603}X", ch("0199")));
     }
     assert_eq!(find_box(&h), want);
+    // A code we name no character for (past Unicode here; a double-byte lead byte on Windows)
+    // types nothing of ours, and the character the system composes for it is typed, not taken
+    // for a digit's text. Windows sends no digit text; Linux does.
+    assert_eq!(wordcraft_engine::cmd::text::alt_code_char("1114112", ansi, oem), None);
+    alt_code_frame(&mut h, "1114112", !cfg!(target_os = "windows"), &["Y"]);
+    want.push('Y');
+    assert_eq!(find_box(&h), want);
     // Digits without Alt type themselves; a bare Alt tap types nothing and opens no keytips.
     h.event(egui::Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.event(egui::Event::Text("5".into()));

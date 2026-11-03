@@ -229,12 +229,13 @@ pub(crate) fn field_alt_codes(app: &mut WordApp, ctx: &egui::Context) {
         out.push(e);
         if released && !st.code.is_empty() {
             let code = std::mem::take(&mut st.code);
+            let system_composes = cfg!(target_os = "windows");
+            // A digit's own text comes with its key, before Alt is let go: text after this is
+            // the system's composed character (Windows), also for a code we name no character
+            // for (a double-byte lead byte, say), or what is typed next. A digit that sent no
+            // text must not cost it.
+            st.swallow_text = false;
             if let Some(c) = field_code_char(&code) {
-                let system_composes = cfg!(target_os = "windows");
-                // The system's composed character comes as text after the digits' swallowed text.
-                if system_composes {
-                    st.swallow_text = false;
-                }
                 let byte_code = code.trim_start_matches('0').parse::<u32>().is_ok_and(|v| v <= 255);
                 st.echo = Some(AltCodeEcho { typed: c.to_string(), system_composes, byte_code });
                 out.push(egui::Event::Text(c.to_string()));
