@@ -30,6 +30,11 @@ impl ControlUi {
     pub(crate) fn popup_open(&self) -> bool {
         self.popup.is_some()
     }
+
+    /// Whether `p` (screen) is on the list/calendar button of the current control.
+    pub(crate) fn on_button(&self, p: egui::Pos2) -> bool {
+        self.button.as_ref().is_some_and(|(b, _)| b.contains(p))
+    }
 }
 
 struct Popup {
@@ -247,4 +252,45 @@ fn calendar(ui: &mut Ui, t: &Tokens, month: &mut (i64, u32)) -> Option<u32> {
         }
     });
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, PointerButton};
+
+    /// #5389: pressing a drop-down's list button opens the list and leaves the caret in the
+    /// control, even when text follows the control and the button hangs over it.
+    #[test]
+    fn pressing_the_list_button_keeps_the_caret_in_the_control() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("text.insert", json!({"text": "tail text"})).unwrap();
+        app.run("caret.docStart", json!({})).unwrap();
+        app.run("developer.dropDown", json!({"items": ["A", "B"]})).unwrap();
+        app.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let before = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&before).is_some(), "the caret starts in the control");
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        for _ in 0..3 {
+            h.step();
+        }
+        let after = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&after).is_some(), "the caret stays in the control");
+        assert!(h.state().controls.popup_open(), "the list is open");
+    }
 }
