@@ -63,6 +63,10 @@ pub struct TableStyleParts {
     pub fill: Option<Rgb>,
     /// Cell margins, points: [top, left, bottom, right] (`w:tblCellMar`).
     pub cell_margins: Option<[f32; 4]>,
+    /// Indent from the leading margin, points (`w:tblPr/w:tblInd`), kept so a save writes it
+    /// back (#3541). The layout places a table by its own indent (`TableProps::indent`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indent: Option<f32>,
     pub header_fill: Option<Rgb>,
     pub header_chr: CharProps,
     /// Cell borders of the header row (`firstRow` region's `w:tcBorders`): `between` is the
@@ -286,6 +290,7 @@ impl TableStyleParts {
         self.band_chr.overlay(&patch.band_chr);
         self.fill = patch.fill.or(self.fill);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
+        self.indent = patch.indent.or(self.indent);
         self.header_fill = patch.header_fill.or(self.header_fill);
         self.header_chr.overlay(&patch.header_chr);
         self.band_fill = patch.band_fill.or(self.band_fill);

@@ -200,6 +200,7 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
+            t.indent = tp.child("w:tblInd").and_then(|k| tw(k, "w:w"));
             t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
             t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }

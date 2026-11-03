@@ -113,22 +113,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
-            w.open("w:tblPr", &[]);
-            if let Some(n) = t.band_size {
-                w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
-            }
-            if let Some(n) = t.col_band_size {
-                w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
-            }
-            if let Some(b) = &t.borders {
-                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
-            }
-            if let Some(m) = &t.cell_margins {
-                props::margins(w, "w:tblCellMar", m);
-            }
-            w.close("w:tblPr");
-        }
+        table_style_pr(w, t);
         // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
         // then cell borders, shading and vertical alignment. The whole table's text formatting
         // is the style's own (above).
@@ -267,4 +252,28 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.close("w:pPr");
     props::rpr(w, &l.chr);
     w.close("w:lvl");
+}
+
+/// A table style's own table properties (`w:tblPr`), in `CT_TblPrBase` order.
+fn table_style_pr(w: &mut W, t: &wordcraft_doc::styles::TableStyleParts) {
+    if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() || t.indent.is_some() {
+        w.open("w:tblPr", &[]);
+        if let Some(n) = t.band_size {
+            w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+        }
+        if let Some(n) = t.col_band_size {
+            w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+        }
+        // `w:tblInd` comes before the borders in `CT_TblPrBase`.
+        if let Some(i) = t.indent {
+            w.empty("w:tblInd", &[("w:w", &crate::units::twips(i)), ("w:type", "dxa")]);
+        }
+        if let Some(b) = &t.borders {
+            props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+        }
+        if let Some(m) = &t.cell_margins {
+            props::margins(w, "w:tblCellMar", m);
+        }
+        w.close("w:tblPr");
+    }
 }
