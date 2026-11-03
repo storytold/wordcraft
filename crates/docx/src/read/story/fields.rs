@@ -1,4 +1,4 @@
-use super::*;
+use super::{CharProps, FieldState, InlineObject, Item, MAX_FIELD_DEPTH, PB, Phase, Reader, StoryCtx};
 
 /// Enclosed characters (`eq \o\ac(○,字)`), with their style from the code's font sizes: Word
 /// enlarges the symbol (bigger than the text, which keeps the field's size) or shrinks the text

@@ -1,5 +1,8 @@
 use super::types::{Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
-use super::*;
+use super::{
+    Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
+    VMerge, VertAlign,
+};
 
 pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
     depth <= MAX_DEPTH
@@ -145,6 +148,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         mark_ins: None,
         mark_del: None,
         fmt_change: None,
+        mark: None,
     };
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
@@ -176,6 +180,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
+                        mark: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -317,6 +322,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 shading: c.props.shading,
                 borders: c.props.borders,
                 valign: c.props.valign,
+                width: None,
             });
         }
         rows.push(cells);

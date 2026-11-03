@@ -1,4 +1,4 @@
-use super::*;
+use super::{ENVELOPE_SIZES, LABEL_PRODUCTS, Serialize, Ui, Value, WordApp, buttons, heading, json, run};
 
 // ---------------------------------------------------------------------------------------------
 // Envelopes
@@ -39,7 +39,7 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     ui.horizontal(|ui| {
         ui.label(tl!("Envelope size:"));
         let label = |i: usize| ENVELOPE_SIZES.get(i).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("env_size").selected_text(label(f.size)).width(220.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("env_size").selected_text(label(f.size)).width(220.0).show_ui(ui, |ui| {
             for i in 0..ENVELOPE_SIZES.len() {
                 ui.selectable_value(&mut f.size, i, label(i));
             }
@@ -49,7 +49,7 @@ pub(super) fn envelopes_ui(app: &mut WordApp, ui: &mut Ui, f: &mut EnvelopeForm)
     ui.add_space(8.0);
     let (mut add, mut new, mut cancel) = (false, false, false);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             cancel = ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
             new = ui.add_enabled(ready, egui::Button::new(tl!("New Document"))).clicked();
             add = ui.add_enabled(ready, crate::widgets::primary_button(ui, tl!("Add to Document"))).clicked();
@@ -156,7 +156,7 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
     });
     ui.horizontal(|ui| {
         ui.label(tl!("Label:"));
-        egui::ComboBox::from_id_salt("label_product").selected_text(product_label(f.product)).width(300.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("label_product").selected_text(product_label(f.product)).width(300.0).show_ui(ui, |ui| {
             for i in 0..LABEL_PRODUCTS.len() {
                 ui.selectable_value(&mut f.product, i, product_label(i));
             }

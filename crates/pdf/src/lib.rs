@@ -65,7 +65,7 @@ pub use export::{export, export_layout};
 #[cfg(test)]
 use exporter::Exporter;
 #[cfg(test)]
-use glyphs::{cluster_ends, left_to_right, split_clusters, visual_order};
+use glyphs::{baseline, cluster_ends, left_to_right, split_clusters, visual_order};
 #[cfg(test)]
 use metadata::{civil, parse_iso};
 pub use options::{PdfError, PdfOptions};
@@ -76,3 +76,6 @@ use picture::{load_image, load_image_within};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;

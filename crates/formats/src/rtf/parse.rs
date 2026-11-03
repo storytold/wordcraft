@@ -1,6 +1,6 @@
 use super::reader::Reader;
 use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
-use super::*;
+use super::{Cell, Document, FBlock, Flow, Para, model};
 
 /// Parse RTF bytes into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
@@ -196,6 +196,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
             }
         }
     }
+    Ok(finalize(r))
+}
+
+fn finalize(mut r: Reader) -> Parsed {
     // A header or footer left open by a truncated file ends here, and so does a multibyte run.
     r.finish_multibyte();
     r.end_header_footer();
@@ -224,7 +228,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
+    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
