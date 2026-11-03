@@ -9121,6 +9121,57 @@ fn an_empty_continuous_section_mark_takes_no_room() {
     assert_eq!(new_page[1].0, 1, "a next-page section starts a page: {new_page:?}");
 }
 
+/// A hidden mark closing a section before a continuous one, holding only an in-line picture:
+/// the picture keeps its line, so the next section starts below it, not over it (#5288). A
+/// floating picture there still leaves the mark quiet, and so does a hidden one or one in hidden
+/// text.
+#[test]
+fn a_hidden_mark_with_an_inline_picture_keeps_its_room() {
+    use wordcraft_doc::para::{Float, ShapeKind};
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Where Pb starts, and the bottom of the closing mark's picture (none: no picture).
+    let tops = |float: Option<Float>, run: CharProps| {
+        let mut d = Document::from_text("Pa\n\nPb");
+        let closer = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        closer.mark.hidden = Some(true);
+        closer.section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = SectionStart::Continuous;
+        if let Some(float) = float {
+            let shape = InlineObject::Shape {
+                kind: ShapeKind::Rectangle,
+                w: 144.0,
+                h: 72.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+                float,
+                story: None,
+                effects: Default::default(),
+                freeform: None,
+                extra: Default::default(),
+            };
+            d.insert_object(&Pos::body(1, 0), shape, &run).unwrap();
+        }
+        let l = lay(&d);
+        let bottom = l.object(&Pos::body(1, 0), 0).map(|o| o.rect.bottom());
+        (l.caret(&Pos::body(2, 0)).unwrap(), bottom)
+    };
+    let wrapped = |wrap| Some(Float { wrap, ..Default::default() });
+    let (empty, _) = tops(None, CharProps::default());
+    let (pb, bottom) = tops(wrapped(Wrap::Inline), CharProps::default());
+    let bottom = bottom.unwrap();
+    assert_eq!(pb.page, 0, "the continuous section stays on the page: {pb:?}");
+    assert!(pb.top >= empty.top + 72.0 - 0.01, "Pb starts below the 72 pt picture: {pb:?} vs {empty:?}");
+    assert!(pb.top >= bottom - 0.01, "Pb starts below the picture's frame: {pb:?} vs {bottom}");
+    let (floating, drawn) = tops(wrapped(Wrap::InFrontOfText), CharProps::default());
+    assert!(drawn.is_some(), "the floating picture is drawn");
+    assert!((floating.top - empty.top).abs() < 0.01, "a floating picture leaves the mark quiet: {floating:?} vs {empty:?}");
+    let (hidden, _) = tops(Some(Float { hidden: true, ..Default::default() }), CharProps::default());
+    assert!((hidden.top - empty.top).abs() < 0.01, "a hidden picture leaves the mark quiet: {hidden:?} vs {empty:?}");
+    let (in_hidden_text, _) = tops(wrapped(Wrap::Inline), CharProps { hidden: Some(true), ..Default::default() });
+    assert!((in_hidden_text.top - empty.top).abs() < 0.01, "a picture in hidden text leaves the mark quiet: {in_hidden_text:?} vs {empty:?}");
+}
+
 /// Empty marks closing continuous sections one after another each keep their line while it
 /// fits; only one right after text is quiet. Past the page's bottom they stay there, so the text
 /// after the run starts the next page. Measured in Word (#3907): "Start", N such marks, "End":
