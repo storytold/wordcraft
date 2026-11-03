@@ -506,6 +506,39 @@ fn title_elision_retains_a_fitting_build_label() {
     assert!(width(&narrow) <= 12.0);
 }
 
+/// Saving state and the distribution label survive a long name, including Unicode names.
+#[test]
+fn title_elision_preserves_save_state_before_the_document_name() {
+    let width = |text: &str| text.chars().count() as f32;
+    let name = "Note sintetice șțăîâ ".repeat(30);
+    for state in [" — Saved", " — Edited", " — Not saved", " — Salvat"] {
+        for label in ["", " (Preview)"] {
+            let suffix = format!("{state}{label}");
+            let available = width(&suffix) + 8.0;
+            let shown = chrome::fitted_document_title(&name, state, label, available, width);
+            assert!(shown.ends_with(&suffix), "{shown:?}");
+            assert!(shown.contains('…'));
+            assert!(width(&shown) <= available);
+            assert_eq!(chrome::fitted_document_title("Note", state, label, 100.0, width), format!("Note{suffix}"));
+        }
+    }
+}
+
+/// An empty-window title protects the same label, even when only the label fits.
+#[test]
+fn title_elision_keeps_the_empty_window_distribution_label() {
+    let width = |text: &str| text.chars().count() as f32;
+    for available in [10.0, 12.0, 15.0] {
+        let shown = chrome::fitted_document_title("WordCraft", "", " (Preview)", available, width);
+        assert!(shown.ends_with(" (Preview)"), "{shown:?}");
+        assert!(width(&shown) <= available);
+    }
+    let narrow = chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 12.0, width);
+    assert!(narrow.ends_with(" (Preview)"));
+    assert!(width(&narrow) <= 12.0);
+    assert_eq!(chrome::fitted_document_title("Document", " — Not saved", " (Preview)", 0.0, width), "");
+}
+
 /// All title-bar inputs have accessible names. Clicking the title opens Rename Document, the
 /// Rename button saves a new name, Escape cancels, a long name stays clickable, and rename
 /// leaves the document clean.

@@ -1115,3 +1115,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+
+
+**PR #5196 title follow-up (2026-11-03):** A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open.

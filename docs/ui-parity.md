@@ -341,3 +341,6 @@ labels unambiguous. Those extra-number assignments have not been compared with W
 | 2026-10-25 | trivial | Customize Ribbon, Quick Access Toolbar and Customize Keyboard pickers: filter-as-you-type command search across all commands (label or id, case-insensitive); clearing restores the category scope (#1845) |
 | 2026-10-29 | trivial | Table Properties: the Row, Column and Cell settings apply to every selected row, column and cell, as in Word, not to the caret's alone, so selecting the whole table and unticking Allow row to break across pages keeps every row whole; Allow row to break and Repeat as header row show as mixed when the selected rows differ and change nothing until clicked; the row-height rule box has an accessible name (#4857) |
 | 2026-10-27 | trivial | File › Options › Proofing › AutoCorrect Options opens its dialog with no document open (Start screen); it did nothing there (#4585) |
+
+
+**PR #5196 title follow-up (2026-11-03):** A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open.

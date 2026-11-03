@@ -293,6 +293,17 @@ pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: imp
     shown
 }
 
+/// Shorten the document name first, retaining the save state and distribution label when they
+/// fit. If those alone exceed the space, shorten the state before the label.
+pub(crate) fn fitted_document_title(name: &str, state: &str, label: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
+    let suffix = format!("{state}{label}");
+    if width(&suffix) <= available {
+        fitted_title(name, &suffix, available, width)
+    } else {
+        fitted_title(state.trim_start(), label, available, width)
+    }
+}
+
 /// Where the AutoSave switch's knob sits in its track `r`: on at the right and off at the left,
 /// mirrored in a right-to-left interface (on at the left).
 fn autosave_knob_x(rtl: bool, on: bool, r: Rect) -> f32 {
@@ -415,33 +426,26 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             });
             let (qat_end, right_start) = if rtl { (right_start, qat_end) } else { (qat_end, right_start) };
             // Centred title.
-            let mut title = if !app.has_document() {
-                // No document open (#1129): the app's name alone.
-                crate::build_config::app_name().to_string()
-            } else {
-                format!(
-                    "{} — {}",
-                    crate::i18n::isolate(&app.title_stem()),
-                    if app.session.dirty {
-                        tl!("Edited")
-                    } else if app.session.path.is_some() {
-                        tl!("Saved")
-                    } else {
-                        tl!("Not saved")
-                    }
-                )
-            };
-            let suffix = if app.has_document() && !crate::build_config::BUILD_LABEL.is_empty() {
-                format!(" ({})", crate::build_config::BUILD_LABEL)
-            } else {
+            let name = if app.has_document() { crate::i18n::isolate(&app.title_stem()) } else { "WordCraft".to_string() };
+            let state = if !app.has_document() {
                 String::new()
+            } else {
+                let state = if app.session.dirty {
+                    tl!("Edited")
+                } else if app.session.path.is_some() {
+                    tl!("Saved")
+                } else {
+                    tl!("Not saved")
+                };
+                format!(" — {state}")
             };
+            let label = if crate::build_config::BUILD_LABEL.is_empty() { String::new() } else { format!(" ({})", crate::build_config::BUILD_LABEL) };
+            let title = format!("{name}{state}{label}");
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;
             let available = 2.0 * (cx - qat_end - 10.0).min(right_start - 10.0 - cx);
-            let shown = fitted_title(&title, &suffix, available, |text| text_width(ui.painter(), text, &font, track, t.text));
-            title.push_str(&suffix);
+            let shown = fitted_document_title(&name, &state, &label, available, |text| text_width(ui.painter(), text, &font, track, t.text));
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
