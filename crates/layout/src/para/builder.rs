@@ -292,10 +292,15 @@ impl<'a> Builder<'a> {
             let from = usize::from(rc.kerned());
             let to = if ligatures.is_some() { all.len() } else { 1 };
             let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
+            // The run's language (`w:lang`) picks the font's forms for it, as in Word: Serbian
+            // italic б г д п т, not the Russian ones (#5068). It is the language of the run's
+            // non-complex text; complex-script text has its own (`w:lang/@w:bidi`, not resolved
+            // yet) and keeps the font's default forms.
+            let lang = if key.complex { None } else { rc.lang.as_deref() };
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run_lang(&st.face, shape_text, features, map, key.rtl, lang)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape_lang(&st.face, shape_text, features, map, lang)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
