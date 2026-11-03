@@ -904,11 +904,14 @@ fn drag_preview_scale_stays_within_the_gpu_texture_limit() {
     let px = preview_scale(2.0, 14_400.0, 100.0, 8192);
     assert!((14_400.0f32 * px).ceil() <= 8192.0);
     assert_eq!(preview_scale(2.0, 100.0, 50.0, 8192), 2.0);
+    assert_eq!(preview_scale(2.0, 0.0, 0.0, 8192), 2.0);
+    assert!((100.0f32 * preview_scale(2.0, 100.0, 50.0, 1)).ceil() <= 1.0);
     for bad in [f32::NAN, f32::INFINITY, 0.0] {
         assert!((100.0f32 * preview_scale(bad, 100.0, 100.0, 0)).ceil() <= 2.0);
     }
 }
 
+/// A large picture's drag preview remains a legal device texture.
 #[test]
 fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     use crate::table_resize::tests::{H, button, steps};
