@@ -1,7 +1,6 @@
 # WordCraft roadmap
 
-> **PR #5170 — Footnote separator spacing (2026-11-03):** Trailing paragraph after-space is excluded from the footnote separator area; line height, internal gaps, continuation notices and endnote behavior retain their prior contracts. The existing native Word Mac 16.114.3 A4 Helvetica Neue controls at 0/6/12 pt remain the reference. Native long-note continuation and multi-paragraph custom separators remain unqualified.
-
+**PR #5170 — Footnote separator spacing (2026-11-03):** Trailing paragraph after-space is excluded from the footnote separator area; line height, internal gaps, continuation notices and endnote behavior retain their prior contracts. The existing native Word Mac 16.114.3 A4 Helvetica Neue controls at 0/6/12 pt remain the reference. Native long-note continuation and multi-paragraph custom separators remain unqualified.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
