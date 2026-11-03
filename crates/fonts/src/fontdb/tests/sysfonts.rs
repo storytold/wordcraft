@@ -703,10 +703,50 @@ fn document_fonts_leave_with_the_last_document_that_embeds_them() {
     assert!(db.set_document_fonts(2, Vec::new()));
     assert!(!db.has_family("Corporate Sans"));
 
+    // A collection only partly present: its Bold is added and its Regular skipped for the first
+    // document's, then added once that document closes.
+    let c = (collection(&[a.0.clone(), named_face("SourceSans3-Bold.ttf", "Corporate Sans")]), "Corporate Sans".to_string());
+    assert!(db.set_document_fonts(1, vec![a.clone()]));
+    assert!(db.set_document_fonts(2, vec![c.clone()]), "its Bold is new");
+    let first = db.face("Corporate Sans", "Regular").id;
+    assert!(db.set_document_fonts(1, Vec::new()), "the first document closed");
+    let face = db.face("Corporate Sans", "Regular");
+    assert_eq!((face.family.as_str(), face.style.as_str()), ("Corporate Sans", "Regular"), "the collection's own Regular");
+    assert_ne!(face.id, first);
+    assert!(db.set_document_fonts(2, Vec::new()));
+    assert!(!db.has_family("Corporate Sans"));
+
     // Loaded without a document claiming it (a document read for its styles): it stays.
     db.add_document_fonts(vec![a.clone()]);
     assert!(!db.set_document_fonts(3, Vec::new()));
     assert!(db.has_family("Corporate Sans"));
+}
+
+/// Documents opening and closing on several threads at once claim one file: each change is made
+/// whole, so the file is recorded once with its faces, and they leave with the last document.
+#[test]
+fn document_fonts_claimed_on_several_threads_leave_with_the_last() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let a = (named_face("SourceSerif4-Regular.ttf", "Threaded Sans"), "Threaded Sans".to_string());
+    const THREADS: u64 = 8;
+    for round in 0..20 {
+        let start = std::sync::Barrier::new(THREADS as usize);
+        std::thread::scope(|s| {
+            for t in 0..THREADS {
+                let (db, a, start) = (&db, a.clone(), &start);
+                s.spawn(move || {
+                    start.wait();
+                    db.set_document_fonts(round * THREADS + t, vec![a]);
+                });
+            }
+        });
+        assert!(db.has_family("Threaded Sans"), "round {round}: claimed");
+        for t in 0..THREADS {
+            db.set_document_fonts(round * THREADS + t, Vec::new());
+        }
+        assert!(!db.has_family("Threaded Sans"), "round {round}: every document that embeds it closed");
+    }
 }
 
 #[test]

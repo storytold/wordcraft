@@ -390,7 +390,7 @@ impl FontDb {
     /// (`___WRD_EMBED_SUB_46`), and the text asks for it by the table's name (#2240). Returns how
     /// many faces were added.
     pub fn add_document_fonts(&self, files: Vec<(Vec<u8>, String)>) -> usize {
-        let added = self.add_new_document_fonts(files);
+        let added = self.add_new_document_fonts(&mut self.write_document(), files);
         if added > 0 {
             self.fonts_changed();
         }
@@ -406,18 +406,18 @@ impl FontDb {
     /// The faces' memory isn't released ([`crate::FaceRef`] keeps them).
     pub fn set_document_fonts(&self, owner: u64, files: Vec<(Vec<u8>, String)>) -> bool {
         let wanted: std::collections::HashSet<u64> = files.iter().map(|(data, name)| document_font_key(data, name)).collect();
-        let gone: Vec<u32> = {
-            let mut document = self.write_document();
-            for (key, file) in document.iter_mut() {
-                if wanted.contains(key) {
-                    file.owners.insert(owner);
-                } else {
-                    file.owners.remove(&owner);
-                }
+        // One lock for the whole change: documents opened or closed at the same time on other
+        // threads see it done or not started, never a file half recorded or half removed.
+        let mut document = self.write_document();
+        for (key, file) in document.iter_mut() {
+            if wanted.contains(key) {
+                file.owners.insert(owner);
+            } else {
+                file.owners.remove(&owner);
             }
-            let stale: Vec<u64> = document.iter().filter(|(_, f)| f.claimed && f.owners.is_empty()).map(|(k, _)| *k).collect();
-            stale.iter().filter_map(|k| document.remove(k)).flat_map(|f| f.ids).collect()
-        };
+        }
+        let stale: Vec<u64> = document.iter().filter(|(_, f)| f.claimed && f.owners.is_empty()).map(|(k, _)| *k).collect();
+        let gone: Vec<u32> = stale.iter().filter_map(|k| document.remove(k)).flat_map(|f| f.ids).collect();
         let mut removed = 0;
         if !gone.is_empty() {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
@@ -428,21 +428,18 @@ impl FontDb {
         }
         let mut added = 0;
         if removed > 0 {
-            // A file whose faces were all present already may have stood on a removed one: those
-            // still claimed are added again from the copy kept for this.
-            let mut document = self.write_document();
-            for file in document.values_mut().filter(|f| f.ids.is_empty() && !f.owners.is_empty()) {
-                if let Some(copy) = &file.skipped {
-                    file.ids = self.add_faces(vec![(copy.0.clone(), Some(copy.1.clone()))]);
-                    added += file.ids.len();
-                    if !file.ids.is_empty() {
-                        file.skipped = None;
-                    }
+            // A file with faces skipped as already present may have stood on removed ones: those
+            // still claimed add them again from the copy kept for this (the faces still present
+            // are skipped again).
+            for file in document.values_mut().filter(|f| !f.owners.is_empty()) {
+                if let Some((data, name)) = &file.skipped {
+                    let ids = self.add_faces(vec![(data.clone(), Some(name.clone()))]);
+                    added += ids.len();
+                    file.ids.extend(ids);
                 }
             }
         }
-        added += self.add_new_document_fonts(files);
-        let mut document = self.write_document();
+        added += self.add_new_document_fonts(&mut document, files);
         for key in &wanted {
             if let Some(file) = document.get_mut(key) {
                 file.owners.insert(owner);
@@ -457,18 +454,19 @@ impl FontDb {
         changed
     }
 
-    /// Add the files not added yet (by content and name); returns how many faces were added.
-    fn add_new_document_fonts(&self, files: Vec<(Vec<u8>, String)>) -> usize {
+    /// Add the files not added yet (by content and name) to `document`, which the caller holds
+    /// locked for the whole change; returns how many faces were added.
+    fn add_new_document_fonts(&self, document: &mut std::collections::HashMap<u64, DocumentFont>, files: Vec<(Vec<u8>, String)>) -> usize {
         let mut added = 0;
         for (data, name) in files {
             let key = document_font_key(&data, &name);
-            if self.write_document().contains_key(&key) {
+            if document.contains_key(&key) {
                 continue;
             }
-            let ids = self.add_faces(vec![(data.clone(), Some(name.clone()))]);
+            let (ids, skipped) = self.add_faces_counted(vec![(data.clone(), Some(name.clone()))]);
             added += ids.len();
-            let skipped = ids.is_empty().then_some((data, name));
-            self.write_document().insert(key, DocumentFont { ids, owners: std::collections::HashSet::new(), claimed: false, skipped });
+            let skipped = (skipped > 0).then_some((data, name));
+            document.insert(key, DocumentFont { ids, owners: std::collections::HashSet::new(), claimed: false, skipped });
         }
         added
     }
@@ -675,8 +673,9 @@ fn document_font_key(data: &[u8], name: &str) -> u64 {
 }
 
 /// A font file documents embed: the faces it added, the documents that claim it
-/// ([`FontDb::set_document_fonts`]), and whether any ever did. A file whose faces were all present
-/// already added none and keeps a copy of itself, to be added once those faces are removed.
+/// ([`FontDb::set_document_fonts`]), and whether any ever did. A file with faces skipped as already
+/// present (all of them, or some of a collection) keeps a copy of itself, to add them once the
+/// faces they stood on are removed.
 #[derive(Debug)]
 pub(super) struct DocumentFont {
     ids: Vec<u32>,

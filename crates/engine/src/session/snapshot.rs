@@ -13,8 +13,8 @@ impl Session {
         }
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
-        super::documents::release_fonts(replaced);
-        super::documents::claim_fonts(self.document_id, &doc);
+        self.font_claims.release(replaced);
+        self.font_claims.claim(self.document_id, &doc);
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
@@ -127,6 +127,7 @@ impl Session {
             others: _,
             order: _,
             untitled_count: _,
+            font_claims: _,
             ime_body_epoch,
             // The IME revision and its caret token are process-global evidence, not document
             // state: a rollback must not reuse a revision.

@@ -31,8 +31,8 @@ impl Session {
     /// Start an editing session at the document beginning with empty history and
     /// default view, preferences and a yellow highlighter independent of document undo.
     pub fn new(doc: Document) -> Self {
-        let s = Self::with_registry(doc, Arc::new(crate::cmd::registry()));
-        super::documents::claim_fonts(s.document_id, &s.doc);
+        let mut s = Self::with_registry(doc, Arc::new(crate::cmd::registry()));
+        s.font_claims.claim(s.document_id, &s.doc);
         s
     }
 
@@ -170,6 +170,7 @@ impl Session {
             others: Vec::new(),
             order: vec![document_id],
             untitled_count: 1,
+            font_claims: Default::default(),
         }
     }
 }

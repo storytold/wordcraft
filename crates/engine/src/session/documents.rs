@@ -24,15 +24,33 @@ pub(super) fn next_document_id() -> u64 {
     NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Claim the fonts `doc` embeds for open document `id`: they stay while an open document embeds
-/// them, and leave the font list when the last one closes (#3687).
-pub(super) fn claim_fonts(id: u64, doc: &Document) {
-    wordcraft_fonts::FontDb::global().set_document_fonts(id, crate::io::embedded_font_files(doc));
+/// The open documents of a session whose embedded fonts it claims: they stay while an open
+/// document embeds them, and leave the font list when the last one closes (#3687). A session that
+/// is dropped releases the documents still open in it, so it leaves no fonts behind.
+#[derive(Default)]
+pub(super) struct FontClaims(std::collections::HashSet<u64>);
+
+impl FontClaims {
+    /// Claim the fonts `doc` embeds for open document `id`.
+    pub(super) fn claim(&mut self, id: u64, doc: &Document) {
+        self.0.insert(id);
+        wordcraft_fonts::FontDb::global().set_document_fonts(id, crate::io::embedded_font_files(doc));
+    }
+
+    /// Document `id` is closed or replaced: its fonts go unless another open document embeds them.
+    pub(super) fn release(&mut self, id: u64) {
+        if self.0.remove(&id) {
+            wordcraft_fonts::FontDb::global().set_document_fonts(id, Vec::new());
+        }
+    }
 }
 
-/// Document `id` is closed or replaced: its fonts go unless another open document embeds them.
-pub(super) fn release_fonts(id: u64) {
-    wordcraft_fonts::FontDb::global().set_document_fonts(id, Vec::new());
+impl Drop for FontClaims {
+    fn drop(&mut self) {
+        for id in std::mem::take(&mut self.0) {
+            wordcraft_fonts::FontDb::global().set_document_fonts(id, Vec::new());
+        }
+    }
 }
 
 /// The id the next document will get: every document made after this call has an id at least
@@ -289,6 +307,7 @@ impl Session {
             others: _,
             order: _,
             untitled_count: _,
+            font_claims: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
         } = self;
@@ -406,7 +425,7 @@ impl Session {
         let d = self.others.swap_remove(at);
         self.order.retain(|d| *d != id);
         self.forget_recovery_copy(&d);
-        release_fonts(id);
+        self.font_claims.release(id);
         true
     }
 
@@ -473,7 +492,7 @@ impl Session {
         view.outline.collapsed.clear();
         let mut d = DocState::new(doc, untitled, view);
         let id = d.document_id;
-        claim_fonts(id, &d.doc);
+        self.font_claims.claim(id, &d.doc);
         self.order.push(id);
         self.swap_doc(&mut d);
         self.others.push(d);
@@ -551,7 +570,7 @@ impl Session {
                 self.order = vec![fresh.document_id];
                 self.swap_doc(&mut fresh);
                 self.forget_recovery_copy(&fresh);
-                release_fonts(id);
+                self.font_claims.release(id);
             }
         }
         self.stop_reading_elsewhere();
