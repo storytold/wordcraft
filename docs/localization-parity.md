@@ -171,7 +171,8 @@ pinned pack index and installed through the font store into `<font store>/langua
 ([installing languages](spelling-dictionaries.md#language-packs)):
 
 - File › Options › Language › Your languages lists English, the installed packs and the
-  document's languages with each one's proofing status, and installs, removes or sets the default
+  document's languages with each one's proofing status (Built in, Installed, Your own dictionary,
+  System dictionary, Grammar built in, Not available yet), and installs, removes or sets the default
   (Set as default); Add a language… opens a searchable list of the other packs with name, size,
   licence and source (`proof.packs` with its `languages` rows, `proof.installPack`,
   `proof.removePack` for agents). A pack is read at once; the lookup order is the dictionaries folder, the installed pack,
