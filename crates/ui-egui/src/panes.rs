@@ -56,6 +56,7 @@ pub enum Pane {
     AltText,
     FormatShape,
     RestrictEditing,
+    Proofing,
     Comments,
 }
 
@@ -71,6 +72,7 @@ impl Pane {
             Self::AltText => "Alt Text",
             Self::FormatShape => "Format Shape",
             Self::RestrictEditing => "Restrict Editing",
+            Self::Proofing => "Proofing",
             Self::Comments => "Comments",
         }
     }
@@ -86,6 +88,7 @@ impl Pane {
             Self::AltText => (Edge::End, 260.0),
             Self::FormatShape => (Edge::End, 280.0),
             Self::RestrictEditing => (Edge::End, 270.0),
+            Self::Proofing => (Edge::End, 400.0),
             Self::Comments => (Edge::End, 290.0),
         };
         PaneState::docked(edge, width)
@@ -103,11 +106,12 @@ impl Pane {
             Self::AltText => "altText",
             Self::FormatShape => "formatShape",
             Self::RestrictEditing => "restrictEditing",
+            Self::Proofing => "proofing",
             Self::Comments => "comments",
         }
     }
 
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -117,6 +121,7 @@ impl Pane {
         Self::AltText,
         Self::FormatShape,
         Self::RestrictEditing,
+        Self::Proofing,
         Self::Comments,
     ];
 
@@ -136,7 +141,7 @@ impl Pane {
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
-            Self::RestrictEditing => None,
+            Self::RestrictEditing | Self::Proofing => None,
         }
     }
 }
@@ -160,6 +165,7 @@ impl PaneContent<Pane> for Content<'_> {
                 egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui));
             }
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
+            Pane::Proofing => crate::proofing_pane::show(app, ui),
             Pane::Comments => comments(app, ui),
         }
     }

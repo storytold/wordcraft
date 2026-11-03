@@ -27,7 +27,7 @@ Opus 5.5 agent wall-clock.
 
 ## Alpha gate (core workflows)
 
-The core-workflow gate from the craftrules progress-docs standard: what a typical Word user does
+The core-workflow gate: what a typical Word user does
 every day, checked end to end on the main platform (macOS desktop), including save and reopen.
 "Partial" here means rough but not blocking: the workflow completes.
 
@@ -90,8 +90,8 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | 2026-10-11 | trivial | Omitted `w:pPrDefault` stays omitted across saves; explicit empty/default properties and later spacing edits remain writable. Synthetic preservation checks only; readiness estimates unchanged |
 | 2026-10-10 | trivial | M5: Draw Table and Eraser landed (#303) |
 | 2026-10-10 | trivial | Merged main: PRs that landed removed from the Current focus list |
-| 2026-10-10 | minor | Current focus heading back to ~150–230 h to beta: full number restored to the additive weighted sum (~60%), method aligned with the standard, no new evidence |
-| 2026-10-10 | minor | Alpha gate table added (core-workflow gate from the progress-docs standard): all six workflows pass, stage stays alpha |
+| 2026-10-10 | minor | Current focus heading back to ~150–230 h to beta: full number restored to the additive weighted sum (~60%), no new evidence |
+| 2026-10-10 | minor | Alpha gate table added (core-workflow gate): all six workflows pass, stage stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md with remaining hours; Current focus from gaps.md; M15–M16 added |
 | 2026-10-10 | trivial | M11: ink pens and eraser landed (#307) |
 | 2026-10-11 | trivial | M11: lasso, Add Pen, Ink to Shape and Ink Replay landed (#395) |
