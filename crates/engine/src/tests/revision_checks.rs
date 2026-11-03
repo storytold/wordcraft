@@ -789,3 +789,27 @@ fn a_change_or_author_of_the_wrong_type_is_an_error() {
     run(&mut s, "review.rejectAll", json!({"author": null}));
     assert!(change_list(&mut s).is_empty());
 }
+
+#[test]
+fn a_listed_paragraph_formatting_change_keeps_another_revisions_numbering_change() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    // Alice's numbering change on the paragraph, then Bob centres it.
+    let alice = {
+        s.doc.revisions.push(wordcraft_doc::Revision { kind: wordcraft_doc::RevisionKind::Format, author: "Alice".into(), ..Default::default() });
+        u32::try_from(s.doc.revisions.len() - 1).unwrap_or_default()
+    };
+    if let Ok(p) = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)) {
+        p.props.num_change = Some(Box::new(wordcraft_doc::props::NumChange { rev: alice, original: String::new() }));
+        p.touch();
+    }
+    s.author = "Bob".into();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    let n = listed(&mut s, |c| c["kind"] == "format" && c["author"] == "Bob");
+    run(&mut s, "review.reject", json!({"change": n}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert!(p.props.fmt_change.is_none(), "Bob's centring is resolved");
+    assert_eq!(p.props.align, None, "and undone");
+    assert_eq!(p.props.num_change.map(|n| n.rev), Some(alice), "Alice's numbering change stays");
+}

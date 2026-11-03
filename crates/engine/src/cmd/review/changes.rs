@@ -306,7 +306,12 @@ fn resolve_listed(s: &mut Session, n: usize, accept: bool) -> Result<(), CmdErro
             let para = s.doc.para_mut(a.story, &a.path)?;
             match target {
                 Target::Mark => fmt_revisions::resolve_char(&mut para.mark, accept),
-                Target::Para => fmt_revisions::resolve_para(&mut para.props, accept),
+                Target::Para => {
+                    // A list numbering change by another revision is a change of its own: it stays.
+                    let other = para.props.num_change.take().filter(|n| n.rev != rev);
+                    fmt_revisions::resolve_para(&mut para.props, accept);
+                    para.props.num_change = other;
+                }
                 _ => {
                     if let Some(sec) = para.section.as_deref_mut() {
                         fmt_revisions::resolve_section(sec, accept);
