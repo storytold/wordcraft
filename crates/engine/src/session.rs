@@ -6,7 +6,7 @@ use serde_json::Value;
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, PartKind, Path, Pos, StoryRef};
-use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
+use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode, VisualPos};
 
 use crate::{CmdError, ImeEditOutcome, Registry};
 
@@ -78,6 +78,8 @@ pub struct Session {
     pub goal_x: Option<f32>,
     /// Page the caret was last on (headers/footers repeat on many pages).
     pub page_hint: usize,
+    visual_anchor: Option<VisualPos>,
+    visual_focus: Option<VisualPos>,
     pub registry: Arc<Registry>,
     /// Author name for comments and tracked changes.
     pub author: String,

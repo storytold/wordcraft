@@ -19,6 +19,7 @@ pub mod math_gallery;
 pub mod packs;
 pub(crate) mod prefs;
 pub mod print;
+mod print_fields;
 pub mod recovery;
 pub mod ribbon;
 pub mod sample;

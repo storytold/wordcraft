@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::{PartKind, Pos, StoryRef};
+use wordcraft_engine::cmd::caret::SelectionMode;
 use wordcraft_layout::display::CommentDisplay;
 use wordcraft_layout::{DocLayout, Page, Placed};
 
@@ -492,7 +493,7 @@ struct CanvasView {
     caret: Option<wordcraft_layout::hit::Caret>,
 }
 
-fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> CanvasView {
+fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &std::sync::Arc<DocLayout>) -> CanvasView {
     use wordcraft_engine::cmd::view::ReadPageColor;
     let read_mode = app.session.view.read_mode;
     let dark_page = if read_mode { app.session.view.read_page_color == ReadPageColor::Inverse } else { app.session.view.dark_mode };
@@ -555,7 +556,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
             app.canvas.scroll_to_caret = true;
         }
     }
-    let caret = layout.caret_on(&preview_sel(app).unwrap_or(app.session.sel_ends()).focus, app.session.page_hint);
+    let caret = app.session.caret_geometry(layout, &preview_sel(app).unwrap_or(app.session.sel_ends()).focus);
     let dim_body = dims_body(app, layout);
     let grid_story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);
     let grid_story = matches!(part_kind(app, grid_story), Some(PartKind::Header | PartKind::Footer)).then_some(grid_story);
@@ -1072,7 +1073,7 @@ fn handle_primary_pointer(
     ui: &Ui,
     resp: &egui::Response,
     rects: &[Rect],
-    layout: &DocLayout,
+    layout: &std::sync::Arc<DocLayout>,
     geo: &Geometry,
     middle_gesture: bool,
 ) {
@@ -1101,7 +1102,14 @@ fn paint_white_space_seams(painter: &egui::Painter, rects: &[Rect], geo: &Geomet
     }
 }
 
-fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, geo: &Geometry, secondary_clicked: bool) {
+fn handle_secondary_selection(
+    app: &mut WordApp,
+    resp: &egui::Response,
+    rects: &[Rect],
+    layout: &std::sync::Arc<DocLayout>,
+    geo: &Geometry,
+    secondary_clicked: bool,
+) {
     // Selected table cells: a right-click off them drops them, even between the selection's ends
     // (beside a selected column), so the menu acts on the cell clicked.
     if secondary_clicked
@@ -1142,10 +1150,11 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
         if crate::objects::select_at(app, layout, rects, geo.scale, p) {
             app.canvas.context_issue = None;
             app.canvas.context_synonyms = None;
-        } else if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+        } else if let Some(target) = layout.hit_visual(page, x, y, app.session.sel.focus.story) {
+            let pos = target.position();
             let (a, b) = app.session.sel.ordered();
-            if !(a <= pos && pos <= b) || app.session.sel.is_collapsed() {
-                app.session.sel = wordcraft_engine::Selection::caret(pos);
+            if !(a <= *pos && *pos <= b) || app.session.sel.is_collapsed() {
+                cursor::set_visual_caret(app, target, SelectionMode::Replace, (page, x, y));
             }
             context_suggestions(app);
         }
@@ -1514,7 +1523,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         if !math_caret
-            && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
+            && let Some(c) = app.session.caret_geometry(&layout, &preview_sel(app).unwrap_or(&app.session.sel).focus)
             && let Some(pr) = rects.get(c.page)
         {
             let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
