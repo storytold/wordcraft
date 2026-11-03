@@ -47,6 +47,8 @@ impl Session {
             })
         };
         if !fits(&self.layout[0]) && fits(&self.layout[1]) {
+            self.visual_anchor = None;
+            self.visual_focus = None;
             self.layout.swap(0, 1);
         }
         if fits(&self.layout[0])
@@ -76,6 +78,8 @@ impl Session {
             filepath: filepath.clone(),
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
+        self.visual_anchor = None;
+        self.visual_focus = None;
         let [newest, _] = std::mem::take(&mut self.layout);
         self.layout =
             [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
@@ -155,7 +159,8 @@ impl Session {
         layout.map(|l| (copy.doc, copy.sel, l))
     }
 
-    /// A layout for output (PDF, images, print): no proofing marks, print view.
+    /// Cached field results in print view, without proofing marks. Physical exports evaluate
+    /// local cross-references in a temporary copy before layout.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)
     }
@@ -177,6 +182,8 @@ impl Session {
 
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
+        self.visual_anchor = None;
+        self.visual_focus = None;
         self.layout = Default::default();
         self.cache.clear();
     }

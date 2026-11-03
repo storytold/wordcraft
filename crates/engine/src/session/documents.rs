@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Pos, StoryRef};
-use wordcraft_layout::LayoutCache;
+use wordcraft_layout::{LayoutCache, VisualPos};
 
 use super::{ColumnBlock, FindState, LayoutSlots, MathEdit, Selection, Session, TypedWord, Undo, ViewState, Widened, doc_bib_style};
 use crate::CmdError;
@@ -50,6 +50,8 @@ pub struct DocState {
     pub(super) find: FindState,
     pub(super) goal_x: Option<f32>,
     pub(super) page_hint: usize,
+    pub(super) visual_anchor: Option<VisualPos>,
+    pub(super) visual_focus: Option<VisualPos>,
     pub(super) new_header_parts: Vec<u32>,
     pub(super) hf_return: Option<Selection>,
     pub(super) history: Vec<Arc<Undo>>,
@@ -104,6 +106,8 @@ impl DocState {
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
+            visual_anchor: None,
+            visual_focus: None,
             new_header_parts: Vec::new(),
             hf_return: None,
             history: Vec::new(),
@@ -204,6 +208,8 @@ impl Session {
             find: _,
             goal_x: _,
             page_hint: _,
+            visual_anchor: _,
+            visual_focus: _,
             new_header_parts: _,
             hf_return: _,
             history: _,
@@ -293,6 +299,8 @@ impl Session {
             find,
             goal_x,
             page_hint,
+            visual_anchor,
+            visual_focus,
             new_header_parts,
             hf_return,
             history,
@@ -340,6 +348,8 @@ impl Session {
         swap(&mut self.find, find);
         swap(&mut self.goal_x, goal_x);
         swap(&mut self.page_hint, page_hint);
+        swap(&mut self.visual_anchor, visual_anchor);
+        swap(&mut self.visual_focus, visual_focus);
         swap(&mut self.new_header_parts, new_header_parts);
         swap(&mut self.hf_return, hf_return);
         swap(&mut self.history, history);

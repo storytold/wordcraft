@@ -6,6 +6,7 @@
 
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::VisualPos;
 
 use super::{ColumnBlock, MathEdit, Selection, Session, TypedWord, ViewState, Widened, next_math_session};
 
@@ -18,6 +19,8 @@ pub struct WindowView {
     pending: Option<CharProps>,
     goal_x: Option<f32>,
     page_hint: usize,
+    visual_anchor: Option<VisualPos>,
+    visual_focus: Option<VisualPos>,
     hf_return: Option<Selection>,
     typing_open: bool,
     join_next: bool,
@@ -64,6 +67,8 @@ impl Session {
             pending: self.pending.take(),
             goal_x: self.goal_x.take(),
             page_hint: take(&mut self.page_hint),
+            visual_anchor: self.visual_anchor.take(),
+            visual_focus: self.visual_focus.take(),
             hf_return: self.hf_return.take(),
             typing_open: take(&mut self.typing_open),
             join_next: take(&mut self.join_next),
@@ -88,6 +93,8 @@ impl Session {
             pending: self.pending.clone(),
             goal_x: self.goal_x,
             page_hint: self.page_hint,
+            visual_anchor: self.visual_anchor.clone(),
+            visual_focus: self.visual_focus.clone(),
             hf_return: self.hf_return.clone(),
             // The new window hasn't typed: its first key starts an undo step of its own.
             typing_open: false,
@@ -118,6 +125,8 @@ impl Session {
             pending,
             goal_x,
             page_hint,
+            visual_anchor,
+            visual_focus,
             hf_return,
             typing_open,
             join_next,
@@ -140,7 +149,11 @@ impl Session {
         self.page_hint = page_hint;
         self.column_mode = column_mode;
         self.math = math;
+        self.visual_anchor = None;
+        self.visual_focus = None;
         if current {
+            self.visual_anchor = visual_anchor;
+            self.visual_focus = visual_focus;
             self.hf_return = hf_return;
             self.typing_open = typing_open;
             self.join_next = join_next;

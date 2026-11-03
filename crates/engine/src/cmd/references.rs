@@ -31,10 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("references.toc", "Table of Contents", "References › Table of Contents", insert_toc).params(
             r#"{"levels"?: 1-9, "title"?: string, "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "hyperlinks"?: bool, "headingStyles"?: bool, "outlineLevels"?: bool, "tcFields"?: bool, "styleLevels"?: {style name: 1-9}} (replaces an existing table; {} updates it)"#,
         ),
-        CommandSpec::new("references.updateToc", "Update Table", "References › Table of Contents", |s, _| {
-            update_toc(s)?;
-            sel_result(s)
-        }),
+        toc::update_spec(),
         CommandSpec::new("references.removeToc", "Remove Table of Contents", "References › Table of Contents", |s, _| {
             if let Some((start, end)) = toc_range(s) {
                 remove_toc(s, start, end)?;

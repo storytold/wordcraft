@@ -1,12 +1,28 @@
 use super::navigation::{page_at, page_to_screen};
 use super::pages::{page_render_options, page_screen_scale};
 use super::story::dims_body;
-use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
+use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, SelectionMode, StoryRef, WordApp, json};
+
+pub(super) fn set_visual_caret(app: &mut WordApp, target: wordcraft_layout::VisualPos, mode: SelectionMode, point: (usize, f32, f32)) {
+    let story = target.position().story;
+    let pos = serde_json::to_value(target.position()).unwrap_or_default();
+    if app.run("caret.set", json!({"pos": pos, "extend": mode == SelectionMode::Extend})).is_ok() {
+        retain_pointer_hit(app, point, story);
+    }
+}
+
+pub(super) fn retain_pointer_hit(app: &mut WordApp, (page, x, y): (usize, f32, f32), story: StoryRef) {
+    // The command may end typing. Hit the final layout without reusing an old owner.
+    let layout = app.session.layout();
+    if let Some(target) = layout.hit_visual(page, x, y, story) {
+        app.session.retain_visual(target);
+    }
+}
 
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
-    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let c = app.session.caret_geometry(&l, &app.session.sel.focus)?;
     let p = page_to_screen(app, c.page, c.x, c.top)?;
     let scale = app
         .canvas
