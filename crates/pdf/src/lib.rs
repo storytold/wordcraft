@@ -82,3 +82,6 @@ use report::pdf_version;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;
