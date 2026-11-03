@@ -177,6 +177,9 @@ pub(super) struct Writer {
     pub(super) kept_defs: std::sync::Arc<std::collections::BTreeMap<String, std::sync::Arc<str>>>,
     /// The package files the markup written as read links to (its pictures): written as read.
     pub(super) kept_files_used: std::collections::BTreeSet<String>,
+    /// The file's tracked changes markup written as read marks, written as read among the
+    /// regions (each once).
+    kept_changes: std::collections::BTreeSet<String>,
     /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
     pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
     pub(super) kept_used: super::kept::Needed,
@@ -604,7 +607,33 @@ impl Writer {
     /// The definitions markup kept as read names, added to those written; false when one of
     /// them can't be written as read.
     fn kept_defs_of(&mut self, xml: &str) -> bool {
-        let Some((auto, common, fonts)) = super::kept::needed(&self.kept_defs, super::kept::names(xml), self.kept_pages) else { return false };
+        // The tracked changes it marks, as read, and those their deleted content marks (text
+        // inserted, then deleted); with the styles they name. Not one without its date, which
+        // ODF requires (§4.3.2.10 in `office:change-info`): it is written from the model, dated.
+        let mut todo: Vec<String> = super::kept::changes(xml).into_iter().collect();
+        let mut regions: Vec<(String, std::sync::Arc<str>)> = Vec::new();
+        while let Some(id) = todo.pop() {
+            if self.kept_changes.contains(&id) || regions.iter().any(|(r, _)| *r == id) {
+                continue;
+            }
+            match self.kept_defs.get(&format!("change:{id}")).filter(|r| r.contains("<dc:date>")) {
+                Some(r) if regions.len() < 1000 => {
+                    todo.extend(super::kept::changes(r));
+                    regions.push((id, r.clone()));
+                }
+                _ => return false,
+            }
+        }
+        let mut names = super::kept::names(xml);
+        for (_, r) in &regions {
+            names.extend(super::kept::names(r));
+        }
+        let Some((auto, common, fonts)) = super::kept::needed(&self.kept_defs, names, self.kept_pages) else { return false };
+        // Those their content marks first, as a reader meets them (and as the file had them).
+        for (id, r) in regions.into_iter().rev() {
+            self.kept_changes.insert(id);
+            self.regions.push(r.to_string());
+        }
         self.kept_used.0.extend(auto);
         self.kept_used.1.extend(common);
         self.kept_used.2.extend(fonts);

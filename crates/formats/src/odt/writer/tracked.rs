@@ -108,7 +108,8 @@ pub(in crate::odt) fn now_unix() -> i64 {
 impl Writer {
     /// A new `text:changed-region` of `kind` by `m` with `body` after its change info; its id.
     pub(in crate::odt) fn region(&mut self, kind: &str, m: &RevMark, body: &str) -> String {
-        let id = format!("ct{}", self.regions.len() + 1);
+        // (With the writer's prefix: a file's own regions, written as read, keep their ids.)
+        let id = format!("{}ct{}", self.prefix, self.regions.len() + 1);
         // `dc:date` is required: a change without a date is dated now.
         let date = if m.date.trim().is_empty() { now_iso() } else { m.date.clone() };
         self.regions.push(format!(

@@ -320,7 +320,13 @@ impl<'a> Body<'a> {
                     && self.del.is_none() =>
                 {
                     self.end_para();
-                    self.kept_index = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean: true, done: self.container().len() });
+                    self.kept_index = Some(KeptOpen {
+                        from: at.0,
+                        depth: self.depth + 1,
+                        clean: true,
+                        done: self.container().len(),
+                        comments: KeptComments::default(),
+                    });
                 }
                 None => {}
             },
@@ -408,7 +414,13 @@ impl<'a> Body<'a> {
                 {
                     // Before it starts: what ends the paragraph open before it.
                     self.end_para();
-                    self.kept_table = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean: true, done: self.container().len() });
+                    self.kept_table = Some(KeptOpen {
+                        from: at.0,
+                        depth: self.depth + 1,
+                        clean: true,
+                        done: self.container().len(),
+                        comments: KeptComments::default(),
+                    });
                 }
                 None => {}
             },
@@ -428,8 +440,12 @@ impl<'a> Body<'a> {
             _ => {}
         }
         match &ev {
-            Ev::Start(q, _) => match &mut self.kept_open {
-                Some(k) => k.clean &= keepable(q),
+            Ev::Start(q, a) => match &mut self.kept_open {
+                Some(k) => {
+                    // Comments and tracked changes paired in it.
+                    let paired = q.starts_with("office:annotation") || matches!(q.as_str(), "text:change" | "text:change-start" | "text:change-end");
+                    k.clean &= (paired || keepable(q)) && k.comments.start(q, a, self.depth + 1, self.paras_done);
+                }
                 None if (q == "text:p" || q == "text:h")
                     && !self.raw.is_empty()
                     && self.in_text
@@ -443,14 +459,25 @@ impl<'a> Body<'a> {
                 {
                     // Drawings read before it that join it aren't in its markup.
                     let clean = self.loose.is_empty();
-                    self.kept_open = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean, done: self.paras_done });
+                    self.kept_open =
+                        Some(KeptOpen { from: at.0, depth: self.depth + 1, clean, done: self.paras_done, comments: KeptComments::default() });
                 }
                 None => {}
             },
+            // A comment in it ending: its paragraphs counted (once read, its last included).
+            Ev::End(_) if self.kept_open.as_ref().is_some_and(|k| k.comments.ends_at(self.depth)) => {
+                self.feed(ev);
+                let done = self.paras_done;
+                if let Some(k) = &mut self.kept_open {
+                    k.comments.end(done);
+                }
+                return;
+            }
             Ev::End(q) if (q == "text:p" || q == "text:h") && self.kept_open.as_ref().is_some_and(|k| k.depth == self.depth) => {
                 if let Some(k) = self.kept_open.take()
                     && k.clean
-                    && k.done == self.paras_done
+                    && k.comments.closed()
+                    && k.done + k.comments.paras == self.paras_done
                     && let Some(p) = &mut self.para
                     && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
                 {
@@ -1668,6 +1695,79 @@ struct KeptOpen {
     depth: usize,
     clean: bool,
     done: usize,
+    /// The comments in a paragraph being kept (see [`KeptComments`]).
+    comments: KeptComments,
+}
+
+/// The comments (§14.1 `office:annotation`) and tracked changes (§5.5.7) in a paragraph being
+/// kept, which it can be only when they are its own: each named comment and each change begun
+/// ends in it, each end and each reply names one begun in it.
+#[derive(Default)]
+struct KeptComments {
+    /// The names of those begun, and of those ended.
+    opened: Vec<String>,
+    ended: Vec<String>,
+    /// The comment being read: its depth and how many paragraphs were finished before it.
+    open: Option<(usize, usize)>,
+    /// The comments' own paragraphs, which aren't the paragraph's.
+    paras: usize,
+}
+
+impl KeptComments {
+    /// Element `q` (`a` its attributes, at `depth`) starting in the paragraph, `done`
+    /// paragraphs finished so far: false when the paragraph can't be kept for it.
+    fn start(&mut self, q: &str, a: &Attrs, depth: usize, done: usize) -> bool {
+        let name = || get(a, "office:name").map(str::to_string);
+        match q {
+            "office:annotation" if self.open.is_none() && self.opened.len() < 64 => {
+                if get(a, "loext:parent-name").is_some_and(|p| !self.opened.iter().any(|n| n == p)) {
+                    return false;
+                }
+                self.opened.extend(name());
+                self.open = Some((depth, done));
+                true
+            }
+            "office:annotation-end" => match name() {
+                Some(n) if self.opened.contains(&n) => {
+                    self.ended.push(n);
+                    true
+                }
+                _ => false,
+            },
+            // A tracked change's start and end both in it (a deletion's place stands alone).
+            "text:change-start" if self.opened.len() < 64 => {
+                self.opened.extend(get(a, "text:change-id").map(|i| format!("\u{0}{i}")));
+                true
+            }
+            "text:change-end" => match get(a, "text:change-id").map(|i| format!("\u{0}{i}")) {
+                Some(n) if self.opened.contains(&n) => {
+                    self.ended.push(n);
+                    true
+                }
+                _ => false,
+            },
+            "text:change" => get(a, "text:change-id").is_some(),
+            "text:change-start" => false,
+            _ => true,
+        }
+    }
+
+    /// Whether the comment being read is the element ending at `depth`.
+    fn ends_at(&self, depth: usize) -> bool {
+        self.open.is_some_and(|(d, _)| d == depth)
+    }
+
+    /// The comment being read ended, `done` paragraphs finished so far.
+    fn end(&mut self, done: usize) {
+        if let Some((_, before)) = self.open.take() {
+            self.paras += done.saturating_sub(before);
+        }
+    }
+
+    /// Whether every comment begun with a name ended.
+    fn closed(&self) -> bool {
+        self.open.is_none() && self.opened.iter().all(|n| self.ended.contains(n))
+    }
 }
 
 /// Whether markup holding element `q` can be kept as read. Pictures and shapes can (a shape's

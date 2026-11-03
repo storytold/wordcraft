@@ -238,8 +238,27 @@ const DRAWINGS: Sample = Sample {
     meta: "",
 };
 
+/// Comments in a paragraph: one over a range, with a reply, resolved, its text styled; one at a
+/// point; with what WordCraft doesn't model (an attribute, a styled paragraph in the comment).
+const COMMENTS: Sample = Sample {
+    name: "comments",
+    content: r##"<office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" wcx:weight="kept"/></style:style></office:automatic-styles><office:body><office:text><text:p>Before <office:annotation office:name="Remark" loext:resolved="false" wcx:mark="kept"><dc:creator>Ada Lovelace</dc:creator><dc:date>2026-10-31T10:00:00</dc:date><meta:creator-initials>AL</meta:creator-initials><text:p>A <text:span text:style-name="T1">firm</text:span> remark.</text:p></office:annotation><office:annotation loext:parent-name="Remark" loext:resolved="true"><dc:creator>Alan Turing</dc:creator><dc:date>2026-10-31T11:00:00</dc:date><text:p>Agreed.</text:p></office:annotation>the words remarked on<office:annotation-end office:name="Remark"/> and a point<office:annotation><dc:creator>Grace Hopper</dc:creator><dc:date>2026-10-31T12:00:00</dc:date><text:p>Here.</text:p></office:annotation> after.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
+/// Tracked changes: an insertion, a deletion (of text inserted before it, in part), a format
+/// change, a change's own remark (`office:change-info` paragraphs), and what WordCraft doesn't
+/// model on them.
+const CHANGES: Sample = Sample {
+    name: "changes",
+    content: r##"<office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-style="italic"/></style:style></office:automatic-styles><office:body><office:text><text:tracked-changes text:track-changes="true"><text:changed-region xml:id="ct10" text:id="ct10" wcx:region="kept"><text:insertion><office:change-info><dc:creator>Ada Lovelace</dc:creator><dc:date>2026-10-30T09:00:00</dc:date><text:p>Added for clarity.</text:p></office:change-info></text:insertion></text:changed-region><text:changed-region xml:id="ct11" text:id="ct11"><text:insertion><office:change-info><dc:creator>Ada Lovelace</dc:creator><dc:date>2026-10-30T09:05:00</dc:date></office:change-info></text:insertion></text:changed-region><text:changed-region xml:id="ct12" text:id="ct12"><text:deletion><office:change-info><dc:creator>Alan Turing</dc:creator><dc:date>2026-10-30T10:00:00</dc:date></office:change-info><text:p>gone <text:change-start text:change-id="ct11"/>and new<text:change-end text:change-id="ct11"/></text:p></text:deletion></text:changed-region><text:changed-region xml:id="ct13" text:id="ct13"><text:format-change><office:change-info><dc:creator>Grace Hopper</dc:creator><dc:date>2026-10-30T11:00:00</dc:date></office:change-info></text:format-change></text:changed-region></text:tracked-changes><text:p>Some <text:change-start text:change-id="ct10"/>inserted <text:change-end text:change-id="ct10"/>words.</text:p><text:p>Some <text:change text:change-id="ct12"/>removed words.</text:p><text:p>A <text:change-start text:change-id="ct13"/><text:span text:style-name="T1">restyled</text:span><text:change-end text:change-id="ct13"/> word.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 10] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS];
+const SAMPLES: [Sample; 12] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -380,4 +399,90 @@ fn a_picture_kept_as_read_is_written_with_its_paragraph_only() {
     let (names, dot) = files(&saved);
     assert!(dot.is_none(), "{names:?}");
     assert!(!content_of(&saved).contains("dot.png"));
+}
+
+#[test]
+fn a_paragraph_with_comments_is_written_as_read_while_they_are() {
+    let d = import(&package(&COMMENTS)).unwrap();
+    let as_read = |d: &wordcraft_doc::Document| content_of(&export(d).unwrap()).contains(r#"wcx:mark="kept""#);
+    assert!(as_read(&d));
+    // A comment's text edited, resolved, deleted with its reply, or answered: written from the
+    // model, which has what changed.
+    let first = |d: &wordcraft_doc::Document| d.comments.iter().find(|(_, c)| c.author == "Ada Lovelace").map(|(id, c)| (*id, c.clone())).unwrap();
+    let mut e = d.clone();
+    let (_, c) = first(&e);
+    if let Some(wordcraft_doc::Block::Para(p)) = e.parts.get_mut(&c.part).and_then(|p| p.blocks.first_mut()).map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
+    assert!(!as_read(&e));
+    let mut e = d.clone();
+    let (id, _) = first(&e);
+    if let Some(c) = e.comments.get_mut(&id) {
+        c.resolved = true;
+    }
+    assert!(!as_read(&e));
+    assert!(content_of(&export(&e).unwrap()).contains(r#"loext:resolved="true""#));
+    let mut e = d.clone();
+    let (id, c) = first(&e);
+    let blocks = e.parts.get(&c.part).unwrap().blocks.clone();
+    let part = e.try_add_part(wordcraft_doc::PartKind::Comment, blocks).unwrap();
+    e.comments.insert(999, wordcraft_doc::Comment { author: "New".into(), parent: Some(id), part, ..Default::default() });
+    let c = content_of(&export(&e).unwrap());
+    assert!(!c.contains(r#"wcx:mark="kept""#) && c.contains("<dc:creator>New</dc:creator>"), "{c}");
+    // Every save stays well-formed and reads back with its comments.
+    assert_eq!(import(&export(&e).unwrap()).unwrap().comments.len(), 4);
+}
+
+#[test]
+fn a_comment_answered_in_another_paragraph_is_written_from_the_model() {
+    // Its reply elsewhere in the file: the paragraph holding it isn't kept (WordCraft writes a
+    // reply with what it answers), and the reply still names it.
+    let content = COMMENTS.content.replace(
+        r#"<office:annotation loext:parent-name="Remark" loext:resolved="true"><dc:creator>Alan Turing</dc:creator><dc:date>2026-10-31T11:00:00</dc:date><text:p>Agreed.</text:p></office:annotation>"#,
+        "",
+    ).replace(
+        "</text:p></office:text>",
+        r#"</text:p><text:p>Later <office:annotation loext:parent-name="Remark"><dc:creator>Alan Turing</dc:creator><text:p>Agreed.</text:p></office:annotation>on.</text:p></office:text>"#,
+    );
+    let leaked: &'static str = Box::leak(content.into_boxed_str());
+    let d = import(&package(&Sample { name: "elsewhere", content: leaked, styles: "", meta: "" })).unwrap();
+    let saved = export(&d).unwrap();
+    let c = content_of(&saved);
+    assert!(!c.contains(r#"wcx:mark="kept""#), "{c}");
+    let again = import(&saved).unwrap();
+    assert_eq!(again.comments.len(), 3);
+    assert!(again.comments.values().any(|c| c.author == "Alan Turing" && c.parent.is_some()));
+}
+
+#[test]
+fn a_change_accepted_is_written_from_the_model_the_others_as_read() {
+    // The insertion accepted: its paragraph is written from the model and its region isn't
+    // written; the other paragraphs keep theirs as read, and ids don't meet.
+    let d = import(&package(&CHANGES)).unwrap();
+    let mut e = d.clone();
+    let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("Some inserted"))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+        for r in &mut p.runs {
+            r.props.ins = None;
+        }
+        p.normalize();
+        p.touch();
+    }
+    let saved = export(&e).unwrap();
+    assert!(parts_well_formed(&saved).is_ok());
+    let c = content_of(&saved);
+    assert!(!c.contains(r#"wcx:region="kept""#), "{c}");
+    assert!(c.contains(r#"text:id="ct12""#) && c.contains(r#"text:id="ct11""#) && c.contains(r#"text:id="ct13""#), "{c}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.revisions.len(), d.revisions.len() - 1, "{:?}", back.revisions);
+    // A change made in WordCraft next to the file's: its own id.
+    let mut e = d.clone();
+    e.settings.track_changes = true;
+    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
+    let c = content_of(&export(&e).unwrap());
+    assert!(c.contains(r#"text:id="wcct1""#) && c.contains(r#"text:id="ct13""#), "{c}");
 }

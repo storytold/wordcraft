@@ -622,7 +622,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     // for one starting a page: the break may be its element's or the one before's (a break after
     // it), and only the model says which is written where.
     if opts.paras && done.is_empty() && p.props.page_break_before != Some(true) {
-        out.kept = doc.kept.of("odt").and_then(|k| k.para(p)).cloned();
+        // With its comments, while they're as read.
+        out.kept =
+            doc.kept.of("odt").and_then(|k| k.para(p).filter(|xml| !xml.contains("<office:annotation") || k.comments_as_read(doc, p, xml))).cloned();
     }
     // The sections kept as read that it opens or closes.
     if opts.paras {

@@ -48,6 +48,9 @@ pub struct KeptXml {
     pub indexes: HashMap<u64, (usize, u64, Arc<str>)>,
     /// While reading: by the first paragraph's `rev`, how many paragraphs, and the markup.
     pub pending_indexes: HashMap<u64, (usize, Arc<str>)>,
+    /// Each top-level comment's [`comments_fingerprint`] when read (it and its replies): a
+    /// paragraph holding comments is written as read only while they are as read.
+    pub comment_fps: HashMap<u32, u64>,
     /// Named definitions the kept markup refers to (styles, font faces…), by a key the format
     /// chooses (`"auto:P12"`, `"style:Heading_20_1"`), as read.
     pub defs: BTreeMap<String, Arc<str>>,
@@ -125,6 +128,23 @@ impl KeptXml {
             return None;
         }
         self.tables.get(&table_fingerprint(t))
+    }
+    /// Whether the comments paragraph `p` holds (those it begins, with their replies) are as
+    /// read and are all the comments its kept markup `xml` holds: a reply written elsewhere
+    /// in the file, or one added since, isn't in it.
+    pub fn comments_as_read(&self, doc: &crate::Document, p: &Paragraph, xml: &str) -> bool {
+        let in_markup = xml.matches("<office:annotation ").count() + xml.matches("<office:annotation>").count();
+        let mut count = 0usize;
+        for o in &p.objects {
+            if let crate::para::InlineObject::CommentStart { id } = o {
+                let (fp, n) = comments_fingerprint(doc, *id);
+                if self.comment_fps.get(id) != Some(&fp) {
+                    return false;
+                }
+                count = count.saturating_add(n);
+            }
+        }
+        count == in_markup
     }
     /// The wrappers kept around table `t`, while it still is what was read.
     pub fn table_wrap(&self, t: &crate::Table) -> Option<&(Vec<Arc<str>>, u32)> {
@@ -218,6 +238,52 @@ pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
         Err(_) => u64::MAX.hash(&mut h),
     }
     h.finish()
+}
+
+/// Most replies a comment's fingerprint follows (hostile input).
+const MAX_REPLIES: usize = 10_000;
+
+/// What comment `root` is with its replies (and theirs): each one's author, date, state and
+/// text, and how many they are.
+pub fn comments_fingerprint(doc: &crate::Document, root: u32) -> (u64, usize) {
+    family_fingerprint(doc, root, &replies(doc))
+}
+
+/// Each comment's replies, by the comment's id.
+fn replies(doc: &crate::Document) -> HashMap<u32, Vec<u32>> {
+    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (id, c) in &doc.comments {
+        if let Some(p) = c.parent {
+            out.entry(p).or_default().push(*id);
+        }
+    }
+    out
+}
+
+/// [`comments_fingerprint`], with each comment's `replies`.
+fn family_fingerprint(doc: &crate::Document, root: u32, replies: &HashMap<u32, Vec<u32>>) -> (u64, usize) {
+    let mut ids = vec![root];
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut i = 0;
+    while let Some(&id) = ids.get(i) {
+        for r in replies.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
+            // (A reply naming itself, or a circle of them, is followed once.)
+            if ids.len() < MAX_REPLIES && seen.insert(*r) {
+                ids.push(*r);
+            }
+        }
+        i += 1;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for id in &ids {
+        let c = doc.comments.get(id);
+        let text = c.and_then(|c| doc.parts.get(&c.part)).map(|p| &p.blocks);
+        match serde_json::to_vec(&(c, text)) {
+            Ok(v) => v.hash(&mut h),
+            Err(_) => u64::MAX.hash(&mut h),
+        }
+    }
+    (h.finish(), ids.len())
 }
 
 /// What `doc`'s page setup is: each section's setup (where it starts, its size, margins,
@@ -329,6 +395,15 @@ impl crate::Document {
                         k.table_wraps.insert(*fp, w);
                     }
                 }
+            }
+        }
+        // The comments as read, for paragraphs holding them.
+        if self.kept.get().is_some_and(|k| !k.pending.is_empty()) && !self.comments.is_empty() {
+            let replies = replies(self);
+            let fps: HashMap<u32, u64> =
+                self.comments.iter().filter(|(_, c)| c.parent.is_none()).map(|(id, _)| (*id, family_fingerprint(self, *id, &replies).0)).collect();
+            if let Some(k) = self.kept.get_mut() {
+                k.comment_fps = fps;
             }
         }
         if self.kept.get().is_none_or(|k| k.pending.is_empty() && k.pending_wraps.is_empty()) {

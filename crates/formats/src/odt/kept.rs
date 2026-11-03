@@ -56,6 +56,10 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 (3, "office:master-styles") => child_key("master", &q, &a),
                 (4, "office:text") if content && q.starts_with("text:") && q.ends_with("-decls") => Some(format!("decls:{q}")),
                 (4, "office:text") if content && q == "office:forms" => Some("forms".to_string()),
+                // A tracked change (§5.5.2), by its id: a paragraph written as read names it.
+                (5, "text:tracked-changes") if content && q == "text:changed-region" => {
+                    get(&a, "text:id").or_else(|| get(&a, "xml:id")).filter(|i| !i.is_empty() && i.len() <= 256).map(|i| format!("change:{i}"))
+                }
                 _ => None,
             };
             if let Some(key) = key {
@@ -70,7 +74,14 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 if let Some((key, ..)) = open.take()
                     && let Some(s) = xml.get(from..at.1).and_then(|b| std::str::from_utf8(b).ok())
                 {
-                    let s = if before_1_3 { to_1_3(s) } else { s.to_string() };
+                    let mut s = if before_1_3 { to_1_3(s) } else { s.to_string() };
+                    // ODF 1.3 names a changed region by `xml:id` (§5.5.2); an older file's by
+                    // `text:id` alone.
+                    if let Some(id) = key.strip_prefix("change:")
+                        && s.split('>').next().is_some_and(|h| !h.contains("xml:id="))
+                    {
+                        s.insert_str("<text:changed-region".len(), &format!(" xml:id=\"{}\"", super::writer::x(id)));
+                    }
                     out.push((key, Arc::from(s)));
                 }
             }
@@ -581,6 +592,22 @@ pub(super) fn merge_decls(orig: Option<&str>, ours: String) -> String {
             format!("{}>{extra}</{el}>", orig.trim_end().trim_end_matches("/>"))
         }
     }
+}
+
+/// The tracked changes (§5.5.7 `text:change-id`) `xml` marks, by id.
+pub(super) fn changes(xml: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if xml.contains("text:change-id") {
+        super::xml::events(xml.as_bytes(), |ev| {
+            if let Ev::Start(_, a) = ev
+                && let Some(id) = get(&a, "text:change-id").filter(|i| !i.is_empty() && i.len() <= 256)
+                && out.len() < MAX_DEFS
+            {
+                out.insert(id.to_string());
+            }
+        });
+    }
+    out
 }
 
 /// The sequences (§7.4.13 `text:sequence`) `xml` counts, which the document declares.
