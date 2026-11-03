@@ -86,7 +86,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     };
     heading(ui, "Location");
     let mut convert = None;
-    egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("notes_location").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.radio_value(&mut f.endnote, false, tl!("Footnotes"));
         ui.add_enabled_ui(!f.endnote, |ui| {
             choice(ui, "notes_fpos", &mut f.pos[0], &[("pageBottom", "Bottom of Page"), ("beneathText", "Below text")], true);
@@ -99,12 +99,15 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
         ui.end_row();
         ui.label("");
         ui.menu_button(format!("{}…", tl!("Convert")), |ui| {
-            for (to, l) in [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")] {
-                if ui.button(tl!(l)).clicked() {
-                    convert = Some(to);
-                    ui.close();
+            crate::rtl::root(ui, |ui| {
+                for (to, l) in [("endnote", "Footnotes to endnotes"), ("footnote", "Endnotes to footnotes"), ("swap", "Swap footnotes and endnotes")]
+                {
+                    if ui.button(tl!(l)).clicked() {
+                        convert = Some(to);
+                        ui.close();
+                    }
                 }
-            }
+            })
         });
         ui.end_row();
     });
@@ -115,7 +118,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     }
     heading(ui, "Format");
     let k = usize::from(f.endnote);
-    egui::Grid::new("notes_format").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("notes_format").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
         ui.label(tl!("Number format"));
         if let Some(v) = f.fmt.get_mut(k) {
             choice(ui, "notes_fmt", v, &FORMATS, false);
@@ -147,7 +150,7 @@ pub fn note_options(app: &mut WordApp, ui: &mut Ui, f: &mut NoteForm) -> bool {
     let (mut insert, mut apply, mut cancel) = (false, false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let label = if f.endnote { "Insert Endnote" } else { "Insert Footnote" };
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if cfg!(target_os = "macos") {
