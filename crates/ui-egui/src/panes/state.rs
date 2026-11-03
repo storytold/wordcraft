@@ -114,17 +114,22 @@ pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
 
 /// A pane's place and size: Styles' from `view.stylesPaneDock` and its own preferences, the
 /// others' from `panePlaces`.
+///
+/// `left` / `right` in the docking API and in saved prefs are **physical** window sides (and the
+/// Dock Left / Dock Right menus mean the same). Only an unset default place is mirrored in a
+/// right-to-left interface, so a pane that has never been docked still opens on the reading-start
+/// side.
 pub(super) fn pane_state(app: &WordApp, pane: Pane) -> PaneState {
-    let mut state = unmirrored_state(app, pane);
-    state.place = mirrored(state.place);
+    let (mut state, explicit) = stored_state(app, pane);
+    if !explicit {
+        state.place = mirror_default(state.place);
+    }
     state
 }
 
-/// A place seen from the interface's reading direction: in a right-to-left language the pane
-/// host's start edge is the window's right side, so a pane saved as docked "left" (the side
-/// reading starts from) is drawn at the right, and the reverse. Applying it twice gives the
-/// place back, so it also turns a requested place into the saved one.
-pub(super) fn mirrored(place: Place) -> Place {
+/// Flip a default dock edge in a right-to-left interface so Start (reading start in LTR) opens on
+/// the physical right. Explicit and saved left/right are never flipped — see [`pane_state`].
+pub(super) fn mirror_default(place: Place) -> Place {
     match place {
         Place::Docked(Edge::Start) if crate::rtl::on() => Place::Docked(Edge::End),
         Place::Docked(Edge::End) if crate::rtl::on() => Place::Docked(Edge::Start),
@@ -132,19 +137,28 @@ pub(super) fn mirrored(place: Place) -> Place {
     }
 }
 
-fn unmirrored_state(app: &WordApp, pane: Pane) -> PaneState {
+/// Physical place from prefs, and whether that place was explicitly saved (`true`) or is still the
+/// pane's default (`false`).
+fn stored_state(app: &WordApp, pane: Pane) -> (PaneState, bool) {
     if pane == Pane::Styles {
-        return styles_state(app);
+        return (styles_state(app), true);
     }
     let default = pane.default_state();
-    let Some(saved) = app.ui.pane_places.get(pane.key()) else { return default };
-    let place = match saved.dock {
-        Some(SavedDock::Left) => Place::Docked(Edge::Start),
-        Some(SavedDock::Right) => Place::Docked(Edge::End),
-        Some(SavedDock::Float) => Place::Floating,
-        None => default.place,
+    let Some(saved) = app.ui.pane_places.get(pane.key()) else {
+        return (default, false);
     };
-    PaneState { place, size: saved.width.or(default.size), float_rect: saved.float }
+    match saved.dock {
+        Some(SavedDock::Left) => (
+            PaneState { place: Place::Docked(Edge::Start), size: saved.width.or(default.size), float_rect: saved.float },
+            true,
+        ),
+        Some(SavedDock::Right) => (
+            PaneState { place: Place::Docked(Edge::End), size: saved.width.or(default.size), float_rect: saved.float },
+            true,
+        ),
+        Some(SavedDock::Float) => (PaneState { place: Place::Floating, size: saved.width.or(default.size), float_rect: saved.float }, true),
+        None => (PaneState { place: default.place, size: saved.width.or(default.size), float_rect: saved.float }, false),
+    }
 }
 
 /// The Styles pane's place and size, from `view.stylesPaneDock` and the UI preferences (#1756).

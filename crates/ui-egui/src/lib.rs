@@ -539,6 +539,10 @@ pub struct WordApp {
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
+    /// Arabic text is (about to be) on screen in a non-Arabic interface, e.g. "العربية" in the
+    /// language picker or Language packs list: load an installed Arabic font when no embedded face
+    /// covers it (dev builds without craft-fonts).
+    pub(crate) want_system_arabic: bool,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,

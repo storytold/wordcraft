@@ -73,6 +73,13 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
+**Task pane docking.** `ui.paneDock` and `view.stylesPaneDock` use **physical** `left` / `right`
+(the window's left and right edges), matching Dock Left / Dock Right in the pane menu. That stays
+true in a right-to-left interface language: `{"dock":"left"}` always puts the pane on the physical
+left and the command reports `"left"`. Only a pane that has never been docked opens on the
+reading-start side by default (the physical right in Arabic). Saved docks and explicit requests
+are never flipped.
+
 Language packs (see [MCP](mcp.md#language-packs)) are commands like any other: `proof.packs`,
 `proof.installPack {"locale": "nl"}` and `proof.removePack {"locale": "nl"}`. Through the control
 channel they act on the running app's packs, and install only while its downloading setting is on;

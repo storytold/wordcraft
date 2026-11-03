@@ -31,6 +31,8 @@ pub(crate) use comments::{CommentDrafts, comment_editor, commit_comment, commit_
 use host::Content;
 pub use host::show;
 pub(crate) use host::{dock_command, overlay_open};
+#[cfg(test)]
+pub(crate) use host::apply;
 pub(crate) use inspector::describe_props;
 use inspector::inspector;
 use nav::nav;
