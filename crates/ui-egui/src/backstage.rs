@@ -599,6 +599,8 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
+        // Only one row shows its path as a tooltip, so every row gives a screen reader the path itself.
+        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(crate::i18n::isolate_path(p)));
         if resp.has_focus() {
             focused = Some((resp.clone(), p));
         }

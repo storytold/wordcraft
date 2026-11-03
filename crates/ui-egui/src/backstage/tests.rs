@@ -195,6 +195,23 @@ fn recent_focus_tooltip_does_not_block_the_row_below() {
     assert!(error.contains("two.docx"), "the click must reach two.docx and try to open it, got error '{error}'");
 }
 
+/// #5212: every Recent row gives a screen reader its full path, not only the hovered or
+/// focused row that shows the path as a tooltip.
+#[test]
+fn recent_rows_describe_their_full_path_without_hover_or_focus() {
+    use egui_kittest::kittest::NodeT;
+    let dir = std::env::temp_dir().join("wordcraft-5212-describe");
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    let one = h.get_by_label("one.docx").rect();
+    h.event(egui::Event::PointerMoved(one.center()));
+    h.run_steps(4);
+    for (name, path) in ["one.docx", "two.docx"].iter().zip(&paths) {
+        let described = h.get_by_label(name).accesskit_node().description();
+        assert_eq!(described.as_deref(), Some(crate::i18n::isolate_path(path).as_str()), "{name} must describe its full path");
+    }
+}
+
 /// #5212: with the pointer resting on one Recent row, Tab to the next row shows the focused
 /// row's path, and moving the pointer again brings back the hovered row's path.
 #[test]
