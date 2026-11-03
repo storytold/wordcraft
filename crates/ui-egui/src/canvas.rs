@@ -168,6 +168,13 @@ pub struct CanvasState {
     pub context_menu_from_keys: bool,
     /// Where the context menu stands: the right-click point, or below the caret.
     pub context_menu_at: Option<Pos2>,
+    /// The context menu's popup id: a mirrored interface moves it with the page ([`crate::mirror`]).
+    pub(crate) context_menu_id: Option<egui::Id>,
+    /// The canvas with its rulers this frame, when the document is on screen.
+    pub(crate) view_rect: Option<Rect>,
+    /// Whether this frame's balloons are floating comments, painted in a layer over the page
+    /// (a mirrored interface flips them with it), rather than in the margin, with the page.
+    pub(crate) balloons_float: bool,
     /// The frame drawn around the equation being edited, on screen (its options strip opens the
     /// equation's menu).
     pub eq_options: Option<EquationFrame>,
@@ -385,6 +392,9 @@ impl Default for CanvasState {
             context_menu_open: false,
             context_menu_from_keys: false,
             context_menu_at: None,
+            context_menu_id: None,
+            view_rect: None,
+            balloons_float: false,
             eq_options: None,
             mini_anchor: None,
             mini_dismissed: None,
@@ -1229,6 +1239,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     }
     // The standalone selection toolbar stands down while the context popup owns the pointer.
     app.canvas.context_menu_open = shown;
+    app.canvas.context_menu_id = Some(egui::Popup::default_response_id(&resp));
     if let Some(c) = crate::ink::cursor(app).filter(|_| resp.hovered() || app.canvas.ink.is_some()) {
         ui.ctx().set_cursor_icon(c);
     } else if resp.hovered() || app.canvas.obj_drag.is_some() {
@@ -1312,6 +1323,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
+    app.canvas.view_rect = Some(full);
     let layout = prepare_layout(app, ui, full);
     let view = prepare_view(app, ui, full, &layout);
     let scroll_target = update_caret_scroll(app, &view);
@@ -1538,7 +1550,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     &app.canvas.ime_preedit,
                     &app.canvas.ime_faces,
                     |c| (c as u32) < 0x250,
-                    |c| wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX),
+                    crate::theme::interface_fallback,
                 );
                 if !new.is_empty() {
                     app.canvas.ime_faces.extend(new);

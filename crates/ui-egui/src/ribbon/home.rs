@@ -263,14 +263,17 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
-                use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::new("para.alignLeft", json!({}), align == A::Left));
-                small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
-                small(ui, app, "alignRight", None, "Align Right", crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right));
-                small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
+                crate::widgets::align_buttons(ui, app, align);
                 ui.add_space(4.0);
-                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", crate::widgets::ButtonAction::new("para.ltr", json!({}), !rtl));
-                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", crate::widgets::ButtonAction::new("para.rtl", json!({}), rtl));
+                // A mirrored interface puts right-to-left first, at the right (see `align_buttons`).
+                let mut directions =
+                    [("textLtr", "Left-to-Right Text Direction", "para.ltr", !rtl), ("textRtl", "Right-to-Left Text Direction", "para.rtl", rtl)];
+                if crate::widgets::mirrored() {
+                    directions.reverse();
+                }
+                for (icon, tip, id, on) in directions {
+                    small(ui, app, icon, None, tip, crate::widgets::ButtonAction::new(id, json!({}), on));
+                }
                 ui.add_space(4.0);
                 menu_button(
                     ui,

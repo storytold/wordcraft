@@ -55,6 +55,7 @@ pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
 pub mod mini_toolbar;
+pub mod mirror;
 pub mod objects;
 pub mod options;
 pub mod panes;
@@ -538,6 +539,11 @@ pub struct WordApp {
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,
+    /// The interface language whose catalog [`WordApp::ensure_language_fonts`] last checked.
+    fonts_lang: Option<&'static str>,
+    /// The language names (File ▸ Options) are on screen, in their own scripts.
+    pub(crate) want_language_name_fonts: bool,
+    fonts_language_names: bool,
     /// The Recover list's document names [`WordApp::ensure_recover_fonts`] last looked at.
     recover_fonts_for: Option<u64>,
     /// The list of recent document paths [`WordApp::ensure_recent_fonts`] last looked at.

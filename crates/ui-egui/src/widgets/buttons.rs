@@ -282,3 +282,27 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
         menu(ui, app);
     });
 }
+
+/// The interface is mirrored for a right-to-left language ([`crate::mirror`]).
+pub fn mirrored() -> bool {
+    crate::i18n::current().rtl()
+}
+
+/// Align Left, Center, Align Right and Justify. Their icons keep their direction in a mirrored
+/// interface, so there Align Right comes first (rightmost) and Align Left third, as right-to-left
+/// Word orders them: each button still does what its icon shows.
+pub fn align_buttons(ui: &mut Ui, app: &mut WordApp, align: wordcraft_doc::Align) {
+    use wordcraft_doc::Align as A;
+    let mut buttons = [
+        ("alignLeft", "Align Left", "para.alignLeft", A::Left),
+        ("alignCenter", "Center", "para.alignCenter", A::Center),
+        ("alignRight", "Align Right", "para.alignRight", A::Right),
+        ("justify", "Justify", "para.justify", A::Justify),
+    ];
+    if mirrored() {
+        buttons.swap(0, 2);
+    }
+    for (icon, tip, id, a) in buttons {
+        small(ui, app, icon, None, tip, ButtonAction::new(id, serde_json::json!({}), align == a));
+    }
+}
