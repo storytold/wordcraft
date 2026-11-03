@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::{CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, fmt_revisions, json, p, pos_json, sel_result};
 
 /// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
@@ -96,8 +98,8 @@ fn resolve_cell(
             fmt_revisions::resolve_cell(cell, accept);
         }
         // Rejecting a deletion or accepting an insertion keeps the row. Accepting a deletion or
-        // rejecting an insertion removes it below, on its first cell's turn: a range resolves its
-        // cells last to first, so the row's other cells are done by then.
+        // rejecting an insertion removes it: here at the caret, and for a range in `resolve_sel`,
+        // once every paragraph of the row is resolved.
         if resolve_row_marks {
             if accept {
                 row.props.ins = None;
@@ -106,34 +108,48 @@ fn resolve_cell(
             }
         }
     }
-    let goes = |x: &wordcraft_doc::Row| if accept { x.props.del.is_some() } else { x.props.ins.is_some() };
-    let delete_row = resolve_row_marks && (c == 0 || caret_in_row) && t.rows.get(r).is_some_and(goes);
-    let delete_table = delete_row && t.rows.len() == 1;
-    if delete_table {
-        s.doc.remove_block(story, &tp)?;
-        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp, off: 0 }));
-        return Ok(true);
-    }
-    if delete_row {
-        t.delete_row(r);
+    if resolve_row_marks && caret_in_row {
+        remove_resolved_row(s, story, &tp, r, accept)?;
     }
     Ok(true)
 }
 
-/// Whether a selection covers every paragraph in a row, including both cell boundaries.
-fn range_covers_row(s: &Session, story: StoryRef, path: &wordcraft_doc::Path, a: &Pos, b: &Pos) -> bool {
-    let Some((table, row, _)) = path.cell() else { return false };
-    let mut first = None;
-    let mut last = None;
-    for p in s.doc.para_paths(story) {
-        if p.cell().is_some_and(|(t, r, _)| t == table && r == row) {
-            first.get_or_insert_with(|| p.clone());
-            last = Some(p);
+/// Removes row `r` of the table at `tp` if resolving its tracked mark takes it away (an accepted
+/// deletion or a rejected insertion); the table goes with its last row.
+fn remove_resolved_row(s: &mut Session, story: StoryRef, tp: &wordcraft_doc::Path, r: usize, accept: bool) -> Result<(), CmdError> {
+    let goes = |x: &wordcraft_doc::Row| if accept { x.props.del.is_some() } else { x.props.ins.is_some() };
+    let Some(t) = s.doc.table(story, tp) else { return Ok(()) };
+    if !t.rows.get(r).is_some_and(goes) {
+        return Ok(());
+    }
+    if t.rows.len() == 1 {
+        s.doc.remove_block(story, tp)?;
+        s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: tp.clone(), off: 0 }));
+    } else {
+        s.doc.table_mut(story, tp)?.delete_row(r);
+    }
+    Ok(())
+}
+
+/// The rows (table path, row) whose every paragraph, nested tables' included, lies in `a..b` with
+/// both cell boundaries, each with its first paragraph. One pass over the story finds them.
+fn covered_rows(s: &Session, a: &Pos, b: &Pos) -> BTreeMap<(wordcraft_doc::Path, usize), wordcraft_doc::Path> {
+    let mut bounds: BTreeMap<(wordcraft_doc::Path, usize), (wordcraft_doc::Path, wordcraft_doc::Path)> = BTreeMap::new();
+    for p in s.doc.para_paths(a.story) {
+        let mut at = p.clone();
+        while let Some((table, row, _)) = at.cell() {
+            bounds.entry((table.clone(), row)).and_modify(|x| x.1 = p.clone()).or_insert_with(|| (p.clone(), p.clone()));
+            at = table;
         }
     }
-    let (Some(first), Some(last)) = (first, last) else { return false };
-    let end = s.doc.para(story, &last).map(|p| p.len()).unwrap_or(0);
-    (&a.path, a.off) <= (&first, 0) && (&b.path, b.off) >= (&last, end)
+    bounds
+        .into_iter()
+        .filter(|(_, (first, last))| {
+            let end = s.doc.para(a.story, last).map(|p| p.len()).unwrap_or(0);
+            (&a.path, a.off) <= (first, 0) && (&b.path, b.off) >= (last, end)
+        })
+        .map(|(row, (first, _))| (row, first))
+        .collect()
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
@@ -337,16 +353,13 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = crate::cmd::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    let mut row_coverage = Vec::new();
-    if ranged {
-        for path in s.doc.paths_between(&a, &b) {
-            let Some((table, row, _)) = path.cell() else { continue };
-            if row_coverage.iter().any(|(seen_table, seen_row, _)| *seen_table == table && *seen_row == row) {
-                continue;
-            }
-            let covered = range_covers_row(s, a.story, &path, &a, &b);
-            row_coverage.push((table, row, covered));
-        }
+    // Rows the range covers whole: their tracked insertion or deletion is resolved too. A row that
+    // goes is removed once its first paragraph is done: the range resolves last to first, so the
+    // rest of the row is done by then, and what is left to do comes before it and doesn't move.
+    let covered = if ranged { covered_rows(s, &a, &b) } else { BTreeMap::new() };
+    let mut remove_at: BTreeMap<&wordcraft_doc::Path, Vec<&(wordcraft_doc::Path, usize)>> = BTreeMap::new();
+    for (row, first) in covered.iter().rev() {
+        remove_at.entry(first).or_default().push(row);
     }
     for path in s.doc.paths_between(&a, &b).into_iter().rev() {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
@@ -357,10 +370,12 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
         if ranged {
-            let resolve_row_marks = path.cell().is_some_and(|(table, row, _)| {
-                row_coverage.iter().any(|(covered_table, covered_row, covered)| *covered && *covered_table == table && *covered_row == row)
-            });
+            let resolve_row_marks = path.cell().is_some_and(|(table, row, _)| covered.contains_key(&(table, row)));
             resolve_cell(s, a.story, &path, accept, resolve_row_marks, false)?;
+            // Inner rows first: an outer row starting with a nested table shares its first paragraph.
+            for (table, row) in remove_at.get(&path).into_iter().flatten() {
+                remove_resolved_row(s, a.story, table, *row, accept)?;
+            }
         }
     }
     crate::cmd::moves::resolve(s, &moves, accept)?;
