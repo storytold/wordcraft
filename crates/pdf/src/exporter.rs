@@ -201,22 +201,37 @@ impl Exporter<'_> {
         };
         // What the items share (the authors' colours, the clipped cells) is worked out once per page.
         let shown = ItemDisplay::new(self.doc, page);
+        // The turned text boxes an item is inside (see `Placed::Spun`): it is drawn turned with them.
+        let mut turns: Vec<Placed> = Vec::new();
         for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = shown.draws(it, &dopts);
+            if within(&mut turns, it) {
+                continue;
+            }
+            let draws = shown.draws_in(&turns, it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                 for d in &draws {
                     me.draw(s, d);
                 }
             });
         }
+        turns.clear();
         for it in &page.items {
-            let draws = shown.draws(it, &dopts);
+            if within(&mut turns, it) {
+                continue;
+            }
+            let draws = shown.draws_in(&turns, it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
                         match d {
                             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // A turned text box's text.
+                            Draw::Rotated { items, .. }
+                                if !turns.is_empty() && items.iter().any(|i| matches!(i, Draw::Glyphs { .. } | Draw::Turned { .. })) =>
+                            {
+                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
+                            }
                             // A picture marked decorative: an artifact screen readers skip.
                             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
@@ -379,4 +394,17 @@ impl Exporter<'_> {
         s.set_fill(None);
         s.pop();
     }
+}
+
+/// Keep `turns`, the turned text boxes the walk is in, up to date with item `it`; true when `it`
+/// is one of their ends (drawn nothing itself).
+fn within(turns: &mut Vec<Placed>, it: &Placed) -> bool {
+    match it {
+        Placed::Spun { open: true, .. } => turns.push(it.clone()),
+        Placed::Spun { open: false, .. } => {
+            turns.pop();
+        }
+        _ => return false,
+    }
+    true
 }

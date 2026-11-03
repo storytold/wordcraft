@@ -1096,6 +1096,14 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                         b.push(it);
                     }
                 }
+                // A turned text box's scope: its lines may be split between the fragments, so each
+                // keeps the (then possibly empty) scope, which draws nothing.
+                Placed::Spun { .. } => {
+                    a.push(it.clone());
+                    let mut it = it.clone();
+                    it.translate(0.0, -shift);
+                    b.push(it);
+                }
                 // Shading and cell areas: the part above the cut stays, the rest moves up with the
                 // continuation (a nested table's cell below the cut moves whole).
                 Placed::Fill { rect, color } => {

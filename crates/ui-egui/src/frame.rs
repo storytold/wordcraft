@@ -19,7 +19,7 @@ const EDGE_HANDLES_FROM: f32 = 40.0;
 /// How far the rotation handle sits above the frame's top edge (screen points), and the step
 /// Shift snaps the angle to (degrees).
 const ROTATE_GAP: f32 = 22.0;
-const SNAP_DEG: f32 = 15.0;
+pub(crate) const SNAP_DEG: f32 = 15.0;
 
 /// Screen point `p` turned `deg` degrees clockwise about `c`.
 fn turn(p: Pos2, c: Pos2, deg: f32) -> Pos2 {
@@ -68,7 +68,7 @@ impl Handle {
 }
 
 /// Where the rotation handle of frame `f` turned `deg` is: above the middle of its top edge.
-fn rotate_handle(f: egui::Rect, deg: f32) -> Pos2 {
+pub(crate) fn rotate_handle(f: egui::Rect, deg: f32) -> Pos2 {
     turn(pos2(f.center().x, f.min.y - ROTATE_GAP), f.center(), deg)
 }
 
@@ -160,9 +160,10 @@ pub fn paint_outline(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32) {
 }
 
 /// A frame being turned to `deg`: its outline and the angle beside the rotation handle.
-pub fn paint_turning(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32) {
+/// `shown` is the angle the turn gives (a straightened frame's turn adds to the object's own).
+pub fn paint_turning(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32, shown: f32) {
     paint_outline(painter, t, f, deg);
-    let label = format!("{:.0}°", wordcraft_geom::normalize_degrees(deg.round()));
+    let label = format!("{:.0}°", wordcraft_geom::normalize_degrees(shown.round()));
     painter.text(rotate_handle(f, deg) + vec2(HANDLE_R + 6.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), t.accent);
 }
 
