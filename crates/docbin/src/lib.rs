@@ -52,7 +52,8 @@ const MAX_TOTAL_CHARS: u64 = 64 << 20;
 /// Most paragraph and cell marks across every story walk of one document. The character
 /// budget does not see them: a mark is one byte of the file but about 1 KB of document, so a
 /// file of nothing but marks would grow memory about a thousand times faster than its size.
-/// Past the cap the read fails with [`DocbinError::Limit`]. Real documents stay far below it:
+/// The cap bounds a flood to about 2 GB while reading (about 4 GB at the very cap, when the
+/// blocks are assembled). Past it the read fails with [`DocbinError::Limit`]. Real documents stay far below it:
 /// 50 paragraphs on each of 10,000 pages is 500,000, and a 10,000-page one-column table (46
 /// rows, each a cell mark plus a row mark) is about 920,000.
 const MAX_PARAGRAPHS: usize = 2_000_000;
@@ -581,7 +582,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
                 // Only table marks keep their table context; a plain paragraph would carry
-                // about 300 unused bytes.
+                // a `RowInfo` (about 300 bytes) it never uses.
                 let row = row.is_table().then(|| Box::new(row));
                 let mut ilvl = 0u8;
                 let mut ilfo = 0i32;

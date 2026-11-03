@@ -270,9 +270,10 @@ fn a_flood_of_cell_marks_is_refused() {
     assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
 }
 
-/// The cap is shared by every story of the document, not given to each walk anew.
+/// The budget counts down across spends and notes the overrun (`walk` receives one shared by
+/// every story of the document).
 #[test]
-fn the_paragraph_cap_is_shared_by_all_stories() {
+fn the_paragraph_budget_counts_down_and_notes_the_overrun() {
     let budget = super::ParaBudget { left: std::cell::Cell::new(2), exceeded: std::cell::Cell::new(false) };
     assert!(budget.spend() && budget.spend());
     assert!(!budget.exceeded.get());
