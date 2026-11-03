@@ -1160,6 +1160,8 @@ fn decorative_pictures_are_artifacts_not_figures() {
     let cases = [
         ("inline", Float::default()),
         ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        // Turned with no room kept for it: drawn cut at its line (a clip), still tagged.
+        ("bare turned inline", Float { rot: 45.0, bare_turn: true, ..Default::default() }),
         ("floating", floating.clone()),
         ("rotated floating", Float { rot: 30.0, ..floating }),
     ];
