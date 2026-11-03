@@ -1,7 +1,7 @@
 //! Notes and comments written (ODF 1.3 §6.3, §14.1): their citations, authors, dates, replies and
 //! content, the paragraph being written put aside meanwhile.
 
-use super::{FBlock, Writer, model, x};
+use super::{FBlock, Fmt, Writer, model, x};
 
 /// The `office:name` of comment `id` written by a writer with names prefixed `prefix`.
 pub(in crate::odt) fn annotation_name(prefix: &str, id: u32) -> String {
@@ -47,6 +47,19 @@ impl Writer {
     /// A footnote or endnote (ODF 1.3 §6.3): its citation (the number LibreOffice shows until it
     /// renumbers, or the custom mark) and its content. The paragraph being written is put aside
     /// meanwhile, and an insertion open around the note ends before it and goes on after it.
+    /// A note whose reference has its own look `fmt`: in a span of it (the citation takes the
+    /// text's formatting).
+    pub(in crate::odt) fn styled_note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], fmt: &Fmt, out: &mut String) {
+        match self.text_style(&Fmt { link: None, ins: None, del: None, ..fmt.clone() }) {
+            Some(n) => {
+                out.push_str(&format!("<text:span text:style-name=\"{n}\">"));
+                self.note(endnote, custom, blocks, out);
+                out.push_str("</text:span>");
+            }
+            None => self.note(endnote, custom, blocks, out),
+        }
+    }
+
     pub(in crate::odt) fn note(&mut self, endnote: bool, custom: &str, blocks: &[FBlock], out: &mut String) {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);

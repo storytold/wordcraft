@@ -172,6 +172,19 @@ fn the_default_letter_kerning_round_trips() {
 }
 
 #[test]
+fn kerning_a_span_turns_on_or_off_round_trips() {
+    // ONLYOFFICE turns kerning on span by span, the default style saying nothing; without it
+    // LibreOffice set the text wider and every page broke elsewhere after a save.
+    let d = spans(&[r#"style:letter-kerning="true""#, r#"style:letter-kerning="false""#, r#"fo:font-weight="bold""#]);
+    let kerns = |d: &Document| runs(d).iter().map(|r| r.kern).collect::<Vec<_>>();
+    assert_eq!(kerns(&d), [Some(1.0), Some(0.0), None]);
+    // Written where it differs from the document's default (here off).
+    let on = |d: &Document| runs(d).iter().map(|r| r.kern.or(d.styles.default_chr.kern).is_some_and(|k| k > 0.0)).collect::<Vec<_>>();
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(on(&back), [true, false, false]);
+}
+
+#[test]
 fn asian_and_complex_script_fonts_and_languages() {
     let d = spans(&[
         r#"style:font-name-complex="Noto Sans Hebrew" style:font-size-complex="14pt" style:font-weight-complex="bold" style:language-complex="he" style:country-complex="IL""#,

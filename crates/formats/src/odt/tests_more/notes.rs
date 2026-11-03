@@ -71,6 +71,19 @@ fn notes_round_trip() {
 }
 
 #[test]
+fn a_note_starting_with_a_tab_keeps_it() {
+    // ONLYOFFICE's notes start with a tab after the number: written back with it, and only the
+    // space WordCraft puts after the mark is left out.
+    let xml = r#"<text:p>A<text:note text:id="n1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p><text:span/><text:tab/>Lorem</text:p></text:note-body></text:note> and<text:note text:id="n2" text:note-class="footnote"><text:note-citation>2</text:note-citation><text:note-body><text:p>Plain</text:p></text:note-body></text:note>.</text:p>"#;
+    let d = import(&body(xml)).unwrap();
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(c.contains("<text:tab/>Lorem"), "{c}");
+    assert!(c.contains(">Plain<") && !c.contains("> Plain"), "{c}");
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert_eq!(notes(&back), notes(&d));
+}
+
+#[test]
 fn a_note_keeps_formatting_and_the_text_around_it() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="B" style:family="text"><style:text-properties fo:font-weight="bold"/></style:style></office:automatic-styles><office:body><office:text><text:list><text:list-item><text:p><text:span text:style-name="B">bold<text:note text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>in <text:span text:style-name="B">note</text:span></text:p></text:note-body></text:note> still bold</text:span></text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#

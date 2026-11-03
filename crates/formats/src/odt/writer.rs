@@ -434,8 +434,8 @@ impl Writer {
                         out.push_str(&format!("<text:bookmark-end text:name=\"{}\"/>", x(a)));
                     }
                 }
-                Inline::Note { endnote, custom, blocks } => {
-                    self.note(*endnote, custom, blocks, out);
+                Inline::Note { endnote, custom, blocks, fmt } => {
+                    self.styled_note(*endnote, custom, blocks, fmt, out);
                     prev_space = false;
                 }
                 Inline::Comment { id, comment } => {

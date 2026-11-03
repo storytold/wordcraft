@@ -60,6 +60,7 @@ impl WithExtra for CharProps {
         self.hidden = x.hidden;
         self.spacing = finite(x.spacing, -1584.0, 1584.0);
         self.scale = finite(x.scale, 1.0, 600.0);
+        self.kern = finite(x.kern, 0.0, 1638.0);
         self.emphasis = x.emphasis;
         self.position = finite(x.position, -1584.0, 1584.0);
         self.outline = x.outline;
@@ -563,10 +564,11 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &CharProps::default(), Some(InlineObject::CommentEnd { id: *doc_id }));
                     }
                 }
-                Inline::Note { endnote, custom, blocks } => {
+                Inline::Note { endnote, custom, blocks, fmt } => {
                     if let Some(obj) = self.note(*endnote, custom, blocks) {
                         let style = if *endnote { "EndnoteReference" } else { "FootnoteReference" };
-                        append(&mut out, "", &CharProps { style: Some(style.into()), ..Default::default() }, Some(obj));
+                        let cp = CharProps { style: Some(style.into()), ..self.budget(char_props(fmt)) };
+                        append(&mut out, "", &cp, Some(obj));
                     }
                 }
                 Inline::Field { instr, result, fmt, locked } => {

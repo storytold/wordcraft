@@ -95,6 +95,12 @@ fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> 
     };
     let e = effective(doc, props_now);
     f.extra = extra_of(&e);
+    // Kerning on or off where it differs from the document's default.
+    let kerns = |k: Option<f32>| k.is_some_and(|k| k.is_finite() && k > 0.0);
+    let (kern, default) = (kerns(e.kern.or(doc.styles.default_chr.kern)), kerns(doc.styles.default_chr.kern));
+    if kern != default {
+        f.extra.get_or_insert_with(Default::default).kern = Some(if kern { 1.0 } else { 0.0 });
+    }
     if let Some(id) = custom {
         f.extra.get_or_insert_with(Default::default).style = Some(id.to_string());
     }
@@ -251,11 +257,19 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
             // The note's content without its own mark (a note holds no notes).
             let story = doc.parts.get(id).map(|part| &part.blocks);
             let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts })).unwrap_or_default();
+            // The space after the mark is the mark's (see `to_doc`'s `note`); a tab or more
+            // spaces there are the note's own.
             if let Some(FBlock::Para(first)) = blocks.first_mut() {
-                first.trim_with(&[' ', '\t'], &[]);
+                let k = first.inlines.iter().take_while(|i| matches!(i, Inline::Text(t, _) if t.is_empty())).count();
+                first.inlines.drain(..k);
+                if let Some(Inline::Text(t, _)) = first.inlines.first_mut()
+                    && t.starts_with(' ')
+                {
+                    t.remove(0);
+                }
             }
             let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
-            vec![Inline::Note { endnote, custom: custom.clone(), blocks }]
+            vec![Inline::Note { endnote, custom: custom.clone(), blocks, fmt: f.clone() }]
         }
         // The comment, then the replies in its thread (replies to replies too, each answering the
         // comment that starts the thread), which have no place of their own.

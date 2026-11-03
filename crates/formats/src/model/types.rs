@@ -242,6 +242,8 @@ pub enum Inline {
         endnote: bool,
         custom: String,
         blocks: Vec<FBlock>,
+        /// The reference's own formatting (beyond the note reference style).
+        fmt: Fmt,
     },
     /// Where comment `id` (the flow's own number for it) starts, and the comment. A reply
     /// ([`FComment::parent`]) has no range: it only follows its comment. Only flows asked for

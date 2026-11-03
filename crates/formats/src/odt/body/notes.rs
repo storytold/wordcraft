@@ -278,7 +278,10 @@ impl Body<'_> {
                     self.push_inline(Inline::CommentEnd(c.id));
                 }
             }
-            None => self.push_inline(Inline::Note { endnote: n.endnote, custom: n.custom, blocks }),
+            None => {
+                let fmt = self.cur_fmt();
+                self.push_inline(Inline::Note { endnote: n.endnote, custom: n.custom, blocks, fmt });
+            }
         }
     }
 

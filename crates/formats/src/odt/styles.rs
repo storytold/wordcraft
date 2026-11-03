@@ -166,6 +166,10 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     if let Some(v) = get(a, "text:display") {
         x.hidden = Some(v.trim() == "none");
     }
+    // Pair kerning (§20.317): on as Word's at every size, or off.
+    if let Some(v) = get(a, "style:letter-kerning") {
+        x.kern = Some(if v.trim() == "true" { 1.0 } else { 0.0 });
+    }
     if let Some(v) = get(a, "fo:letter-spacing") {
         x.spacing = Some(if v.trim() == "normal" { 0.0 } else { length(v).unwrap_or(0.0).clamp(-1584.0, 1584.0) });
     }

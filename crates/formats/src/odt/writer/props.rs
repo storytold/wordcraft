@@ -17,6 +17,9 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
     if on(x.hidden) {
         p.push_str(" text:display=\"none\"");
     }
+    if let Some(k) = x.kern.filter(|k| k.is_finite()) {
+        p.push_str(&format!(" style:letter-kerning=\"{}\"", k > 0.0));
+    }
     if let Some(s) = x.spacing.filter(|s| s.is_finite() && *s != 0.0) {
         p.push_str(&format!(" fo:letter-spacing=\"{}\"", pt(s)));
     }
