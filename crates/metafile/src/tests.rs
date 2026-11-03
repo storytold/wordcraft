@@ -898,7 +898,12 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
     let path = |w: f32| crate::Picture {
         width: 100.0,
         height: 50.0,
-        items: vec![Item::Path { segs: vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 0.0)], fill: None, stroke: Some(([0, 0, 0, 255], w)), even_odd: true }],
+        items: vec![Item::Path {
+            segs: vec![Seg::Move(0.0, 0.0), Seg::Line(10.0, 0.0)],
+            fill: None,
+            stroke: Some(([0, 0, 0, 255], w)),
+            even_odd: true,
+        }],
     };
     let width = |w: f32| match pic_place(&path(w)).first() {
         Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
