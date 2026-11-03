@@ -594,7 +594,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             }
             para.mark = CharProps::default();
             if e.text.contains('\t') {
-                para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
+                let cached = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
+                para.props.tabs = number_tab(s, &para.props, cached.as_deref().unwrap_or_default(), &e.text, width - 0.5).or(cached);
             }
             if show_page && sep.contains('\t') {
                 let right = TabStop { pos: width - 0.5, align: TabAlign::Right, leader };
@@ -605,6 +606,41 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     }
     s.touch();
     Ok(())
+}
+
+/// The tab stops of a numbered entry (`1.1<tab>Title`) whose number's tab has no stop to go to
+/// before the page-number stop at `limit`, neither in `direct` (the cached entry's stops) nor in
+/// its style, nor a hanging indent past the number: `direct` and a left stop 11 pt past the
+/// number. Without one the title goes to the page-number stop and the page number wraps
+/// (#4185). The 11 pt is
+/// measured from a Word-written TOC (a bench fixture): its 50 numbered level-2 entries have a
+/// left stop at indent + number width + 220 twips, one per number width ("4.1" and "4.10" each
+/// get their own), with the number in 10 pt Arial, so the gap is not an em of the number's font.
+fn number_tab(s: &Session, props: &wordcraft_doc::ParaProps, direct: &[TabStop], text: &str, limit: f32) -> Option<Vec<TabStop>> {
+    // Resolved with `direct`, as layout resolves the entry: a direct stop (a Clear too) replaces
+    // the style's stop at its place, and Clear stops are gone.
+    let para = wordcraft_doc::ParaProps { style: props.style.clone(), tabs: Some(direct.to_vec()), ..Default::default() };
+    let style = s.doc.styles.resolve_para(&para);
+    let number = text.split('\t').next()?;
+    let c = s.doc.styles.resolve_char(props.style.as_deref(), &CharProps::default());
+    let face = wordcraft_fonts::word::resolve(&c.font, c.bold, c.italic).face;
+    // As layout measures it: kerned only when the run's kerning covers its size, advances at the
+    // character scale, plus the character spacing after every character.
+    let kern_off = [wordcraft_fonts::feature_value(b"kern", 0)];
+    let features = if c.kerned() { &[][..] } else { &kern_off[..] };
+    let k = c.size / face.upem.max(1.0) as f32 * c.scale / 100.0;
+    let advances: f32 = wordcraft_fonts::shape(&face, number, features, |c| c).iter().map(|g| g.x_advance as f32 * k).sum();
+    let spacing = c.spacing * wordcraft_doc::cluster::cluster_starts(number).len() as f32;
+    let end = style.indent_left + style.indent_first + advances + spacing;
+    let usable = |t: &TabStop| matches!(t.align, TabAlign::Left | TabAlign::Center | TabAlign::Decimal) && t.pos > end && t.pos < limit;
+    // A hanging indent's implicit stop serves while the number ends before it.
+    let hanging = (style.indent_first < 0.0).then_some(TabStop { pos: style.indent_left, align: TabAlign::Left, leader: TabLeader::None });
+    if style.tabs.iter().chain(&hanging).any(usable) {
+        return None;
+    }
+    let mut tabs = direct.to_vec();
+    tabs.push(TabStop { pos: end + 11.0, align: TabAlign::Left, leader: TabLeader::None });
+    Some(tabs)
 }
 
 /// The tab stops of a TOC entry: the right-aligned stop for its page number, and, when the
