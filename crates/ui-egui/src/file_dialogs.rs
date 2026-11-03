@@ -55,14 +55,64 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     }
 }
 
+/// The file types Save As offers: every format the engine saves, with the suggested name's own
+/// format first. rfd makes a filter's first extension the dialog's default, which the Windows,
+/// macOS and Linux panels append to a file name the user typed without one; with no filter at
+/// all the name came back bare and the save failed, since the format is chosen by extension
+/// (#689). The built-in browser lists them too (#5368).
+pub fn save_exts(name: &str) -> Vec<String> {
+    let saves = wordcraft_engine::io::SAVE_EXTS;
+    let suggested = std::path::Path::new(name)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .filter(|e| saves.contains(&e.as_str()))
+        .unwrap_or_else(|| "docx".to_string());
+    let mut exts: Vec<String> = Vec::with_capacity(saves.len());
+    exts.push(suggested.clone());
+    exts.extend(saves.iter().filter(|e| **e != suggested).map(|e| (*e).to_string()));
+    exts
+}
+
+/// The "Save as type" list (#1399): one named entry per format, the suggested one first (see
+/// [`save_exts`] for why the order matters).
+///
+/// rfd doesn't report which entry the user picked, so if they choose "PDF" but leave "name.docx"
+/// in the name box, the extension in the name wins, as the format is chosen by extension.
+pub fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
+    save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
+}
+
+/// A readable name for a save format's extension.
+fn format_name(ext: &str) -> String {
+    match ext {
+        "docx" => "Word Document".into(),
+        "docm" => "Word Macro-Enabled Document".into(),
+        "dotx" => "Word Template".into(),
+        "dotm" => "Word Macro-Enabled Template".into(),
+        "pdf" => "PDF".into(),
+        "txt" => "Plain Text".into(),
+        "md" => "Markdown".into(),
+        "html" => "Web Page".into(),
+        "rtf" => "Rich Text Format".into(),
+        "odt" => "OpenDocument Text".into(),
+        "tex" => "LaTeX".into(),
+        "png" => "PNG Image".into(),
+        "json" => "JSON".into(),
+        "xml" => "XML".into(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
-    /// Save the document there, then carry on.
-    SaveAs { after: AfterSave, document: u64 },
+    /// Save the document there, then carry on. A name with no extension WordCraft saves gets
+    /// `ext`, the suggested name's (#5368).
+    SaveAs { after: AfterSave, document: u64, ext: String },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
@@ -80,6 +130,15 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+}
+
+impl AfterPick {
+    /// Save As for `document`, suggested as `name`: its extension is the format a name typed
+    /// without one is saved in (`.docx` when it has none).
+    pub(crate) fn save_as(after: AfterSave, document: u64, name: &str) -> Self {
+        let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty()).unwrap_or("docx");
+        AfterPick::SaveAs { after, document, ext: ext.to_ascii_lowercase() }
+    }
 }
 
 /// What to do once Save As has written the document.
@@ -293,6 +352,8 @@ impl WordApp {
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext.as_str() };
+                let path = wordcraft_engine::io::with_save_ext(&path, file_ext);
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == crate::print_page::EXPORT_WORD_2003 {
@@ -315,7 +376,7 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::SaveAs { after, document } => {
+            AfterPick::SaveAs { after, document, ext } => {
                 // The document it was for may wait behind another one: it is shown and saved.
                 if document != self.session.document_id() {
                     if !self.session.is_open(document) {
@@ -328,7 +389,7 @@ impl WordApp {
                 // otherwise dropped: a failed write (no permission, disk full, a bad path) left the
                 // Save As page sitting there with nothing to say why, since its own render loop
                 // skips the status bar while Backstage is open. `fail_save_as` reaches both.
-                let result = picked.map(|path| self.run("file.save", json!({"path": path})));
+                let result = picked.map(|path| self.run("file.save", json!({"path": wordcraft_engine::io::with_save_ext(&path, &ext)})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
                 if saved {
                     self.ui.backstage = false;
@@ -390,7 +451,8 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        let after = AfterPick::save_as(after, self.session.document_id(), &name);
+        self.ask_file(FileDialogRequest::Save { name, dir: None }, after)
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.
@@ -426,7 +488,7 @@ impl WordApp {
         }
         let dir = dir.filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned());
         let name = format!("{}.dotx", self.title_stem());
-        let after = AfterPick::SaveAs { after: AfterSave::Nothing, document: self.session.document_id() };
+        let after = AfterPick::save_as(AfterSave::Nothing, self.session.document_id(), &name);
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: dir.clone() }, after);
         dir
     }

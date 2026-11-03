@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
-use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
+use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters, save_filters};
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
@@ -151,9 +151,9 @@ impl FileBrowser {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
+            // Every format WordCraft saves, the suggested one first, as the system dialog lists them (#5368).
             FileDialogRequest::Save { name, .. } => {
-                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
-                let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
+                let mut f = save_filters(name);
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
             }
@@ -189,6 +189,20 @@ impl FileBrowser {
         self.note = Note::None;
     }
 
+    /// Save: picking another file type changes the name's extension to it, when the name has a
+    /// format's extension (`Report.docx` → `Report.pdf`), so the type picked is the type saved.
+    fn retype(&mut self) {
+        if !matches!(self.req, FileDialogRequest::Save { .. }) {
+            return;
+        }
+        let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*").cloned() else { return };
+        let path = Path::new(&self.name);
+        let typed = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
+        if typed.is_some_and(|t| wordcraft_engine::io::SAVE_EXTS.contains(&t.as_str())) {
+            self.name = path.with_extension(ext).to_string_lossy().into_owned();
+        }
+    }
+
     fn up(&mut self) {
         if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
             self.navigate(parent);
@@ -218,10 +232,9 @@ impl FileBrowser {
                 Step::Stay
             }
             FileDialogRequest::Save { .. } => {
-                if path.extension().is_none()
-                    && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
-                {
-                    path.set_extension(ext);
+                // A name with no extension WordCraft saves (`Report v1.2`) gets the type's (#5368).
+                if let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*") {
+                    path = PathBuf::from(wordcraft_engine::io::with_save_ext(&path.to_string_lossy(), ext));
                 }
                 if path.exists() && self.note != Note::Replace(path.clone()) {
                     self.note = Note::Replace(path);
@@ -283,10 +296,11 @@ impl WordApp {
         let (req, after) = match purpose {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
-            "save" => (
-                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
-                AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
-            ),
+            "save" => {
+                let name = self.default_save_name();
+                let after = AfterPick::save_as(crate::file_dialogs::AfterSave::Nothing, self.session.document_id(), &name);
+                (FileDialogRequest::Save { name, dir: None }, after)
+            }
             _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
         };
         self.show_file_browser(req, after, false);
@@ -453,6 +467,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         refilter = b.filter != before;
     });
     if refilter {
+        b.retype();
         b.navigate(b.dir.clone());
     }
     ui.add_space(8.0);
@@ -544,6 +559,34 @@ mod tests {
         b.name = "old".into();
         assert_eq!(b.accept(), Step::Stay, "asks before replacing");
         assert_eq!(b.accept(), Step::Pick(dir.join("drafts").join("old.docx")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #5368: the built-in Save As lists every format WordCraft saves, the suggested one first;
+    /// picking a type changes the name's extension to it, and a name with no format's extension
+    /// gets the type's.
+    #[test]
+    fn save_lists_every_format_and_the_type_picked_is_saved() {
+        let dir = scratch("save-types");
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        assert_eq!(b.filters.len(), wordcraft_engine::io::SAVE_EXTS.len() + 1, "every format, then All files");
+        assert_eq!(b.filters[0].1, ["docx"]);
+        assert_eq!(b.filters.last().map(|f| f.1.clone()), Some(vec!["*".to_string()]));
+        let pdf = b.filters.iter().position(|(_, e)| e[0] == "pdf").unwrap();
+        b.filter = pdf;
+        b.retype();
+        assert_eq!(b.name, "Document1.pdf");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Document1.pdf")));
+        b.name = "Report v1.2".into();
+        b.retype();
+        assert_eq!(b.name, "Report v1.2", "a name with no format's extension isn't changed");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Report v1.2.pdf")));
+        // All files adds nothing: Save As then adds the suggested format.
+        b.filter = b.filters.len() - 1;
+        b.retype();
+        b.name = "Bare".into();
+        assert_eq!(b.accept(), Step::Pick(dir.join("Bare")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

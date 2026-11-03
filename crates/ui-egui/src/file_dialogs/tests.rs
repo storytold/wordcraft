@@ -710,3 +710,71 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// #5368: a name typed without an extension WordCraft saves is saved in the suggested format, as
+/// Word adds .docx, instead of failing (the format is chosen by extension); a template keeps
+/// .dotx and an export its own format.
+#[test]
+fn save_as_adds_the_format_to_a_name_without_one() {
+    let dir = scratch("save-as-ext");
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    for (name, saved) in [("Report", "Report.docx"), ("Report v1.2", "Report v1.2.docx"), ("Notes.", "Notes.docx"), ("Kept.DOCX", "Kept.DOCX")] {
+        a.save_as_dialog();
+        answer(&shown, Some(&dir.join(name).to_string_lossy()));
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true, "{name}");
+        let path = dir.join(saved);
+        assert_eq!(a.session.path.as_deref(), Some(path.as_path()), "{name}");
+        assert_eq!(saved_text(&path), UNSAVED, "{name}");
+    }
+
+    a.services.templates_dir = Some(dir.join("Templates"));
+    a.run("ui.saveAsTemplate", json!({})).unwrap();
+    answer(&shown, Some(&dir.join("Templates").join("Memo").to_string_lossy()));
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true);
+    assert!(dir.join("Templates").join("Memo.dotx").is_file(), "a template stays a template");
+
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Handout").to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_ok());
+    assert!(std::fs::read(dir.join("Handout.pdf")).unwrap().starts_with(b"%PDF"), "an export keeps its format");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
+/// every savable extension exactly once.
+#[test]
+fn save_dialog_lists_one_named_type_per_format() {
+    let filters = save_filters("report.odt");
+    assert_eq!(filters.len(), wordcraft_engine::io::SAVE_EXTS.len());
+    assert_eq!(filters[0].1, vec!["odt".to_string()]);
+    assert!(filters[0].0.contains("OpenDocument"), "{}", filters[0].0);
+    let all: Vec<&String> = filters.iter().flat_map(|(_, e)| e).collect();
+    for e in wordcraft_engine::io::SAVE_EXTS {
+        assert_eq!(all.iter().filter(|x| x.as_str() == *e).count(), 1, "{e}");
+    }
+    assert!(filters.iter().all(|(l, e)| !l.trim().is_empty() && e.len() == 1));
+    let mut labels: Vec<&String> = filters.iter().map(|(l, _)| l).collect();
+    labels.sort();
+    labels.dedup();
+    assert_eq!(labels.len(), filters.len(), "labels are distinct");
+    // Unknown names fall back to Word's format first.
+    assert_eq!(save_filters("no extension")[0].1, vec!["docx".to_string()]);
+}
+
+/// #689: the Save dialog's default extension is the suggested name's own format, so a file
+/// name the user types without one is saved in the document's format instead of coming back
+/// bare and failing.
+#[test]
+fn save_dialog_defaults_to_the_suggested_format() {
+    assert_eq!(save_exts("novel.docx")[0], "docx");
+    assert_eq!(save_exts("report.odt")[0], "odt");
+    assert_eq!(save_exts("annual report.pdf")[0], "pdf");
+    // A suggested name always has an extension; anything unreadable falls back to Word's.
+    assert_eq!(save_exts("no extension")[0], "docx");
+    assert_eq!(save_exts("mystery.rtf2")[0], "docx");
+    // Every savable format is still offered, once.
+    let exts = save_exts("novel.docx");
+    assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| exts.iter().any(|x| x == e)));
+    assert_eq!(exts.len(), wordcraft_engine::io::SAVE_EXTS.len());
+}

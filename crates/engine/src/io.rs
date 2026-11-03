@@ -44,6 +44,22 @@ fn ext_of(name: &str) -> String {
     file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// Other spellings of [`SAVE_EXTS`] that save the same format.
+const SAVE_ALIASES: &[&str] = &["text", "markdown", "htm", "xhtml", "latex", "ltx"];
+
+/// The path Save As writes for a `path` the user named, in format `ext` (`docx`, `pdf`…): a file
+/// name with no extension, or with one WordCraft doesn't save (`Report v1.2`, `notes.final`),
+/// gets `.ext` added, as Word adds `.docx` (#5368). The format is chosen by the extension, so
+/// such a name used to fail to save at all.
+pub fn with_save_ext(path: &str, ext: &str) -> String {
+    let current = ext_of(path);
+    if SAVE_EXTS.contains(&current.as_str()) || SAVE_ALIASES.contains(&current.as_str()) {
+        return path.to_string();
+    }
+    // Windows drops a file name's trailing dots, so `Report.` is `Report.docx`, not `Report..docx`.
+    format!("{}.{ext}", path.trim_end_matches('.'))
+}
+
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?
 pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()

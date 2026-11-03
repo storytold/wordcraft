@@ -99,7 +99,7 @@ fn picker(dialog: rfd::AsyncFileDialog, req: &FileDialogRequest) -> Picking {
             if let Some(dir) = dir.filter(|d| std::path::Path::new(d).is_dir()) {
                 dialog = dialog.set_directory(dir);
             }
-            for (label, exts) in save_filters(&name) {
+            for (label, exts) in wordcraft_ui_egui::save_filters(&name) {
                 dialog = dialog.add_filter(label, &exts);
             }
             Box::pin(async move { dialog.save_file().await.into_iter().collect() })
@@ -199,57 +199,9 @@ fn on_path(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
-/// The file types Save As offers: every format the engine saves, with the suggested name's own
-/// format first. rfd makes a filter's first extension the dialog's default, which the Windows,
-/// macOS and Linux panels append to a file name the user typed without one; with no filter at
-/// all the name came back bare and the save failed, since the format is chosen by extension
-/// (#689).
-fn save_exts(name: &str) -> Vec<String> {
-    let suggested = std::path::Path::new(name)
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .map(str::to_ascii_lowercase)
-        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
-        .unwrap_or_else(|| "docx".to_string());
-    let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());
-    exts.push(suggested.clone());
-    exts.extend(wordcraft_engine::io::SAVE_EXTS.iter().filter(|e| **e != suggested).map(|e| (*e).to_string()));
-    exts
-}
-
-/// The "Save as type" list (#1399): one named entry per format, the suggested one first (see
-/// [`save_exts`] for why the order matters).
-///
-/// rfd doesn't report which entry the user picked, so if they choose "PDF" but leave "name.docx"
-/// in the name box, the extension in the name wins, as the format is chosen by extension.
-fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
-    save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
-}
-
-/// A readable name for a save format's extension.
-fn format_name(ext: &str) -> String {
-    match ext {
-        "docx" => "Word Document".into(),
-        "docm" => "Word Macro-Enabled Document".into(),
-        "dotx" => "Word Template".into(),
-        "dotm" => "Word Macro-Enabled Template".into(),
-        "pdf" => "PDF".into(),
-        "txt" => "Plain Text".into(),
-        "md" => "Markdown".into(),
-        "html" => "Web Page".into(),
-        "rtf" => "Rich Text Format".into(),
-        "odt" => "OpenDocument Text".into(),
-        "tex" => "LaTeX".into(),
-        "png" => "PNG Image".into(),
-        "json" => "JSON".into(),
-        "xml" => "XML".into(),
-        other => other.to_ascii_uppercase(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{pick, save_exts, save_filters};
+    use super::pick;
     use std::time::Duration;
 
     /// #2999: a dialog that "cancels" at once is a portal that failed: asked again without a
@@ -268,43 +220,5 @@ mod tests {
         assert!(pick(async { Vec::<u8>::new() }, async { vec![] }, quick).is_err(), "the built-in browser");
         assert_eq!(pick(slow_cancel(), async { vec![2u8] }, quick), Ok(vec![]), "a real cancel isn't asked again");
         assert_eq!(pick(async { vec![] }, slow_cancel(), quick), Ok(vec![]), "the second dialog cancelled for real");
-    }
-
-    /// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
-    /// every savable extension exactly once.
-    #[test]
-    fn save_dialog_lists_one_named_type_per_format() {
-        let filters = save_filters("report.odt");
-        assert_eq!(filters.len(), wordcraft_engine::io::SAVE_EXTS.len());
-        assert_eq!(filters[0].1, vec!["odt".to_string()]);
-        assert!(filters[0].0.contains("OpenDocument"), "{}", filters[0].0);
-        let all: Vec<&String> = filters.iter().flat_map(|(_, e)| e).collect();
-        for e in wordcraft_engine::io::SAVE_EXTS {
-            assert_eq!(all.iter().filter(|x| x.as_str() == *e).count(), 1, "{e}");
-        }
-        assert!(filters.iter().all(|(l, e)| !l.trim().is_empty() && e.len() == 1));
-        let mut labels: Vec<&String> = filters.iter().map(|(l, _)| l).collect();
-        labels.sort();
-        labels.dedup();
-        assert_eq!(labels.len(), filters.len(), "labels are distinct");
-        // Unknown names fall back to Word's format first.
-        assert_eq!(save_filters("no extension")[0].1, vec!["docx".to_string()]);
-    }
-
-    /// #689: the Save dialog's default extension is the suggested name's own format, so a file
-    /// name the user types without one is saved in the document's format instead of coming back
-    /// bare and failing.
-    #[test]
-    fn save_dialog_defaults_to_the_suggested_format() {
-        assert_eq!(save_exts("novel.docx")[0], "docx");
-        assert_eq!(save_exts("report.odt")[0], "odt");
-        assert_eq!(save_exts("annual report.pdf")[0], "pdf");
-        // A suggested name always has an extension; anything unreadable falls back to Word's.
-        assert_eq!(save_exts("no extension")[0], "docx");
-        assert_eq!(save_exts("mystery.rtf2")[0], "docx");
-        // Every savable format is still offered, once.
-        let exts = save_exts("novel.docx");
-        assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| exts.iter().any(|x| x == e)));
-        assert_eq!(exts.len(), wordcraft_engine::io::SAVE_EXTS.len());
     }
 }
