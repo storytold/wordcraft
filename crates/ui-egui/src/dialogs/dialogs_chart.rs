@@ -198,7 +198,7 @@ pub fn type_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartTypeForm) -> bool {
     let t = Tokens::get(ui.ctx());
     let col = accents(app);
     let mut chosen = None;
-    egui::Grid::new("chart_types").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("chart_types").spacing(vec2(8.0, 8.0)), |ui| {
         for (k, kind) in ChartType::ALL.into_iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(112.0, 92.0), Sense::click());
             let on = f.kind == kind;
@@ -256,7 +256,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
     let mut remove_row = None;
     let (can_remove_series, can_remove_row) = (f.names.len() > 1, f.categories.len() > 1);
     egui::ScrollArea::horizontal().id_salt("chart_data_h").max_width(760.0).show(ui, |ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_sized([CELL_W, ROW_H - 4.0], egui::Label::new(egui::RichText::new(tl!("Categories")).strong()));
                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
