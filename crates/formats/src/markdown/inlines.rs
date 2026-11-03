@@ -276,6 +276,9 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     // text. A scan pays for what it reads; earlier bracket matches are looked up in `known`.
     let ticks = Backticks::new(s);
     let mut links = LinkScan { text: s, refs, ticks: &ticks, known: HashMap::new(), budget: s.len().saturating_mul(8).saturating_add(8192) };
+    // Where the last comment end is: a comment opener after it has none to find, so a run of
+    // unclosed `<!--` doesn't search the rest of the text once each.
+    let last_comment_end = s.rfind("-->");
     let b = s.as_bytes();
     let mut i = 0usize;
     let mut text_start = 0usize;
@@ -366,7 +369,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 }
             }
             b'<' => {
-                if let Some((end, parsed)) = angle_inlines(s, i, base) {
+                if let Some((end, parsed)) = angle_inlines(s, i, base, last_comment_end) {
                     flush!();
                     nodes.extend(parsed);
                     i = end;
@@ -394,8 +397,9 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     nodes
 }
 
-fn angle_inlines(s: &str, start: usize, base: &Fmt) -> Option<(usize, Vec<Node>)> {
-    if let Some(pos) = s.get(start..).and_then(|rest| rest.strip_prefix("<!--")).and_then(|rest| rest.find("-->")) {
+fn angle_inlines(s: &str, start: usize, base: &Fmt, last_comment_end: Option<usize>) -> Option<(usize, Vec<Node>)> {
+    let closable = last_comment_end.is_some_and(|e| e >= start + 4);
+    if let Some(pos) = s.get(start..).and_then(|rest| rest.strip_prefix("<!--")).filter(|_| closable).and_then(|rest| rest.find("-->")) {
         return Some((start + 4 + pos + 3, Vec::new()));
     }
     let rest = s.get(start + 1..).unwrap_or("");
