@@ -1,7 +1,7 @@
 # WordCraft roadmap
 
 > **PR #4840 integration:** 2026-11-03 · Integrate #4736/#4840 with current main: preserve first-fragment non-empty-cell checks and physical-page freshness for oversized cantSplit continuation; readiness estimates unchanged.
-
+>
 > **Office corpus validation:** 2026-10-31 · A4 synthetic office corpus compared with Word Mac 16.114.3 using Helvetica Neue: clipping is fixed; 3/4 controls keep their marker-to-page assignments. Complex-table pagination, heading placement and footnote positions still differ. Readiness estimates unchanged.
 >
 > **Table pagination update:** 2026-10-30 · Oversized automatic/minimum-height cantSplit rows start on a fresh page and continue without clipping (#4736); fitting rows, repeated header rows and exact-height clipping retain their contracts. Native synthetic Word Mac 16.114.2 reference; readiness estimates unchanged.
