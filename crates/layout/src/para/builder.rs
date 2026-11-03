@@ -422,6 +422,14 @@ impl<'a> Builder<'a> {
             });
             return;
         };
+        // A result shaped in more than one font (a date's digits in the Latin font, its 年月日 in
+        // the East Asian one) keeps a cluster per font: one cluster has one style, and drawing
+        // every glyph in the first font's face drew the others' glyph ids from the wrong font
+        // (and a PDF couldn't embed that face). Right-to-left results stay one cluster.
+        if lv.is_empty() && added.iter().any(|c| c.style != first.style) {
+            self.push_atomic_parts(text, (start, end), &added);
+            return;
+        }
         let order = if lv.is_empty() {
             (0..added.len()).collect()
         } else {
@@ -453,6 +461,53 @@ impl<'a> Builder<'a> {
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// [`Self::shape_atomic`] for a left-to-right result in more than one font: one cluster per
+    /// run of one style, each standing for the whole object (`start..end`, so a caret goes before
+    /// or after the object, never into it) and showing its part of `text`. No line break falls
+    /// between them.
+    fn push_atomic_parts(&mut self, text: &str, (start, end): (usize, usize), added: &[Cluster]) {
+        let mut i = 0;
+        while let Some(head) = added.get(i) {
+            let j = added.get(i..).and_then(|rest| rest.iter().position(|c| c.style != head.style)).map_or(added.len(), |n| i + n);
+            let part = added.get(i..j).unwrap_or_default();
+            let a = head.start.saturating_sub(start);
+            let b = part.last().map_or(a, |c| c.end.saturating_sub(start)).max(a);
+            let mut x = 0.0;
+            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+            for c in part {
+                for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                    g.dx += x;
+                }
+                x += c.adv;
+                let (ca, cb) = (c.start.saturating_sub(start).saturating_sub(a), c.end.saturating_sub(start).saturating_sub(a));
+                if c.g1 <= c.g0 {
+                    // A ligature's glyph takes the letters of the clusters after it that have none.
+                    let from = ranges.last().map(|r| r.start);
+                    for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                        r.end = cb;
+                    }
+                }
+                ranges.extend((c.g0..c.g1).map(|_| ca..cb));
+            }
+            let g1 = part.last().map_or(head.g0, |c| c.g1);
+            self.shown.push((self.clusters.len(), text.get(a..b).unwrap_or_default().to_string(), ranges));
+            self.clusters.push(Cluster {
+                start,
+                end,
+                adv: x,
+                kind: ClKind::Text,
+                style: head.style,
+                g0: head.g0,
+                g1,
+                break_after: false,
+                obj_h: 0.0,
+                obj_d: 0.0,
+                dot: false,
+            });
+            i = j.max(i + 1);
+        }
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -533,10 +588,14 @@ pub(super) fn overstrike(
     let s = rc.size.clamp(1.0, 1638.0);
     // The widest text at the run's own size.
     let (c0, g0, s0) = (b.clusters.len(), b.glyphs.len(), b.shown.len());
+    let mut w0 = 0.0f32;
     for t in &texts {
+        // A text in more than one font is several clusters.
+        let c = b.clusters.len();
         b.shape_atomic(t, start, end, rc);
+        w0 = w0.max(b.clusters.get(c..).map_or(0.0, |cs| cs.iter().map(|c| c.adv).sum()));
     }
-    let w0 = b.clusters.get(c0..).map(|cs| cs.iter().map(|c| c.adv).fold(0.0f32, f32::max)).unwrap_or(0.0).max(0.0);
+    let w0 = w0.max(0.0);
     b.clusters.truncate(c0);
     b.glyphs.truncate(g0);
     b.shown.truncate(s0);
