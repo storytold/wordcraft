@@ -186,10 +186,10 @@ Aksara's pinned repository carries the MIT notice, Copyright (c) 2025 SBBIC Khme
 All three copyright lines and the full permission notice ship in WordCraft's `NOTICE`.
 
 This establishes the reported resource lineage and published/supplied license
-notices. It is not a reconstructed, source-by-source training-data manifest:
-the exact tagger training-corpus composition and its split from frequency-list
-inputs have not been separately identified. No private source corpus is shipped
-in this PR. The pinned raw-file hashes identify the distributed Aksara artifacts.
+notices. SBBIC confirmed on 2026-11-03 that the tagger was trained on internal
+documents it has permission to train with. This is not a source-by-source
+training-data manifest. No private source corpus is shipped in this PR. The pinned
+raw-file hashes identify the distributed Aksara artifacts.
 
 The `craft-i18n.rev` update retains the companion Khmer manifest together with
 its upstream catalog history; unrelated catalog commits are not Khmer translations.
