@@ -207,7 +207,8 @@ fn worst_coefficients(bytes: &[u8]) -> u64 {
 }
 
 /// The compression of a classic TIFF's first image (the one the image crate decodes): 1 when the
-/// tag is missing. None when the header can't be read.
+/// tag is missing. None when the header can't be read, or when the tag appears more than once:
+/// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
 fn tiff_compression(bytes: &[u8]) -> Option<u16> {
     let le = match bytes.get(..4)? {
         b"II*\0" => true,
@@ -223,21 +224,22 @@ fn tiff_compression(bytes: &[u8]) -> Option<u16> {
         Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
     };
     let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let mut found = None;
     for i in 0..usize::from(u16_at(ifd)?) {
         let entry = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
         if u16_at(entry)? != 259 {
             continue;
         }
-        if u32_at(entry.checked_add(4)?)? != 1 {
+        if found.is_some() || u32_at(entry.checked_add(4)?)? != 1 {
             return None;
         }
-        return match u16_at(entry.checked_add(2)?)? {
-            3 => u16_at(entry.checked_add(8)?),
-            4 => u16::try_from(u32_at(entry.checked_add(8)?)?).ok(),
-            _ => None,
-        };
+        found = Some(match u16_at(entry.checked_add(2)?)? {
+            3 => u16_at(entry.checked_add(8)?)?,
+            4 => u16::try_from(u32_at(entry.checked_add(8)?)?).ok()?,
+            _ => return None,
+        });
     }
-    Some(1)
+    Some(found.unwrap_or(1))
 }
 
 /// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
@@ -410,6 +412,19 @@ mod tests {
         assert_eq!(tiff_compression(&be), Some(7), "big-endian: the short is left-justified");
         be.truncate(12);
         assert_eq!(tiff_compression(&be), None, "cut short");
+        // A second compression tag (the one the decoder keeps) can't hide behind an allowed first.
+        let mut twice = b"II*\0".to_vec();
+        twice.extend(8u32.to_le_bytes());
+        twice.extend(2u16.to_le_bytes());
+        for compression in [1u32, 7] {
+            twice.extend(259u16.to_le_bytes());
+            twice.extend(3u16.to_le_bytes());
+            twice.extend(1u32.to_le_bytes());
+            twice.extend(compression.to_le_bytes());
+        }
+        twice.extend(0u32.to_le_bytes());
+        assert_eq!(tiff_compression(&twice), None, "duplicate compression tags");
+        assert!(matches!(probe(&twice), Err(Refusal::Unsupported(_))));
         // An uncompressed TIFF reads as before.
         let tiff = encode(image::RgbImage::from_pixel(5, 3, image::Rgb([9, 8, 7])), ImageFormat::Tiff);
         assert_eq!(tiff_compression(&tiff), Some(1));
