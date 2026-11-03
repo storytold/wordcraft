@@ -5,7 +5,7 @@ use super::chars::{
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::*;
+use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
@@ -20,6 +20,22 @@ pub(super) struct Builder<'a> {
     pub(super) shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
 }
 
+struct SegmentInput<'a> {
+    text: &'a str,
+    rc: &'a ResolvedChar,
+    rc_cs: Option<&'a Arc<ResolvedChar>>,
+    primary: FaceRef,
+    primary_cs: Option<FaceRef>,
+    primary_ea: Option<FaceRef>,
+    run_face: Option<FaceRef>,
+    ea_face: Option<FaceRef>,
+    sym: Option<SymbolRun<'a>>,
+    levels: &'a [u8],
+    lbase: usize,
+    use_levels: bool,
+    context: &'a [bool],
+}
+
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -28,6 +44,51 @@ impl<'a> Builder<'a> {
     fn numeral_char(&self, context: &[bool], at: usize, c: char, rtl: bool) -> char {
         let dir = if !context.is_empty() && is_numeral_digit(c) { context.get(at).copied().unwrap_or(false) } else { rtl };
         self.env.numeral.map(c, dir)
+    }
+
+    fn segment_keys(&self, input: SegmentInput<'_>) -> Vec<(usize, usize, SegKey)> {
+        let SegmentInput { text, rc, rc_cs, primary, primary_cs, primary_ea, run_face, ea_face, sym, levels, lbase, use_levels, context } = input;
+        let show = |c: char| sym.map_or(c, |m| m.show(c));
+        let mut seg_start = 0;
+        let mut cur: Option<SegKey> = None;
+        let mut segs = Vec::new();
+        for (i, c) in text.char_indices() {
+            let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
+            let c = show(c);
+            let dc = self.numeral_char(context, i, c, rtl);
+            let mark = is_mark(c);
+            let complex = match cur {
+                Some(k) if mark => k.complex,
+                _ => rc_cs.is_some() && rc.uses_complex(dc),
+            };
+            let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let face = match cur {
+                Some(k) if mark => k.face,
+                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
+                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
+                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
+                _ => {
+                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+                    wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
+                }
+            };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            match cur {
+                Some(previous) if previous.same(&key) => {}
+                Some(previous) => {
+                    segs.push((seg_start, i, previous));
+                    seg_start = i;
+                    cur = Some(key);
+                }
+                None => cur = Some(key),
+            }
+        }
+        if let Some(previous) = cur {
+            segs.push((seg_start, text.len(), previous));
+        }
+        segs
     }
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
@@ -148,54 +209,21 @@ impl<'a> Builder<'a> {
                 wordcraft_fonts::FontDb::global().fallback_for_run(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
             }
         };
-        // Split by font coverage (fallback faces), small caps case, script formatting and direction.
-        let mut seg_start = 0;
-        let mut cur: Option<SegKey> = None;
-        let mut segs: Vec<(usize, usize, SegKey)> = Vec::new();
-        for (i, c) in text.char_indices() {
-            let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
-            // A symbol-font character becomes its Unicode symbol (#776).
-            let c = show(c);
-            // Displayed form (Word › Numeral): one char in, one char out. Coverage and the
-            // fallback face are picked for the displayed char, so Hindi digits land in an
-            // Arabic-capable face and Western digits in a Latin one.
-            let dc = self.numeral_char(&context, i, c, rtl);
-            let mark = is_mark(c);
-            let complex = match cur {
-                Some(k) if mark => k.complex,
-                _ => rc_cs.is_some() && rc.uses_complex(dc),
-            };
-            let prim = if complex { primary_cs.unwrap_or(primary) } else { primary };
-            let face = match cur {
-                Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
-                // The run's one substitute face for a missing Thai font (#1549).
-                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                // Stay in the fallback face the word started in while it covers the letters.
-                Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
-                // The run's unified East Asian face, when one face covers the whole run.
-                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
-                _ => {
-                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
-                }
-            };
-            let small = rc.small_caps && !rc.caps && c.is_lowercase();
-            let k = SegKey { face, small, complex, rtl };
-            match cur {
-                Some(p) if p.same(&k) => {}
-                Some(p) => {
-                    segs.push((seg_start, i, p));
-                    seg_start = i;
-                    cur = Some(k);
-                }
-                None => cur = Some(k),
-            }
-        }
-        if let Some(p) = cur {
-            segs.push((seg_start, text.len(), p));
-        }
+        let segs = self.segment_keys(SegmentInput {
+            text,
+            rc,
+            rc_cs: rc_cs.as_ref(),
+            primary,
+            primary_cs,
+            primary_ea,
+            run_face,
+            ea_face,
+            sym,
+            levels,
+            lbase,
+            use_levels,
+            context: &context,
+        });
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
@@ -429,16 +457,13 @@ impl<'a> Builder<'a> {
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
     /// the cluster (at least `width` wide) and raised `dy`. Returns the cluster's index.
-    #[allow(clippy::too_many_arguments)]
     fn shape_overstruck(
         &mut self,
         texts: &[&str],
-        start: usize,
-        end: usize,
+        (start, end): (usize, usize),
         rc: &Arc<ResolvedChar>,
         align: wordcraft_doc::eq::OAlign,
-        width: f32,
-        dy: f32,
+        (width, dy): (f32, f32),
     ) -> Option<usize> {
         use wordcraft_doc::eq::OAlign;
         let (c0, s0) = (self.clusters.len(), self.shown.len());
@@ -501,7 +526,7 @@ pub(super) fn overstrike(
     let shapes: Vec<EncloseShape> = o.args.iter().filter_map(|a| EncloseShape::from_symbol(a)).collect();
     let texts: Vec<&str> = o.args.iter().filter(|a| !a.is_empty() && EncloseShape::from_symbol(a).is_none()).map(String::as_str).collect();
     let Some(shape) = shapes.first().copied() else {
-        b.shape_overstruck(&texts, start, end, rc, o.align, 0.0, 0.0);
+        b.shape_overstruck(&texts, (start, end), rc, o.align, (0.0, 0.0));
         return;
     };
     let style = Enclosure::parse(instr).map(|e| e.style).unwrap_or_default();
@@ -554,7 +579,7 @@ pub(super) fn overstrike(
         rc.clone()
     };
     let pad = s * 0.05;
-    let Some(k) = b.shape_overstruck(&texts, start, end, &trc, o.align, bw + 2.0 * pad, ty - size * 0.34) else { return };
+    let Some(k) = b.shape_overstruck(&texts, (start, end), &trc, o.align, (bw + 2.0 * pad, ty - size * 0.34)) else { return };
     let adv = b.clusters.get(k).map(|c| c.adv).unwrap_or(bw);
     let kind = match shape {
         EncloseShape::Circle => ShapeKind::Ellipse,
@@ -570,17 +595,14 @@ impl Builder<'_> {
     /// One cluster for ruby `base` text (an [`InlineObject::Ruby`] at `start..end`), as wide as the
     /// wider of the base and the ruby, with the ruby text laid out over it by `align`. The line
     /// grows to fit the ruby through the cluster's `obj_h`.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn ruby(
         &mut self,
         base: &str,
         ruby: &str,
         align: RubyAlign,
         raise: f32,
-        start: usize,
-        end: usize,
-        rc: &Arc<ResolvedChar>,
-        ruby_rc: &Arc<ResolvedChar>,
+        (start, end): (usize, usize),
+        (rc, ruby_rc): (&Arc<ResolvedChar>, &Arc<ResolvedChar>),
     ) -> Option<RubyLayout> {
         self.shape_atomic(base, start, end, rc);
         let ci = self.clusters.len().checked_sub(1)?;

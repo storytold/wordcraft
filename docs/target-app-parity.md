@@ -1,6 +1,6 @@
 # WordCraft parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** trivial (Insert Table of Figures lists any caption label, #3013; previously trivial: Performance row: typing no longer starts render threads on every repaint, #3027; previously trivial: shapes inserted in a row are all kept, #2019; previously trivial: East Asian typography: `w:eastAsianLayout` kept on save, not laid out; previously trivial: Ink to Shape recognises arrows; previously trivial: Windows Magnifier follows the caret onto a new line, #1119; previously trivial: table border drags with Ctrl and Alt, from the left edge and of selected cells, #711; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: all 12 bibliography styles, #383; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** trivial (Tables row: Table Properties applies to the selected rows, columns and cells, #4857; no percentage change); previously trivial (Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880)); previously trivial (Insert Table of Figures lists any caption label, #3013; previously trivial: Performance row: typing no longer starts render threads on every repaint, #3027; previously trivial: shapes inserted in a row are all kept, #2019; previously trivial: East Asian typography: `w:eastAsianLayout` kept on save, not laid out; previously trivial: Ink to Shape recognises arrows; previously trivial: Windows Magnifier follows the caret onto a new line, #1119; previously trivial: table border drags with Ctrl and Alt, from the left edge and of selected cells, #711; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: all 12 bibliography styles, #383; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The authoritative assessment of how close WordCraft is to Microsoft Word. [`ROADMAP.md`](../ROADMAP.md)
 summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklists are
@@ -8,6 +8,8 @@ summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklist
 [`typing-parity.md`](typing-parity.md), [`ui-parity.md`](ui-parity.md),
 [`hardware-parity.md`](hardware-parity.md) and [`localization-parity.md`](localization-parity.md).
 The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
+
+Labels → New Document with one label per recipient continues across sheets for all selected recipients (#4880). The final sheet leaves unused labels blank; address mapping, fixed-text and single-label modes stay unchanged. This is label generation, not a new Update Labels or Finish & Merge template workflow. Readiness estimates are unchanged.
 
 ## Headline (2026-10-10, origin/main `a99dddc`, v0.4.0 + ~90 merged PRs)
 
@@ -84,7 +86,7 @@ Weighted feature depth: **~68%** (Σ weight × parity / 100 over the table).
 
 ## Readiness numbers: full, mainstream practitioner, essentials user
 
-Three numbers, each with its own hours (craftrules `standards/progress-docs.md`, "Numbers"). The
+Three numbers, each with its own hours. The
 **full** number is the additive weighted sum over the dimension table below. **Mainstream** and
 **essentials** average depth over the areas in scope, then multiply by written-down discounts for
 what still stops real work. The stage follows the full number and the core-workflow gate.
@@ -215,7 +217,7 @@ Word. Their weighted sum is the **full ready for real work** number.
   splits it into feature depth (67%, up: equations, .doc import, RTL, text boxes, Zotero landed) and
   ready-for-real-work (60%, additive weighted sum), which adds file fidelity, stability,
   localization and the rest. A multiplicative version (~47%) was briefly used the same day and
-  reverted to align with the standard; no new evidence.
+  reverted; no new evidence.
 - **Why the hours went up** from "120–150 h to 100%" (2026-10-06): that figure left out
   localization, multilingual proofing, ecosystem, hardware, PDF Reflow and `.doc` writing, and
   priced DOCX corpus fidelity at 10 h. The new evidence is the Word bundle inventory (30 UI
@@ -251,6 +253,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | trivial | Recipient labels continue across product-sized sheets instead of stopping after the first sheet (#4880). Filtered/sorted order, product geometry and single-label mode retained; readiness estimates unchanged. |
 | 2026-10-18 | trivial | References: Insert Table of Figures dialog; a table of figures lists any caption label (`TOC \c`), without label and number (`\a`), without page numbers (`\n`) or with them after the text (`\p`); Word's switch order is recognised and the leader kept on update (#3013); no percentage change |
 | 2026-10-15 | trivial | Pictures, shapes, text boxes: Insert › Shapes adds the new shape beside the selection, as Word draws it, so a second shape no longer replaces the first (still selected after its insert) and selected text stays; a picture still replaces a selected picture, as in Word (#2019) |
 | 2026-10-19 | trivial | Performance row: render threads reused while typing (#3027) |
@@ -311,9 +314,10 @@ can be used without committing Word output.
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |
 | 2026-10-10 | trivial | Pictures, shapes, text boxes: free rotation and flips, rotation handle, rotated wrap bounds, DOCX `a:xfrm` rot/flipH/flipV (#332); no percentage change |
 | 2026-10-10 | minor | Merged main (12 PRs): Paste Special, Advanced Find, Column Selection, Style Inspector, custom table styles, gridlines, zoom buttons, touchpad scrolling, File Info fields, Serbian. Catalog 378/428 → 384/430 (89.3%); typing 82→85%, styles 72→74%, tables 74→76%; feature depth 67→68%; mainstream 54→55%; full stays ~60%, essentials ~63% |
-| 2026-10-10 | minor | Readiness table: hours to ~95% per audience (full ~650–1,100 h, mainstream ~300–500 h, essentials ~90–140 h). Full number restored to the additive weighted sum, ~47% → ~60%: method aligned with the standard, no new evidence; beta distance back to ~15 points and ~150–230 h |
+| 2026-10-10 | minor | Readiness table: hours to ~95% per audience (full ~650–1,100 h, mainstream ~300–500 h, essentials ~90–140 h). Full number restored to the additive weighted sum, ~47% → ~60%: no new evidence; beta distance back to ~15 points and ~150–230 h |
 | 2026-10-11 | trivial | East Asian typography 15% → 25%: document grid (#391); kinsoku and Asian Typography options already landed |
 | 2026-10-10 | minor | Added mainstream practitioner (~54%) and essentials user (~63%) numbers with written weights and discounts; full ready-for-real-work recomputed with the same multiplicative discounts: 60% → ~47% (method change, not new product evidence; stage stays alpha: above 40% and the gate passes); beta now ~450–700 h to the 75% bar; user-evidence counts from GitHub |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate: passes, stays alpha |
 | 2026-10-10 | major | Created from ROADMAP.md's "Parity by area" and "Estimate to 100%" sections; full re-measure against Word for Mac 16.113.4 (bundle listing, catalog diff from source, issue tracker); split into feature depth (67%) and ready for real work (60%); added proofing, East Asian, accessibility areas and the dimension table; hours re-calibrated from PR history |
 | 2026-10-06 | major | First estimate in ROADMAP.md: ~62% real feature parity, 120–150 h to 100% |
+| 2026-10-29 | trivial | Tables row: Table Properties' row, column and cell settings apply to the selection, as in Word (#4857); no percentage change |

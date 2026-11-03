@@ -1,6 +1,6 @@
 use super::buttons::DROPDOWN;
 use super::tooltip::{keytip_badge, show_hint};
-use super::*;
+use super::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Tokens, Ui, icons, pos2, regular, vec2};
 
 /// Word's standard colour grid (theme colours + tints, standard colours). Returns a picked hex.
 pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
@@ -62,7 +62,7 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, false, "")
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip: "" })
 }
 
 /// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
@@ -75,7 +75,7 @@ pub fn combo_hint(
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     tip: &str,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, false, tip)
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: false, tip })
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -99,7 +99,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, true, tl!("Font"))
+    combo_impl(ui, ComboOptions { id, width, current, items, recent: &[], preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -116,21 +116,56 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, recent, preview, true, tl!("Font"))
+    combo_impl(ui, ComboOptions { id, width, current, items, recent, preview, search: true, tip: tl!("Font") })
 }
 
 /// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
-pub fn font_combo_with_recent_hint(
-    ui: &mut Ui,
-    id: &str,
+pub struct FontComboOptions<'a> {
+    pub id: &'a str,
+    pub width: f32,
+    pub current: &'a str,
+    pub items: &'a [String],
+    pub recent: &'a [String],
+    pub preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
+    pub tip: &'a str,
+}
+
+pub fn font_combo_with_recent_hint(ui: &mut Ui, options: FontComboOptions<'_>) -> Option<String> {
+    combo_impl(
+        ui,
+        ComboOptions {
+            search: true,
+            id: options.id,
+            width: options.width,
+            current: options.current,
+            items: options.items,
+            recent: options.recent,
+            preview: options.preview,
+            tip: options.tip,
+        },
+    )
+}
+
+struct ComboOptions<'a> {
+    id: &'a str,
     width: f32,
-    current: &str,
-    items: &[String],
-    recent: &[String],
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-    tip: &str,
-) -> Option<String> {
-    combo_impl(ui, id, width, current, items, recent, preview, true, tip)
+    current: &'a str,
+    items: &'a [String],
+    recent: &'a [String],
+    preview: Option<&'a dyn Fn(&mut Ui, &str) -> Response>,
+    search: bool,
+    tip: &'a str,
+}
+
+/// The arrow's box next to a combo's field: its corner radii and the rectangle it paints, reaching
+/// one border width under the field on the side the two meet (the field is left of the arrow in a
+/// left-to-right row, right of it in a right-to-left one).
+fn arrow_box_shape(rtl: bool, arrow: Rect, r: CornerRadius) -> (CornerRadius, Rect) {
+    if rtl {
+        (CornerRadius { nw: r.nw, sw: r.sw, ne: 0, se: 0 }, Rect::from_min_max(arrow.min, pos2(arrow.max.x + ARROW_BORDER, arrow.max.y)))
+    } else {
+        (CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se }, Rect::from_min_max(pos2(arrow.min.x - ARROW_BORDER, arrow.min.y), arrow.max))
+    }
 }
 
 /// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
@@ -183,17 +218,8 @@ struct ComboSearch {
 /// Draws an editable or searchable combo box: keeps temporary text and search state, supports
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
-fn combo_impl(
-    ui: &mut Ui,
-    id: &str,
-    width: f32,
-    current: &str,
-    items: &[String],
-    recent: &[String],
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-    search: bool,
-    tip: &str,
-) -> Option<String> {
+fn combo_impl(ui: &mut Ui, options: ComboOptions<'_>) -> Option<String> {
+    let ComboOptions { id, width, current, items, recent, preview, search, tip } = options;
     let mut out = None;
     let edit_id = ui.scope_id().with(("combo_text", id));
     let te_id = ui.scope_id().with(("combo_edit", id));
@@ -205,12 +231,16 @@ fn combo_impl(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         // The field and its arrow share one outline: rounded on the outside, square where they
-        // meet. The field's frame takes the widget visuals' radius in every state.
+        // meet. The field's frame takes the widget visuals' radius in every state. In a row that
+        // runs right to left the arrow comes after the field on its left, so the corners and the
+        // arrow's underlap are the mirror image.
+        let rtl = ui.layout().prefer_right_to_left();
         let r = ui.visuals().widgets.inactive.corner_radius;
         let w = &mut ui.visuals_mut().widgets;
         for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-            v.corner_radius.ne = 0;
-            v.corner_radius.se = 0;
+            let (a, b) = if rtl { (&mut v.corner_radius.nw, &mut v.corner_radius.sw) } else { (&mut v.corner_radius.ne, &mut v.corner_radius.se) };
+            *a = 0;
+            *b = 0;
         }
         // Up/Down move the list's highlight: take them before the text field moves its cursor.
         let mut step = 0i32;
@@ -291,8 +321,7 @@ fn combo_impl(
         }
         // It reaches one border width under the field, so the field's right border is the only line
         // between them: two borders side by side read as a double-width divider.
-        let ar_radius = CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se };
-        let under = Rect::from_min_max(pos2(ar.min.x - ARROW_BORDER, ar.min.y), ar.max);
+        let (ar_radius, under) = arrow_box_shape(rtl, ar, r);
         let fill = if aresp.hovered() { t.hover } else { t.input };
         let arrow_box = egui::epaint::RectShape::new(under, ar_radius, fill, Stroke::new(ARROW_BORDER, t.input_border), egui::StrokeKind::Inside);
         ui.painter().set(arrow_bg, arrow_box);
@@ -307,26 +336,38 @@ fn combo_impl(
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
         // The font list closes on a chosen entry or a click outside it, not on its headings.
         let close = if search { egui::PopupCloseBehavior::CloseOnClickOutside } else { egui::PopupCloseBehavior::CloseOnClick };
-        egui::Popup::menu(&aresp).anchor(resp.rect.union(ar)).close_behavior(close).show(|ui| {
-            let item = |k: usize| items.get(k);
-            let row = |k: usize| section_row(k, recent, &item);
-            if let Some(v) = list_rows(ui, width, current, section_rows(recent.len(), items.len()), &row, None, None, preview).0 {
-                out = Some(v);
+        let mut menu_field = aresp.clone();
+        menu_field.rect = resp.rect.union(ar);
+        let menu = craft_ui::combo::Menu::new(ui, &menu_field).close_behavior(close).height(420.0);
+        let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
+        let item = |k: usize| items.get(k);
+        let row = |k: usize| section_row(k, recent, &item);
+        let total = section_rows(recent.len(), items.len());
+        let list = |ui: &mut Ui, range: std::ops::Range<usize>, ()| {
+            draw_rows(ui, RowDrawOptions { width, current, range, row: &row, highlight: None, preview, row_height: row_h })
+        };
+        let footer = |ui: &mut Ui| {
+            let mut picked = None;
+            ui.separator();
+            if ui.button(tl!("Add Font…")).clicked() {
+                picked = Some(ADD_FONT.to_string());
                 ui.close();
             }
-            if search {
-                ui.separator();
-                if ui.button(tl!("Add Font…")).clicked() {
-                    out = Some(ADD_FONT.to_string());
-                    ui.close();
-                }
-                #[cfg(target_arch = "wasm32")]
-                if ui.button(tl!("Load System Installed Fonts…")).clicked() {
-                    out = Some(LOAD_SYSTEM_FONTS.to_string());
-                    ui.close();
-                }
+            #[cfg(target_arch = "wasm32")]
+            if ui.button(tl!("Load System Installed Fonts…")).clicked() {
+                picked = Some(LOAD_SYSTEM_FONTS.to_string());
+                ui.close();
             }
-        });
+            picked
+        };
+        let picked = if search {
+            menu.show_rows_with_header_footer(|_| (), row_h, |()| total, list, footer).map(|(v, f)| v.or(f))
+        } else {
+            menu.show_rows_with_header(|_| (), row_h, |()| total, list)
+        };
+        if let Some(v) = picked.flatten() {
+            out = Some(v);
+        }
         let n = section_rows(recent_shown.len(), s.matches.len());
         if s.open && n > 0 {
             let matches = s.matches.clone();
@@ -347,7 +388,7 @@ fn combo_impl(
                     .show(ui, |ui| {
                         let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
                         let row = |k: usize| section_row(k, recent_shown, &item);
-                        list_rows(ui, width, current, n, &row, Some(lit), scroll, preview)
+                        list_rows(ui, RowListOptions { width, current, n, row: &row, highlight: Some(lit), scroll, preview })
                     })
                     .inner
             });
@@ -389,7 +430,7 @@ pub const COMBO_PREVIEW_ROW_H: f32 = 24.0;
 /// family and each preview loads that font, so building all rows loaded every font on the system
 /// (gigabytes on large font collections) and froze the app (#121).
 pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], preview: Option<&dyn Fn(&mut Ui, &str) -> Response>) -> Option<String> {
-    list_rows(ui, width, current, items.len(), &|k| items.get(k).map(Row::Item), None, None, preview).0
+    list_rows(ui, RowListOptions { width, current, n: items.len(), row: &|k| items.get(k).map(Row::Item), highlight: None, scroll: None, preview }).0
 }
 
 /// A row of a combo's list: a dim section heading nothing picks, or an entry.
@@ -449,19 +490,64 @@ fn heading_row(ui: &mut Ui, text: &str, size: egui::Vec2, rule: bool) {
     });
 }
 
+/// The rows `range` of a combo's list, in `ui`'s scroll area. Returns the clicked item.
+struct RowDrawOptions<'rows, 'text> {
+    width: f32,
+    current: &'text str,
+    range: std::ops::Range<usize>,
+    row: &'rows dyn Fn(usize) -> Option<Row<'text>>,
+    highlight: Option<usize>,
+    preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
+    row_height: f32,
+}
+
+fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
+    let RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h } = options;
+    let mut out = None;
+    let fill = Tokens::get(ui.ctx()).checked;
+    ui.set_min_width(width + 60.0);
+    for k in range {
+        let it = match row(k) {
+            Some(Row::Item(it)) => it,
+            Some(Row::Heading(h)) => {
+                heading_row(ui, h, vec2(width + 60.0, row_h), k > 0);
+                continue;
+            }
+            None => continue,
+        };
+        let lit = highlight == Some(k);
+        let clicked = match preview {
+            Some(p) => {
+                if lit {
+                    let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
+                    ui.painter().rect_filled(r, 3.0, fill);
+                }
+                p(ui, it).clicked()
+            }
+            None => ui.selectable_label(if highlight.is_some() { lit } else { it == current }, it.as_str()).clicked(),
+        };
+        if clicked {
+            out = Some(it.clone());
+        }
+    }
+    out
+}
+
 /// The rows of [`combo_list`], virtualised, for `n` rows fetched by index. With a `highlight`
 /// that row is marked instead of `current`; `scroll` (last frame's offset and visible height)
 /// scrolls the highlight into view. Returns the clicked item, the scroll offset and the height.
-fn list_rows<'a>(
-    ui: &mut Ui,
+struct RowListOptions<'rows, 'text> {
     width: f32,
-    current: &str,
+    current: &'text str,
     n: usize,
-    row: &dyn Fn(usize) -> Option<Row<'a>>,
+    row: &'rows dyn Fn(usize) -> Option<Row<'text>>,
     highlight: Option<usize>,
     scroll: Option<(f32, f32)>,
-    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
-) -> (Option<String>, f32, f32) {
+    preview: Option<&'rows dyn Fn(&mut Ui, &str) -> Response>,
+}
+
+fn list_rows(ui: &mut Ui, options: RowListOptions<'_, '_>) -> (Option<String>, f32, f32) {
+    let RowListOptions { width, current, n, row, highlight, scroll, preview } = options;
     let mut out = None;
     let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
     let desired_h = (n as f32 * (row_h + ui.spacing().item_spacing.y)).min(420.0);
@@ -483,32 +569,9 @@ fn list_rows<'a>(
         };
         area = area.vertical_scroll_offset(offset.max(0.0));
     }
-    let fill = Tokens::get(ui.ctx()).checked;
     let shown = area.show_rows(ui, row_h, n, |ui, range| {
-        ui.set_min_width(width + 60.0);
-        for k in range {
-            let it = match row(k) {
-                Some(Row::Item(it)) => it,
-                Some(Row::Heading(h)) => {
-                    heading_row(ui, h, vec2(width + 60.0, row_h), k > 0);
-                    continue;
-                }
-                None => continue,
-            };
-            let lit = highlight == Some(k);
-            let clicked = match preview {
-                Some(p) => {
-                    if lit {
-                        let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
-                        ui.painter().rect_filled(r, 3.0, fill);
-                    }
-                    p(ui, it).clicked()
-                }
-                None => ui.selectable_label(if highlight.is_some() { lit } else { it == current }, it.as_str()).clicked(),
-            };
-            if clicked {
-                out = Some(it.clone());
-            }
+        if let Some(v) = draw_rows(ui, RowDrawOptions { width, current, range, row, highlight, preview, row_height: row_h }) {
+            out = Some(v);
         }
     });
     (out, shown.state.clamped_offset().y, shown.inner_rect.height())
@@ -551,5 +614,26 @@ pub fn drawn_state(ui: &Ui, resp: &Response, framed: bool) -> DrawnState {
             text: t.text,
             expansion: 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The arrow's box fuses with its field on the side they meet: in a left-to-right row the
+    /// arrow is right of the field (rounded on the right, painted one border under the field's
+    /// right edge), in a right-to-left row it is left of it (rounded on the left, under the
+    /// field's left edge).
+    #[test]
+    fn the_arrow_box_is_rounded_away_from_its_field() {
+        let arrow = Rect::from_min_max(pos2(100.0, 0.0), pos2(116.0, 20.0));
+        let r = CornerRadius::same(4);
+        let (ltr, under) = arrow_box_shape(false, arrow, r);
+        assert_eq!((ltr.nw, ltr.sw, ltr.ne, ltr.se), (0, 0, 4, 4));
+        assert_eq!((under.min.x, under.max.x), (100.0 - ARROW_BORDER, 116.0));
+        let (rtl, under) = arrow_box_shape(true, arrow, r);
+        assert_eq!((rtl.nw, rtl.sw, rtl.ne, rtl.se), (4, 4, 0, 0));
+        assert_eq!((under.min.x, under.max.x), (100.0, 116.0 + ARROW_BORDER));
     }
 }
