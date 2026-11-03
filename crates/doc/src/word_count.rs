@@ -75,7 +75,9 @@ fn segmented_words(text: &str) -> usize {
 /// are written without spaces, #4547; Korean is spaced, so Hangul counts by tokens).
 fn spaced_words(s: &str) -> usize {
     // The half-width voiced sound marks belong to the kana before them, not a word of their own.
-    let word_char = |c: char| c.is_alphanumeric() && !matches!(c, '\u{FF9E}' | '\u{FF9F}' | 'ៗ');
+    // Unicode counts Khmer vowel signs as alphabetic; alone, they are not a word either.
+    let khmer_sign = |c: char| ('\u{1780}'..='\u{17ff}').contains(&c) && !('\u{1780}'..='\u{17b3}').contains(&c) && !c.is_numeric();
+    let word_char = |c: char| c.is_alphanumeric() && !matches!(c, '\u{FF9E}' | '\u{FF9F}') && !khmer_sign(c);
     let tokens = s.split(|c: char| c.is_whitespace() || c == para::OBJ || is_cjk_word(c)).filter(|w| w.chars().any(word_char)).count();
     tokens.saturating_add(s.chars().filter(|c| is_cjk_word(*c)).count())
 }
@@ -105,10 +107,11 @@ mod tests {
         let available = wordcraft_proof::khmer::data_available();
         assert_eq!(count_words(PHRASE), if available { 4 } else { 1 });
         assert_eq!(count_words("ខ្មែរ\u{200b}ភាសា"), 2, "authored breaks work even without a dictionary");
+        assert_eq!(count_words("ៗ។! ា្"), 0, "detached marks/signs are not words");
+        assert_eq!(count_words("១២៣"), 1, "Khmer digits are");
         if available {
             // A normal word, a compound, and the repetition sign's preceding word.
             assert_eq!(count_words("អ្នកចម្រៀង ក្រុមហ៊ុន អ្វីៗ"), 2 + 1 + 1);
-            assert_eq!(count_words("ៗ។! ា្"), 0, "detached marks/signs are not words");
             let words = wordcraft_proof::khmer::line_breaks(PHRASE).len() + 1;
             assert_eq!(count_words(PHRASE), words);
         }

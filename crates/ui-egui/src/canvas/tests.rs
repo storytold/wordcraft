@@ -39,6 +39,45 @@ fn right_click_moves_between_dictionary_wrap_sides() {
     assert_eq!(h.state().session.caret_geometry(&layout, &pos), Some(start));
 }
 
+/// Right-clicking inside the equation being edited stays in that equation: going through
+/// `caret.set` must not change the document, its history, or which equation is open.
+#[test]
+fn right_click_inside_an_equation_keeps_editing_it() {
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), Default::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.state_mut().run("insert.equation", json!({"linear": "x+y+z"})).unwrap();
+    for _ in 0..6 {
+        h.step();
+    }
+    let open = h.state().session.math.clone().expect("the equation is being edited");
+    let (doc, rev, undo) = (h.state().session.doc.clone(), h.state().session.rev(), h.state().session.undo_depth());
+    let layout = h.state_mut().session.layout();
+    let story = h.state().session.sel.focus.story;
+    let (x, y, at, inner) = (0..2000)
+        .flat_map(|i| (0..2000).map(move |j| (i as f32 * 0.5, j as f32 * 0.5)))
+        .find_map(|(x, y)| layout.equation_hit(0, x, y, story).map(|(at, inner)| (x, y, at, inner)))
+        .expect("the equation is on the first page");
+    let screen = page_to_screen(h.state_mut(), 0, x, y).unwrap();
+    h.event(egui::Event::PointerMoved(screen));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    let edited = h.state().session.math.clone().expect("the right-click keeps the equation open");
+    assert_eq!((edited.at.clone(), at.clone()), (open.at.clone(), open.at));
+    assert_eq!(edited.pos, inner, "the caret is where the click landed");
+    assert_eq!(h.state().session.sel.focus, at);
+    assert!(h.state().session.doc == doc, "a right-click does not edit");
+    assert_eq!(h.state().session.rev(), rev);
+    assert_eq!(h.state().session.undo_depth(), undo, "nor does it add to the history");
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.

@@ -712,6 +712,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Khmer: word counts follow shared word spans, and the release audit keeps shaping in styled fallback, lazy navigation in other scripts, page hints in repeated stories and the visual caret on no-op or failed edits |
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |

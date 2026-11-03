@@ -159,7 +159,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | trivial | Khmer review: dictionary-only caret affinity, typing/page/pointer/accessibility regressions, shaping-first font fallback and bounded refinement; dependency updates and native platform acceptance remain required. |
+| 2026-11-03 | minor | Khmer review: dictionary-only caret affinity, typing/page/pointer/accessibility regressions, shaping-first font fallback and bounded refinement; dependency updates and native platform acceptance remain required. |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
 | 2026-11-03 | trivial | #8: language-packs-2 published and pinned, 75 packs; Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto available as Language packs |
 | 2026-11-02 | minor | Optional shared Khmer support documented; companion dependency changes and platform acceptance remain required |

@@ -258,7 +258,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | trivial | Khmer review: dictionary-only caret affinity, typing/page/pointer/accessibility regressions, shaping-first font fallback and bounded refinement; dependency updates and native platform acceptance remain required. |
+| 2026-11-03 | minor | Khmer review: dictionary-only caret affinity, typing/page/pointer/accessibility regressions, shaping-first font fallback and bounded refinement; dependency updates and native platform acceptance remain required. |
 | 2026-11-03 | minor | Arabic (`ar`) interface: ~2,730 catalog rows from craft-i18n, `ar-*` locales, mirrored shell (ribbon, panes, File page, dialogs, menus), Arabic UI font fallback, document canvas independent (#1195); 28 languages; Hebrew UI still open |
 | 2026-11-03 | trivial | Language packs: language-packs-2 published and pinned, 75 packs, with Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto |
 | 2026-11-02 | minor | Optional shared Khmer support documented; companion dependency changes and platform acceptance remain required |
