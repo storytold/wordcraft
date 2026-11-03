@@ -735,6 +735,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.rows(4.5, 11.5, &[4.25, 7.25]);
             color_bar(pen, a);
         }
+        // The Shading buttons draw the last colour as their own bar (the icon's accent), so this one
+        // has no bar of its own.
+        "shadingNoBar" => {
+            pen.block(2.0, 1.5, 14.0, 10.0, 1.0, pen.t);
+            pen.rows(4.5, 11.5, &[4.25, 7.25]);
+        }
         "borders" => {
             for (x, y) in [
                 (5.0, 2.0),
@@ -2823,5 +2829,24 @@ mod tests {
         let red = Color32::from_rgb(200, 30, 30);
         assert_ne!(count("highlight", red), count("highlight", Color32::TRANSPARENT), "the highlight icon lost its bar");
         assert_eq!(count("highlightNoColor", red), count("highlightNoColor", Color32::TRANSPARENT), "No Color drew a bar");
+    }
+
+    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    #[test]
+    fn the_shading_button_icon_has_no_bar_of_its_own() {
+        let ctx = context();
+        let count = |name: &str, accent: Color32| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(64.0, 64.0))), ..Default::default() };
+            let full = ctx.run_ui(input, |ui| {
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("icon")));
+                paint_state(&painter, Rect::from_min_size(Pos2::ZERO, vec2(32.0, 32.0)), name, Color32::from_gray(66), accent, false);
+            });
+            let n = full.shapes.len();
+            full.drop_without_applying_deltas();
+            n
+        };
+        let red = Color32::from_rgb(200, 30, 30);
+        assert_ne!(count("shading", red), count("shading", Color32::TRANSPARENT), "the shading icon lost its bar");
+        assert_eq!(count("shadingNoBar", red), count("shadingNoBar", Color32::TRANSPARENT), "shadingNoBar drew a bar");
     }
 }
