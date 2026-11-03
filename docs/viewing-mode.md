@@ -17,6 +17,8 @@ Create Source, Templates, Macros, Compare and Combine, are refused before they o
 `ui.dialog`. Word Count, Find, Go To, Zoom and informational dialogs remain available. The same early
 check applies to user actions and direct UI commands, and leaves an existing
 dialog in place when the requested editing dialog is refused.
+The mail-merge record dialogs are also refused before opening. The Styles gallery
+and Styles pane disable Modify while Viewing is active; leaving Viewing restores it.
 
 Change Picture is disabled even when a picture remains selected. Both user-facing
 and direct UI command entrypoints refuse it before opening a file picker or

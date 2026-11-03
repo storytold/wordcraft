@@ -381,3 +381,38 @@ fn font_menu_entries_take_the_theme_text_colour() {
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
 }
+
+/// Viewing disables the real style menu's Modify action; leaving Viewing keeps the editor available.
+#[test]
+fn viewing_disables_modify_in_the_styles_gallery() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for viewing in [true, false] {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        app.ui.language = "en".into();
+        app.run("view.viewing", serde_json::json!({"value": viewing})).unwrap();
+        let before = app.session.doc.clone();
+        let depth = app.session.undo_depth();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 1200.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let state = app.session.run("format.state", &serde_json::json!({})).unwrap();
+                super::style_gallery(app, ui, &state);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("Normal").click_secondary();
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Modify…").accesskit_node().is_disabled(), viewing);
+        h.get_by_label("Modify…").click();
+        h.run_steps(3);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), if viewing { None } else { Some("modifyStyle") });
+        assert!(h.state().session.doc.same_content(&before));
+        assert_eq!(h.state().session.undo_depth(), depth);
+    }
+}

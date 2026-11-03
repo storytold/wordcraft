@@ -976,6 +976,8 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
         "macros",
         "compare",
         "combine",
+        "mergeRecords",
+        "printRecords",
     ] {
         for execute_directly in [false, true] {
             let params = json!({"name": name});
@@ -988,7 +990,7 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
         }
     }
     app.run("view.viewing", json!({"value": false})).unwrap();
-    for name in ["insertTable", "templates", "macros", "compare", "combine"] {
+    for name in ["insertTable", "templates", "macros", "compare", "combine", "mergeRecords", "printRecords"] {
         for execute_directly in [false, true] {
             let params = json!({"name": name});
             if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();

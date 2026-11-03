@@ -601,7 +601,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
                 let _ = app.run("styles.updateToMatch", json!({"style": id}));
                 ui.close();
             }
-            if ui.button(tl!("Modify…")).clicked() {
+            if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("Modify…"))).clicked() {
                 app.dialog = crate::dialogs::Dialog::modify_style(app, id);
                 ui.close();
             }

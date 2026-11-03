@@ -95,7 +95,7 @@ pub(super) fn styles(app: &mut WordApp, ui: &mut Ui) {
                     app.canvas.want_focus = true;
                 }
                 crate::rtl::context_menu(&r, |ui| {
-                    if ui.button(tl!("Modify…")).clicked() {
+                    if ui.add_enabled(!app.session.view.viewing, egui::Button::new(tl!("Modify…"))).clicked() {
                         app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
                         ui.close();
                     }
