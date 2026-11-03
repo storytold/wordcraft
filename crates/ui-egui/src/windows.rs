@@ -236,6 +236,9 @@ pub(crate) struct ViewportInput {
     events: Vec<egui::Event>,
     /// A viewport whose pass got keyboard input this way, until its window has looked.
     keys_for: Option<ViewportId>,
+    /// The viewport whose current pass got control input this way (any kind), until its next
+    /// pass: [`WordApp::input_from_control`].
+    pub(crate) injected: Option<ViewportId>,
     control_click: HashMap<ViewportId, bool>,
 }
 
@@ -252,10 +255,14 @@ impl egui::Plugin for ViewportInput {
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
         }
+        if self.injected == Some(viewport) {
+            self.injected = None;
+        }
         if self.target != Some(viewport) || self.events.is_empty() {
             return;
         }
         self.target = None;
+        self.injected = Some(viewport);
         let events = std::mem::take(&mut self.events);
         if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
             input.focused = true;
