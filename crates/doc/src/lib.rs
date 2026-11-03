@@ -79,6 +79,7 @@ mod text_walk;
 
 pub use block::{Block, Blocks, BoxBudget, MAX_TEXT_BOX_DEPTH};
 pub use compare::para_block;
+pub use document::EmbeddedFontsOwner;
 use document::MediaIndex;
 pub use error::{DocError, Result};
 pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
@@ -127,6 +128,11 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// The owner of the fonts this document embeds in the process-wide font database (0: none
+    /// loaded), so layout sees them and other documents don't; not part of the document (never
+    /// saved, ignored by `==`, kept by copies).
+    #[serde(skip)]
+    pub embedded_fonts: EmbeddedFontsOwner,
 }
 
 #[cfg(test)]

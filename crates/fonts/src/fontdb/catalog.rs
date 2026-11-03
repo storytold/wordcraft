@@ -11,7 +11,7 @@ impl FontDb {
     /// Word's font list, this holds each face's legacy family name too ("Roboto Light", "Inter
     /// SemiBold"), which [`FontDb::face`] resolves to that face.
     pub fn families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().flat_map(|f| [f.family.clone(), f.legacy_family.clone()]).collect();
+        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.visible()).flat_map(|f| [f.family.clone(), f.legacy_family.clone()]).collect();
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(self.read_catalog().iter().flat_map(|c| [c.family.clone(), c.legacy.clone()]));
         v.sort_by_key(|a| a.to_lowercase());
@@ -22,7 +22,7 @@ impl FontDb {
     /// The installed Chinese, Japanese and Korean families (English names), for the Font dialog's
     /// Asian text font list.
     pub fn east_asian_families(&self) -> Vec<String> {
-        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.is_east_asian()).map(|f| f.family.clone()).collect();
+        let mut v: Vec<String> = self.read_faces().iter().filter(|f| f.visible() && f.is_east_asian()).map(|f| f.family.clone()).collect();
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(self.read_catalog().iter().filter(|c| c.east_asian).map(|c| c.family.clone()));
         v.sort_by_key(|a| a.to_lowercase());
@@ -42,7 +42,7 @@ impl FontDb {
                 }
             }
         };
-        for f in self.read_faces().iter() {
+        for f in self.read_faces().iter().filter(|f| f.visible()) {
             add(&f.local_names);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -67,7 +67,9 @@ impl FontDb {
     /// `family` as its English name. `None` for names no font has.
     pub fn english_family(&self, family: &str) -> Option<String> {
         let hit = |names: &[LocalName]| names.iter().find(|n| n.name.eq_ignore_ascii_case(family)).map(|n| n.english.clone());
-        if let Some(e) = self.read_faces().iter().find_map(|f| hit(&f.local_names)) {
+        // Another document's embedded faces don't name families for this one (an embedded
+        // 仿宋_GB2312 made the name look installed to every later document).
+        if let Some(e) = self.read_faces().iter().filter(|f| f.visible()).find_map(|f| hit(&f.local_names)) {
             return Some(e);
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -95,7 +97,7 @@ impl FontDb {
             v.extend(
                 self.read_faces()
                     .iter()
-                    .filter(|f| named(&f.family, &f.legacy_family) && !f.style.contains('{'))
+                    .filter(|f| f.visible() && named(&f.family, &f.legacy_family) && !f.style.contains('{'))
                     .map(|f| (f.italic, f.weight, f.style.clone())),
             );
             #[cfg(not(target_arch = "wasm32"))]
@@ -125,6 +127,12 @@ impl FontDb {
     /// [`FontDb::add_document_fonts`]) has them go by that name instead. Faces already present
     /// (same family and style) are skipped. Returns how many were added.
     pub(super) fn add_fonts(&self, files: Vec<(Vec<u8>, Option<String>)>) -> usize {
+        self.add_owned_fonts(files, 0)
+    }
+
+    /// [`Self::add_fonts`] for the document `owner` (0: shared): its faces count as present only
+    /// beside the same owner's, so two documents embedding the same family keep a copy each.
+    pub(super) fn add_owned_fonts(&self, files: Vec<(Vec<u8>, Option<String>)>, owner: u64) -> usize {
         let mut new = Vec::new();
         for (bytes, name) in files {
             let data = Arc::new(bytes);
@@ -132,6 +140,7 @@ impl FontDb {
             for f in enumerate_faces(&data, MAX_FILE_FACES) {
                 if let Some(mut face) = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords) {
                     face.local_names = f.local;
+                    face.owner = owner;
                     if let Some(n) = name.as_deref().filter(|n| !face.named(n) && !face.local_names.iter().any(|l| l.name.eq_ignore_ascii_case(n))) {
                         face.family = n.to_string();
                         face.legacy_family = n.to_string();
@@ -142,7 +151,7 @@ impl FontDb {
         }
         let mut faces = self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         // Indexed: a document's fonts may add hundreds of faces to thousands (#3716).
-        let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase());
+        let key = |f: &FontFace| (f.family.to_ascii_lowercase(), f.style.to_ascii_lowercase(), f.owner);
         let mut present: std::collections::HashSet<_> = faces.iter().map(|g| key(g)).collect();
         let mut added = 0;
         for f in new {
@@ -233,8 +242,9 @@ impl FontDb {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_cataloged(&self, family: &str) -> bool {
         let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Another lookup may have loaded it while this one waited.
-        if self.is_loaded(family) {
+        // Another lookup may have loaded it while this one waited. A document's embedded copy
+        // answering to the name (a SimSun embedded as 黑体 keeps SimSun's names) doesn't count.
+        if self.read_faces().iter().any(|f| f.owner == 0 && f.named(family)) {
             return true;
         }
         let paths = self.family_paths(family);

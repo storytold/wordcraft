@@ -373,6 +373,7 @@ pub(super) fn make_face(
         .unwrap_or(!matches!(a.style, skrifa::attribute::Style::Normal) || style_italic(&style));
     Some(FontFace {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        owner: 0,
         family,
         style,
         legacy_family,

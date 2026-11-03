@@ -672,7 +672,7 @@ fn circle_without_text_face() {
 fn circle_checks_face_coverage() {
     let db = FontDb::with_font_dirs(Vec::new());
     db.set_system_fallback(false);
-    db.add_document_fonts(vec![(named_face("SourceSerif4-Regular.ttf", "Times New Roman"), "Times New Roman".to_string())]);
+    db.add_document_fonts(vec![(named_face("SourceSerif4-Regular.ttf", "Times New Roman"), "Times New Roman".to_string())], 0);
     let preferred = db.face("Times New Roman", "Regular");
     assert!(!preferred.covers('●'));
     let primary = db.face("Source Serif 4", "Regular");
@@ -705,4 +705,40 @@ fn catalog_postscript_names() {
     assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A document's embedded copy of an installed font under another table name (WPS embeds SimSun
+/// as 黑体 or 等线, keeping SimSun's own names) belongs to that document: it doesn't stand in for
+/// the installed font elsewhere, and the installed font still loads when asked for by name.
+#[test]
+fn a_documents_copy_of_an_installed_font_does_not_stop_it_loading() {
+    let dir = font_dir("doc-copy");
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let owner = crate::DocumentFonts::new_owner();
+    db.add_document_fonts(vec![(renamed("SourceSans3-Regular.ttf"), FAMILY.to_string())], owner);
+    let shared_loaded = |db: &FontDb| db.read_faces().iter().any(|f| f.owner == 0 && f.family == FAMILY);
+    {
+        let _doc = crate::DocumentFonts::enter(owner);
+        assert!(db.is_loaded(FAMILY), "the document sees its copy");
+        db.load_cataloged(FAMILY);
+        assert!(shared_loaded(&db), "the installed family loads beside the document's copy");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A document's embedded font that has a localized name (an embedded 仿宋_GB2312) names that
+/// family only for its own document: to another, the localized name stays unknown, so the
+/// family is substituted as if nothing were embedded (it resolved to the generic fallback, and
+/// 仿宋_GB2312 text in a document opened next drew in a sans).
+#[test]
+fn an_embedded_fonts_localized_name_is_its_documents_only() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Test"), (0x0804, "测试宋体")]);
+    let owner = crate::DocumentFonts::new_owner();
+    db.add_document_fonts(vec![(song, "测试宋体".to_string())], owner);
+    assert_eq!(db.english_family("测试宋体"), None, "another document doesn't see the embedded font's names");
+    assert!(!db.has_family("测试宋体"));
+    let _doc = crate::DocumentFonts::enter(owner);
+    assert!(db.has_family("测试宋体"), "its own document does");
 }

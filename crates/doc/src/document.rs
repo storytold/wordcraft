@@ -43,6 +43,18 @@ impl PartialEq for MediaIndex {
     }
 }
 
+/// Who owns a document's embedded fonts in the font database ([`Document::embedded_fonts`]): an
+/// id, 0 for none. Equal whatever the ids, like [`MediaIndex`], so it never makes two documents
+/// differ.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EmbeddedFontsOwner(pub u64);
+
+impl PartialEq for EmbeddedFontsOwner {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 impl std::fmt::Debug for MediaIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("MediaIndex")
@@ -76,6 +88,7 @@ impl Document {
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
+            embedded_fonts: EmbeddedFontsOwner::default(),
         }
     }
 
@@ -152,6 +165,7 @@ impl Document {
             passthrough,
             glossary,
             media_index: _,
+            embedded_fonts: _,
         } = self;
         let Document {
             body: other_body,
@@ -171,6 +185,7 @@ impl Document {
             passthrough: other_passthrough,
             glossary: other_glossary,
             media_index: _,
+            embedded_fonts: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
