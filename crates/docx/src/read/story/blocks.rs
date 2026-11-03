@@ -193,7 +193,11 @@ impl Reader<'_> {
             return self.flush_pending(sc, out);
         }
         if let Some(Block::Para(p)) = next.first_mut() {
-            for o in sc.pending.drain(..).rev() {
+            for (o, tables) in sc.pending.drain(..).rev() {
+                self.bookmark_place(
+                    &o,
+                    BookmarkPlace { container: BookmarkContainer::Block, after: false, tables: sc.tables.saturating_sub(tables) },
+                );
                 let _ = p.insert_object(0, o, &CharProps::default());
             }
         }

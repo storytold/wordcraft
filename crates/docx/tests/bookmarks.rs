@@ -4,18 +4,31 @@ use std::io::{Cursor, Read, Write};
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 fn package(body: &str, header: &str) -> Vec<u8> {
+    package_with_chunk(body, header, None)
+}
+
+fn package_with_chunk(body: &str, header: &str, chunk: Option<&[u8]>) -> Vec<u8> {
     let document = format!(
         r#"<w:document xmlns:w="{W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}<w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#
     );
     let header = format!(r#"<w:hdr xmlns:w="{W}">{header}</w:hdr>"#);
     let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="header" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#;
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = if chunk.is_some() {
+        rels.replace("</Relationships>", r#"<Relationship Id="chunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="chunk.docx"/></Relationships>"#)
+    } else {
+        rels.to_string()
+    };
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, text) in
-        [("_rels/.rels", root), ("word/document.xml", &document), ("word/_rels/document.xml.rels", rels), ("word/header1.xml", &header)]
+        [("_rels/.rels", root), ("word/document.xml", &document), ("word/_rels/document.xml.rels", rels.as_str()), ("word/header1.xml", &header)]
     {
         zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(text.as_bytes()).unwrap();
+    }
+    if let Some(chunk) = chunk {
+        zip.start_file("word/chunk.docx", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(chunk).unwrap();
     }
     zip.finish().unwrap().into_inner()
 }
@@ -303,4 +316,31 @@ fn physical_row_limit_counts_empty_rows_too() {
     let rows = format!("{}{}", "<w:tr/>".repeat(wordcraft_doc::table::MAX_ROWS), row(&cell("beyond the row limit")));
     let d = wordcraft_docx::read(&package(&table(&rows), &para("header"))).unwrap();
     assert!(d.body.iter().all(|b| b.as_table().is_none()));
+}
+
+#[test]
+fn bookmarks_before_imported_chunks_keep_their_source_container() {
+    let chunk = package(&para("Synthetic chunk text"), "");
+    let around_chunk = format!(r#"{}<w:altChunk r:id="chunk"/>{}{}"#, start(19, "ChunkBoundary", true), end(19), para("after"));
+    let cases = [
+        (around_chunk.clone(), "w:body"),
+        (format!("{}{}", table(&row(&cell("before"))), around_chunk), "w:body"),
+        (table(&row(&format!("<w:tc>{around_chunk}</w:tc>"))), "w:tc"),
+    ];
+    for (body, parent) in cases {
+        let mut doc = wordcraft_docx::read(&package_with_chunk(&body, "", Some(&chunk))).unwrap();
+        assert!(doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Synthetic chunk text"));
+        for _ in 0..2 {
+            let bytes = wordcraft_docx::write(&doc).unwrap();
+            let found = markers(&xml(&bytes, "word/document.xml"));
+            let begin = found.iter().find(|m| m.2 == "w:bookmarkStart" && m.3.iter().any(|(k, v)| k == "w:name" && v == "ChunkBoundary")).unwrap();
+            assert_eq!(begin.0, parent, "the bookmark remains outside the imported paragraph");
+            for (key, value) in [("w:id", "19"), ("w:colFirst", "1"), ("w:colLast", "2")] {
+                assert!(begin.3.iter().any(|(k, v)| k == key && v == value));
+            }
+            let end = found.iter().find(|m| m.2 == "w:bookmarkEnd" && m.3.iter().any(|(k, v)| k == "w:id" && v == "19")).unwrap();
+            assert_eq!(end.0, parent);
+            doc = wordcraft_docx::read(&bytes).unwrap();
+        }
+    }
 }
