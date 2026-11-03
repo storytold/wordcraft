@@ -14,6 +14,7 @@ mod documents;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod numeric_field_limits;
 mod revision_checks;
 mod typing;
 mod wordart;
