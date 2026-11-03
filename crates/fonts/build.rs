@@ -1,11 +1,12 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/manifest.txt` are embedded as `CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty. Web
-//! (wasm32) builds embed only the Georgian interface face (about 230 KB), to stay within the web
-//! size budget; the Japanese one is 4.7 MB. With `CRAFT_FONTS_REQUIRED` (releases), a native
-//! build also fails when the checkout has no font for a CJK interface language (Japanese,
-//! Simplified Chinese), as an outdated pin once did (#241). It only reads the local checkout: no
-//! network.
+//! (wasm32) builds embed only the Georgian and Arabic faces (about 230 KB and 845 KB), to stay
+//! within the web size budget; the Japanese one is 4.7 MB. A web build whose checkout has no
+//! Arabic face warns and embeds none. With `CRAFT_FONTS_REQUIRED`
+//! (releases), a native build also fails when the checkout has no font for a CJK interface
+//! language (Japanese, Simplified Chinese), as an outdated pin once did (#241). It only reads the
+//! local checkout: no network.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -20,6 +21,13 @@ fn main() {
                 // Each CJK interface language needs its own face: without the Chinese one, Chinese
                 // menus fall back to the Japanese face and show boxes for simplified hanzi (#241).
                 let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+                // The web build has no system fonts to fall back on: without this face, Arabic is boxes.
+                if wasm && !covered.iter().any(|c| c == "Arab") {
+                    println!(
+                        "cargo::warning=CRAFT_FONTS_DIR={}: no Arab font in fonts/manifest.txt; the web build shows Arabic text as boxes",
+                        dir.display()
+                    );
+                }
                 if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() && !wasm {
                     for s in REQUIRED_SCRIPTS.iter().filter(|s| !covered.iter().any(|c| c == *s)) {
                         println!("cargo::error=CRAFT_FONTS_DIR={}: no {s} font in fonts/manifest.txt (craft-fonts too old?)", dir.display());
@@ -56,7 +64,7 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        if wasm && !scripts.split(',').any(|s| s.trim() == "Geor") {
+        if wasm && !scripts.split(',').any(|s| matches!(s.trim(), "Geor" | "Arab")) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
