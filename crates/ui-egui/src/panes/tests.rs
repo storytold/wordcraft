@@ -486,12 +486,16 @@ fn navigation_arrows_and_enter_step_through_the_search_results() {
 fn the_results_list_shows_and_marks_a_result_past_the_first_500() {
     use egui_kittest::kittest::{NodeT, Queryable};
     let text: Vec<String> = (0..600).map(|i| format!("cat #{i}.")).collect();
-    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text.join("\n"))), crate::Services::default());
+    let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
     app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    // Find selects the first "cat"; Ctrl+F puts it in the pane's search box, as in the test above.
     app.run("edit.find", serde_json::json!({"text": "cat"})).unwrap();
-    assert_eq!(app.session.find.results.len(), 600);
-    app.ui.nav_tab = "results".into();
     let mut h = pane_harness(app);
+    h.state_mut().canvas.want_focus = false;
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert_eq!(h.state().session.find.results.len(), 600);
     let (a, b) = h.state().session.find.results[500].clone();
     h.state_mut().run("select.range", serde_json::json!({"anchor": a, "focus": b})).unwrap();
     h.run_steps(4);
