@@ -4092,6 +4092,30 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Solid { color, transparency }), .. } => (Some(*color), *transparency),
+        o => panic!("{o:?}"),
+    };
+    const FILL_ALPHA: u32 = 30_980;
+    const ALPHA_SCALE: f32 = 100_000.0;
+    // Canonical Fill stores the percentage computed from opacity, including f32 rounding.
+    let expected = 100.0 - (FILL_ALPHA as f32 / ALPHA_SCALE) * 100.0;
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), expected));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let parts = unzip(&bytes);
+    let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+    assert!(xml.contains(&format!("<a:alpha val=\"{FILL_ALPHA}\"/>")), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), expected));
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the
@@ -4287,4 +4311,63 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
+/// line when it has no width and no `o:hrpct`, a share of it (`o:hrpct`, tenths of a percent), or
+/// its own width (`o:hrpct="0"`), placed by `o:hralign`. It saves back as the same VML rule.
+#[test]
+fn vml_horizontal_rules_are_read_and_kept() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let hr = |attrs: &str, style: &str| format!(r#"<w:p><w:r><w:pict><v:rect style="{style}" {attrs}/></w:pict></w:r></w:p>"#);
+    let body = [
+        hr(r#"o:hralign="center" o:hrstd="t" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="500" o:hralign="right" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="0" o:hralign="center" o:hr="t""#, "width:100pt;height:3pt"),
+        hr("", "width:100pt;height:3pt"),
+    ]
+    .concat();
+    let rules = |d: &Document| -> Vec<(Option<HorizontalRule>, f32)> {
+        paras(d)
+            .iter()
+            .filter_map(|p| p.objects.iter().find_map(|o| if let InlineObject::Shape { extra, w, .. } = o { Some((extra.hr, *w)) } else { None }))
+            .collect()
+    };
+    let d = read_body(&body);
+    let got = rules(&d);
+    assert_eq!(
+        got,
+        [
+            (Some(HorizontalRule { pct: 100.0, align: Align::Center, standard: true }), 0.0),
+            (Some(HorizontalRule { pct: 50.0, align: Align::Right, standard: false }), 0.0),
+            (Some(HorizontalRule { pct: 0.0, align: Align::Center, standard: false }), 100.0),
+            (None, 100.0),
+        ]
+    );
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(rules(&again)[..3], got[..3]);
+    // A rule's rotation and flips are kept.
+    let spin = |d: &Document| paras(d)[0].objects.iter().find_map(|o| o.frame()).map(|(_, _, f)| f.spin());
+    let d = read_body(&hr(r#"o:hrpct="500" o:hr="t""#, "width:0;height:1.5pt;rotation:45;flip:x y"));
+    assert_eq!(spin(&d), Some(wordcraft_geom::Spin::new(45.0, true, true)));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(spin(&again), spin(&d));
+    // A see-through rule stays see-through.
+    let fill = |d: &Document| paras(d)[0].objects.iter().find_map(|o| if let InlineObject::Shape { fill, .. } = o { fill.clone() } else { None });
+    let d = read_body(
+        r##"<w:p><w:r><w:pict><v:rect style="width:0;height:1.5pt" o:hr="t" fillcolor="#ff0000"><v:fill opacity="0.25"/></v:rect></w:pict></w:r></w:p>"##,
+    );
+    let Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) = fill(&d) else { panic!("{:?}", fill(&d)) };
+    assert!((transparency - 75.0).abs() < 0.01, "{transparency}");
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(fill(&again), fill(&d));
+    // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
+    let body = [
+        hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),
+        hr(r#"o:hralign="center" o:hr="t""#, "visibility:hidden;width:0;height:2pt"),
+    ]
+    .concat();
+    let d = read_body(&body);
+    assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }
