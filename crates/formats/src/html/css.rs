@@ -1,3 +1,5 @@
+use super::builder::decls;
+use super::import::PAGE_FONT;
 use super::{Align, Fmt, model, parse_color};
 
 pub(super) struct ElementStyle {
@@ -41,7 +43,7 @@ pub fn css_len_pt(v: &str) -> Option<f32> {
     }
 }
 
-fn strip_important(v: &str) -> &str {
+pub(super) fn strip_important(v: &str) -> &str {
     let s = v.trim();
     if let Some(pos) = s.rfind('!') {
         let after = s[pos + 1..].trim();
@@ -55,10 +57,7 @@ fn strip_important(v: &str) -> &str {
 /// Apply a `style` attribute to formatting / block properties.
 pub(super) fn apply_style(css: &str, style: &mut ElementStyle, parent: &Fmt) {
     let ElementStyle { fmt: f, align, preserve, page_break, page_break_after } = style;
-    for decl in css.split(';').take(64) {
-        let Some((k, v)) = decl.split_once(':') else { continue };
-        let k = k.trim().to_ascii_lowercase();
-        let v = strip_important(v);
+    for (k, v) in decls(css) {
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => {
@@ -118,6 +117,14 @@ pub(super) fn apply_style(css: &str, style: &mut ElementStyle, parent: &Fmt) {
                     f.code = true;
                 } else if !fam.is_empty() && !matches!(fam.to_ascii_lowercase().as_str(), "serif" | "sans-serif" | "inherit" | "initial") {
                     f.font = model::kept_font(&fam).or(f.font.take());
+                } else if f.font.is_some() {
+                    // A generic family replaces a face the text has (a page's Times New Roman);
+                    // text without one keeps the document's font.
+                    match fam.to_ascii_lowercase().as_str() {
+                        "serif" => f.font = Some(PAGE_FONT.into()),
+                        "sans-serif" => f.font = Some("Arial".into()),
+                        _ => {}
+                    }
                 }
             }
             "vertical-align" => {

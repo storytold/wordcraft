@@ -179,6 +179,10 @@ impl Lang {
         self.code() == "ko"
     }
 
+    pub fn prefers_hant(self) -> bool {
+        self.code() == "zh-hant"
+    }
+
     /// The language new blank documents are written in with this interface ([`LangInfo::editing_lang`]).
     pub fn editing_lang(self) -> Option<&'static str> {
         self.info().and_then(|l| l.editing_lang)
@@ -208,6 +212,18 @@ impl Lang {
         let catalogs =
             Lang::all().filter(|l| l.uses_cjk() && l.prefers_hans() == hans && l.prefers_korean() == korean).flat_map(Lang::catalog_texts).collect();
         (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
+    }
+
+    /// The CJK characters of the Traditional Chinese catalogs, which an installed Traditional
+    /// Chinese UI font must cover to be put first.
+    pub fn hant_font_chars() -> Vec<char> {
+        let chars: std::collections::BTreeSet<char> = Lang::all()
+            .filter(|l| l.prefers_hant())
+            .flat_map(Lang::catalog_texts)
+            .flat_map(str::chars)
+            .filter(|c| wordcraft_fonts::is_cjk(*c))
+            .collect();
+        chars.into_iter().collect()
     }
 
     /// A language by its exact code (any case): one of [`LANGUAGES`] whose catalogs are embedded.
