@@ -242,11 +242,13 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
             border_el(w, "w:insideV", x);
         }
     }
-    if let Some(x) = &b.tl2br {
-        border_el(w, "w:tl2br", x);
-    }
-    if let Some(x) = &b.tr2bl {
-        border_el(w, "w:tr2bl", x);
+    if tag != "w:tblBorders" {
+        if let Some(x) = &b.tl2br {
+            border_el(w, "w:tl2br", x);
+        }
+        if let Some(x) = &b.tr2bl {
+            border_el(w, "w:tr2bl", x);
+        }
     }
     w.close(tag);
 }

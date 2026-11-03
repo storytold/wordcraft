@@ -379,6 +379,11 @@ fn cell_diagonal_borders_survive_json_two_saves_and_unrelated_edits() {
     d.body = vec![Arc::new(Block::Table(table))];
 
     let json = serde_json::to_vec(&d).expect("serialize document");
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let styles = part_xml(&bytes, "word/styles.xml");
+    assert!(!styles.contains("w:tl2br") && !styles.contains("w:tr2bl"), "table style diagonals are not valid in w:tblBorders");
+    let document = document_xml(&bytes);
+    assert!(document.contains("<w:tl2br") && document.contains("<w:tr2bl"), "cell diagonals stay in w:tcBorders");
     let mut got: Document = serde_json::from_slice(&json).expect("deserialize document");
     for cycle in 0..2 {
         got = rt(&got);
@@ -389,8 +394,8 @@ fn cell_diagonal_borders_survive_json_two_saves_and_unrelated_edits() {
         assert_eq!(cell.props.shading, Some(Rgb(0xF0, 0xF0, 0xF0)));
         assert_eq!(cell.blocks.first().and_then(|b| b.as_para()).map(Paragraph::plain_text).as_deref(), Some("crossed"));
         let style_borders = got.styles.styles.iter().find(|s| s.id == "DiagonalGrid").and_then(|s| s.table.as_ref()).and_then(|t| t.borders);
-        assert_eq!(style_borders.and_then(|b| b.tl2br), Some(up));
-        assert_eq!(style_borders.and_then(|b| b.tr2bl), Some(down));
+        assert_eq!(style_borders.and_then(|b| b.tl2br), None);
+        assert_eq!(style_borders.and_then(|b| b.tr2bl), None);
         if cycle == 0 {
             got.styles.styles.iter_mut().find(|s| s.id == "DiagonalGrid").expect("table style").name = "Edited Grid".into();
         }
