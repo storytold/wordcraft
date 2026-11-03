@@ -379,6 +379,9 @@ fn an_encrypted_package_with_spare_fat_sectors_opens() {
     assert!(wordcraft_docx::is_encrypted(&f));
     let package = wordcraft_docx::decrypt(&f, Some("pw")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(read(&package).unwrap().plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "Behind a password");
+    // The way the app opens it, too.
+    let opened = wordcraft_docx::read_with_password(&f, Some("pw")).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(opened.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "Behind a password");
 }
 
 #[test]
