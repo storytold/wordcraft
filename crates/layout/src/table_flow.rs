@@ -270,7 +270,13 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
         let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
         obstacles.extend_from_slice(&pb.float_tables);
-        let r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &obstacles);
+        let r = clear_of_float_tables(
+            Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h),
+            f,
+            ctx.doc.settings.compat_mode >= 15,
+            h_area.0,
+            &obstacles,
+        );
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
         // its anchor: one placed relative to the paragraph when it would run off the page, one
         // placed on the page or margin when it would also cover the text already on the page.
