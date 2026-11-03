@@ -20,6 +20,9 @@ pub(crate) struct Runtime {
     /// The context of the last frame, to wake the UI when a check is queued from a menu callback.
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
+    /// The app is quitting so the installed update can start: the documents open now come back
+    /// in the new copy ([`WordApp::documents_to_reopen`]).
+    restarting: bool,
     pub(crate) manual_window_open: bool,
     #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
@@ -38,6 +41,7 @@ impl Default for Runtime {
             check_requested: false,
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
+            restarting: false,
             manual_window_open: false,
             #[cfg(target_arch = "wasm32")]
             status_message: None,
@@ -50,6 +54,38 @@ impl WordApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
         self.updates_rt.startup_check = on;
+    }
+
+    /// The saved documents to open again when the app quits for an update, in the order they
+    /// were opened with the active one last, so it comes back in front. Empty for any other
+    /// quit. The update only starts with no unsaved work, so every open document is on disk;
+    /// a blank one that was never saved has no path and is left out.
+    pub fn documents_to_reopen(&self) -> Vec<std::path::PathBuf> {
+        if !self.updates_rt.restarting {
+            return Vec::new();
+        }
+        let (active, others): (Vec<_>, Vec<_>) =
+            self.session.documents().into_iter().filter(|d| Some(d.id) != self.no_document).partition(|d| d.active);
+        others.into_iter().chain(active).filter_map(|d| d.path).collect()
+    }
+}
+
+/// Whether an update may install now. The restart helper is scheduled before the app closes,
+/// so nothing starts while any window holds unsaved work or a print job is being submitted.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn ready_to_restart(app: &WordApp) -> bool {
+    !(app.has_unsaved_documents() || app.printing.busy())
+}
+
+/// The update is installed: quit the whole app, every window, so the helper can start the new
+/// copy. Closing the root viewport would close only one window while others are open.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn quit_for_update(app: &mut WordApp) {
+    app.updates_rt.restarting = true;
+    if !app.quit() {
+        // Unsaved work arrived after the check: each document is asked about, and a Cancel
+        // keeps the app open with nothing marked to reopen.
+        app.updates_rt.restarting = app.quit_requested;
     }
 }
 
@@ -88,11 +124,10 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-        let clean = !(app.session.dirty || app.save_unconfirmed() || app.printing.busy() || crate::panes::has_comment_drafts(app));
+        let clean = ready_to_restart(app);
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
-            Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::Close => quit_for_update(app),
             Action::None => {}
         }
         // The dialog answers Help ▸ Check for Updates; a found update leaves the status idle and the prompt above takes over.

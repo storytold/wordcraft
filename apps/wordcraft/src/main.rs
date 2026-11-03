@@ -21,6 +21,7 @@ mod graphics;
 mod logging;
 mod print;
 mod region;
+mod reopen;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -120,6 +121,7 @@ impl eframe::App for App {
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
         save_prefs(&self.0);
+        reopen::save(&self.0.documents_to_reopen());
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
@@ -148,6 +150,7 @@ fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server:
     print::finish_pending_jobs();
     app.session.finish_recovery();
     save_prefs(app);
+    reopen::save(&app.documents_to_reopen());
     if let Some(key_file) = key_file {
         key_file.remove();
     }
@@ -522,13 +525,16 @@ fn main() -> eframe::Result {
                 app = app.with_control(rx);
                 key_file = file;
             }
+            // The documents open when the last run quit for an update come back first, so a file
+            // on the command line still ends up in front; one that is both opens once.
+            let reopened = reopen::take();
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
             // macOS hands over later open on top of it and close it (`apple_events`).
-            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
+            if reopened.is_empty() && files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
                 app.start_screen();
             }
-            for f in files {
+            for f in reopened.into_iter().chain(files) {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     app.report_open_failure(&f, &e);
                 }
