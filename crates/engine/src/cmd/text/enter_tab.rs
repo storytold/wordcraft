@@ -2,7 +2,10 @@ use super::autoformat::{
     EnterAutoFormat, apply_border_line, apply_heading_line, apply_table_line, border_line, heading_line, table_line, typing_options,
 };
 use super::unicode::ins_char;
-use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use super::{
+    CmdError, CmdResult, NumRef, PAGE_BREAK, Pos, Selection, Session, StoryRef, Value, delete_selection, sel_result, split_para,
+    split_para_keeping_format, type_text,
+};
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
@@ -292,4 +295,43 @@ pub(super) fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     crate::cmd::para::outdent(s, &Value::Null)
+}
+
+/// A page break at the caret. At the end of the document Word puts it in a paragraph of its own
+/// (Normal, not in a list) between the text and a new empty paragraph with the last paragraph's
+/// formatting, which takes the caret: a page break ending the body would start no page.
+pub(crate) fn page_break(s: &mut Session, _: &Value) -> CmdResult {
+    let at = s.sel.focus.clone();
+    if !s.sel.is_collapsed() || !at_body_end(s, &at) || crate::cmd::controls::refuses_paragraph(s) {
+        return ins_char(s, PAGE_BREAK);
+    }
+    let own = if at.off > 0 { split_para_keeping_format(s, &at)? } else { at };
+    let after = split_para_keeping_format(s, &own)?;
+    let p = s.doc.para_mut(own.story, &own.path)?;
+    p.props = Default::default();
+    p.touch();
+    s.sel = Selection::caret(own);
+    let mut b = [0u8; 4];
+    type_text(s, PAGE_BREAK.encode_utf8(&mut b))?;
+    s.sel = Selection::caret(after);
+    s.goal_x = None;
+    sel_result(s)
+}
+
+/// Whether `at` is the end of the body's last paragraph.
+fn at_body_end(s: &Session, at: &Pos) -> bool {
+    at.story == StoryRef::Body
+        && at.path.0.len() == 1
+        && at.path.0.first().is_some_and(|&i| usize::try_from(i).is_ok_and(|i| i.saturating_add(1) == s.doc.body.len()))
+        && s.doc.para_at(at).is_some_and(|p| at.off >= p.len())
+}
+
+/// When `at` is the end of the body's last paragraph and that paragraph ends with a page break,
+/// a new empty paragraph after it with its formatting, where it is returned: a page break ending
+/// the body starts no page (Word), so the page the break was inserted for needs something on it.
+pub(crate) fn open_page_after_final_break(s: &mut Session, at: &Pos) -> Result<Option<Pos>, CmdError> {
+    if !at_body_end(s, at) || !s.doc.para_at(at).is_some_and(|p| p.text.ends_with(PAGE_BREAK)) {
+        return Ok(None);
+    }
+    split_para_keeping_format(s, at).map(Some)
 }

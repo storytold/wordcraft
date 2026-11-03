@@ -213,17 +213,24 @@ impl Ctx<'_> {
         pl
     }
 
-    /// The list label of `p`, advancing the list counters: call it once per paragraph, in
-    /// document order (only for paragraphs that will show).
-    /// Whether `p` gets a list label ([`Ctx::next_label`] is `Some`), without counting it.
-    pub(crate) fn has_label(&self, p: &Paragraph) -> bool {
+    /// Whether `p` is a list item for the automatic spacing between items: its list shows
+    /// labels. An empty paragraph closing a section counts though it draws no label
+    /// ([`Ctx::next_label`]): Word drops the automatic space after the item before it.
+    pub(crate) fn is_list_item(&self, p: &Paragraph) -> bool {
         p.props
             .numbering
             .or_else(|| self.doc.styles.resolve_para(&p.props).numbering)
             .filter(|n| n.num != 0)
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
+
+    /// The list label of `p`, advancing the list counters: call it once per paragraph, in
+    /// document order (only for paragraphs that will show). An empty paragraph closing a section
+    /// has none and doesn't count in its list (Word).
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
+        if super::flow::empty_section_mark(p) {
+            return None;
+        }
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
     }
