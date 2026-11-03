@@ -722,7 +722,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
     // A different top only matters when there is something to wrap around.
-    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
+    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !body_wraps(ctx, pb).is_empty()) {
         let y0 = pb.y;
         f.reanchor(ctx, pb, (y0, applied_before));
         f.anchor_y = y0 - applied_before;

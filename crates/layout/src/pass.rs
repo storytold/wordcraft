@@ -104,6 +104,7 @@ fn new_ctx<'a>(
         table_keys: Vec::new(),
         fitted: HashMap::new(),
         header_tables: HashMap::new(),
+        header_wraps: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
         floats_above: HashMap::new(),

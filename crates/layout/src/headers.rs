@@ -1,6 +1,7 @@
 use super::boxes::{BoxInput, layout_box};
 use super::cache::{Totals, hash_of};
 use super::ctx::{Ctx, with_pct_base, with_pin};
+use super::floats::WrapArea;
 use super::flow::again;
 use super::page::{PageBuilder, PageFrame, page_border_rules};
 use super::placed::{HfSlot, Placed};
@@ -348,4 +349,62 @@ pub(crate) fn mirror_even_pages(pages: &mut [Page], sections: &[(usize, &Section
         }
         page.body.x += dx;
     }
+}
+
+/// Header wrapping is independent of body counters and is reused for each paragraph on a page.
+pub(crate) fn header_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+    if pb.web || ctx.opts.view == ViewMode::Read {
+        return Vec::new();
+    }
+    let Some(page) = pb.pages.last() else { return Vec::new() };
+    let first = pb.pages.iter().rev().nth(1).is_none_or(|prev| prev.section != page.section);
+    let key = (page.section, page.number, first);
+    if let Some(areas) = ctx.header_wraps.get(&key) {
+        return areas.clone();
+    }
+    ctx.header_wraps.insert(key, Vec::new());
+    let hf = Arc::clone(&ctx.hf);
+    let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
+    if sect.text_direction.is_turned() {
+        return Vec::new();
+    }
+    let set = hf.heads.set(page.section);
+    let id = if sect.title_page && first {
+        set.first
+    } else if ctx.doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
+        set.even.or(set.default)
+    } else {
+        set.default
+    };
+    let Some(id) = id else { return Vec::new() };
+    let Some(part) = ctx.doc.parts.get(&id) else { return Vec::new() };
+    let blocks = part.blocks.clone();
+    let x = sect.margin_left + sect.gutter;
+    let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+    let base = hf.defining_width(false, page.section, Some(id));
+    let counters = std::mem::take(&mut ctx.counters);
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let fields = ctx.fields.clone();
+    let grid = std::mem::take(&mut ctx.grid);
+    let used_totals = ctx.uses_totals;
+    ctx.fields.page = page.number;
+    let mut areas = again(ctx, 0, |ctx| {
+        with_pct_base(ctx, base, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))).exclusions
+    });
+    ctx.counters = counters;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.fields = fields;
+    ctx.grid = grid;
+    // Only exclusions measured during body flow can require a total-dependent replay.
+    if areas.is_empty() {
+        ctx.uses_totals = used_totals;
+    }
+    for (r, _, _, _, _) in &mut areas {
+        r.x += x;
+        r.y += sect.header;
+    }
+    ctx.header_wraps.insert(key, areas.clone());
+    areas
 }

@@ -58,6 +58,7 @@ pub(crate) struct Ctx<'a> {
     /// on the page (see [`with_pin`]).
     pub(crate) pin: Option<Pin>,
     pub(crate) footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
+    pub(crate) header_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     pub(crate) header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).

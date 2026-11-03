@@ -2,7 +2,7 @@ use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
-use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
+use super::headers::{MAX_HEADER_ITEMS, header_table_areas, header_wraps};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
 use super::placed::Placed;
@@ -125,7 +125,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
-    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, tl.rows.first().map_or(0.0, |r| r.height));
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
     // Items repeated so far, and what one more repeat of the header rows costs (see
     // `MAX_HEADER_ITEMS`).
@@ -174,6 +174,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row_keeping_cells(row, room).is_some()))
         {
             pb.advance(block, body_top);
+            let height = tl.rows.first().map_or(0.0, |r| r.height);
+            below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, height);
         }
     }
     // For the move-on rule, the table's own header rows at the top of a page leave it empty.
@@ -193,6 +195,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
+            // Each row clears exclusions, including after repeated headers.
+            below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, cur.height);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
@@ -237,10 +241,13 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 None => {}
             }
             pb.advance(block, body_top);
+            let height = header_rows.first().and_then(|i| tl.rows.get(*i)).map_or_else(|| rest.as_ref().unwrap_or(row).height, |r| r.height);
+            below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, height);
             // Repeat header rows, up to this table's cap.
             if !header_rows.contains(&ri) && header_repeats.saturating_add(header_cost) <= MAX_HEADER_ITEMS {
                 header_repeats += header_cost;
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
+                    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, h.height);
                     place(pb, h);
                 }
             }
@@ -269,6 +276,16 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         };
         let x = float_table_x(pb, w, f, legacy, ctx.mirror);
         let mut obstacles = if f.overlap { Vec::new() } else { header_table_areas(ctx, pb) };
+        if !f.overlap {
+            // TopAndBottom spans this table's current and possible distance-adjusted x.
+            let left = x.min(h_area.0 + dl) - dl;
+            let right = x.max(h_area.0 + dl) + w + dr;
+            obstacles.extend(header_wraps(ctx, pb).into_iter().map(
+                |(r, top_bottom, ..)| {
+                    if top_bottom { Rect::new(left, r.y, right - left, r.h) } else { r }
+                },
+            ));
+        }
         obstacles.extend_from_slice(&pb.float_tables);
         let r = clear_of_float_tables(Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h), f, legacy, h_area.0, &obstacles);
         // Like Word, a table that doesn't fit below the text before it moves to the next page with
@@ -282,6 +299,10 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
         };
         if attempt == 0 && moves && !pb.at_top() {
             pb.advance(block, body_top);
+            if f.v_rel == Anchor::Paragraph {
+                let x = float_table_x(pb, w, f, legacy, ctx.mirror);
+                below_floats(ctx, pb, x, x + w, h);
+            }
             continue;
         }
         if let Some(pg) = pb.page() {
@@ -359,15 +380,16 @@ fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: 
 
 /// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
 /// starts there (a table in the text flow doesn't wrap around them).
-fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
-    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1);
+fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32, height: f32) {
+    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1, height);
 }
 
 /// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
 /// starts there.
-pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
+pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32, height: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let in_the_way =
+            excl.iter().filter(|(r, top_bottom, ..)| r.y < y + height.max(0.01) && r.bottom() > y && (*top_bottom || (r.x < x1 && r.right() > x0)));
         let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }

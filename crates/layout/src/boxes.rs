@@ -162,7 +162,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
             }
             (rect.x, rect.y)
         }
-        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width)),
+        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width, layout.rows.first().map_or(0.0, |r| r.height))),
     };
     let mut row_y = ty;
     for row in &layout.rows {
@@ -376,7 +376,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps, exclusions: excl }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -430,6 +430,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// floating tables end (a table cell grows to hold them) and where its last block starts (the
 /// height without it).
 pub(crate) struct BoxLayout {
+    pub(crate) exclusions: Vec<WrapArea>,
     pub(crate) items: Vec<Placed>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
