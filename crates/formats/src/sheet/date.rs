@@ -147,7 +147,11 @@ pub(super) fn iso_time(v: &str) -> Option<String> {
                 _ => return None,
             }
         }
-        let s = s.round() as u64;
+        let mut s = s.round() as u64;
+        m = m.saturating_add(s / 60);
+        s %= 60;
+        h = h.saturating_add(m / 60);
+        m %= 60;
         return Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") });
     }
     // xs:time: hh:mm[:ss[.sss]][Z|+...]
@@ -158,4 +162,17 @@ pub(super) fn iso_time(v: &str) -> Option<String> {
         return Some(if s == 0 { format!("{h:02}:{mi:02}") } else { format!("{h:02}:{mi:02}:{s:02}") });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso_time;
+
+    #[test]
+    fn duration_seconds_round_up_carries() {
+        assert_eq!(iso_time("PT1H59M59.6S").as_deref(), Some("02:00"));
+        assert_eq!(iso_time("PT59M59.5S").as_deref(), Some("01:00"));
+        assert_eq!(iso_time("PT0H0M59.4S").as_deref(), Some("00:00:59"));
+        assert_eq!(iso_time("PT1H2M3S").as_deref(), Some("01:02:03"));
+    }
 }
