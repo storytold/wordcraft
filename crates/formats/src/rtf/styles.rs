@@ -252,10 +252,10 @@ fn spacing(st: &St) -> model::Spacing {
     let gap = |v: Option<i32>| v.map(|v| pt(v).max(0.0));
     let sl = st.sl.unwrap_or(0);
     let line = if sl == 0 {
-        (st.sl == Some(0) && !st.slmult && st.dest == Dest::OldProps(true)).then_some(LineSpacing::AtLeast(0.0))
+        (st.sl == Some(0) && st.slmult == Some(false) && st.dest == Dest::OldProps(true)).then_some(LineSpacing::AtLeast(0.0))
     } else if sl < 0 {
         Some(LineSpacing::Exactly(pt(sl.saturating_neg()).max(0.7)))
-    } else if st.slmult {
+    } else if st.slmult == Some(true) {
         // \sl240\slmult1 is single spacing.
         Some(LineSpacing::Multiple((sl as f32 / 240.0).clamp(0.06, 132.0)))
     } else {

@@ -118,6 +118,9 @@ fn exact_line_spacing_supports_subpoint_values() {
         (r"\sl-20", Some(LineSpacing::Exactly(1.0))),
         (r"\sl-2147483648", Some(LineSpacing::Exactly(1584.0))),
         (r"\sl0", None),
+        (r"\sl0\slmult0", None),
+        (r"\sl0\slmult1", None),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
         (r"\sl1\slmult0", Some(LineSpacing::AtLeast(0.05))),
         (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
     ] {
@@ -823,9 +826,19 @@ fn saving_keeps_prior_paragraph_spacing() {
 #[test]
 fn prior_zero_line_spacing_is_explicit_and_scoped() {
     use wordcraft_doc::props::LineSpacing;
-    for (words, expected) in
-        [("", None), (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))), (r"\sl0\slmult1", None), (r"\sl0\pard\ql", None), (r"{\sl0\slmult0}", None)]
-    {
+    for (words, expected) in [
+        ("", None),
+        (r"\sl0", None),
+        (r"\slmult0", None),
+        (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\slmult0\sl0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl0\slmult1", None),
+        (r"\sl0\slmult0\pard\ql\sl0", None),
+        (r"{\sl0\slmult0}\sl0", None),
+        (r"\sl0\slmult0{\slmult1}", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
         let mut doc = prior_layout_document(words);
         for _ in 0..3 {
             assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");

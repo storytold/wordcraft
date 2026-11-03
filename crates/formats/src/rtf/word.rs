@@ -197,7 +197,7 @@ impl Reader {
             "sb" => self.st.sb = Some(pv),
             "sa" => self.st.sa = Some(pv),
             "sl" => self.st.sl = Some(pv),
-            "slmult" => self.st.slmult = on,
+            "slmult" => self.st.slmult = Some(on),
             "li" | "lin" => self.st.li = Some(pv),
             "ri" | "rin" => self.st.ri = Some(pv),
             "fi" => self.st.fi = Some(pv),
