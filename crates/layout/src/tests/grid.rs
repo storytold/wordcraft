@@ -194,3 +194,20 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
         }
     }
 }
+
+#[test]
+fn grid_advance_follows_character_scaling_and_spacing() {
+    // `w:w` scales the size the grid adjustment is added to, and `w:spacing` comes on top: a red
+    // header title at 90% must not take its full size per character and lose its last one.
+    for (scale, spacing) in [(50.0, 0.0), (90.0, 0.0), (200.0, 0.0), (100.0, 2.0), (90.0, 2.0)] {
+        let (mut d, size, pitch) = tight_grid("关于通知");
+        if let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+            p.runs[0].props.scale = Some(scale);
+            p.runs[0].props.spacing = Some(spacing);
+        }
+        let want = size * scale / 100.0 + pitch - size + spacing;
+        for c in &first_para(&lay(&d)).clusters {
+            assert!((c.adv - want).abs() < 0.01, "advance {} at {scale}% with {spacing} pt spacing, want {want}", c.adv);
+        }
+    }
+}

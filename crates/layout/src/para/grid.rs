@@ -58,8 +58,9 @@ pub fn is_east_asian(c: char) -> bool {
         | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFF)
 }
 
-/// Character grid: East Asian characters advance by their size plus the grid's adjustment
-/// ([`Grid::advance`]: one pitch at the default size), the glyph centred in its advance. Latin
+/// Character grid: East Asian characters advance by their size (scaled by `w:w`) plus the grid's
+/// adjustment ([`Grid::advance`]: one pitch at the default size) plus their character spacing,
+/// the glyph centred in its advance. Latin
 /// text stays proportional unless everything snaps (`snapToChars`), when it takes whole cells.
 pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     let Some(pitch) = grid.chars else { return };
@@ -73,8 +74,15 @@ pub(super) fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
         if !(east_asian || (grid.snap_all && c.kind == ClKind::Text)) {
             continue;
         }
-        let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
-        let adv = if east_asian { grid.advance(size).unwrap_or(pitch) } else { (c.adv / pitch - 0.01).ceil().clamp(1.0, 64.0) * pitch };
+        // Character scaling (`w:w`) scales the size the grid adds its adjustment to, and character
+        // spacing (`w:spacing`) comes on top (WPS: 16 pt at 50% advances 7.8 pt on a 15.79 pt
+        // grid, 16 pt with 2 pt spacing 17.78 pt).
+        let (size, spacing) = b.styles.get(c.style as usize).map_or((base, 0.0), |st| (st.size * st.rc.scale / 100.0, st.rc.spacing));
+        let adv = if east_asian {
+            grid.advance(size).map_or(pitch, |a| (a + spacing).max(0.0))
+        } else {
+            (c.adv / pitch - 0.01).ceil().clamp(1.0, 64.0) * pitch
+        };
         let shift = (adv - c.adv) / 2.0;
         for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
             g.dx += shift;
