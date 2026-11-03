@@ -160,6 +160,11 @@ pub(super) fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
     let current_shows_next = layout.pages.get(s.page_hint).is_some_and(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next));
     if current_shows_next {
         // Keep the current page, which already shows the target story in the active section.
+    } else if let Some(current_section) = layout.pages.get(s.page_hint).map(|pg| pg.section)
+        && let Some(pg_idx) =
+            layout.pages.iter().position(|pg| pg.section == current_section && (pg.header_story == Some(next) || pg.footer_story == Some(next)))
+    {
+        s.page_hint = pg_idx;
     } else if let Some(pg_idx) = layout.pages.iter().position(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next)) {
         s.page_hint = pg_idx;
     } else {
