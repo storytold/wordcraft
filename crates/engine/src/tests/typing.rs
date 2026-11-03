@@ -1319,6 +1319,48 @@ fn typing_at_either_end_of_a_link_is_not_linked() {
 }
 
 #[test]
+fn a_link_on_a_selection_shows_the_text_to_display() {
+    // Ctrl+K on selected text with a new Text to display: the selection is retyped with it and
+    // linked, keeping its formatting; typing after it stays outside the link (as in Word).
+    let mut s = typed("go see kiln now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    typ(&mut s, "!");
+    assert_eq!(texts(&s), ["go see oven! now"]);
+    assert_eq!(links(&s), [("Oven".into(), false)]);
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.bold == Some(true)), "the new text keeps the selection's formatting");
+    // The same text, or text that can't stand in one line, leaves the selection as it is.
+    run(&mut s, "select.text", json!({"text": "see"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "see"}));
+    run(&mut s, "select.text", json!({"text": "now"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "two\nlines"}));
+    assert_eq!(texts(&s), ["go see oven! now"]);
+}
+
+#[test]
+fn a_link_over_two_paragraphs_keeps_their_text() {
+    // Word shows <<Selection in Document>> for such a selection: the text to display is ignored.
+    let mut s = typed("one\ntwo");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "both"}));
+    assert_eq!(texts(&s), ["one", "two"]);
+    assert_eq!(links(&s), [("One".into(), false), ("two".into(), false)]);
+}
+
+#[test]
+fn a_retyped_link_text_is_tracked() {
+    let mut s = typed("go see kiln now");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "kiln" && c.del.is_some()), "the old text stays as a deletion");
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.ins.is_some() && c.link.is_some()));
+}
+
+#[test]
 fn typing_then_selecting_then_typing_are_two_undo_steps() {
     // #419: a selection that moves the insertion point ends the typing group, like a caret move.
     let mut s = typed("alpha");
