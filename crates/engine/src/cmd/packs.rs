@@ -326,6 +326,73 @@ mod tests {
         assert!(s.ui_requests.is_empty(), "no dialog opens");
     }
 
+    /// Sets up [`Slow`] with downloading on and installs on a thread; returns its go-ahead.
+    fn slow_in_background() -> std::sync::mpsc::Sender<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let slow = Arc::new(Slow { inner: FixedBackend::sample(), go: std::sync::Mutex::new(rx) });
+        slow.inner.network.store(true, Ordering::Relaxed);
+        packs::set_backend(Some(slow as Arc<dyn Backend>));
+        packs::set_background(Some(Arc::new(|| {})));
+        tx
+    }
+
+    fn wait_for_finish(before: u64) {
+        for _ in 0..500 {
+            if packs::finished() != before {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_ne!(packs::finished(), before, "the install thread ended");
+    }
+
+    /// FU.1: the person's own Cancel isn't a failure. The install stops being listed at once and
+    /// ends without an error ("Couldn't install: cancelled" in red was wrong); removing the pack
+    /// while the cancelled download is still stopping says so.
+    #[test]
+    fn a_cancelled_install_ends_without_an_error() {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
+        let go = slow_in_background();
+        let before = packs::finished();
+        assert!(packs::start_install("pl").unwrap());
+        assert_eq!(packs::installing().len(), 1);
+        packs::cancel("pl");
+        assert!(packs::installing().is_empty(), "Install shows again at once");
+        let e = packs::remove("pl").unwrap_err();
+        assert!(e.contains("still stopping"), "{e}");
+        go.send(()).unwrap();
+        wait_for_finish(before);
+        assert!(packs::installing().is_empty());
+        assert_eq!(packs::error("pl"), None, "a cancel is no error");
+        assert!(packs::errors().is_empty(), "{:?}", packs::errors());
+        assert!(!packs::is_installed("pl"));
+    }
+
+    /// FU.1: Install right after Cancel, before the cancelled download has stopped, isn't
+    /// refused as still running: it shows as installing and the pack installs once the cancelled
+    /// run ends (never two downloads of a pack at once).
+    #[test]
+    fn install_right_after_cancel_starts_again() {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
+        let go = slow_in_background();
+        let before = packs::finished();
+        assert!(packs::start_install("pl").unwrap());
+        packs::cancel("pl");
+        assert!(packs::start_install("pl").unwrap(), "started again");
+        let running = packs::installing();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].locale, "pl");
+        // The cancelled run ends, then the new one.
+        go.send(()).unwrap();
+        go.send(()).unwrap();
+        wait_for_finish(before);
+        assert!(packs::is_installed("pl"), "the second Install installed it");
+        assert!(packs::installing().is_empty());
+        assert!(packs::errors().is_empty(), "{:?}", packs::errors());
+    }
+
     /// A pack read from its folder proofs and hyphenates its language's runs, and leaves the
     /// English runs to English: a tiny Lithuanian pack (`ProofLang::Pack`, no rules of its own).
     #[test]
