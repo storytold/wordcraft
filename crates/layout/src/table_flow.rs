@@ -94,7 +94,62 @@ fn row_keeps_next(row: &table::RowLayout) -> bool {
         .unwrap_or(false)
 }
 
-fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
+/// The cut that leaves every row of a nested table marked "can't split" whole: just below the
+/// top of the highest such row the cut at `room` runs through, moved up again while it runs
+/// through another one (Word moves such a row on with the rest of the outer row, observed in the
+/// docxide-pdf `nested-first-row-*-cant1` cases). Like the split itself, a row "runs through"
+/// the cut when it ends below the room left for text there, above the row's bottom band; the cut
+/// goes that band below the row's top, so the text and rows ending at its top stay.
+/// shortcut: the moved row's side borders and shading keep that band's height on the page, and
+/// on the next page its cell area and shading start that band less its top margin below its
+/// first line (clicks there miss the cell). Only an explicit bottom cell margin or a thick outer
+/// border shows it, never Word's defaults; upgrade with a separate drawing cut in split_row that
+/// moves a nested cell starting between the limit and the cut whole from its top.
+fn nested_keep_cut(doc: &wordcraft_doc::Document, row: &table::RowLayout, room: f32) -> f32 {
+    let own = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
+    // Each nested row's top and bottom when it can't split. A vertically merged cell runs past
+    // its own row, so a row ends where its shortest cell does.
+    let mut bands: std::collections::BTreeMap<(StoryRef, &[u32], usize), Option<(f32, f32)>> = std::collections::BTreeMap::new();
+    // The split runs a cell aligned to the middle or bottom from its top: so do its bands.
+    let mut shift = vec![0.0f32; row.items.len()];
+    for al in row.cells.iter().filter_map(|c| c.align.as_ref()) {
+        shift.get_mut(al.content.clone()).into_iter().flatten().for_each(|d| *d = al.dy);
+    }
+    for (it, &dy) in row.items.iter().zip(&shift) {
+        let Placed::Cell { rect, table, row: r, story, .. } = it else { continue };
+        if Some(table.0.len()) <= own {
+            continue;
+        }
+        let rect = Rect { y: rect.y - dy, ..*rect };
+        let band = bands
+            .entry((*story, table.0.as_slice(), *r))
+            .or_insert_with(|| doc.table(*story, table).and_then(|t| t.rows.get(*r)).filter(|r| r.props.cant_split).map(|_| (rect.y, rect.bottom())));
+        if let Some((top, bottom)) = band {
+            *top = top.min(rect.y);
+            *bottom = bottom.min(rect.bottom());
+        }
+    }
+    let below = row.bottom.clamp(0.0, room.max(0.0));
+    let mut bands: Vec<(f32, f32)> = bands.into_values().flatten().collect();
+    // From the lowest top up: once the cut moves up to a row, the rows starting below it are
+    // wholly under it, and a row the old cut ran through still runs through the new one.
+    bands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut cut = room;
+    for (top, bottom) in bands {
+        let limit = cut - below;
+        if top < limit && bottom > limit + 0.01 {
+            cut = top + below;
+        }
+    }
+    cut
+}
+
+/// [`table::split_row_keeping_cells`] that doesn't split a nested "can't split" row either.
+fn split_keeping_nested(doc: &wordcraft_doc::Document, row: &table::RowLayout, room: f32) -> Option<(table::RowLayout, table::RowLayout)> {
+    table::split_row_keeping_cells(row, nested_keep_cut(doc, row, room))
+}
+
+fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
     if laid.height <= room + 0.01 {
         return true;
     }
@@ -104,7 +159,7 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
         return false;
     }
-    table::split_row_keeping_cells(laid, room).is_some()
+    split_keeping_nested(doc, laid, room).is_some()
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
@@ -171,8 +226,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     {
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
-        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row_keeping_cells(row, room).is_some()))
-        {
+        if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && split_keeping_nested(ctx.doc, row, room).is_some())) {
             pb.advance(block, body_top);
         }
     }
@@ -207,7 +261,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                     }
                     let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
                     let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
+                    height <= page_height + 0.01 && !row_can_start(ctx.doc, next, laid, pb.bottom - pb.y - height, page_height)
                 });
             // A row another row follows needs room for the border below it too (measured in Word).
             if pb.y + cur.height + cur.edge <= pb.bottom + 0.01 && !defer_kept {
@@ -222,8 +276,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             let moves_on = first_part && short_of_min(ri, room);
             let split = match (splittable && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
-                (true, true) => table::split_row_keeping_cells(cur, room),
-                (true, false) => table::split_row(cur, room),
+                (true, true) => split_keeping_nested(ctx.doc, cur, room),
+                // On a fresh page, a nested row taller than the room splits rather than overflowing.
+                (true, false) => table::split_row(cur, nested_keep_cut(ctx.doc, cur, room)).or_else(|| table::split_row(cur, room)),
             };
             match split {
                 Some((a, b)) => {
