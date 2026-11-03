@@ -233,6 +233,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         Some((f, l)) => stsh::parse(&table, f, l)?,
         None => Vec::new(),
     };
+    let standard_fonts = fib.pair(fib::pair::STSHF).map(|(f, l)| stsh::standard_fonts(&table, f, l)).unwrap_or_default();
     let chpx_bins = match fib.pair(fib::pair::PLCF_BTE_CHPX) {
         Some((f, l)) => Bins::parse(&table, f, l)?,
         None => Bins::parse(&[], 0, 0)?,
@@ -247,7 +248,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts);
+    doc.styles = fmt::stylesheet(&raw_styles, &fonts, standard_fonts);
     doc.numbering = list::parse(&table, &fib, &fonts);
     let sheet: StyleSheet = doc.styles.clone();
     let sects = sections::parse(&word, &table, &fib);
@@ -363,6 +364,11 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
     let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pics);
+    // The first paragraph ending at each CP, found once rather than by a scan per section.
+    let mut ending: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (i, p) in paras.iter().enumerate() {
+        ending.entry(p.end_cp).or_insert(i);
+    }
     let last = sects.last().map(|s| s.props.clone());
     for (si, sec) in sects.iter().enumerate() {
         let mut props = sec.props.clone();
@@ -373,11 +379,8 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         if is_final {
             continue; // handled below through `last`
         }
-        for p in paras.iter_mut() {
-            if p.end_cp == sec.end_cp {
-                p.para.section = Some(Box::new(props));
-                break;
-            }
+        if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
+            p.para.section = Some(Box::new(props));
         }
     }
     if let Some(mut l) = last {
