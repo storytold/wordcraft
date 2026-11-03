@@ -1,7 +1,8 @@
 use super::exporter::Exporter;
-use super::metadata::metadata;
+use super::metadata::{metadata, source_date_epoch};
 use super::options::{PdfError, PdfOptions};
 use super::paint::{clamp_side, ok};
+use super::report::{ExportReport, pdf_version};
 use super::{
     DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Size, Transform, WriteError, Writer, krilla,
     layout, write,
@@ -11,6 +12,11 @@ use super::{
 /// deletions are left out, as in Word's "No Markup" view. With `comments` each page carries the
 /// markup area with the comment balloons.
 pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    export_with_report(doc, opts).map(|(bytes, _)| bytes)
+}
+
+/// [`export`], also returning the export's report (pages, version, fonts, dates).
+pub fn export_with_report(doc: &Document, opts: &PdfOptions) -> Result<(Vec<u8>, ExportReport), PdfError> {
     write::guard(|| {
         let lo = LayoutOptions { hide_deleted: !opts.include_markup, comment_balloons: opts.comments, numeral: opts.numeral, ..Default::default() };
         let lay = layout(doc, &mut LayoutCache::new(), &lo);
@@ -20,10 +26,15 @@ pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
 
 /// Write an existing layout of `doc` as PDF.
 pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    export_layout_with_report(doc, lay, opts).map(|(bytes, _)| bytes)
+}
+
+/// [`export_layout`], also returning the export's report.
+pub fn export_layout_with_report(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<(Vec<u8>, ExportReport), PdfError> {
     write::guard(|| export_layout_inner(doc, lay, opts))
 }
 
-fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<(Vec<u8>, ExportReport), PdfError> {
     let pages: Vec<usize> = match &opts.pages {
         Some(v) => {
             if let Some(bad) = v.iter().find(|p| **p >= lay.pages.len()) {
@@ -41,7 +52,7 @@ fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Re
     let mut outlined = HashSet::new();
     loop {
         match write_attempt(doc, lay, opts, &pages, &outlined)? {
-            Attempt::Done(bytes) => return Ok(bytes),
+            Attempt::Done(bytes, report) => return Ok((bytes, report)),
             Attempt::BadFont(id, msg) if outlined.len() < MAX_OUTLINED_FONTS && outlined.insert(id) => {
                 log::warn!("PDF: {msg}; its text is drawn as outlines");
             }
@@ -55,7 +66,7 @@ const MAX_OUTLINED_FONTS: usize = 32;
 
 /// One try at writing the PDF.
 enum Attempt {
-    Done(Vec<u8>),
+    Done(Vec<u8>, ExportReport),
     /// The face with this id could not be embedded (and why).
     BadFont(u32, String),
 }
@@ -118,7 +129,23 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         return Err(error);
     }
     match writer.finish() {
-        Ok(bytes) => Ok(Attempt::Done(bytes)),
+        Ok(bytes) => {
+            // The report is read off the attempt that succeeded: after a subsetting
+            // failure the retry's font table, not the failed attempt's, is what the
+            // file holds.
+            let mut embedded_fonts: Vec<String> = ex.fonts.values().filter(|(_, f)| f.is_some()).map(|(face, _)| face.family.clone()).collect();
+            embedded_fonts.sort();
+            embedded_fonts.dedup();
+            let report = ExportReport {
+                pages: pages.len(),
+                pdf_version: pdf_version(&bytes),
+                tagged: opts.tagged,
+                pdf_ua: false,
+                source_date_epoch: source_date_epoch(),
+                embedded_fonts,
+            };
+            Ok(Attempt::Done(bytes, report))
+        }
         Err(WriteError::Serialization(error)) => match *error {
             KrillaError::Font(font, msg) => {
                 let bad = ex.fonts.iter().find(|(_, (_, f))| f.as_ref() == Some(&font));

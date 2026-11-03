@@ -16,8 +16,14 @@ workspace = true
 [dependencies]
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
+wordcraft-fonts = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-mcp = { workspace = true }
 wordcraft-zotero = { workspace = true }
 serde_json = { workspace = true }
+log = { workspace = true }
 sys-locale = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+chrono = { workspace = true }

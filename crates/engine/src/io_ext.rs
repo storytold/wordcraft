@@ -30,17 +30,20 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
         "xml" if opts.word2003 => Some(wordcraft_docx::write_wordml2003(doc).map_err(|e| e.to_string())),
         "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
-        "pdf" => {
-            let pdf = wordcraft_pdf::PdfOptions {
-                include_markup: opts.markup,
-                comments: opts.markup && opts.comments,
-                numeral: opts.numeral,
-                ..Default::default()
-            };
-            Some(wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string()))
-        }
+        "pdf" => Some(export_pdf(doc, opts).map(|(bytes, _)| bytes)),
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),
     }
+}
+
+/// The PDF options an engine save uses, in one place so a plain save and a reported
+/// export cannot drift apart.
+fn pdf_options(opts: &crate::io::ExportOptions) -> wordcraft_pdf::PdfOptions {
+    wordcraft_pdf::PdfOptions { include_markup: opts.markup, comments: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() }
+}
+
+/// Export as PDF, with the export's report (see [`wordcraft_pdf::ExportReport`]).
+pub fn export_pdf(doc: &Document, opts: &crate::io::ExportOptions) -> Result<(Vec<u8>, wordcraft_pdf::ExportReport), String> {
+    wordcraft_pdf::export_with_report(doc, &pdf_options(opts)).map_err(|e| e.to_string())
 }
 
 /// Render page `page` as PNG at `scale` px/pt. With Print Markup's comments the page has its

@@ -14,6 +14,30 @@ Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed com
 document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
 connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
+## PDF save reports
+
+A successful `file.save` or `file.saveAs` to a PDF also returns `exportReport`, with
+`pages`, `pdfVersion`, `tagged`, `pdfUa`, `sourceDateEpoch` and `embeddedFonts`. It
+describes the bytes that were written, including save-time normalization. Other
+formats omit this field, and a failed write returns an error. The CLI uses this
+report for `convert --report`; it does not export the document a second time.
+
+The CLI sidecar is UTF-8 JSON at the output path with `.report.json` appended
+(`folder/out.pdf` produces `folder/out.pdf.report.json`). It adds `schemaVersion: 1`,
+`source`, `target`, `requestedFonts` and a `warnings` array, including `[]` when no
+requested font is missing from the embedded-family list. A warning has
+`{"code":"requestedFontNotEmbedded","font":"Family name"}`. This comparison covers
+direct Latin, East Asian and complex-script font names in body paragraphs and nested
+tables. It is not an exhaustive substitution audit: inherited styles, headers/footers,
+and fonts requested for scripts with no rendered glyphs can affect the comparison.
+The sidecar includes paths and font names, without document text, titles or authors.
+
+Before writing, the CLI announces that any existing sidecar will be replaced; the
+write uses the same atomic replacement as a document save. Exit status is `0` after
+both files are written, including when font warnings exist. If the sidecar cannot be
+written, the PDF remains, stderr states its path and the report error, and exit
+status is `1`. A failed conversion also exits `1` and writes no report.
+
 ## Keys
 
 Any local program (and possibly a web page) can reach a loopback port, so every request needs the
