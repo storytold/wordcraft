@@ -229,6 +229,49 @@ fn page_setup_menus_mark_the_current_setting() {
     assert_eq!(first_words, ["Narrow", "Landscape", "A4", "Right"], "{checked:?}");
 }
 
+/// The Language menu's built-in short list, as `language_checks` takes it.
+fn short() -> Vec<(String, String)> {
+    PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect()
+}
+
+/// Check marks with only `tag` checked.
+fn listed_only(tag: &str) -> Vec<bool> {
+    PROOFING_LANGUAGES.iter().map(|(t, _)| *t == tag).collect()
+}
+
+/// CP4.3: the menu's check marks are worked out one way (the tag, or the same proofing language
+/// named alike), not by a case per language: a bare or ISO 639-2 tag checks its language, and a
+/// region WordCraft proofs like another (New Zealand like the UK) doesn't check that one.
+#[test]
+fn language_menu_checks_by_tag_or_proofing_language() {
+    for (current, tag) in [
+        ("pl", "pl-PL"),
+        ("pt", "pt-BR"),
+        ("it", "it-IT"),
+        ("hr", "hr-HR"),
+        ("tr", "tr-TR"),
+        ("ces", "cs-CZ"),
+        ("in", "id-ID"),
+        ("es", "es-ES"),
+        ("en", "en-US"),
+        ("RU-ru", "ru-RU"),
+    ] {
+        let c = language_checks(current, &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{current}");
+    }
+    let c = language_checks("en-NZ", &short());
+    assert_eq!(c.extra.as_deref(), Some("English (New Zealand)"));
+    assert!(!c.listed.contains(&true), "English (New Zealand) doesn't check English (United Kingdom)");
+    // A pack language in the list (once installed) is checked for its bare tag too.
+    let mut entries = short();
+    entries.push(("bg-BG".into(), "Bulgarian".into()));
+    let c = language_checks("bg", &entries);
+    assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)));
+    // Nothing set (mixed selection): nothing checked, nothing above.
+    let c = language_checks("", &entries);
+    assert_eq!((c.extra, c.listed.contains(&true)), (None, false));
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]
@@ -240,17 +283,16 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
-    let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);
     for tag in ["fr-CA", "pt-AO", "en-SG"] {
-        let c = language_checks(tag, exact(tag));
+        let c = language_checks(tag, &short());
         let name = c.extra.expect("shown above the list");
         assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
         assert!(!c.listed.contains(&true), "{tag}: nothing in the list checked");
     }
     // A tag named like a list entry checks that entry instead of showing it again.
-    let c = language_checks("PT-br-x-test", |_| false);
+    let c = language_checks("PT-br-x-test", &short());
     assert_eq!(c.extra, None);
-    assert_eq!(c.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-BR"));
+    assert_eq!(c.listed, listed_only("pt-BR"));
 }
 
 /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
@@ -262,8 +304,8 @@ fn english_dialects_are_in_the_language_menu() {
     {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     for (tag, name) in
         [("en-NZ", "English (New Zealand)"), ("en-IE", "English (Ireland)"), ("en-ZA", "English (South Africa)"), ("en-IN", "English (India)")]
@@ -292,12 +334,12 @@ fn spanish_varieties_are_in_the_language_menu() {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     assert_eq!(language_name(Some("es")), "Spanish (Spain)");
     assert_eq!(language_name(Some("es-AR")), "Spanish (Argentina)");
-    let c = language_checks("es-AR", |t| t.eq_ignore_ascii_case("es-AR"));
+    let c = language_checks("es-AR", &short());
     assert_eq!(c.extra.as_deref(), Some("Spanish (Argentina)"));
     assert!(!c.listed.contains(&true));
 }

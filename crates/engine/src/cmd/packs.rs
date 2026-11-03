@@ -229,6 +229,15 @@ mod tests {
         assert_eq!(packs::pack_for_tag("pt-PT", &packs).map(|p| p.locale.as_str()), Some("pt-pt"));
         assert_eq!(packs::pack_for_tag("pt_BR", &packs).map(|p| p.locale.as_str()), Some("pt"));
         assert_eq!(packs::pack_for_tag("nl-BE", &packs).map(|p| p.locale.as_str()), Some("nl"));
+        // A script-qualified tag finds its script's pack before the language's (CP4.3: Serbian
+        // (Latin) chosen in the Language dialog is proofed by `sr-latn`, not the Cyrillic `sr`).
+        packs.push(Pack { locale: "sr".into(), ..packs[0].clone() });
+        packs.push(Pack { locale: "sr-latn".into(), ..packs[0].clone() });
+        assert_eq!(packs::pack_for_tag("sr-Latn-RS", &packs).map(|p| p.locale.as_str()), Some("sr-latn"));
+        assert_eq!(packs::pack_for_tag("sr-Cyrl-RS", &packs).map(|p| p.locale.as_str()), Some("sr"));
+        assert_eq!(packs::pack_for_tag("sr-latn", &packs).map(|p| p.locale.as_str()), Some("sr-latn"));
+        assert_eq!(packs::pack_for_tag("-", &packs), None);
+        assert_eq!(packs::pack_for_tag("nl--", &packs).map(|p| p.locale.as_str()), Some("nl"));
         assert_eq!(packs::pack_for_tag("en-GB", &packs), None);
         assert_eq!(packs::pack_for_tag("", &packs), None);
         assert!(packs::valid_locale("sr-latn"));

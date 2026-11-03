@@ -20,13 +20,155 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("es-UY", "Spanish (Uruguay)"),
 ];
 
+/// Every language WordCraft has an English name for, by tag: the Language menu's short list, the
+/// Language dialog's built-in list, then the Language pack languages neither has (Bulgarian…).
+fn known() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    PROOFING_LANGUAGES.iter().chain(crate::dialogs_layout::LANGUAGES.iter()).chain(crate::language_packs::MORE_LANGUAGES.iter())
+}
+
+/// The language tag a document stores for text in a Language pack's language: the tag WordCraft
+/// already names for it (`nl` → `nl-NL`, `sr-latn` → `sr-Latn-RS`, `bg` → `bg-BG`), else the
+/// locale in BCP 47 case (`de-at` → `de-AT`). [`wordcraft_engine::packs::pack_for_tag`] finds the
+/// same pack again from it, so text marked in a pack's language is proofed by that pack.
+pub(crate) fn tag_for_pack(locale: &str) -> String {
+    let exact = known().find(|(t, _)| t.eq_ignore_ascii_case(locale));
+    let prefixed = || {
+        known().find(|(t, _)| {
+            t.len() > locale.len()
+                && t.get(..locale.len()).is_some_and(|p| p.eq_ignore_ascii_case(locale))
+                && t.as_bytes().get(locale.len()) == Some(&b'-')
+        })
+    };
+    if let Some((t, _)) = exact.or_else(prefixed) {
+        return (*t).to_string();
+    }
+    let parts: Vec<String> = locale
+        .split(['-', '_'])
+        .enumerate()
+        .map(|(i, p)| {
+            let alpha = p.chars().all(|c| c.is_ascii_alphabetic());
+            if i > 0 && alpha && p.len() == 2 {
+                p.to_ascii_uppercase()
+            } else if i > 0 && alpha && p.len() == 4 {
+                let lower = p.to_ascii_lowercase();
+                let mut c = lower.chars();
+                c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+            } else {
+                p.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    parts.join("-")
+}
+
+/// A pack language's name for the lists, in English: the name WordCraft has for its tag, else the
+/// pack's own name (as shown, without format characters), else the tag.
+fn pack_language_name(tag: &str, endonym: &str) -> String {
+    let named = language_name(Some(tag));
+    if !named.eq_ignore_ascii_case(tag) || endonym.trim().is_empty() {
+        return named;
+    }
+    crate::language_packs::shown(endonym, 40)
+}
+
+/// The installed and available Language packs, as (document tag, pack's own name), installed first.
+fn pack_languages(available: bool) -> Vec<(String, String)> {
+    let installed = wordcraft_engine::packs::installed().into_iter().map(|i| (i.locale, i.name));
+    let index: Vec<(String, String)> =
+        if available { wordcraft_engine::packs::available().into_iter().map(|p| (p.locale, p.name)).collect() } else { Vec::new() };
+    installed.chain(index).map(|(locale, name)| (tag_for_pack(&locale), name)).collect()
+}
+
+/// Review › Language's and the status bar's short list, as (tag, English name): the languages
+/// WordCraft proofs itself, then each installed Language pack's language not among them, by name.
+pub(crate) fn short_languages() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect();
+    let mut more: Vec<(String, String)> = Vec::new();
+    for (tag, endonym) in pack_languages(false) {
+        if !out.iter().chain(&more).any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
+            let name = pack_language_name(&tag, &endonym);
+            more.push((tag, name));
+        }
+    }
+    more.sort_by_cached_key(|(_, n)| sort_key(tl!(n)));
+    out.extend(more);
+    out
+}
+
+/// The Set Proofing Language dialog's list, as (tag, name in the interface language), sorted by
+/// name: every language WordCraft names, every installed Language pack's and every available
+/// one's, each once.
+pub(crate) fn all_languages() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let builtin = PROOFING_LANGUAGES.iter().chain(crate::dialogs_layout::LANGUAGES.iter()).map(|(t, n)| ((*t).to_string(), (*n).to_string()));
+    let packs = pack_languages(true).into_iter().map(|(tag, endonym)| {
+        let name = pack_language_name(&tag, &endonym);
+        (tag, name)
+    });
+    for (tag, name) in builtin.chain(packs) {
+        if !out.iter().any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
+            out.push((tag, tl!(&name).to_string()));
+        }
+    }
+    out.sort_by_cached_key(|(_, n)| sort_key(n));
+    out
+}
+
+/// The Set Proofing Language dialog's list: [`all_languages`], with the `current` language when
+/// it is none of them.
+pub(crate) fn language_list(current: &str) -> Vec<(String, String)> {
+    let mut list = all_languages();
+    if !current.is_empty() && !list.iter().any(|(t, _)| t.eq_ignore_ascii_case(current)) {
+        list.push((current.to_string(), tl!(&language_name(Some(current))).to_string()));
+        list.sort_by_cached_key(|(_, n)| sort_key(n));
+    }
+    list
+}
+
+/// How a language name sorts: case-insensitively, a Latin letter with a mark beside the plain one
+/// (Čeština with Czech, Ελληνικά and other scripts after Latin, by code point).
+pub(crate) fn sort_key(name: &str) -> (String, String) {
+    const FOLD: [(&str, &str); 22] = [
+        ("àáâãäåāăą", "a"),
+        ("æ", "ae"),
+        ("çćĉċč", "c"),
+        ("ďđð", "d"),
+        ("èéêëēĕėęě", "e"),
+        ("ĝğġģ", "g"),
+        ("ĥħ", "h"),
+        ("ìíîïĩīĭįı", "i"),
+        ("ĵ", "j"),
+        ("ķ", "k"),
+        ("ĺļľŀł", "l"),
+        ("ñńņňŉ", "n"),
+        ("òóôõöøōŏő", "o"),
+        ("œ", "oe"),
+        ("ŕŗř", "r"),
+        ("śŝşšș", "s"),
+        ("ß", "ss"),
+        ("ţťŧțþ", "t"),
+        ("ùúûüũūŭůűų", "u"),
+        ("ŵ", "w"),
+        ("ýÿŷ", "y"),
+        ("źżž", "z"),
+    ];
+    let lower = name.to_lowercase();
+    let mut folded = String::with_capacity(lower.len());
+    for c in lower.chars() {
+        match FOLD.iter().find(|(from, _)| from.contains(c)) {
+            Some((_, to)) => folded.push_str(to),
+            None => folded.push(c),
+        }
+    }
+    (folded, lower)
+}
+
 /// The English name of a proofing language tag, as the status bar shows it (no tag: WordCraft's
 /// default, US English): a listed language by its name; another region of one by the language
 /// and the region ("French (Canada)"); a bare language subtag by its usual variant; else the tag.
 pub(crate) fn language_name(tag: Option<&str>) -> String {
     let tag = tag.unwrap_or("en-US");
-    let named =
-        |t: &str| PROOFING_LANGUAGES.iter().chain(crate::dialogs_layout::LANGUAGES.iter()).find(|(l, _)| l.eq_ignore_ascii_case(t)).map(|(_, n)| *n);
+    let named = |t: &str| known().find(|(l, _)| l.eq_ignore_ascii_case(t)).map(|(_, n)| *n);
     // Any language the Language dialog offers (French, German…) by its name, not its tag (#860).
     if let Some(name) = named(tag) {
         return name.to_string();
@@ -39,8 +181,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     match region {
         // A region the list doesn't have: the language's name without its own region or variant.
         Some(r) => {
-            let language = crate::dialogs_layout::LANGUAGES
-                .iter()
+            let language = known()
                 .find(|(l, _)| l.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(primary)))
                 .map(|(_, n)| n.split(" (").next().unwrap_or(n));
             match language {
@@ -61,14 +202,22 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
-            _ => tag.to_string(),
+            // A language (and script) without its region: the named tag it starts (`bg` is
+            // Bulgarian, `sr-Latn` Serbian (Latin)).
+            _ => known()
+                .find(|(t, _)| {
+                    t.len() > tag.len()
+                        && t.get(..tag.len()).is_some_and(|p| p.eq_ignore_ascii_case(tag))
+                        && t.as_bytes().get(tag.len()) == Some(&b'-')
+                })
+                .map_or_else(|| tag.to_string(), |(_, n)| (*n).to_string()),
         },
     }
 }
 
 /// The English name of a region subtag the language list has no entry for (else the subtag).
 fn region_name(code: &str) -> String {
-    const REGIONS: [(&str, &str); 62] = [
+    const REGIONS: [(&str, &str); 69] = [
         ("AE", "U.A.E."),
         ("AO", "Angola"),
         ("AR", "Argentina"),
@@ -85,6 +234,7 @@ fn region_name(code: &str) -> String {
         ("CN", "China"),
         ("CO", "Colombia"),
         ("CR", "Costa Rica"),
+        ("CU", "Cuba"),
         ("CV", "Cabo Verde"),
         ("CY", "Cyprus"),
         ("DE", "Germany"),
@@ -92,10 +242,13 @@ fn region_name(code: &str) -> String {
         ("EC", "Ecuador"),
         ("EG", "Egypt"),
         ("ES", "Spain"),
+        ("FI", "Finland"),
         ("FR", "France"),
         ("GB", "United Kingdom"),
+        ("GQ", "Equatorial Guinea"),
         ("GT", "Guatemala"),
         ("HK", "Hong Kong SAR"),
+        ("HN", "Honduras"),
         ("IE", "Ireland"),
         ("IN", "India"),
         ("IQ", "Iraq"),
@@ -114,8 +267,10 @@ fn region_name(code: &str) -> String {
         ("MX", "Mexico"),
         ("MY", "Malaysia"),
         ("MZ", "Mozambique"),
+        ("NI", "Nicaragua"),
         ("NL", "Netherlands"),
         ("NZ", "New Zealand"),
+        ("PA", "Panama"),
         ("PE", "Peru"),
         ("PH", "Philippines"),
         ("PR", "Puerto Rico"),
@@ -124,6 +279,7 @@ fn region_name(code: &str) -> String {
         ("QA", "Qatar"),
         ("RU", "Russia"),
         ("SG", "Singapore"),
+        ("SV", "El Salvador"),
         ("SY", "Syria"),
         ("TW", "Taiwan"),
         ("UA", "Ukraine"),
@@ -189,23 +345,12 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
         _ => String::new(),
     };
     let no_proof = st.get("noProof").and_then(Value::as_bool).unwrap_or(false);
-    let listed = |tag: &str| {
-        current.eq_ignore_ascii_case(tag)
-            || (tag == "pl-PL" && current.eq_ignore_ascii_case("pl"))
-            || (tag == "pt-BR" && current.eq_ignore_ascii_case("pt"))
-            || (tag == "it-IT" && current.eq_ignore_ascii_case("it"))
-            || (tag == "hr-HR" && current.eq_ignore_ascii_case("hr"))
-            || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
-            || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
-            || (tag == "id-ID" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Id)
-            || (tag == "es-ES" && current.eq_ignore_ascii_case("es"))
-            || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
-    };
-    let checks = language_checks(&current, listed);
+    let entries = short_languages();
+    let checks = language_checks(&current, &entries);
     if let Some(name) = checks.extra {
         mi_check(ui, app, &name, true, "review.language", json!({"lang": current}));
     }
-    for ((tag, name), on) in PROOFING_LANGUAGES.iter().zip(checks.listed) {
+    for ((tag, name), on) in entries.iter().zip(checks.listed) {
         mi_check(ui, app, name, on, "review.language", json!({"lang": tag}));
     }
     ui.separator();
@@ -215,18 +360,24 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
     mi_check(ui, app, "Language Preferences…", false, "file.options", json!({"pane": "language"}));
 }
 
-/// The Language menu's check marks for the `current` tag: which short-list entries are checked
-/// (`listed` matches a tag), and the name of the current language when it is none of them,
-/// shown checked above. A language named like a short-list entry checks that entry, so no name
-/// shows twice.
+/// The Language menu's check marks for the `current` tag: which `entries` (tag, English name) are
+/// checked, and the name of the current language when it is none of them, shown checked above.
+/// An entry is checked for its own tag (any case), or for a tag WordCraft proofs the same way and
+/// names alike (`pl` for Polish, `ces` for Czech, `PT-br-x-test` for Portuguese (Brazil)), so no
+/// name shows twice; English (New Zealand) doesn't check English (United Kingdom).
 pub(super) struct LanguageChecks {
     pub(super) extra: Option<String>,
-    pub(super) listed: [bool; PROOFING_LANGUAGES.len()],
+    pub(super) listed: Vec<bool>,
 }
 
-pub(super) fn language_checks(current: &str, listed: impl Fn(&str) -> bool) -> LanguageChecks {
+pub(super) fn language_checks(current: &str, entries: &[(String, String)]) -> LanguageChecks {
+    use wordcraft_engine::proof::ProofLang;
     let name = (!current.is_empty()).then(|| language_name(Some(current)));
-    let on = PROOFING_LANGUAGES.map(|(t, n)| listed(t) || name.as_deref() == Some(n));
+    let lang = ProofLang::from_tag(Some(current));
+    let on: Vec<bool> = entries
+        .iter()
+        .map(|(t, n)| t.eq_ignore_ascii_case(current) || (name.as_deref() == Some(n.as_str()) && ProofLang::from_tag(Some(t)) == lang))
+        .collect();
     LanguageChecks { extra: name.filter(|_| !on.contains(&true)), listed: on }
 }
 

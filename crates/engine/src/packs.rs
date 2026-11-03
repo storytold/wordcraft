@@ -575,15 +575,23 @@ pub fn licence_texts() -> Vec<(String, String)> {
 /// About › Language data's title for SCOWL's notices.
 pub const SCOWL_TITLE: &str = "English spelling dictionaries (SCOWL)";
 
-/// The pack locale for a document language tag: the whole tag (`pt-pt`), else its language
-/// (`nl` for `nl-NL`), whichever the index has. `None` for English and tags with no pack.
+/// The pack locale for a document language tag: the whole tag (`pt-pt`), else each shorter
+/// prefix of it (`sr-latn` for `sr-Latn-RS`, `nl` for `nl-NL`), the first the index has. `None`
+/// for English and tags with no pack.
 pub fn pack_for_tag<'a>(tag: &str, packs: &'a [Pack]) -> Option<&'a Pack> {
-    let tag = tag.trim().replace('_', "-").to_ascii_lowercase();
+    // A tag is a handful of short subtags; anything longer is junk and only its start is read.
+    let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
     let base = tag.split('-').next().unwrap_or("");
     if base.is_empty() || base == "en" {
         return None;
     }
-    packs.iter().find(|p| p.locale == tag).or_else(|| packs.iter().find(|p| p.locale == base))
+    let mut prefix = tag.as_str();
+    loop {
+        if let Some(p) = packs.iter().find(|p| p.locale == prefix) {
+            return Some(p);
+        }
+        prefix = prefix.rsplit_once('-')?.0;
+    }
 }
 
 /// The languages (`w:lang`, resolved through the styles) of the body text, in first-seen order.
