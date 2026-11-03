@@ -93,3 +93,40 @@ fn a_sections_column_balance_is_its_own_else_the_profiles_and_is_written() {
         assert!(content.contains(&format!(r#"text:dont-balance-text-columns="{written}""#)), "{props}: {content}");
     }
 }
+
+#[test]
+fn paragraph_spacing_adds_up_as_the_document_says_else_as_the_profile_does() {
+    // LibreOffice's `AddParaTableSpacing` (settings.xml; false: the larger of the two, observed)
+    // says how the space between paragraphs adds up; without it, the profile decides
+    // (LibreOffice adds them, WordCraft as Word takes the larger). Written back as WordCraft lays
+    // the document out, in a set LibreOffice reads (the `ooo` namespace declared).
+    let content =
+        format!("<office:document-content {NS_T}><office:body><office:text><text:p>a</text:p></office:text></office:body></office:document-content>");
+    let with = |add: Option<bool>| {
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let mut parts = vec![("mimetype", "application/vnd.oasis.opendocument.text".to_string()), ("content.xml", content.clone())];
+        if let Some(m) = add {
+            parts.push(("settings.xml", format!(r#"<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0" xmlns:ooo="http://openoffice.org/2004/office"><office:settings><config:config-item-set config:name="ooo:configuration-settings"><config:config-item config:name="AddParaTableSpacing" config:type="boolean">{m}</config:config-item></config:config-item-set></office:settings></office:document-settings>"#)));
+        }
+        for (name, data) in parts {
+            z.start_file(name, o).unwrap();
+            std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    };
+    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+        assert!(import_as(&with(Some(true)), &p).settings.sum_paragraph_spacing);
+        assert!(!import_as(&with(Some(false)), &p).settings.sum_paragraph_spacing);
+    }
+    assert!(import_as(&with(None), &OdfProfile::libreoffice()).settings.sum_paragraph_spacing);
+    assert!(!import_as(&with(None), &OdfProfile::wordcraft()).settings.sum_paragraph_spacing);
+    for (add, written) in [(Some(true), "true"), (None, "false")] {
+        let d = import_as(&with(add), &OdfProfile::wordcraft());
+        let saved = crate::odt::export(&d).unwrap();
+        let settings = crate::odt::tests::entry(&saved, "settings.xml");
+        assert!(settings.contains(&format!(r#"config:name="AddParaTableSpacing" config:type="boolean">{written}<"#)), "{add:?}: {settings}");
+        assert_eq!(settings.matches("\"AddParaTableSpacing\"").count(), 1);
+        assert!(settings.contains("xmlns:ooo="), "LibreOffice reads the set only with its namespace");
+    }
+}

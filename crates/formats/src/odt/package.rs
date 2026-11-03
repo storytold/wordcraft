@@ -420,6 +420,71 @@ pub(super) const SETTINGS_PART: &str = "odt/settings.xml";
 /// Largest `settings.xml` kept, in bytes.
 pub(super) const MAX_SETTINGS: usize = 1 << 20;
 
+/// LibreOffice's layout settings for a new document (observed in what LibreOffice 24 saves):
+/// written in full, because LibreOffice gives any it doesn't find in a document's set its old,
+/// pre-OpenOffice value (observed), which changes how the document is laid out.
+const LO_DEFAULTS: &[(&str, bool)] = &[
+    ("NoNumberingShowFollowBy", false),
+    ("HyphenateURLs", false),
+    ("FootnoteInColumnToPageEnd", true),
+    ("GutterAtTop", false),
+    ("ContinuousEndnotes", false),
+    ("FrameAutowidthWithMorePara", false),
+    ("SubtractFlysAnchoredAtFlys", false),
+    ("SurroundTextWrapSmall", false),
+    ("TreatSingleColumnBreakAsPageBreak", false),
+    ("TabOverSpacing", false),
+    ("AutoFirstLineIndentDisregardLineSpace", true),
+    ("TabOverMargin", false),
+    ("ApplyTextAttrToEmptyLineAtEndOfParagraph", true),
+    ("DisableOffPagePositioning", false),
+    ("BackgroundParaOverDrawings", false),
+    ("TabOverflow", true),
+    ("AddVerticalFrameOffsets", false),
+    ("AddFrameOffsets", false),
+    ("TableRowKeep", false),
+    ("ApplyParagraphMarkFormatToNumbering", false),
+    ("JustifyLinesWithShrinking", false),
+    ("CollapseEmptyCellPara", true),
+    ("UnbreakableNumberings", false),
+    ("MsWordCompTrailingBlanks", false),
+    ("AddParaTableSpacing", true),
+    ("OutlineLevelYieldsNumbering", false),
+    ("UseOldNumbering", false),
+    ("AddParaSpacingToTableCells", true),
+    ("PropLineSpacingShrinksFirstLine", true),
+    ("TabAtLeftIndentForParagraphsInList", false),
+    ("DoNotCaptureDrawObjsOnPage", false),
+    ("HeaderSpacingBelowLastPara", false),
+    ("ClippedPictures", false),
+    ("MathBaselineAlignment", true),
+    ("AlignTabStopPosition", true),
+    ("UseFormerLineSpacing", false),
+    ("AddParaLineSpacingToTableCells", true),
+    ("IsKernAsianPunctuation", false),
+    ("DoNotJustifyLinesWithManualBreak", false),
+    ("UseVariableWidthNBSP", false),
+    ("AddParaTableSpacingAtStart", true),
+    ("InvertBorderSpacing", false),
+    ("AddExternalLeading", true),
+    ("UseFormerObjectPositioning", false),
+    ("UnxForceZeroExtLeading", false),
+    ("UseFormerTextWrapping", false),
+    ("ConsiderTextWrapOnObjPos", false),
+    ("StylesNoDefault", false),
+    ("IgnoreFirstLineIndentInNumbering", false),
+    ("NoGapAfterNoteNumber", false),
+    ("EmptyDbFieldHidesPara", true),
+    ("DoNotResetParaAttrsForNumFont", false),
+    ("IgnoreTabsAndBlanksForLineCalculation", false),
+    ("ClipAsCharacterAnchoredWriterFlyFrames", false),
+    ("DropCapPunctuation", true),
+    ("UseOldPrinterMetrics", false),
+    ("TabsRelativeToIndent", true),
+    ("MsWordCompMinLineHeightByFly", false),
+    ("SmallCapsPercentage66", false),
+];
+
 /// LibreOffice's layout compatibility switches (`ooo:configuration-settings`) for a document
 /// laid out as Word lays it out, as LibreOffice sets them for Word files.
 const WORD_COMPAT: &[(&str, bool)] = &[
@@ -447,7 +512,6 @@ const WORD_COMPAT: &[(&str, bool)] = &[
     ("CollapseEmptyCellPara", true),
     ("UnbreakableNumberings", true),
     ("MsWordCompTrailingBlanks", true),
-    ("AddParaTableSpacing", false),
     ("OutlineLevelYieldsNumbering", false),
     ("UseOldNumbering", false),
     ("AddParaSpacingToTableCells", true),
@@ -486,32 +550,64 @@ const WORD_COMPAT: &[(&str, bool)] = &[
 /// `settings.xml` (ODF 1.3 §3.10) for `doc`: an ODT's own, kept from opening it, or LibreOffice's
 /// switches for Word's layout. Either way tab stops are measured from the margin, as WordCraft
 /// writes them (LibreOffice's own default measures them from the paragraph's indent).
+/// `settings.xml`: LibreOffice's layout settings for a document laid out as WordCraft lays it
+/// out. The set's name, `ooo:configuration-settings`, is a qualified name: without the `ooo`
+/// namespace declared LibreOffice ignores the whole set (observed).
 fn settings_xml(doc: &Document) -> String {
-    const TABS: &str = "<config:config-item config:name=\"TabsRelativeToIndent\" config:type=\"boolean\">false</config:config-item>";
+    // What WordCraft's own layout of the document needs LibreOffice to do the same: tab stops
+    // from the margin (as written), and the space between paragraphs as WordCraft lays it out
+    // (ODF leaves it open; LibreOffice's `AddParaTableSpacing` false takes the larger of the two).
+    let ours = [("TabsRelativeToIndent", false), ("AddParaTableSpacing", doc.settings.sum_paragraph_spacing)];
+    let item = |name: &str, on: bool| format!("<config:config-item config:name=\"{name}\" config:type=\"boolean\">{on}</config:config-item>");
     if let Some(own) = doc.passthrough.get(SETTINGS_PART).filter(|b| b.len() <= MAX_SETTINGS).and_then(|b| std::str::from_utf8(b).ok()) {
-        let set = "config:name=\"ooo:configuration-settings\"";
-        let tabs = "config:name=\"TabsRelativeToIndent\"";
-        if let Some(at) = own.find(tabs) {
-            // The file's item, its value made false.
-            let rest = own.get(at..).unwrap_or("");
-            if let (Some(gt), Some(lt)) = (rest.find('>'), rest.find("</config:config-item>"))
-                && gt < lt
-            {
-                return format!("{}false{}", own.get(..at + gt + 1).unwrap_or(""), own.get(at + lt..).unwrap_or(""));
+        let mut out = own.to_string();
+        let mut ok = true;
+        for (name, on) in ours {
+            match with_setting(&out, name, on, &item(name, on)) {
+                Some(next) => out = next,
+                None => ok = false,
             }
-        } else if let Some(at) = own.find(set).and_then(|at| own.get(at..)?.find('>').map(|gt| at + gt + 1)) {
-            return format!("{}{TABS}{}", own.get(..at).unwrap_or(""), own.get(at..).unwrap_or(""));
+        }
+        if ok {
+            return out;
         }
     }
     let mut s = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" office:version=\"1.3\"><office:settings><config:config-item-set config:name=\"ooo:configuration-settings\">",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" xmlns:ooo=\"http://openoffice.org/2004/office\" office:version=\"1.3\"><office:settings><config:config-item-set config:name=\"ooo:configuration-settings\">",
     );
-    s.push_str(TABS);
-    for (name, on) in WORD_COMPAT {
-        s.push_str(&format!("<config:config-item config:name=\"{name}\" config:type=\"boolean\">{on}</config:config-item>"));
+    // LibreOffice's defaults; Word's layout rules for a document WordCraft lays out as Word does
+    // (one opened from ODF is laid out by ODF's rules, `Settings::odf`, as LibreOffice's
+    // defaults have it); and what WordCraft's layout of this document needs.
+    let mut all: Vec<(&str, bool)> = LO_DEFAULTS.to_vec();
+    let word = if doc.settings.odf.is_none() { WORD_COMPAT } else { &[] };
+    for (name, on) in word.iter().copied().chain(ours) {
+        match all.iter_mut().find(|(n, _)| *n == name) {
+            Some(slot) => slot.1 = on,
+            None => all.push((name, on)),
+        }
     }
+    for (name, on) in all {
+        s.push_str(&item(name, on));
+    }
+    // Metrics independent of any printer, as LibreOffice's own documents.
+    s.push_str("<config:config-item config:name=\"PrinterIndependentLayout\" config:type=\"string\">high-resolution</config:config-item>");
     s.push_str("</config:config-item-set></office:settings></office:document-settings>\n");
     s
+}
+
+/// A file's own `settings.xml` (`own`) with LibreOffice's setting `name` made `on`: its item's
+/// value changed, or `item` added at the start of the configuration settings. `None` when it has
+/// neither.
+fn with_setting(own: &str, name: &str, on: bool, item: &str) -> Option<String> {
+    let key = format!("config:name=\"{name}\"");
+    if let Some(at) = own.find(&key) {
+        let rest = own.get(at..)?;
+        let (gt, lt) = (rest.find('>')?, rest.find("</config:config-item>")?);
+        return (gt < lt).then(|| format!("{}{on}{}", own.get(..at + gt + 1).unwrap_or(""), own.get(at + lt..).unwrap_or("")));
+    }
+    let set = "config:name=\"ooo:configuration-settings\"";
+    let at = own.find(set).and_then(|at| own.get(at..)?.find('>').map(|gt| at + gt + 1))?;
+    Some(format!("{}{item}{}", own.get(..at).unwrap_or(""), own.get(at..).unwrap_or("")))
 }
 
 fn meta_xml(m: &Meta, props: &[wordcraft_doc::CustomProp]) -> String {

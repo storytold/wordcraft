@@ -96,6 +96,10 @@ pub struct OdfProfile {
     /// its name) ends with balanced columns at the end of the document too (`true`), else only
     /// when text follows on the same page, as in Word.
     pub balance_section_columns: bool,
+    /// The space between two paragraphs is the first's space after plus the second's space
+    /// before (`true`), else the larger of the two, when the document doesn't say (the
+    /// standard doesn't; LibreOffice's own `AddParaTableSpacing` setting does when present).
+    pub sum_paragraph_spacing: bool,
 }
 
 impl Default for OdfProfile {
@@ -122,6 +126,7 @@ impl OdfProfile {
             inline_invalid_relation_is_baseline: false,
             picture_lines_fit_pictures: false,
             balance_section_columns: false,
+            sum_paragraph_spacing: false,
         }
     }
 
@@ -142,6 +147,7 @@ impl OdfProfile {
             inline_invalid_relation_is_baseline: true,
             picture_lines_fit_pictures: true,
             balance_section_columns: true,
+            sum_paragraph_spacing: true,
         }
     }
 

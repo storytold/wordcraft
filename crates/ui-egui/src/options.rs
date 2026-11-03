@@ -696,6 +696,7 @@ fn odf_files(app: &mut WordApp, ui: &mut Ui) {
         ),
         ("pictureLinesFitPictures", "A line holding only pictures is as tall as the pictures", e.picture_lines_fit_pictures),
         ("balanceSectionColumns", "A section's columns end balanced at the end of the document too", e.balance_section_columns),
+        ("sumParagraphSpacing", "The space between paragraphs is the space after plus the space before", e.sum_paragraph_spacing),
     ] {
         let mut v = value;
         if ui.checkbox(&mut v, tl!(label)).changed() {

@@ -55,6 +55,7 @@ Where to set it:
 | *(meaning)* A page-anchored frame positioned against a paragraph or character | §20.299, §20.398 Table 23: combination not defined | `pageFrameParagraphIsPage` | the page's text area | the page's edge |
 | *(meaning)* An in-line frame positioned against a paragraph or page | §20.398 Table 23: combination not defined | `inlineInvalidRelationIsBaseline` | stands on the baseline | positioned against the baseline (raised by its offset) |
 | Height of a line holding only in-line pictures | no line-height algorithm in the standard | `pictureLinesFitPictures` | as tall as its text would be too | as tall as the pictures |
+| How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | `sumParagraphSpacing` | the larger of the two (as Word) | their sum |
 | *(meaning)* Whether a columned section's columns end balanced when nothing follows it on the page, and when it doesn't say | §20.428 `text:dont-balance-text-columns`: no default, and its value descriptions contradict its name (WordCraft reads the name; so does LibreOffice) | `balanceSectionColumns` | as Word: only when text follows on the same page | balanced |
 
 ## Law: what the standard defines and WordCraft follows whatever the profile
@@ -112,6 +113,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Paragraph spacing (`sumParagraphSpacing`); a file's `AddParaTableSpacing` is followed, and WordCraft writes it. WordCraft's `settings.xml` now declares the `ooo` namespace, without which LibreOffice ignored all of its settings. |
 | 2026-11-03 | Section column balancing (`balanceSectionColumns`); §20.428's contradiction recorded. WordCraft writes `text:dont-balance-text-columns` on every columned section. |
 | 2026-11-02 | Unstated page margins are a setting (`pageMargin`: WordCraft 0, XSL's initial value; LibreOffice 2 cm), not law: the standard refers to XSL's margins without saying whether XSL's default comes too. |
 | 2026-11-02 | First version: the profile, the open cases, law cases, writer choices, Google Docs and ONLYOFFICE findings. Stated values are never replaced by a preset; the cases about the meaning of stated values are marked. |

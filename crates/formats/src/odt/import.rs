@@ -404,6 +404,8 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 /// What [`parse_tracked`] reads besides the flow.
 struct Parsed {
     flow: Flow,
+    /// The space between paragraphs is their spacings' sum (else the larger).
+    sum_spacing: bool,
     /// The last section's properties.
     last: SectionProps,
     /// Whether change tracking is on (`None`: the document has no tracked changes).
@@ -522,6 +524,9 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     // Where tab stops are measured from: as the document's settings say (LibreOffice's own), else
     // the profile's choice (the standard ties it only to indexes, §19.512.3).
     styles.tabs_from_indent = settings.as_deref().and_then(|s| setting(s, "TabsRelativeToIndent")).unwrap_or(profile.tabs_from_indent);
+    // How the space between two paragraphs adds up: as LibreOffice's `AddParaTableSpacing` says
+    // (false: the larger of the two, as Word), else the profile's choice (the standard doesn't say).
+    let sum_spacing = settings.as_deref().and_then(|s| setting(s, "AddParaTableSpacing")).unwrap_or(profile.sum_paragraph_spacing);
     let meta_xml = read_entry(&mut z, "meta.xml");
     let meta = meta_xml.as_deref().map(read_meta).unwrap_or_default();
     // Custom document properties, then the user fields not among them.
@@ -603,6 +608,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         kept,
         hidden_controls,
         page_image,
+        sum_spacing,
     })
 }
 
@@ -647,6 +653,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         kept,
         hidden_controls,
         page_image,
+        sum_spacing,
     } = parse_tracked(bytes, (page.page_w, page.page_h), profile)?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
@@ -671,6 +678,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     doc.settings.page_color = page_doc.page_color;
     // Laid out with the standard's rules, and the profile's choices made as it is laid out.
     doc.settings.odf = Some(profile.layout());
+    doc.settings.sum_paragraph_spacing = sum_spacing;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
     if let Some((bytes, fill)) = page_image
         && let Some(ext) = model::sniff_image(&bytes)
