@@ -99,8 +99,9 @@ fn recent_harness(recent: &[String], size: egui::Vec2) -> egui_kittest::Harness<
     h
 }
 
-/// Returns the painted bounds and clip rect of the Recent entry's name and path texts.
-fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, egui::Rect, egui::Rect)> {
+/// Returns the painted bounds and clip rect of the Recent entry's name and path texts, and
+/// whether each ends with an ellipsis.
+fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, egui::Rect, egui::Rect, bool)> {
     /// Collects every text shape, including those nested in shape lists.
     fn collect_text<'a>(s: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
         match s {
@@ -120,7 +121,8 @@ fn recent_text_bounds(h: &egui_kittest::Harness<'_, WordApp>) -> Vec<(String, eg
         for ts in texts {
             let text = ts.galley.text();
             if text.starts_with("C:/Users/Someone") || text.starts_with("AVeryLongDocumentName") {
-                found.push((text.to_owned(), ts.visual_bounding_rect(), cs.clip_rect));
+                let ellipsis = ts.galley.rows.first().and_then(|row| row.glyphs.last()).is_some_and(|g| g.chr == '\u{2026}');
+                found.push((text.to_owned(), ts.visual_bounding_rect(), cs.clip_rect, ellipsis));
             }
         }
     }
@@ -134,7 +136,8 @@ fn recent_shortens_a_long_name_and_path_to_its_row() {
     let row = h.get_by_label(&name).rect();
     let texts = recent_text_bounds(&h);
     assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
-    for (text, bounds, _) in &texts {
+    for (text, bounds, _, ellipsis) in &texts {
+        assert!(*ellipsis, "text '{text}' must end with an ellipsis");
         assert!(bounds.max.x <= row.max.x + 0.5, "text '{text}' bounds.max.x ({}) > row.max.x + 0.5 ({})", bounds.max.x, row.max.x + 0.5);
     }
 
@@ -150,7 +153,8 @@ fn recent_texts_end_inside_the_visible_area_at_the_smallest_window() {
     let (h, _, _) = long_recent_harness(egui::vec2(760.0, 480.0));
     let texts = recent_text_bounds(&h);
     assert_eq!(texts.len(), 2, "both file name and path shapes must be found");
-    for (text, bounds, clip) in &texts {
+    for (text, bounds, clip, ellipsis) in &texts {
+        assert!(*ellipsis, "text '{text}' must end with an ellipsis");
         assert!(bounds.max.x <= clip.max.x + 0.5, "text '{text}' ends at {} past the visible edge {}", bounds.max.x, clip.max.x);
     }
 }
@@ -189,6 +193,30 @@ fn recent_focus_tooltip_does_not_block_the_row_below() {
     h.run_steps(3);
     let error = h.ctx.data(|d| d.get_temp::<String>(super::open_error_id())).unwrap_or_default();
     assert!(error.contains("two.docx"), "the click must reach two.docx and try to open it, got error '{error}'");
+}
+
+/// #5212: with the pointer resting on one Recent row, Tab to the next row shows the focused
+/// row's path, and moving the pointer again brings back the hovered row's path.
+#[test]
+fn recent_tab_shows_the_focused_path_while_the_pointer_rests_on_another_row() {
+    let dir = std::env::temp_dir().join("wordcraft-5212-tab");
+    let paths = ["one.docx", "two.docx"].map(|n| dir.join(n).to_string_lossy().to_string());
+    let mut h = recent_harness(&paths, egui::vec2(1440.0, 900.0));
+    let one = h.get_by_label("one.docx").rect();
+    h.event(egui::Event::PointerMoved(one.center()));
+    h.run_steps(4);
+    h.get_by_label(&paths[0]);
+
+    h.get_by_label("one.docx").focus();
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert!(h.get_by_label("two.docx").is_focused(), "Tab must move focus to the next Recent row");
+    assert!(h.query_by_label(&paths[1]).is_some(), "the focused row's path must show while the pointer rests on another row");
+
+    h.event(egui::Event::PointerMoved(one.center() + egui::vec2(4.0, 0.0)));
+    h.run_steps(4);
+    assert!(h.query_by_label(&paths[0]).is_some(), "moving the pointer must bring back the hovered row's path");
 }
 
 /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain

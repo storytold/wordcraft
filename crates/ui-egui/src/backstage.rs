@@ -593,19 +593,17 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
-    let (mut focused, mut any_hovered) = (None, false);
+    let (mut focused, mut hovered) = (None, None);
     for (p, name) in shown.iter().zip(&names) {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
-        // The row shows a name and a path that may not fit: the path in full is its tooltip.
-        let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
-        any_hovered |= resp.hovered();
         if resp.has_focus() {
             focused = Some((resp.clone(), p));
         }
         if resp.hovered() {
+            hovered = Some((resp.clone(), p));
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
         // Names and paths are set apart (a right-to-left line would scramble their marks and
@@ -637,10 +635,40 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
     }
-    // Keyboard users see the full path too. egui shows one tooltip per layer, so a hovered row's
-    // tooltip wins, and this plain tooltip lets the pointer through to the rows below it.
-    if let Some((resp, p)) = focused.filter(|_| !any_hovered) {
-        egui::Tooltip::for_widget(&resp).show(|ui| ui.label(crate::i18n::isolate_path(p)));
+    // A row shows a name and a path that may not fit: the path in full is its tooltip, for the
+    // hovered row or, after a key press, the focused one. egui shows one tooltip per layer, so
+    // only one of them is drawn, and the focus tooltip lets the pointer through to the rows below.
+    let keyboard = recent_keyboard_last(ui);
+    match (focused, hovered) {
+        (Some((resp, p)), hovered) if keyboard || hovered.is_none() => {
+            egui::Tooltip::for_widget(&resp).show(|ui| ui.label(crate::i18n::isolate_path(p)));
+        }
+        (_, Some((resp, p))) => {
+            resp.on_hover_text(crate::i18n::isolate_path(p));
+        }
+        _ => {}
+    }
+}
+
+/// Was a key pressed more recently than the pointer moved? Kept across passes, so a focused
+/// Recent row keeps its tooltip while the pointer rests on another row.
+fn recent_keyboard_last(ui: &Ui) -> bool {
+    let id = egui::Id::unique("backstage_recent_keyboard_last");
+    let now = ui.input(|i| {
+        if i.pointer.delta() != egui::Vec2::ZERO {
+            Some(false)
+        } else if i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })) {
+            Some(true)
+        } else {
+            None
+        }
+    });
+    match now {
+        Some(keyboard) => {
+            ui.ctx().data_mut(|d| d.insert_temp(id, keyboard));
+            keyboard
+        }
+        None => ui.ctx().data(|d| d.get_temp(id)).unwrap_or(false),
     }
 }
 
