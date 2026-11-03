@@ -2597,7 +2597,12 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
     let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
+    let f = super::FieldBuild {
+        depth: 1,
+        instr: format!("HYPERLINK \"http://{target}\""),
+        sep: Some(result),
+        anchor: wordcraft_doc::props::CharProps::default(),
+    };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
     assert_eq!(u64::MAX - work.left.get(), ("http://".len() + n) as u64, "one copy of the target");
@@ -2610,7 +2615,7 @@ fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
     let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
-    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
+    let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result), anchor: CharProps::default() };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
     super::finish_field(&mut pb, f, &budget);

@@ -423,6 +423,61 @@ fn tracked_paragraph_marks_round_trip() {
     assert_eq!(r.body[0].as_para().unwrap().props_at(1).ins, None, "the text itself isn't marked");
 }
 
+/// A tracked insertion or deletion of a picture, a note reference or a field round-trips: the
+/// reader takes each anchor's revision marks from its CHPX.
+#[test]
+fn tracked_object_anchors_round_trip() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions = vec![
+        Revision::new(RevisionKind::Insert, "Ada", "2025-03-04T05:06:00Z"),
+        Revision::new(RevisionKind::Delete, "Grace", "2025-03-05T10:20:00Z"),
+    ];
+    d.media.insert("pic.png".into(), Arc::new(png()));
+    let f = d.add_part(PartKind::Footnote, vec![para_block(para("The footnote."))]);
+    let inserted = CharProps { ins: Some(0), ..Default::default() };
+    let deleted = CharProps { del: Some(1), ..Default::default() };
+    let mut p = para("a b c d");
+    let picture =
+        InlineObject::Image { media: "pic.png".into(), w: 20.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let page = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let note = InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() };
+    // Inserted back to front so the offsets stay put: picture after "a", note after "b",
+    // field after "c" and an untracked field after "d".
+    p.insert_object(7, page.clone(), &CharProps::default()).unwrap();
+    p.insert_object(5, page, &inserted).unwrap();
+    p.insert_object(3, note, &deleted).unwrap();
+    p.insert_object(1, picture, &inserted).unwrap();
+    d.body = vec![para_block(p)];
+    let r = round(&d);
+    let q = r.body[0].as_para().unwrap();
+    let anchors: Vec<(&str, Option<RevisionKind>, Option<RevisionKind>)> = q
+        .text
+        .match_indices('\u{FFFC}')
+        .zip(&q.objects)
+        .map(|((at, _), o)| {
+            let props = q.props_of_char(at);
+            let kind = |rev: Option<u32>| rev.and_then(|i| r.revisions.get(i as usize)).map(|rev| rev.kind);
+            let name = match o {
+                InlineObject::Image { .. } => "picture",
+                InlineObject::NoteRef { .. } => "note",
+                InlineObject::Field { .. } => "field",
+                _ => "other",
+            };
+            (name, kind(props.ins), kind(props.del))
+        })
+        .collect();
+    assert_eq!(
+        anchors,
+        vec![
+            ("picture", Some(RevisionKind::Insert), None),
+            ("note", None, Some(RevisionKind::Delete)),
+            ("field", Some(RevisionKind::Insert), None),
+            ("field", None, None),
+        ]
+    );
+}
+
 #[test]
 fn overlapping_bookmarks_keep_their_ends() {
     // Outer starts first and ends last; inner ends before it: the ends sort apart from the starts.

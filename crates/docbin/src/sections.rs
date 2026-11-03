@@ -15,6 +15,7 @@ const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
 const S_PGN_RESTART: u16 = 0x3011; // sprmSFPgnRestart
 const S_PGN_START: u16 = 0x501C; // sprmSPgnStart97
+const S_PGN_START32: u16 = 0x7044; // sprmSPgnStart, the 32-bit form
 const S_NFC_PGN: u16 = 0x300E;
 const S_DXA_COLUMNS: u16 = 0x900C;
 const S_VJC: u16 = 0x301A;
@@ -76,9 +77,12 @@ fn sepx_props(grpprl: &[u8]) -> SectionProps {
         apply_section(&mut props, &prl);
     }
     // The start number counts only when the section restarts its page numbers
-    // ([MS-DOC] sprmSPgnStart97), whichever of the two comes first.
+    // ([MS-DOC] sprmSPgnStart97), whichever of the two comes first. A restart without a
+    // start number restarts at 0, the sprms' default.
     if !restart {
         props.page_num_start = None;
+    } else if props.page_num_start.is_none() {
+        props.page_num_start = Some(0);
     }
     // Without an explicit orientation sprm, infer it from the page shape.
     if !explicit_orient {
@@ -122,6 +126,11 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         S_PGN_START => {
             if let Some(v) = s16(prl) {
                 s.page_num_start = Some(v.max(0) as u32);
+            }
+        }
+        S_PGN_START32 => {
+            if let [b0, b1, b2, b3, ..] = prl.operand {
+                s.page_num_start = Some(u32::from_le_bytes([*b0, *b1, *b2, *b3]).min(2_147_483_646));
             }
         }
         S_NFC_PGN => {
@@ -239,5 +248,16 @@ mod tests {
         assert_eq!(sepx_props(&[&off[..], &start].concat()).page_num_start, None);
         assert_eq!(sepx_props(&[&restart[..], &start].concat()).page_num_start, Some(5));
         assert_eq!(sepx_props(&[&start[..], &restart].concat()).page_num_start, Some(5));
+    }
+
+    /// A restart without a start number restarts at 0 ([MS-DOC] sprmSPgnStart97's default),
+    /// and the 32-bit sprmSPgnStart gives the start number as well.
+    #[test]
+    fn a_page_number_restart_without_a_start_restarts_at_zero() {
+        let restart = [0x11, 0x30, 1];
+        assert_eq!(sepx_props(&restart).page_num_start, Some(0));
+        let start32 = [0x44, 0x70, 0x40, 0x42, 0x0F, 0x00];
+        assert_eq!(sepx_props(&[&restart[..], &start32].concat()).page_num_start, Some(1_000_000));
+        assert_eq!(sepx_props(&start32).page_num_start, None);
     }
 }

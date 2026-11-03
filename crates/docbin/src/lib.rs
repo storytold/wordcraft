@@ -590,7 +590,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     Some(f) => {
                         f.depth = f.depth.saturating_add(1);
                     }
-                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None }),
+                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp) }),
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -620,13 +620,16 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
             '\u{1}' => {
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-                let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
+                let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                let fc_pic = pic_location(chpx);
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
                     Some(p) => {
                         // Every anchor of a picture gets its own copy of the alt text; the
                         // copies are charged to the work budget (#3709).
                         let alt = if ctx.work.charge(p.alt.len() as u64, Cost::AltText) { p.alt.clone() } else { String::new() };
-                        pb.push('\u{FFFC}', CharProps::default());
+                        let mut props = CharProps::default();
+                        ctx.revs.mark(&mut props, chpx, ctx.pieces.piece_prm(cp));
+                        pb.push('\u{FFFC}', props);
                         pb.objects.push(InlineObject::Image {
                             media: p.key.clone(),
                             w: p.w,
@@ -649,7 +652,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     if !ctx.work.charge(object_cost(obj), Cost::FloatingObject) {
                         continue;
                     }
-                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.push('\u{FFFC}', anchor_props(ctx, cp));
                     pb.objects.push(obj.clone());
                 }
             }
@@ -657,7 +660,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // Footnote or endnote reference; custom symbols share the same character.
                 let at = ctx.notes.partition_point(|(c, _, _)| *c < cp);
                 if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
-                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.push('\u{FFFC}', anchor_props(ctx, cp));
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
                 }
             }
@@ -691,6 +694,17 @@ struct FieldBuild {
     depth: u32,
     instr: String,
     sep: Option<Vec<(char, CharProps)>>,
+    /// The begin character's revision marks, for the field object's anchor.
+    anchor: CharProps,
+}
+
+/// The properties of an object anchor at `cp`: only its revision marks, so a tracked
+/// insertion or deletion of a picture, note reference or field survives.
+fn anchor_props(ctx: &WalkCtx<'_>, cp: u32) -> CharProps {
+    let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+    let mut props = CharProps::default();
+    ctx.revs.mark(&mut props, ctx.chpx_bins.chpx(ctx.word, fc), ctx.pieces.piece_prm(cp));
+    props
 }
 
 /// Bytes a clone of `obj` copies: the object itself plus a picture's alt text, a group with all
@@ -731,7 +745,7 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
         return;
     }
     let result_text: String = result.iter().map(|(c, _)| *c).collect();
-    pb.push('\u{FFFC}', CharProps::default());
+    pb.push('\u{FFFC}', f.anchor);
     pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, dirty: false, code: false, form: String::new() });
 }
 
