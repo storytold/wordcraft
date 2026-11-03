@@ -253,6 +253,11 @@ impl Session {
     /// command cached at the revision it touched to is dropped: that number comes round again
     /// with the next edit, for a different document.
     pub(super) fn restore_rev(&mut self, rev: u64) {
+        // A rejected handler can cache matches before its edit commits a new revision.
+        // Restoring the document must invalidate those matches even when `rev` is unchanged.
+        if let Some((r, _)) = &mut self.find.results_revision {
+            *r = rev.wrapping_sub(1);
+        }
         if self.rev == rev {
             return;
         }

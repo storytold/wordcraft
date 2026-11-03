@@ -111,6 +111,12 @@ pub struct FindState {
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
+    /// Revision and story of `results`; absent when Navigation has cleared its results.
+    #[serde(skip)]
+    pub results_revision: Option<(u64, StoryRef)>,
+    /// Original absolute bounds of a selection-limited Advanced Find.
+    #[serde(skip)]
+    pub results_selection: Option<(Pos, Pos)>,
     pub current: usize,
     /// Reading Highlight: mark every match of `query` in the body.
     pub highlight: bool,
