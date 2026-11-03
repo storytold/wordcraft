@@ -878,35 +878,37 @@ fn picture_size_keeps_the_side_it_leaves() {
     let size = |s: &Session| obj_size(&selected(s).unwrap().1);
     // A side a scale sets on its own: 0 has no length to scale.
     let scaled = |x: f32, k: f32| if x == 0.0 { 0.0 } else { (x * k).clamp(1.0, 4000.0) };
-    for (w0, h0) in [(100.0, 0.0), (0.0, 100.0), (5000.0, 0.0), (0.0, 5000.0), (100.0, 0.5), (5000.0, 50.0), (100.0, 50.0)] {
-        // Each call with the size it gives, or None where both sides follow each other in
-        // proportion (within the limits, the proportions kept).
-        let follows = w0 > 0.0 && h0 > 0.0;
-        let or_together = |e: (f32, f32)| if follows { None } else { Some(e) };
+    // Sizes with both sides follow each other: they fit 1–4000 pt by the one factor nearest 1, worked out by hand
+    // for the calls `width` locked, `height` locked, `scale` 50 and `scale` 200 with a width (in that order).
+    let states = [
+        ((100.0, 0.0), None),
+        ((0.0, 100.0), None),
+        ((5000.0, 0.0), None),
+        ((0.0, 5000.0), None),
+        ((100.0, 0.5), Some([(200.0, 1.0), (4000.0, 20.0), (200.0, 1.0), (200.0, 1.0)])),
+        ((5000.0, 50.0), Some([(200.0, 2.0), (4000.0, 40.0), (2500.0, 25.0), (200.0, 2.0)])),
+        ((100.0, 50.0), Some([(200.0, 100.0), (400.0, 200.0), (50.0, 25.0), (200.0, 100.0)])),
+    ];
+    for ((w0, h0), together) in states {
+        let follow = |i: usize, alone: (f32, f32)| together.map_or(alone, |t: [(f32, f32); 4]| t[i]);
         let cases = [
-            (json!({"width": 200.0, "lockAspect": false}), Some((200.0, h0))),
-            (json!({"height": 200.0, "lockAspect": false}), Some((w0, 200.0))),
-            (json!({"width": 200.0}), or_together((200.0, h0))),
-            (json!({"height": 200.0}), or_together((w0, 200.0))),
-            (json!({"scale": 50}), or_together((scaled(w0, 0.5), scaled(h0, 0.5)))),
-            (json!({"scale": 200, "width": 200.0}), or_together((200.0, scaled(h0, 2.0)))),
-            (json!({"scale": 100}), Some((w0, h0))),
-            (json!({}), Some((w0, h0))),
+            (json!({"width": 200.0, "lockAspect": false}), (200.0, h0)),
+            (json!({"height": 200.0, "lockAspect": false}), (w0, 200.0)),
+            (json!({"width": 200.0}), follow(0, (200.0, h0))),
+            (json!({"height": 200.0}), follow(1, (w0, 200.0))),
+            (json!({"scale": 50}), follow(2, (scaled(w0, 0.5), scaled(h0, 0.5)))),
+            (json!({"scale": 200, "width": 200.0}), follow(3, (200.0, scaled(h0, 2.0)))),
+            (json!({"scale": 100}), (w0, h0)),
+            (json!({}), (w0, h0)),
             // The Size dialog: both sides sent, the height as it was.
-            (json!({"width": 200.0, "height": h0, "lockAspect": false}), Some((200.0, h0))),
-            (json!({"width": 200.0, "height": 300.0}), Some((200.0, 300.0))),
+            (json!({"width": 200.0, "height": h0, "lockAspect": false}), (200.0, h0)),
+            (json!({"width": 200.0, "height": 300.0}), (200.0, 300.0)),
         ];
-        for (v, expected) in cases {
+        for (v, (ew, eh)) in cases {
             with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
             s.run("picture.size", &v).unwrap();
             let (w, h) = size(&s);
-            match expected {
-                Some(e) => assert_eq!((w, h), e, "{w0}×{h0} {v}"),
-                None => {
-                    let within = (1.0..=4000.0).contains(&w) && (1.0..=4000.0).contains(&h);
-                    assert!(within && (w / h - w0 / h0).abs() < 1e-3 * w0 / h0, "{w0}×{h0} {v}: {w}×{h}");
-                }
-            }
+            assert!((w - ew).abs() < 1e-3 && (h - eh).abs() < 1e-3, "{w0}×{h0} {v}: {w}×{h}, not {ew}×{eh}");
         }
     }
     // Both sides of a picture's original size fit together, whatever size it had, even when the
