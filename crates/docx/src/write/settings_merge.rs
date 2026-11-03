@@ -8,8 +8,8 @@
 //! tag (namespace declarations, `mc:Ignorable`) and every child the model doesn't own are kept
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
-//! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
-//! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
+//! `w:compat` the compatibility mode and modeled break-spacing flag are replaced. Kept children
+//! referring to a relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
 //! carried. Anything unexpected returns `None`, and the generated part is written as before.
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
@@ -227,7 +227,86 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+const BREAK_SPACING: &str = "w:suppressSpBfAfterPgBrk";
+const COMPAT_ROOT: &str = "w:compat";
+const COMPAT_SETTING: &str = "w:compatSetting";
+
+// CT_Compat sequence after suppressSpBfAfterPgBrk (ISO 29500-1, 17.15.1.21).
+const BREAK_SPACING_SUCCESSORS: &[&str] = &[
+    "w:swapBordersFacingPages",
+    "w:convMailMergeEsc",
+    "w:truncateFontHeightsLikeWP6",
+    "w:mwSmallCaps",
+    "w:usePrinterMetrics",
+    "w:doNotSuppressParagraphBorders",
+    "w:wrapTrailSpaces",
+    "w:footnoteLayoutLikeWW8",
+    "w:shapeLayoutLikeWW8",
+    "w:alignTablesRowByRow",
+    "w:forgetLastTabAlignment",
+    "w:adjustLineHeightInTable",
+    "w:autoSpaceLikeWord95",
+    "w:noSpaceRaiseLower",
+    "w:doNotUseHTMLParagraphAutoSpacing",
+    "w:layoutRawTableWidth",
+    "w:layoutTableRowsApart",
+    "w:useWord97LineBreakRules",
+    "w:doNotBreakWrappedTables",
+    "w:doNotSnapToGridInCell",
+    "w:selectFldWithFirstOrLastChar",
+    "w:applyBreakingRules",
+    "w:doNotWrapTextWithPunct",
+    "w:doNotUseEastAsianBreakRules",
+    "w:useWord2002TableStyleRules",
+    "w:growAutofit",
+    "w:useFELayout",
+    "w:useNormalStyleForList",
+    "w:doNotUseIndentAsNumberingTabStop",
+    "w:useAltKinsokuLineBreakRules",
+    "w:allowSpaceOfSameStyleInTable",
+    "w:doNotSuppressIndentation",
+    "w:doNotAutofitConstrainedTables",
+    "w:autofitToFirstFixedWidthCell",
+    "w:underlineTabInNumList",
+    "w:displayHangulFixedWidth",
+    "w:splitPgBreakAndParaMark",
+    "w:doNotVertAlignCellWithSp",
+    "w:doNotBreakConstrainedForcedTable",
+    "w:doNotVertAlignInTxbx",
+    "w:useAnsiKerningPairs",
+    "w:cachedColBalance",
+    COMPAT_SETTING,
+];
+
+fn merge_break_spacing(orig: &str, generated: &str) -> Option<String> {
+    let (_, close, original) = children(orig, COMPAT_ROOT)?;
+    let (_, _, current) = children(generated, COMPAT_ROOT)?;
+    let replacement = match current.iter().find(|c| c.name == BREAK_SPACING) {
+        Some(child) => Some(generated.get(child.start..child.end)?),
+        None => None,
+    };
+    let mut out = String::with_capacity(orig.len() + replacement.map_or(0, str::len));
+    let mut cursor = 0;
+    let mut replaced = false;
+    for child in original.iter().filter(|c| c.name == BREAK_SPACING) {
+        out.push_str(orig.get(cursor..child.start)?);
+        if !replaced {
+            out.push_str(replacement.unwrap_or(""));
+            replaced = true;
+        }
+        cursor = child.end;
+    }
+    if !replaced && let Some(flag) = replacement {
+        let at = original.iter().find(|c| BREAK_SPACING_SUCCESSORS.contains(&c.name.as_str())).map_or(close, |c| c.start);
+        out.push_str(orig.get(cursor..at)?);
+        out.push_str(flag);
+        cursor = at;
+    }
+    out.push_str(orig.get(cursor..)?);
+    Some(out)
+}
+
+/// The original `w:compat` with modeled values taken from the generated one.
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
     let mode = |s: &str| -> Option<(usize, usize)> {
         let at = s.find("w:name=\"compatibilityMode\"")?;
@@ -235,7 +314,7 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
         let tag_end = tag_start + s.get(tag_start..)?.find('>')? + 1;
         Some((tag_start, tag_end))
     };
-    match (mode(orig), mode(generated)) {
+    let merged = match (mode(orig), mode(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
         (None, Some((c, d))) => {
             // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
@@ -249,7 +328,8 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
             }
         }
         _ => Some(orig.to_string()),
-    }
+    }?;
+    merge_break_spacing(&merged, generated)
 }
 
 /// Does `original` (a settings part) hold anything the model doesn't write? Then the reader keeps

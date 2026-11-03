@@ -534,7 +534,7 @@ impl<'a> Flow<'a> {
     }
 
     /// Start the next page or column if the lines just placed end one, or are not the last.
-    fn after_lines(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, forced: Option<LineEnd>, mark_with_break: bool) {
+    fn after_lines(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, forced: Option<LineEnd>, mark_with_break: bool, break_gap: f32) {
         let (block, body_top) = (self.block, self.body_top);
         // A paragraph that starts with a page break starts on the new page, its space before
         // there (Word).
@@ -549,7 +549,7 @@ impl<'a> Flow<'a> {
             }
             Some(LineEnd::PageBreak) if starts_with_break && !pb.web => {
                 pb.new_page(block, body_top);
-                pb.y += self.pl.rp.space_before.max(0.0);
+                pb.y += break_gap.max(0.0);
             }
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
             Some(LineEnd::ColumnBreak) => {
@@ -717,6 +717,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     if broke_before {
         pb.new_page(block, body_top);
     }
+    let follows_paragraph = pb.prev.is_some();
     let before = f.gap_before(ctx, pb, broke_before);
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
@@ -727,6 +728,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.reanchor(ctx, pb, (y0, applied_before));
         f.anchor_y = y0 - applied_before;
     }
+    // Retain the published predecessor-dependent gap across the leading page break.
+    let break_gap = if ctx.doc.settings.suppress_break_spacing { if follows_paragraph { applied_before } else { 0.0 } } else { f.pl.rp.space_before };
     while f.l0 < f.n() {
         f.relay_wrap(ctx, pb);
         f.relay_pages(ctx, pb);
@@ -747,7 +750,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         }
         let (forced, mark_with_break) = (fit.forced, fit.mark_with_break);
         f.emit(ctx, pb, rooms, (lead, fit, &notes));
-        f.after_lines(ctx, pb, forced, mark_with_break);
+        f.after_lines(ctx, pb, forced, mark_with_break, break_gap);
     }
     f.finish(pb, rooms);
 }

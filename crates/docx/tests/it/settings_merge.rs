@@ -163,3 +163,43 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+#[test]
+fn break_spacing_setting_saves() {
+    let original = SETTINGS.replace("<w:compat>", "<w:compat><w:suppressSpBfAfterPgBrk/>");
+    let mut d = wordcraft_docx::read(&with_settings(&original)).unwrap();
+    assert!(d.settings.suppress_break_spacing);
+    for enabled in [false, true, false] {
+        d.settings.suppress_break_spacing = enabled;
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let files = unzip(&bytes);
+        let settings = text(&files, "word/settings.xml");
+        assert!(settings.contains("enableOpenTypeFeatures"), "unowned compatibility setting survives");
+        assert_eq!(settings.matches("<w:suppressSpBfAfterPgBrk").count(), usize::from(enabled));
+        d = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(d.settings.suppress_break_spacing, enabled);
+    }
+}
+
+#[test]
+fn break_spacing_schema_order() {
+    for later in ["swapBordersFacingPages", "doNotUseHTMLParagraphAutoSpacing", "cachedColBalance"] {
+        let original = SETTINGS.replace("<w:compat>", &format!("<w:compat><w:doNotExpandShiftReturn/><w:suppressTopSpacingWP/><w:{later}/>"));
+        let mut d = wordcraft_docx::read(&with_settings(&original)).unwrap();
+        for enabled in [true, false, true] {
+            d.settings.suppress_break_spacing = enabled;
+            let bytes = wordcraft_docx::write(&d).unwrap();
+            let settings = text(&unzip(&bytes), "word/settings.xml");
+            if enabled {
+                let at = settings.find("<w:suppressSpBfAfterPgBrk").unwrap();
+                assert!(settings.find("<w:doNotExpandShiftReturn").unwrap() < at, "{settings}");
+                assert!(settings.find("<w:suppressTopSpacingWP").unwrap() < at, "{settings}");
+                assert!(at < settings.find(&format!("<w:{later}")).unwrap(), "{settings}");
+            }
+            assert_eq!(settings.matches("<w:suppressSpBfAfterPgBrk").count(), usize::from(enabled));
+            d = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(d.settings.suppress_break_spacing, enabled);
+            assert!(d.settings.do_not_expand_shift_return);
+        }
+    }
+}

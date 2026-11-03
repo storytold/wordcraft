@@ -142,6 +142,9 @@ fn write_compatibility_settings(w: &mut W, doc: &Document) {
     if doc.settings.do_not_expand_shift_return {
         w.empty("w:doNotExpandShiftReturn", &[]);
     }
+    if doc.settings.suppress_break_spacing {
+        w.empty("w:suppressSpBfAfterPgBrk", &[]);
+    }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }
