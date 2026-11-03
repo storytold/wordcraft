@@ -1,3 +1,4 @@
+use super::section::comment_reference_style;
 use super::{
     ChangeAttrs, CharProps, InlineObject, Paragraph, PartRels, Piece, PropChange, RevisionKind, W, Writer, open_change, ppr_inner, rpr, rpr_inner, rt,
 };
@@ -103,6 +104,17 @@ impl Writer<'_> {
             w.raw("<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr>");
             w.empty(mark, &[]);
             w.raw("</w:r>");
+        }
+        // A comment's first paragraph starts with its annotation reference mark, in the comment
+        // reference style (#3541). The reader skips the mark, so a comment read from a file gets
+        // it back here, once.
+        if std::mem::take(&mut self.pending_annotation_ref) {
+            w.open("w:r", &[]);
+            w.open("w:rPr", &[]);
+            w.val("w:rStyle", comment_reference_style(self.doc));
+            w.close("w:rPr");
+            w.empty("w:annotationRef", &[]);
+            w.close("w:r");
         }
         // A header's watermark, in its first top-level paragraph (not a table cell or text box).
         if depth == 0
