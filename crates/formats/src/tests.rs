@@ -1019,3 +1019,14 @@ fn latex_export_keeps_repeated_spaces() {
     let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
     assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }
+
+#[test]
+fn many_imported_lists_take_fresh_numbering_ids_in_turn() {
+    // Each list found its ids by scanning every numbering made before it (quadratic in lists).
+    let md: String = (0..4000).map(|i| if i % 2 == 0 { "- a\n\n" } else { "1. b\n\n" }).collect();
+    let d = import("md", md.as_bytes()).expect("handled").expect("import");
+    let ids: Vec<u32> = d.numbering.nums.iter().map(|n| n.id).collect();
+    assert_eq!(ids, (1..=4000).collect::<Vec<u32>>());
+    let abstracts: Vec<u32> = d.numbering.abstracts.iter().map(|a| a.id).collect();
+    assert_eq!(abstracts, (0..4000).collect::<Vec<u32>>());
+}

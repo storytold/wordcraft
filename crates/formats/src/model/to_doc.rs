@@ -118,6 +118,10 @@ struct Builder<'a> {
     revs: std::collections::HashMap<(u8, RevMark), u32>,
     /// Link and font bytes given to runs so far ([`MAX_RUN_STRINGS`]).
     run_strings: usize,
+    /// The ids the next list's abstract and concrete numbering take: past every id in `doc`,
+    /// found once rather than by a scan of every numbering per list.
+    next_abstract: u32,
+    next_num: u32,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -137,7 +141,9 @@ impl<'a> Builder<'a> {
                 revs.entry((rev_key(r.kind), mark)).or_insert(i as u32);
             }
         }
-        Builder { doc, revs, run_strings: 0 }
+        let next_abstract = doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
+        let next_num = doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
+        Builder { doc, revs, run_strings: 0, next_abstract, next_num }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -291,9 +297,10 @@ impl<'a> Builder<'a> {
             })
             .collect();
         let numbering = &mut self.doc.numbering;
-        let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
+        let (aid, nid) = (self.next_abstract, self.next_num);
+        self.next_abstract = aid.saturating_add(1);
+        self.next_num = nid.saturating_add(1);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels, ..Default::default() });
-        let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
         numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
     }
