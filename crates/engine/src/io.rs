@@ -30,7 +30,7 @@ pub const OPEN_EXTS: &[&str] = &[
     "json",
 ];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
+pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "mht", "rtf", "odt", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -54,7 +54,7 @@ pub fn is_word_package(ext: &str) -> bool {
 pub struct ExportOptions {
     /// Print Markup: PDFs show tracked changes marked up and, with `comments`, each page scaled
     /// down beside a markup area with the comments in balloons (page images get the area too);
-    /// HTML, Markdown and text copies end with the comments.
+    /// HTML, MHT, Markdown and text copies end with the comments.
     pub markup: bool,
     /// With `markup`, show the comments (Track Changes Options › Comments).
     pub comments: bool,

@@ -7,15 +7,16 @@ use serde_json::json;
 use wordcraft_doc::{Document, StoryRef};
 use wordcraft_engine::{Session, io};
 
-struct Scratch(PathBuf);
+/// A directory of its own for one test, removed when dropped.
+pub(crate) struct Scratch(PathBuf);
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!("wordcraft-safe-save-test-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }
-    fn path(&self, name: &str) -> PathBuf {
+    pub(crate) fn path(&self, name: &str) -> PathBuf {
         self.0.join(name)
     }
     fn names(&self) -> Vec<String> {

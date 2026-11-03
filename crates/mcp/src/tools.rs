@@ -99,14 +99,14 @@ pub fn tool_definitions() -> Value {
         tool(
             "open_document",
             "Open",
-            "Open a .docx, .doc, .odt, .rtf, .md, .tex, .html, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
+            "Open a .docx, .doc, .odt, .rtf, .md, .tex, .html, .mht, .txt or .json file, or any other text file (.m3u, .log, .ini…) as plain text. Give `password` for a protected file; without it the call fails asking for one. The file opens beside the documents already open (it replaces a blank one nobody has used) and becomes the active one; a file that is already open becomes active again (`alreadyOpen`). The reply's `id` addresses it (`doc`).",
             obj(json!({"path": s("File path"), "password": s("Password, if the file is protected")}), &["path"]),
             false
         ),
         tool(
             "save_document",
             "Save",
-            "Save (format from the extension: docx, pdf, odt, rtf, html, md, tex, txt, png).",
+            "Save (format from the extension: docx, pdf, odt, rtf, html, mht, md, tex, txt, png).",
             with_doc(obj(json!({"path": s("File path; omit to save in place")}), &[])),
             false
         ),
