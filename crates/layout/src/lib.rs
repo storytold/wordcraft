@@ -355,3 +355,7 @@ thread_local! {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod tests_leading;

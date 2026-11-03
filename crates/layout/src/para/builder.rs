@@ -5,10 +5,11 @@ use super::chars::{
 };
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
-use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use super::{Arc, Document, FaceRef, LineSpacing, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
+    pub(super) spacing: LineSpacing,
     pub(super) styles: Vec<StyleRun>,
     /// Hash of a style's format → (index in `styles`, small caps), see `style`.
     pub(super) style_index: std::collections::HashMap<u64, Vec<(u32, bool)>>,
@@ -91,6 +92,13 @@ impl<'a> Builder<'a> {
         segs
     }
 
+    fn font_metrics(&self, face: &wordcraft_fonts::FontFace) -> (f64, f64) {
+        if matches!(self.spacing, LineSpacing::Exactly(_)) {
+            return wordcraft_fonts::word::fixed_line_metrics(face);
+        }
+        wordcraft_fonts::word::line_metrics(face)
+    }
+
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     pub(super) fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
         let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
@@ -123,7 +131,7 @@ impl<'a> Builder<'a> {
         // the height Word gives it.
         let (a, d) = match wordcraft_fonts::word::symbol_line(&rc.font, &r) {
             Some((a, d)) => (a * face.upem, d * face.upem),
-            None => wordcraft_fonts::word::line_metrics(&face),
+            None => self.font_metrics(&face),
         };
         let k = size as f64 / face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has

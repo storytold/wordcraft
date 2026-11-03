@@ -292,7 +292,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
         .collect();
     let width: f32 = runs.iter().map(|(f, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
     // The font's own line metrics centre the line, whichever faces draw it.
-    let (ascent, descent) = wordcraft_fonts::word::line_metrics(primary.get());
+    let (ascent, descent) = wordcraft_fonts::word::fixed_line_metrics(primary.get());
     let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * scale(primary) / 2.0;
     let mut pen = match align {
         TextAlign::Left => r.x,
