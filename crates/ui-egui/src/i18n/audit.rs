@@ -164,6 +164,17 @@ impl<'a> Exempt<'a> {
             names.extend(c.categories.iter().cloned());
             names.extend(c.series.iter().map(|s| s.name.clone()));
         }
+        // About › Language data: the licences' own titles and texts, and the packs' names,
+        // licences and sources (File › Options › Language), as their authors wrote them.
+        for (title, text) in wordcraft_engine::packs::licence_texts() {
+            names.extend([title, text]);
+        }
+        for p in wordcraft_engine::packs::available() {
+            names.extend([format!("{} · {}", p.name, p.locale), p.source_link().to_string(), p.locale, p.name, p.licence, p.url]);
+        }
+        for p in wordcraft_engine::packs::installed() {
+            names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale), p.locale]);
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
@@ -171,6 +182,10 @@ impl<'a> Exempt<'a> {
         // interface text.
         if let Some(sugg) = app.canvas.context_issue.as_ref().and_then(|i| i.get("suggestions")).and_then(Value::as_array) {
             names.extend(sugg.iter().filter_map(Value::as_str).map(str::to_string));
+        }
+        // The proofing pane displays document context and dictionary suggestions, not UI wording.
+        if let Some(form) = &app.spelling_review {
+            names.extend(form.content_text());
         }
         Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
@@ -281,6 +296,7 @@ fn untranslated_interface_text() {
         "about",
         "contributors",
         "models",
+        "languageData",
         "insertMergeField",
         "findRecipient",
         "mergeRecords",
