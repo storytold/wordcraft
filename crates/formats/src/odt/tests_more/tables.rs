@@ -176,3 +176,18 @@ fn a_cells_background_picture_is_read_drawn_and_written() {
     let again = cells(&back)[0].picture.clone().expect("kept");
     assert_eq!((again.repeat, again.align, again.size), (pic.repeat, pic.align, pic.size));
 }
+
+#[test]
+fn what_a_covered_cell_holds_stays_out_of_the_document() {
+    // ONLYOFFICE writes paragraphs into covered cells (§9.1.5: not shown); they went before the
+    // table as empty paragraphs, pushing it down the page.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell table:number-columns-spanned="2"><text:p>wide</text:p></table:table-cell><table:covered-table-cell><text:p>hidden</text:p><text:list><text:list-item><text:p/></text:list-item></text:list></table:covered-table-cell></table:table-row><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table><text:p>after</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, None)).unwrap();
+    assert!(matches!(&*d.body[0], Block::Table(_)), "the table comes first");
+    assert_eq!(d.body.len(), 2);
+    assert_eq!(d.body[1].as_para().unwrap().text, "after");
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.rows[0].cells[0].props.span, 2);
+}

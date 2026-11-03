@@ -441,6 +441,8 @@ struct Parsed {
     font: Option<String>,
     /// The document's default font size, points.
     size: Option<f32>,
+    /// The document's default text colour.
+    color: Option<wordcraft_doc::props::Rgb>,
     /// The custom paragraph styles the paragraphs use, parents included, parents first.
     named: Vec<super::styles::NamedStyle>,
     /// Their ODF names, alongside.
@@ -618,6 +620,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         track,
         font: styles.doc_font(),
         size: styles.doc_size(),
+        color: styles.doc_color(),
         spacing: styles.doc_spacing(),
         looks: styles.kind_looks(),
         named,
@@ -665,6 +668,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         track,
         font,
         size,
+        color,
         spacing,
         looks,
         named,
@@ -704,6 +708,9 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     }
     if size.is_some() {
         doc.styles.default_chr.size = size;
+    }
+    if let Some(c) = color {
+        doc.styles.default_chr.color = Some(wordcraft_doc::props::TextColor::Rgb(c));
     }
     doc.styles.default_chr.kern = kern.then_some(1.0);
     doc.styles.default_chr.overlay(&scripts);

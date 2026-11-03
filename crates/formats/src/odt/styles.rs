@@ -1042,6 +1042,8 @@ pub(super) struct Styles {
     pub(super) default_kern: bool,
     /// Widow and orphan control `style:default-style` for paragraphs states, if it does.
     default_widows: Option<bool>,
+    /// The text colour of `style:default-style` for paragraphs (`fo:color`), if it gives one.
+    default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
     /// The named dashes and gradients graphic styles use.
@@ -1092,6 +1094,7 @@ impl Styles {
                         self.default_size = Some(sz.min(1638.0));
                     }
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
+                    self.default_color = get(&a, "fo:color").and_then(model::parse_color);
                     script_properties(&a, &mut self.default_scripts, &self.faces);
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
@@ -1173,6 +1176,12 @@ impl Styles {
 
     /// The document's default font size: the Standard paragraph style's (the document's
     /// defaults, as for [`Styles::doc_font`]), else the default style's.
+    /// The document's default text colour: the Standard paragraph style's, else the default
+    /// style's.
+    pub(super) fn doc_color(&self) -> Option<wordcraft_doc::props::Rgb> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.color).or(self.default_color)
+    }
+
     pub(super) fn doc_size(&self) -> Option<f32> {
         self.map
             .get("Standard")

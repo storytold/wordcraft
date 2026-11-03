@@ -919,6 +919,8 @@ impl Body<'_> {
                         t.row.push(Cell { covered: true, ..Default::default() });
                     }
                 }
+                // What a covered cell holds isn't shown (§9.1.5): skipped (it went before the table).
+                self.skip = 1;
             }
             "frame" => {
                 let w = get(a, "svg:width").and_then(length);
@@ -1274,6 +1276,10 @@ impl Body<'_> {
     fn end_skipped(&mut self) {
         self.skip -= 1;
         if self.skip > 0 {
+            return;
+        }
+        // Not a custom shape's geometry (a covered cell, say): nothing more.
+        if self.geometry.is_none() && self.geometry_xml.is_none() {
             return;
         }
         let xml = self.geometry_xml.take();

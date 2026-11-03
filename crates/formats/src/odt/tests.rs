@@ -45,6 +45,28 @@ fn default_paragraph_style_font_becomes_document_font() {
 }
 
 #[test]
+fn the_default_text_colour_round_trips() {
+    // Google Docs' résumé template greys all its text in the default style; it came back black.
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hi</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!(
+        r##"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:color="#666666"/></style:default-style></office:styles></office:document-styles>"##
+    );
+    let grey = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0x66, 0x66, 0x66)));
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(doc.styles.default_chr.color, grey);
+    let back = import(&export(&doc).unwrap()).unwrap();
+    assert_eq!(back.styles.default_chr.color, grey);
+    // None stated: none written (automatic).
+    let plain = import(&package(&content, None)).unwrap();
+    let styles = entry(&export(&plain).unwrap(), "styles.xml");
+    let default =
+        styles.split("<style:default-style style:family=\"paragraph\">").nth(1).and_then(|s| s.split("</style:default-style>").next()).unwrap();
+    assert!(!default.contains("fo:color"), "{default}");
+}
+
+#[test]
 fn rejects_garbage() {
     assert!(parse(b"not a zip").is_err());
 }
