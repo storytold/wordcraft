@@ -2648,6 +2648,7 @@ fn only_web_and_email_links_are_followed() {
 
 #[test]
 fn followed_links_reach_the_launcher_without_command_line_syntax() {
+    use super::links::for_launcher;
     assert_eq!(for_launcher("https://x.example/a|calc"), "https://x.example/a%7Ccalc");
     assert_eq!(for_launcher("https://x.example/a^b<c>d(e)f!g\"h i"), "https://x.example/a%5Eb%3Cc%3Ed%28e%29f%21g%22h%20i");
     // Ordinary links, queries and existing escapes are unchanged.
