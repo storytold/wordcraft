@@ -27,6 +27,62 @@ pub fn lift_color(math: &mut Math) -> Option<Rgb> {
     Some(c)
 }
 
+/// An explicit size shared by every run and structural control, without inherited arguments.
+pub(super) fn shared_size(e: &El) -> Option<f32> {
+    fn scan(e: &El, depth: usize, common: &mut Option<f32>, runs: &mut usize) -> Option<()> {
+        if depth > MAX_DEPTH || e.name == "m:argSz" {
+            return None;
+        }
+        // The reader drops deleted revisions, including their nested size properties.
+        if matches!(e.name.as_str(), "w:del" | "w:moveFrom" | "m:del") {
+            return Some(());
+        }
+        if matches!(e.name.as_str(), "m:r" | "w:r" | "m:ctrlPr") {
+            let mut r = MRun::default();
+            wrpr(e.child("w:rPr"), &mut r);
+            let size = r.size?;
+            if common.is_some_and(|previous| previous != size) {
+                return None;
+            }
+            *common = Some(size);
+            if e.name != "m:ctrlPr" {
+                *runs = runs.saturating_add(1);
+            }
+        }
+        if matches!(
+            e.name.as_str(),
+            "m:f"
+                | "m:sSup"
+                | "m:sSub"
+                | "m:sSubSup"
+                | "m:sPre"
+                | "m:rad"
+                | "m:nary"
+                | "m:d"
+                | "m:func"
+                | "m:limLow"
+                | "m:limUpp"
+                | "m:acc"
+                | "m:bar"
+                | "m:borderBox"
+                | "m:box"
+                | "m:groupChr"
+                | "m:eqArr"
+                | "m:m"
+                | "m:phant"
+        ) {
+            e.child(&format!("{}Pr", e.name))?.child("m:ctrlPr")?;
+        }
+        for child in e.els() {
+            scan(child, depth + 1, common, runs)?;
+        }
+        Some(())
+    }
+    let (mut common, mut runs) = (None, 0usize);
+    scan(e, 0, &mut common, &mut runs)?;
+    common.filter(|_| runs > 0)
+}
+
 /// `m:oMathParaPr/m:jc`.
 pub fn para_jc(para: &El) -> MathJc {
     match para.child("m:oMathParaPr").and_then(|p| p.child("m:jc")).and_then(|j| j.attr("m:val")) {
@@ -356,6 +412,75 @@ mod tests {
             r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{inner}</m:oMath>"#
         );
         crate::xml::parse(x.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn shared_math_size() {
+        let run = |size: Option<u16>| {
+            format!("<m:r><w:rPr>{}</w:rPr><m:t>x</m:t></m:r>", size.map(|v| format!("<w:sz w:val=\"{v}\"/>")).unwrap_or_default())
+        };
+        for size in [18, 28, 40] {
+            let control = format!("<m:ctrlPr><w:rPr><w:sz w:val=\"{size}\"/></w:rPr></m:ctrlPr>");
+            let uniform = format!("<m:sSup><m:sSupPr>{control}</m:sSupPr><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup>", run(Some(size)), run(Some(size)));
+            assert_eq!(shared_size(&omath(&uniform)), Some(f32::from(size) / 2.0));
+            for inner in [
+                uniform.replace(&run(Some(size)), &run(None)),
+                uniform.replace(&control, ""),
+                uniform.replace(&control, &control.replace(&format!("val=\"{size}\""), "val=\"22\"")),
+                format!("{}{uniform}", run(Some(22))),
+                uniform.replace("<m:e>", "<m:e><m:argPr><m:argSz m:val=\"-1\"/></m:argPr>"),
+            ] {
+                assert_eq!(shared_size(&omath(&inner)), None, "preserve operand/control boundaries: {inner}");
+            }
+        }
+    }
+
+    fn sized_run(size: Option<u16>) -> String {
+        let prop = size.map(|v| format!("<w:sz w:val=\"{v}\"/>")).unwrap_or_default();
+        format!("<m:r><w:rPr>{prop}</w:rPr><m:t>x</m:t></m:r>")
+    }
+
+    #[test]
+    fn shared_size_deletions() {
+        for tag in ["w:del", "w:moveFrom", "m:del"] {
+            for deleted in [sized_run(Some(22)), sized_run(None), "<m:argPr><m:argSz m:val=\"-1\"/></m:argPr>".into()] {
+                let e = omath(&format!("{}<{tag}>{deleted}</{tag}>", sized_run(Some(28))));
+                assert_eq!(texts(&mut read_omath(&e, MathJc::CenterGroup)), ["x"]);
+                assert_eq!(shared_size(&e), Some(14.0), "{tag}: {deleted}");
+                assert_eq!(shared_size(&omath(&format!("<{tag}>{deleted}</{tag}>"))), None);
+            }
+        }
+    }
+
+    #[test]
+    fn shared_size_insertions() {
+        for tag in ["w:ins", "w:moveTo"] {
+            for (size, expected) in [(Some(28), Some(14.0)), (Some(22), None), (None, None)] {
+                let e = omath(&format!("{}<{tag}>{}</{tag}>", sized_run(Some(28)), sized_run(size)));
+                assert_eq!(texts(&mut read_omath(&e, MathJc::CenterGroup)).concat(), "xx");
+                assert_eq!(shared_size(&e), expected, "{tag}: {size:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn shared_size_nested_controls() {
+        let script = |size| {
+            format!(
+                "<m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:sz w:val=\"{size}\"/></w:rPr></m:ctrlPr></m:sSupPr><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup>",
+                sized_run(Some(28)),
+                sized_run(Some(28))
+            )
+        };
+        let visible = script(28);
+        let inner = format!("<w:ins><w:moveTo>{visible}<w:del>{}</w:del></w:moveTo></w:ins>", script(22));
+        let e = omath(&inner);
+        assert_eq!(texts(&mut read_omath(&e, MathJc::CenterGroup)), ["x", "x"]);
+        assert_eq!(shared_size(&e), Some(14.0));
+        for visible in [script(22), visible.replace("<m:e>", "<m:e><m:argPr><m:argSz m:val=\"-1\"/></m:argPr>")] {
+            let e = omath(&format!("<w:ins>{visible}</w:ins>"));
+            assert_eq!(shared_size(&e), None, "visible size guards: {visible}");
+        }
     }
 
     #[test]
