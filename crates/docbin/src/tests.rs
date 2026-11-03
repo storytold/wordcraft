@@ -2402,6 +2402,23 @@ fn second_table_gets_its_own_grid() {
 }
 
 #[test]
+fn repeated_cell_sprms_keep_one_override_per_cell() {
+    // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
+    // slot per cell, the last value winning, instead of a copy per repetition.
+    let mut sprms = Vec::new();
+    for w in 0..200u16 {
+        let [w0, w1] = (w * 20).to_le_bytes();
+        sprms.push(sprm_cb(0xD635, &[0, 63, 3, w0, w1]));
+        sprms.push(sprm_cb(0xD62C, &[0, 255, 1]));
+        sprms.push([0x24, 0x56, 0, 2].to_vec());
+    }
+    let row = crate::table::decode(&sprms.concat());
+    assert_eq!(row.width_of(0), Some(199.0), "the last width wins");
+    assert_eq!(row.width_of(62), Some(199.0));
+    assert!(row.overrides() <= 63 + 255 + 63, "{}", row.overrides());
+}
+
+#[test]
 fn sprm_t_cell_width_twips_and_percentage() {
     // [MS-DOC] §2.9.290 sprmTCellWidth (0xD635):
     // cb (1 byte), itcFirst (1 byte), itcLim (1 byte), ftsWidth (1 byte), wWidth (2 bytes).
