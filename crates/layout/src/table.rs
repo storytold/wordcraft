@@ -2,6 +2,7 @@
 //! table-style conditional formatting. Rows are laid out as free-standing boxes; pagination
 //! moves whole rows or splits them between lines (`split_row`).
 
+use super::foreground::{Foreground, extend_foreground, remap_foreground};
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
@@ -18,6 +19,7 @@ pub struct RowLayout {
     pub height: f32,
     /// Items relative to the table's top-left (x) and the row's top (y).
     pub items: Vec<Placed>,
+    pub(super) foreground: Vec<Foreground>,
     /// The room the row keeps below its text: the bottom cell margin and border band. Part of a
     /// row split across pages keeps it too.
     pub bottom: f32,
@@ -379,6 +381,7 @@ fn region_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (
 
 struct CellBox {
     items: Vec<Placed>,
+    foreground: Vec<Foreground>,
     h: f32,
     x: f32,
     w: f32,
@@ -629,8 +632,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let insets = margins[0] + margins[2] + band_t + band_b;
             let turn = cell.props.text_direction;
             let mut turned = None;
-            let (items, h) = if cell.props.vmerge == VMerge::Continue {
-                (Vec::new(), 0.0)
+            let (items, foreground, h) = if cell.props.vmerge == VMerge::Continue {
+                (Vec::new(), Vec::new(), 0.0)
             } else if turn.is_turned() {
                 collapsed = false;
                 // Turned text: its lines run along the cell's height. An exact row height sets
@@ -645,12 +648,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                         natural_length(&probe).clamp(4.0, TURNED_MAX)
                     }
                 };
-                let BoxLayout { items, height, floats_bottom, .. } = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
+                let BoxLayout { items, foreground, height, floats_bottom, .. } =
+                    layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
                 let across = height.max(floats_bottom);
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
-                (items, len)
+                (items, foreground, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
+                let BoxLayout { mut items, foreground, mut height, floats_bottom, last_top, .. } =
                     layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
@@ -663,7 +667,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     it.translate(x0 + margins[1], margins[0] + band_t);
                 }
                 // The cell grows to hold its floating tables.
-                (items, height.max(floats_bottom))
+                (items, foreground, height.max(floats_bottom))
             };
             let h = h + insets;
             let end = h - margins[2] - band_b;
@@ -677,6 +681,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             }
             cells.push(CellBox {
                 items,
+                foreground,
                 h,
                 x: x0,
                 w: x1 - x0,
@@ -771,6 +776,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         let exact = t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0));
         let mut items = Vec::new();
         let mut parts = Vec::with_capacity(cells.len());
+        let mut foreground = Vec::new();
         for (ci, c) in cells.into_iter().enumerate() {
             let first = items.len();
             // A restart cell spans several rows: its height is their sum.
@@ -805,6 +811,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
+            let mut cell_foreground = c.foreground;
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
@@ -820,7 +827,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     // Same list numbers as the first layout: lay it out from the same counters.
                     let now = (std::mem::replace(&mut ctx.counters, tn.snap.0), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
                     let b = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
-                    (cell_items, across) = (b.items, b.height.max(b.floats_bottom));
+                    (cell_items, cell_foreground, across) = (b.items, b.foreground, b.height.max(b.floats_bottom));
                     (ctx.counters, ctx.eq_count) = now;
                 }
                 // Lines stack across the cell from its start edge (right for top-to-bottom text,
@@ -839,6 +846,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     it.turn(tn.turn, ox, oy);
                 }
             }
+            extend_foreground(&mut foreground, &cell_foreground, items.len());
             let content = items.len();
             for mut it in cell_items {
                 it.translate(0.0, dy);
@@ -880,6 +888,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         out.push(RowLayout {
             height: rh,
             items,
+            foreground,
             bottom: bottoms.get(ri).copied().unwrap_or(0.0),
             edge: edges.get(ri).copied().unwrap_or(0.0),
             cells: parts,
@@ -912,6 +921,12 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
 /// Tables). Content of a cell aligned below the cut doesn't count.
 pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     split_row_with(row, cut, true)
+}
+
+fn record_item_range(map: &mut [std::ops::Range<usize>], source: usize, span: std::ops::Range<usize>) {
+    if let Some(range) = map.get_mut(source) {
+        *range = span;
+    }
 }
 
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
@@ -1040,10 +1055,14 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let rest = (row.height - height).max(0.0);
     let geo_shift = |bottom: f32, shift: f32| if bottom >= row.height - 0.01 { rest } else { shift };
     let (mut a, mut b) = (Vec::new(), Vec::new());
+    let map_len = if row.foreground.is_empty() { 0 } else { row.items.len() };
+    let (mut map_a, mut map_b) = (vec![0..0; map_len], vec![0..0; map_len]);
     let mut parts = Vec::with_capacity(cells.len());
     for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
         let start = b.len();
-        for (it, &split) in items.iter().zip(splits) {
+        for (index, (it, &split)) in items.iter().zip(splits).enumerate() {
+            let source = c.items.start.saturating_add(index);
+            let (start_a, start_b) = (a.len(), b.len());
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -1052,6 +1071,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     it.translate(0.0, -shift);
                     b.push(it);
                 }
+                record_item_range(&mut map_a, source, start_a..a.len());
+                record_item_range(&mut map_b, source, start_b..b.len());
                 continue;
             }
             match it {
@@ -1136,13 +1157,15 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     }
                 }
             }
+            record_item_range(&mut map_a, source, start_a..a.len());
+            record_item_range(&mut map_b, source, start_b..b.len());
         }
         parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts },
+        RowLayout { height: cut, items: a, foreground: remap_foreground(&row.foreground, &map_a), bottom: row.bottom, edge: 0.0, cells: Vec::new() },
+        RowLayout { height, items: b, foreground: remap_foreground(&row.foreground, &map_b), bottom: row.bottom, edge: row.edge, cells: parts },
     ))
 }
 

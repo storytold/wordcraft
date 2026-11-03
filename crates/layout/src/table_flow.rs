@@ -2,6 +2,7 @@ use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
 use super::flow::again;
+use super::foreground::extend_foreground;
 use super::headers::{MAX_HEADER_ITEMS, header_table_areas};
 use super::notes::table_notes;
 use super::page::{PageBuilder, PageFrame, page_frame};
@@ -146,7 +147,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
     let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
-        if let Some(pg) = pb.page() {
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
+            extend_foreground(ranges, &row.foreground, pg.items.len().saturating_sub(behind));
             for it in &row.items {
                 let mut it = it.clone();
                 it.translate(x, y);
@@ -284,9 +287,11 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pb.advance(block, body_top);
             continue;
         }
-        if let Some(pg) = pb.page() {
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
             let mut y = r.y;
             for row in &tl.rows {
+                extend_foreground(ranges, &row.foreground, pg.items.len().saturating_sub(behind));
                 for it in &row.items {
                     let mut it = it.clone();
                     it.translate(r.x, y);

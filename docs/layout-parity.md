@@ -244,6 +244,8 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 
 Spanning cell minima retain each column's text minimum and share extra width in preferred-column proportions; automatic tables share equally. Nested measurement normalizes preferred grid weights as layout does.
 
+Foreground floats cover later inline content within their owning story. Complete frame/text groups follow relativeHeight across paragraphs and cells, including row splits. New floating creation and copied content receive ranks above existing floating roots; moves preserve ranks. At u32 exhaustion, dense normalization preserves positive-rank order and ties while zero remains unranked. Protected edits that would alter other regions fail. Group-child order and the separate pinned header/footer layer are unchanged. Behind-text stacking and one-step Bring Forward/Send Backward remain outside this repair. Word-native comparison and broad corpus coverage remain unmeasured for this change.
+
 ## Validation fonts
 
 The deleted/hidden-text wrapping, ellipse wrapping and widow-control regressions request Source Sans 3 explicitly. Their fixed widths and word counts use that font's metrics. This changes test inputs only, not renderer font substitution or Word parity claims.
@@ -278,6 +280,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | New floating drawings receive model ranks above existing drawings before layout/export (#2519). Paste preserves incoming rank order and ties. Exhaustion alone densely renumbers positive ranks; zero remains unranked. No new Word comparison or behind-text ordering claim. |
+| 2026-10-16 | trivial | Foreground floats cover later inline content; relativeHeight survives DOCX import/export and orders complete frame/text groups. Synthetic regressions cover behind-text, header placement and cross-cell stacking through row splits. |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
 | 2026-10-31 | trivial | A table row that would leave a cell empty on a page that already holds something (its inline picture or first line runs past the room) moves on whole instead of leaving the other cells' text beside the empty cell; an at-least row grown by its picture no longer splits off the picture (#4272) |
 | 2026-11-01 | trivial | A cell aligned to the middle or bottom of a row split across pages is aligned within the part left on the page when its text fits there, and starts at the top of the cell otherwise, as measured in Word |

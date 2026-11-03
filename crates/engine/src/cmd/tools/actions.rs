@@ -115,7 +115,7 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
         s.doc.glossary.remove(i);
     }
     if let Some(name) = p::str(v, "insert") {
-        let frag = match s.building_blocks.get(name) {
+        let mut frag = match s.building_blocks.get(name) {
             Some(f) => f.clone(),
             None => {
                 let e = document_entry(&s.doc, name, gallery).and_then(|i| s.doc.glossary.get(i));
@@ -124,6 +124,7 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
             }
         };
         let at = delete_selection(s)?;
+        crate::cmd::z_order::fragment(&mut s.doc, &mut frag, crate::cmd::z_order::Intent::Fresh)?;
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);
     }

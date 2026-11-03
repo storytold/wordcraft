@@ -1,7 +1,9 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
 use super::ctx::Ctx;
+use super::floats::PlacedObjects;
 use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, place_objects};
+use super::foreground::append_foreground;
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
@@ -509,7 +511,7 @@ impl<'a> Flow<'a> {
             table_chr: None,
             pinned: None,
         };
-        let (behind, front) = place_objects(
+        let PlacedObjects { behind, inline, front } = place_objects(
             ctx,
             &ObjectPlacement {
                 story: StoryRef::Body,
@@ -523,9 +525,9 @@ impl<'a> Flow<'a> {
                 depth: 0,
             },
         );
-        items.extend(front);
+        items.extend(inline);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
-        add_items(pb, behind, items);
+        add_items(pb, behind, items, front);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
             pb.content_bottom = pb.content_bottom.max(pb.y);
@@ -696,13 +698,15 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
 }
 
 /// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
+fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, front: Vec<(u32, u32, Vec<Placed>)>) {
     let n_behind = behind.len();
-    if let Some(pg) = pb.pages.last_mut() {
+    let prefix = pb.behind.last().copied().unwrap_or(0) + n_behind;
+    if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
         pg.items.extend(items);
+        append_foreground(&mut pg.items, ranges, prefix, front);
     }
     if let Some(b) = pb.behind.last_mut() {
         *b += n_behind;
@@ -806,7 +810,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
         table_chr: None,
         pinned: None,
     };
-    let (behind, front) = place_objects(
+    let PlacedObjects { behind, inline, front } = place_objects(
         ctx,
         &ObjectPlacement {
             story: StoryRef::Body,
@@ -820,17 +824,12 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
             depth: 0,
         },
     );
-    items.extend(front);
+    items.extend(inline);
     let children = level < outline::BODY && outline::has_children(&o.levels, block);
     // Collapsed, or with something under it hidden by Show Level: the wavy line says so.
     let collapsed = children && o.hidden.get(block + 1).copied().unwrap_or(false);
     items.extend(outline::symbol_items(&pl, x, y, level, children, collapsed));
-    if let Some(pg) = pb.page() {
-        for (i, it) in behind.into_iter().enumerate() {
-            pg.items.insert(i.min(pg.items.len()), it);
-        }
-        pg.items.extend(items);
-    }
+    add_items(pb, behind, items, front);
     if let (Some(f), Some(l)) = (pl.lines.first(), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) {
         pb.y = y + (l.top + l.height - f.top);
     }

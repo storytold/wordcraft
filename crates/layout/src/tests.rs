@@ -3982,6 +3982,7 @@ fn split_row_rejects_a_hostile_cut() {
     };
     let line = |y: f32| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
     let row = |height: f32, bottom: f32| RowLayout {
+        foreground: Vec::new(),
         edge: 0.0,
         height,
         items: vec![line(0.0), line(150.0)],
@@ -7233,6 +7234,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
     let row = RowLayout {
+        foreground: Vec::new(),
         edge: 0.0,
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
@@ -10643,6 +10645,7 @@ fn split_cell_moves_image_frame() {
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);
         let row = RowLayout {
+            foreground: Vec::new(),
             height: 200.0,
             bottom: 4.0,
             edge: 0.0,
@@ -12861,5 +12864,7 @@ fn header_margin_table_area() {
         }
     }
 }
+
+mod foreground;
 
 mod shape_alpha;

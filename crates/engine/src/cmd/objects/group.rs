@@ -128,7 +128,7 @@ pub(super) fn group(s: &mut Session, _: &Value) -> CmdResult {
     }
     let first = picks.first().cloned().ok_or_else(|| CmdError::Failed("nothing to group".into()))?;
     let at = s.doc.clamp(&first);
-    s.doc.insert_object(&at, grouped, &wordcraft_doc::CharProps::default())?;
+    crate::cmd::z_order::insert(s, &at, grouped, &wordcraft_doc::CharProps::default(), crate::cmd::z_order::Intent::Preserve)?;
     s.touch();
     let pos = move_object(s, at, Some(page as u64), x0, y0, (w, h))?;
     s.also_selected.clear();
@@ -188,7 +188,7 @@ pub(super) fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     let mut placed = Vec::new();
     for m in members {
         placed.push(at.clone());
-        at = s.doc.insert_object(&at, m, &wordcraft_doc::CharProps::default())?;
+        at = crate::cmd::z_order::insert(s, &at, m, &wordcraft_doc::CharProps::default(), crate::cmd::z_order::Intent::Preserve)?;
     }
     let first = placed.first().cloned().unwrap_or(pos);
     s.sel = Selection { anchor: first.clone(), focus: Pos { off: first.off + len, ..first } };

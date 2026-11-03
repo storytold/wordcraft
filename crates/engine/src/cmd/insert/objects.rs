@@ -152,7 +152,7 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     }
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let end = s.doc.insert_object(&at, obj, &props)?;
+    let end = crate::cmd::z_order::insert(s, &at, obj, &props, crate::cmd::z_order::Intent::Fresh)?;
     s.sel = Selection::caret(end);
     Ok(json!({"media": key, "width": w, "height": h}))
 }
@@ -238,7 +238,7 @@ pub(super) fn shape(s: &mut Session, v: &Value) -> CmdResult {
     // selection and becomes the selection. (A picture does replace the selection, as in Word.)
     let props = s.typing_props();
     let (_, at) = s.sel.ordered();
-    let end = s.doc.insert_object(&at, obj, &props)?;
+    let end = crate::cmd::z_order::insert(s, &at, obj, &props, crate::cmd::z_order::Intent::Fresh)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
 }
@@ -265,7 +265,7 @@ pub(super) fn text_box(s: &mut Session, v: &Value) -> CmdResult {
     if crate::cmd::canvas::add_member(s, obj.clone())?.is_none() {
         let props = s.typing_props();
         let at = delete_selection(s)?;
-        s.doc.insert_object(&at, obj, &props)?;
+        crate::cmd::z_order::insert(s, &at, obj, &props, crate::cmd::z_order::Intent::Fresh)?;
     }
     // Like Word, type straight into the new box.
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));

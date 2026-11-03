@@ -1,7 +1,9 @@
 use super::ctx::{Ctx, page_anchored};
+use super::floats::PlacedObjects;
 use super::floats::{
     ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
 };
+use super::foreground::{Foreground, append_foreground, extend_foreground, order_foreground};
 use super::page::PageFrame;
 use super::placed::Placed;
 use super::table_flow::below;
@@ -63,6 +65,8 @@ struct TableBlockContext<'ctx, 'state, 'doc> {
     depth: usize,
     y: &'state mut f32,
     items: &'state mut Vec<Placed>,
+    foreground: &'state mut Vec<Foreground>,
+    behind: usize,
     exclusions: &'state mut Vec<WrapArea>,
     float_tables: &'state mut Vec<Rect>,
     table_areas: &'state mut Vec<Rect>,
@@ -131,6 +135,8 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         depth,
         y,
         items,
+        foreground,
+        behind,
         exclusions,
         float_tables,
         table_areas,
@@ -166,6 +172,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     };
     let mut row_y = ty;
     for row in &layout.rows {
+        extend_foreground(foreground, &row.foreground, items.len().saturating_sub(behind));
         for item in &row.items {
             let mut item = item.clone();
             item.translate(tx, row_y);
@@ -201,6 +208,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut items = Vec::new();
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
+    let mut foreground = Vec::new();
     // Wrap areas of the box's floating objects.
     let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
@@ -316,7 +324,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
-                    let (back, front) = place_objects(
+                    let PlacedObjects { behind: back, inline, front } = place_objects(
                         ctx,
                         &ObjectPlacement {
                             story,
@@ -330,7 +338,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                             depth,
                         },
                     );
-                    for placed in back.iter().chain(front.iter()) {
+                    for placed in back.iter().chain(inline.iter()).chain(front.iter().flat_map(|(_, _, items)| items)) {
                         if let Placed::Object { rect, spin, wrap, .. } = placed
                             && !matches!(wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
                         {
@@ -340,7 +348,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     let at = behind.min(items.len());
                     behind += back.len();
                     items.splice(at..at, back);
-                    items.extend(front);
+                    items.extend(inline);
+                    append_foreground(&mut items, &mut foreground, behind, front);
                 }
                 // Automatic space after: none after the last paragraph of a cell or box.
                 let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
@@ -362,6 +371,8 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     depth,
                     y: &mut y,
                     items: &mut items,
+                    foreground: &mut foreground,
+                    behind,
                     exclusions: &mut excl,
                     float_tables: &mut float_tables,
                     table_areas: &mut table_areas,
@@ -376,7 +387,15 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    if in_cell {
+        for group in &mut foreground {
+            group.range = group.range.start.saturating_add(behind)..group.range.end.saturating_add(behind);
+        }
+    } else {
+        order_foreground(&mut items, &foreground, behind);
+        foreground.clear();
+    }
+    BoxLayout { items, foreground, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -431,6 +450,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 pub(crate) struct BoxLayout {
     pub(crate) items: Vec<Placed>,
+    pub(super) foreground: Vec<Foreground>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
     pub(crate) height: f32,

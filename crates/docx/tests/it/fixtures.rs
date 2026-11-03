@@ -4092,6 +4092,25 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+#[test]
+fn floating_z_round_trips() {
+    for height in ["0", "7", "4294967295"] {
+        let body = format!(
+            r#"<w:p><w:r><w:drawing><wp:anchor relativeHeight="{height}" behindDoc="0"><wp:extent cx="914400" cy="457200"/><wp:wrapNone/><wp:docPr id="1" name="Original stacking probe"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>"#
+        );
+        let mut d = read_body(&body);
+        for pass in 0..2 {
+            let float = paras(&d)[0].objects[0].frame().unwrap().2;
+            const FIRST_FALLBACK_RANK: u32 = 251_658_241;
+            let rank = height.parse::<u32>().unwrap();
+            let expected = if rank == 0 && pass > 0 { FIRST_FALLBACK_RANK } else { rank };
+            assert_eq!(float.z, expected);
+            assert_eq!(float.wrap, Wrap::InFrontOfText);
+            d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        }
+    }
+}
+
 /// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
 /// hid the picture.
 #[test]

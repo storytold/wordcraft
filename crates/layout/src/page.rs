@@ -1,6 +1,7 @@
 use super::boxes::{BoxInput, layout_box};
 use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
+use super::foreground::Foreground;
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
@@ -61,6 +62,7 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
+    pub(super) foreground: Vec<Vec<Foreground>>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -290,6 +292,7 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.foreground.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -324,6 +327,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.foreground.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;

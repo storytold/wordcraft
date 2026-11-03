@@ -315,7 +315,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     };
     let typing = s.typing_props();
     let at = super::delete_selection(s)?;
-    s.doc.insert_object(&at, obj, &typing)?;
+    super::z_order::insert(s, &at, obj, &typing, super::z_order::Intent::Fresh)?;
     s.sel = Selection { anchor: s.doc.start_of(StoryRef::Part(id)), focus: s.doc.end_of(StoryRef::Part(id)) };
     Ok(json!({"story": id}))
 }

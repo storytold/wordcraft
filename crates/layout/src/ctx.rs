@@ -1,5 +1,6 @@
 use super::cache::{Key, LayoutCache, Totals, has_page_fields, has_total_fields, hash_of};
 use super::floats::{EarlyFloats, WrapArea};
+use super::foreground::{Foreground, order_foreground};
 use super::headers::HfLinks;
 use super::placed::Placed;
 use super::{
@@ -95,6 +96,7 @@ pub(crate) struct Pin {
     pub(crate) mirror: bool,
     pub(crate) behind: Vec<Placed>,
     pub(crate) front: Vec<Placed>,
+    pub(super) foreground: Vec<Foreground>,
     pub(crate) seen: HashSet<(Vec<u32>, usize)>,
 }
 
@@ -130,12 +132,18 @@ pub(crate) fn with_pin<T>(
         mirror: ctx.mirror,
         behind: Vec::new(),
         front: Vec::new(),
+        foreground: Vec::new(),
         seen: HashSet::new(),
     };
     let outer = ctx.pin.replace(pin);
     let out = f(ctx);
     let pin = std::mem::replace(&mut ctx.pin, outer);
-    let (behind, front) = pin.map(|p| (p.behind, p.front)).unwrap_or_default();
+    let (behind, front) = pin
+        .map(|mut p| {
+            order_foreground(&mut p.front, &p.foreground, 0);
+            (p.behind, p.front)
+        })
+        .unwrap_or_default();
     (out, behind, front)
 }
 

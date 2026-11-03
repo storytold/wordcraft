@@ -173,7 +173,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
             at.off = at.off.saturating_sub(len);
         }
         let at = s.doc.clamp(&at);
-        s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+        crate::cmd::z_order::insert(s, &at, obj, &wordcraft_doc::CharProps::default(), crate::cmd::z_order::Intent::Preserve)?;
         at
     };
     // First on the page where it was dropped, so the text wraps around it as it will in the end.

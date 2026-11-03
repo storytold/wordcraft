@@ -177,12 +177,15 @@ pub(super) fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdRes
 
 /// Change the object at `pos`; returns it afterwards.
 pub(crate) fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
+    let mut obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
+    let was_inline = obj.frame().is_some_and(|(_, _, f)| f.wrap == Wrap::Inline);
+    f(&mut obj);
+    let intent = if was_inline { crate::cmd::z_order::Intent::Fresh } else { crate::cmd::z_order::Intent::Preserve };
+    crate::cmd::z_order::object(&mut s.doc, &mut obj, intent)?;
     let para = s.doc.para_mut(pos.story, &pos.path)?;
-    let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-    f(o);
-    let o = o.clone();
+    *para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))? = obj.clone();
     para.touch();
-    Ok(o)
+    Ok(obj)
 }
 
 pub(super) fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<InlineObject, CmdError> {

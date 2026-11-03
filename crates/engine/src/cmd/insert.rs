@@ -138,6 +138,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let mut frag = s.doc.adopt(doc);
             super::paste::unlink_sections(&mut frag.blocks);
             let at = delete_selection(s)?;
+            super::z_order::fragment(&mut s.doc, &mut frag, super::z_order::Intent::Fresh)?;
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)

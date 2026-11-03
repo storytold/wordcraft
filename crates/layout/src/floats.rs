@@ -1,4 +1,5 @@
 use super::ctx::Ctx;
+use super::foreground::append_foreground;
 use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
@@ -444,20 +445,22 @@ pub(crate) struct ObjectPlacement<'a> {
     pub depth: usize,
 }
 
+pub(super) struct PlacedObjects {
+    pub(super) behind: Vec<Placed>,
+    pub(super) inline: Vec<Placed>,
+    pub(super) front: Vec<(u32, u32, Vec<Placed>)>,
+}
+
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
 /// worked out from `at`. Returns what goes behind the text, and what goes in front.
-pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>) {
+pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> PlacedObjects {
     let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
-    // Each object's items (behind the text, in front), with its stacking order: drawn lowest
-    // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
-    // their order in the paragraph. Inline objects and objects without one keep their order.
-    let mut stack: Vec<(u32, Vec<Placed>, Vec<Placed>)> = Vec::new();
-    // The highest order so far: an object without one (inserted here) stacks above the objects
-    // before it, as the writer gives it the next order up on save.
+    let (mut behind, mut inline, mut front) = (Vec::new(), Vec::new(), Vec::new());
+    let mut backs = Vec::new();
     let mut z_top = 0u32;
-    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
+    let Some(fl) = pl.lines.get(l0) else { return PlacedObjects { behind, inline, front } };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // A floating object belongs to its paragraph, not to its line: Word puts it on the page the
@@ -485,6 +488,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 continue;
             }
             let pinned = at.pinned.and_then(|m| m.get(&oi)).copied().filter(|_| floating);
+            let front_start = front.len();
+            let mut back = Vec::new();
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
@@ -493,8 +498,14 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h, pl.rule_room(line, k))
             };
-            let (mut behind, mut front) = (Vec::new(), Vec::new());
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            let mut foreground = Vec::new();
+            let layer = if !floating {
+                &mut inline
+            } else if float.wrap == Wrap::BehindText {
+                &mut back
+            } else {
+                &mut foreground
+            };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
                 layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
@@ -507,7 +518,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
-            front.push(Placed::Object {
+            layer.push(Placed::Object {
                 rect,
                 spin: float.spin(),
                 story,
@@ -534,18 +545,14 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             };
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
-                let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                let layer = if !floating {
+                    &mut inline
+                } else if float.wrap == Wrap::BehindText {
+                    &mut back
+                } else {
+                    &mut foreground
+                };
                 layer.extend(items);
-            }
-            // Placed on the page from a header or footer cell: drawn with the header, once.
-            if pinned.is_some() {
-                if let Some(pin) = ctx.pin.as_mut()
-                    && pin.seen.insert((path.to_vec(), c.start))
-                {
-                    pin.behind.extend(behind);
-                    pin.front.extend(front);
-                }
-                continue;
             }
             let z = if floating && float.z > 0 {
                 z_top = z_top.max(float.z);
@@ -553,17 +560,30 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             } else {
                 z_top
             };
-            stack.push((z, behind, front));
+            if !foreground.is_empty() {
+                front.push((float.z, z_top, foreground));
+            }
+            // Placed on the page from a header or footer cell: drawn with the header, once.
+            if pinned.is_some() {
+                let f = front.split_off(front_start.min(front.len()));
+                if let Some(pin) = ctx.pin.as_mut()
+                    && pin.seen.insert((path.to_vec(), c.start))
+                {
+                    pin.behind.extend(back);
+                    append_foreground(&mut pin.front, &mut pin.foreground, 0, f);
+                }
+                continue;
+            }
+            if !back.is_empty() {
+                backs.push((z, back));
+            }
         }
     }
-    // Stable: equal orders (none given) keep the paragraph's order.
-    stack.sort_by_key(|(z, _, _)| *z);
-    let (mut behind, mut front) = (Vec::new(), Vec::new());
-    for (_, b, f) in stack {
-        behind.extend(b);
-        front.extend(f);
+    backs.sort_by_key(|(z, _)| *z);
+    for (_, group) in backs {
+        behind.extend(group);
     }
-    (behind, front)
+    PlacedObjects { behind, inline, front }
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the
