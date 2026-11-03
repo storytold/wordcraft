@@ -6622,6 +6622,82 @@ fn a_floating_table_in_a_cell_takes_no_room_and_the_cell_holds_it() {
     assert!(below_y > last_y + 10.0, "text below the outer table at {below_y}, the inner table's last row at {last_y}");
 }
 
+#[test]
+fn a_cells_end_mark_below_its_floating_table_adds_no_line() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{NumRef, TableFloat};
+    // A cell holding a floating table as wide as the cell, then the empty end-of-cell paragraph
+    // it anchors: Word ends the cell with the table (docxide-pdf nested-final-mark-*). `before`
+    // empty paragraphs come first; `bookmark` puts a bookmark in the mark; `space` is its space
+    // before; `top` the table's distance from the text above it; `numbered` numbers the mark.
+    // Returns the gap from the inner table's text to the text below the outer table, a line's
+    // height, where a click on the text below lands, and how far the mark's line starts above
+    // that text.
+    let gap = |y: f32, before: usize, bookmark: bool, space: f32, top: f32, numbered: bool| {
+        let mut d = Document::from_text("Below");
+        let mut inner = Table::new(1, 1, 468.0);
+        inner.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Inner", Default::default()))];
+        inner.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, y, dist: [9.0, top, 9.0, 0.0], ..Default::default() });
+        let mut mark = wordcraft_doc::Paragraph::default();
+        mark.props.space_before = Some(space);
+        if numbered {
+            let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+            mark.props.numbering = Some(NumRef { num, level: 0 });
+        }
+        if bookmark {
+            mark.insert_object(0, InlineObject::BookmarkStart { name: "here".into() }, &Default::default()).unwrap();
+        }
+        let mut outer = Table::new(1, 1, 468.0);
+        let cell = &mut outer.rows[0].cells[0].blocks;
+        *cell = (0..before).map(|_| wordcraft_doc::para_block(Default::default())).collect();
+        cell.push(std::sync::Arc::new(wordcraft_doc::Block::Table(inner)));
+        cell.push(wordcraft_doc::para_block(mark));
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        let l = lay(&d);
+        let b = before as u32;
+        let (&[(_, iy, _)], &[(bx, below_y, _)]) = (&para_at(&l, &[0, 0, 0, b, 0, 0, 0])[..], &para_at(&l, &[1])[..]) else {
+            panic!("lines missing")
+        };
+        let line = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, path, .. } if path.0 == [1] => para.lines.first().map(|l| l.height),
+                _ => None,
+            })
+            .unwrap();
+        let hit = l.hit(0, bx + 1.0, below_y + line / 2.0, StoryRef::Body).map(|p| p.path.0);
+        let mark = para_at(&l, &[0, 0, 0, b + 1]).first().map_or(f32::NAN, |m| below_y - m.1);
+        (below_y - iy, line, hit, mark)
+    };
+    let (g, line, hit, mark) = gap(0.0, 0, false, 0.0, 0.0, false);
+    assert!(g < line * 1.5, "the text below the outer table follows the inner table: gap {g}, line {line}");
+    assert_eq!(hit, Some(vec![1]), "a click on the text below the table lands there, not on the cell's mark");
+    // The mark's line stays in the cell, at its anchor, not over the text after the table.
+    assert!(mark > line * 0.5, "the mark's line starts {mark} above the text below the table");
+    // After text in the cell, a table placed at the mark's top hides it too, also with a
+    // distance from the text above.
+    let (g, line, _, _) = gap(0.0, 1, false, 0.0, 0.0, false);
+    assert!(g < line * 1.5, "no line below a table after text: gap {g}, line {line}");
+    let (g, line, _, _) = gap(0.0, 1, false, 0.0, 6.0, false);
+    assert!(g < line * 1.5, "no line below a table kept 6pt from the text above: gap {g}, line {line}");
+    // A bookmark in the mark leaves it empty.
+    let (g, line, _, _) = gap(0.0, 0, true, 0.0, 0.0, false);
+    assert!(g < line * 1.5, "a bookmarked mark adds no line either: gap {g}, line {line}");
+    // A table first in its cell isn't raised above the cell's top: no line for the mark.
+    let (g, line, _, _) = gap(-2.0, 0, false, 0.0, 0.0, false);
+    assert!(g < line * 1.5, "no line below a table first in its cell: gap {g}, line {line}");
+    // Raised above text before it in the cell, the table leaves the mark its line, as in Word.
+    let (g, line, _, _) = gap(-2.0, 1, false, 0.0, 0.0, false);
+    assert!(g > line * 1.5, "the mark keeps its line below a raised table: gap {g}, line {line}");
+    // A mark whose own space before already takes it below the table wasn't pushed: it keeps its line.
+    let (g, line, _, _) = gap(0.0, 0, false, 60.0, 0.0, false);
+    assert!(g > 60.0 + line * 0.5, "the mark below the table by its space before keeps its line: gap {g}, line {line}");
+    // A numbered mark shows its number: it keeps its line.
+    let (g, line, _, _) = gap(0.0, 0, false, 0.0, 0.0, true);
+    assert!(g > line * 1.5, "a numbered mark keeps its line: gap {g}, line {line}");
+}
+
 /// A floating (anchored, non-inline) picture in a cell grows the row to hold it too, the same
 /// way a floating table does: it must not hang past the row's own bottom edge and overlap
 /// whatever follows the table (#3108).
