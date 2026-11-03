@@ -11,8 +11,9 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod focus_mode;
 mod font_sizes;
-mod focus_mode;mod fonts;
+mod fonts;
 mod ime_noop;
 mod revision_checks;
 mod typing;
