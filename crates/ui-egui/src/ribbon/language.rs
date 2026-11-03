@@ -39,7 +39,10 @@ pub(crate) fn tag_for_pack(locale: &str) -> String {
                 && t.as_bytes().get(locale.len()) == Some(&b'-')
         })
     };
-    if let Some((t, _)) = exact.or_else(prefixed) {
+    // A variant WordCraft names with its region (`ca-valencia` is `ca-ES-valencia`).
+    let regioned =
+        || known().find(|(t, _)| t.contains('-') && without_region(&t.to_ascii_lowercase()) == locale.to_ascii_lowercase().replace('_', "-"));
+    if let Some((t, _)) = exact.or_else(prefixed).or_else(regioned) {
         return (*t).to_string();
     }
     let parts: Vec<String> = locale
@@ -115,10 +118,11 @@ pub(crate) fn all_languages() -> Vec<(String, String)> {
 }
 
 /// The Set Proofing Language dialog's list: [`all_languages`], with the `current` language when
-/// it is none of them.
+/// it is none of them ([`same_language`]: a row is checked for it then).
 pub(crate) fn language_list(current: &str) -> Vec<(String, String)> {
     let mut list = all_languages();
-    if !current.is_empty() && !list.iter().any(|(t, _)| t.eq_ignore_ascii_case(current)) {
+    // A tag the list has under another spelling (`nl` for `nl-NL`) is that row, not another.
+    if !current.is_empty() && !list.iter().any(|(t, _)| same_language(current, t)) {
         list.push((current.to_string(), tl!(&language_name(Some(current))).to_string()));
         list.sort_by_cached_key(|(_, n)| sort_key(n));
     }
@@ -210,6 +214,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
                         && t.get(..tag.len()).is_some_and(|p| p.eq_ignore_ascii_case(tag))
                         && t.as_bytes().get(tag.len()) == Some(&b'-')
                 })
+                .or_else(|| known().find(|(t, _)| t.contains('-') && without_region(&t.to_ascii_lowercase()).eq_ignore_ascii_case(tag)))
                 .map_or_else(|| tag.to_string(), |(_, n)| (*n).to_string()),
         },
     }
@@ -371,14 +376,65 @@ pub(super) struct LanguageChecks {
 }
 
 pub(super) fn language_checks(current: &str, entries: &[(String, String)]) -> LanguageChecks {
-    use wordcraft_engine::proof::ProofLang;
     let name = (!current.is_empty()).then(|| language_name(Some(current)));
-    let lang = ProofLang::from_tag(Some(current));
-    let on: Vec<bool> = entries
-        .iter()
-        .map(|(t, n)| t.eq_ignore_ascii_case(current) || (name.as_deref() == Some(n.as_str()) && ProofLang::from_tag(Some(t)) == lang))
-        .collect();
+    let on: Vec<bool> =
+        entries.iter().map(|(t, n)| t.eq_ignore_ascii_case(current) || (name.as_deref() == Some(n.as_str()) && same_proofing(current, t))).collect();
     LanguageChecks { extra: name.filter(|_| !on.contains(&true)), listed: on }
+}
+
+/// Are `a` and `b` the same language as the lists show it: the same tag (any case), or named
+/// alike and proofed alike ([`same_proofing`]): `nl` is the `nl-NL` row, `pl` the `pl-PL` one.
+pub(crate) fn same_language(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b) || (!a.is_empty() && language_name(Some(a)) == language_name(Some(b)) && same_proofing(a, b))
+}
+
+/// Does WordCraft proof `a` and `b` the same way: the same built-in language, or two Language
+/// pack languages read from the same pack ([`wordcraft_engine::packs::pack_for_tag`]: `nl` and
+/// `nl-NL` are both the `nl` pack's, though their pack locales differ); with neither pack known,
+/// the same language and script whatever the region.
+fn same_proofing(a: &str, b: &str) -> bool {
+    use wordcraft_engine::packs;
+    use wordcraft_engine::proof::ProofLang;
+    let (la, lb) = (ProofLang::from_tag(Some(a)), ProofLang::from_tag(Some(b)));
+    if la == lb {
+        return true;
+    }
+    let (Some(pa), Some(pb)) = (la.pack_locale(), lb.pack_locale()) else { return false };
+    let mut known = packs::available();
+    for i in packs::installed() {
+        if !known.iter().any(|p| p.locale == i.locale) {
+            known.push(packs::Pack {
+                locale: i.locale,
+                name: i.name,
+                version: String::new(),
+                url: String::new(),
+                source: None,
+                size: 0,
+                licence: i.licence,
+                class: String::new(),
+                spelling: false,
+                hyphenation: false,
+            });
+        }
+    }
+    match (packs::pack_for_tag(a, &known), packs::pack_for_tag(b, &known)) {
+        (Some(x), Some(y)) => x.locale == y.locale,
+        (None, None) => without_region(pa.as_str()) == without_region(pb.as_str()),
+        _ => false,
+    }
+}
+
+/// A lowercase locale without its region subtag (`nl-nl` → `nl`, `sr-latn-rs` → `sr-latn`).
+fn without_region(locale: &str) -> String {
+    locale
+        .split('-')
+        .enumerate()
+        .filter(|(i, p)| {
+            *i == 0 || !((p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic())) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit())))
+        })
+        .map(|(_, p)| p)
+        .collect::<Vec<&str>>()
+        .join("-")
 }
 
 /// A menu item with a check mark when `checked` (the current choice of several).

@@ -112,7 +112,7 @@ pub(crate) const MORE_LANGUAGES: [(&str, &str); 27] = [
     ("bg-BG", "Bulgarian"),
     ("bs-BA", "Bosnian"),
     ("ca-ES", "Catalan"),
-    ("ca-valencia", "Catalan (Valencian)"),
+    ("ca-ES-valencia", "Catalan (Valencian)"),
     ("cy-GB", "Welsh"),
     ("eo", "Esperanto"),
     ("fa-IR", "Persian"),
@@ -695,7 +695,15 @@ mod tests {
             assert_eq!(packs::pack_for_tag(&tag, &index).map(|f| f.locale.as_str()), Some(p.locale.as_str()), "{} → {tag}", p.locale);
             assert!(packs::proofable(&tag), "{tag}");
         }
+        // Valencian is stored as Word writes it, and Word's tag finds the Valencian pack, not the
+        // Catalan one; Catalan of Spain stays the Catalan pack's.
+        assert_eq!(crate::ribbon::language_name(Some("ca-ES-valencia")), "Catalan (Valencian)");
+        assert_eq!(super::language_of("ca-valencia", ""), "Catalan (Valencian)");
+        assert_eq!(packs::pack_for_tag("ca-ES-valencia", &index).map(|f| f.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca-ES", &index).map(|f| f.locale.as_str()), Some("ca"));
         for (locale, tag) in [
+            ("ca-valencia", "ca-ES-valencia"),
+            ("ca", "ca-ES"),
             ("bg", "bg-BG"),
             ("sr-latn", "sr-Latn-RS"),
             ("sr", "sr-Cyrl-RS"),
@@ -750,6 +758,14 @@ mod tests {
         assert_eq!(tags.len(), n, "each language once");
         assert!(all.windows(2).all(|w| crate::ribbon::sort_key(&w[0].1) <= crate::ribbon::sort_key(&w[1].1)), "sorted by name");
         assert!(!all.iter().any(|(_, n)| n == "Беларуская" || n == "Български"), "every pack named in the interface language");
+        // One Catalan row and one Valencian, no stray Catalan (Spain).
+        assert_eq!(all.iter().filter(|(_, n)| n.starts_with("Catalan")).map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["ca-ES", "ca-ES-valencia"]);
+        // A bare tag is its regioned row, not a second row of the same name.
+        for (current, row) in [("nl", "nl-NL"), ("sv", "sv-SE"), ("ca-valencia", "ca-ES-valencia")] {
+            let list = crate::ribbon::language_list(current);
+            assert_eq!(list, all, "{current}");
+            assert_eq!(list.iter().filter(|(t, _)| crate::ribbon::same_language(current, t)).map(|(t, _)| t.as_str()).collect::<Vec<_>>(), [row]);
+        }
         // The dialog shows the same list, and a tag none of them has besides.
         assert_eq!(crate::ribbon::language_list("bg-BG"), all);
         assert!(crate::ribbon::language_list("xx-YY").iter().any(|(t, _)| t == "xx-YY"));

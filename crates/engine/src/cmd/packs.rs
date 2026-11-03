@@ -238,6 +238,12 @@ mod tests {
         assert_eq!(packs::pack_for_tag("sr-latn", &packs).map(|p| p.locale.as_str()), Some("sr-latn"));
         assert_eq!(packs::pack_for_tag("-", &packs), None);
         assert_eq!(packs::pack_for_tag("nl--", &packs).map(|p| p.locale.as_str()), Some("nl"));
+        // A variant after the region is its language-and-variant pack's; the region alone isn't.
+        packs.push(Pack { locale: "ca-valencia".into(), ..packs[0].clone() });
+        assert_eq!(packs::pack_for_tag("ca-ES-valencia", &packs).map(|p| p.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca_es_VALENCIA", &packs).map(|p| p.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca-ES", &packs).map(|p| p.locale.as_str()), Some("ca"));
+        assert_eq!(packs::pack_for_tag("ca", &packs).map(|p| p.locale.as_str()), Some("ca"));
         assert_eq!(packs::pack_for_tag("en-GB", &packs), None);
         assert_eq!(packs::pack_for_tag("", &packs), None);
         assert!(packs::valid_locale("sr-latn"));

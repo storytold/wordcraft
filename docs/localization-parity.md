@@ -182,7 +182,8 @@ pinned pack index and installed through the font store into `<font store>/langua
   available pack's language (Bulgarian, Belarusian, Spanish (Cuba)…), each once and sorted by
   name; Review › Language and the status bar's menu show the short list plus the installed packs'
   languages. A pack's language is stored as the tag WordCraft names (`bg-BG`, `sr-Latn-RS`,
-  `de-AT`), which finds that pack again, so the text is proofed by it. Every pack in the published
+  `de-AT`, Word's `ca-ES-valencia` for Valencian), which finds that pack again, so the text is
+  proofed by it; a bare tag (`nl`) is the same row as its regioned one (`nl-NL`). Every pack in the published
   index has an English name.
 - language-packs-2 is published and pinned (75 packs, craft-i18n `20467b63`), adding the
   compounding languages (Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian,

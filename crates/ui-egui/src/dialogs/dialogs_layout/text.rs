@@ -332,7 +332,7 @@ pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) 
         egui::ScrollArea::vertical().max_height(220.0).min_scrolled_height(220.0).show(ui, |ui| {
             ui.set_min_width(300.0);
             for (tag, name) in &list {
-                let on = f.lang.eq_ignore_ascii_case(tag);
+                let on = crate::ribbon::same_language(&f.lang, tag);
                 let r = ui.selectable_label(on, name.as_str());
                 if r.clicked() {
                     f.lang = tag.clone();

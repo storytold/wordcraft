@@ -576,22 +576,46 @@ pub fn licence_texts() -> Vec<(String, String)> {
 pub const SCOWL_TITLE: &str = "English spelling dictionaries (SCOWL)";
 
 /// The pack locale for a document language tag: the whole tag (`pt-pt`), else each shorter
-/// prefix of it (`sr-latn` for `sr-Latn-RS`, `nl` for `nl-NL`), the first the index has. `None`
+/// prefix of it (`sr-latn` for `sr-Latn-RS`, `nl` for `nl-NL`), the first the index has. A
+/// variant after the region is also tried without the region, before the region alone
+/// (`ca-ES-valencia` is the `ca-valencia` pack's), as craft-proof looks its dictionary up. `None`
 /// for English and tags with no pack.
 pub fn pack_for_tag<'a>(tag: &str, packs: &'a [Pack]) -> Option<&'a Pack> {
+    pack_candidates(tag).iter().find_map(|c| packs.iter().find(|p| &p.locale == c))
+}
+
+/// The pack locales [`pack_for_tag`] tries for `tag`, best first.
+fn pack_candidates(tag: &str) -> Vec<String> {
     // A tag is a handful of short subtags; anything longer is junk and only its start is read.
     let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
-    let base = tag.split('-').next().unwrap_or("");
+    let parts: Vec<&str> = tag.split('-').collect();
+    let base = parts.first().copied().unwrap_or("");
     if base.is_empty() || base == "en" {
-        return None;
+        return Vec::new();
     }
-    let mut prefix = tag.as_str();
-    loop {
-        if let Some(p) = packs.iter().find(|p| p.locale == prefix) {
-            return Some(p);
+    let region = parts
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, p)| (p.len() == 2 && p.bytes().all(|b| b.is_ascii_alphabetic())) || (p.len() == 3 && p.bytes().all(|b| b.is_ascii_digit())));
+    let mut out: Vec<String> = Vec::new();
+    for n in (1..=parts.len()).rev() {
+        let prefix = parts.get(..n).unwrap_or_default();
+        for c in [
+            Some(prefix.join("-")),
+            region
+                .filter(|(r, _)| r + 1 < n)
+                .map(|(r, _)| prefix.iter().enumerate().filter(|(i, _)| *i != r).map(|(_, p)| *p).collect::<Vec<&str>>().join("-")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !out.contains(&c) {
+                out.push(c);
+            }
         }
-        prefix = prefix.rsplit_once('-')?.0;
     }
+    out
 }
 
 /// The languages (`w:lang`, resolved through the styles) of the body text, in first-seen order.

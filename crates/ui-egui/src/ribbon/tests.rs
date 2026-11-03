@@ -267,6 +267,16 @@ fn language_menu_checks_by_tag_or_proofing_language() {
     entries.push(("bg-BG".into(), "Bulgarian".into()));
     let c = language_checks("bg", &entries);
     assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)));
+    // CP4.3 review: a bare pack-language tag checks the regioned row of the same pack, however
+    // the packs are known (`nl` and `nl-NL` are both the `nl` pack's), and shows no second Dutch.
+    entries.push(("nl-NL".into(), "Dutch".into()));
+    for current in ["nl", "NL-nl"] {
+        let c = language_checks(current, &entries);
+        assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)), "{current}");
+    }
+    let c = language_checks("nl-BE", &entries);
+    assert_eq!((c.extra.as_deref(), c.listed.last().copied()), (Some("Dutch (Belgium)"), Some(false)));
+    assert!(super::language::same_language("sv", "sv-SE") && !super::language::same_language("sv-FI", "sv-SE"));
     // Nothing set (mixed selection): nothing checked, nothing above.
     let c = language_checks("", &entries);
     assert_eq!((c.extra, c.listed.contains(&true)), (None, false));
