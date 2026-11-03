@@ -109,20 +109,27 @@ impl Bus {
 fn read(bus: &mut Bus) -> Option<bool> {
     const PORTAL: &str = "org.freedesktop.portal.Desktop";
     const SETTINGS: &str = "org.freedesktop.portal.Settings";
-    const SCHEMAS: [(&str, &str); 2] = [("org.gnome.desktop.interface", "color-scheme"), ("org.freedesktop.interface.color-scheme", "color-scheme")];
+    const SCHEMAS: [(&str, &str); 3] = [
+        ("org.freedesktop.appearance", "color-scheme"),
+        ("org.gnome.desktop.interface", "color-scheme"),
+        ("org.freedesktop.interface.color-scheme", "color-scheme"),
+    ];
     if bus.0.is_none() {
         bus.0 = zbus::blocking::Connection::session().ok();
     }
     let connection = bus.0.as_ref()?;
     let mut answered = false;
     for (schema, key) in SCHEMAS {
-        let Ok(reply) = connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key)) else {
+        let reply = connection
+            .call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "ReadOne", &(schema, key))
+            .or_else(|_| connection.call_method(Some(PORTAL), "/org/freedesktop/portal/desktop", Some(SETTINGS), "Read", &(schema, key)));
+        let Ok(reply) = reply else {
             continue;
         };
         answered = true;
         let Ok((answer,)) = reply.body().deserialize::<(zbus::zvariant::OwnedValue,)>() else { continue };
-        if let Ok(scheme) = String::try_from(&*answer) {
-            return parse(&scheme);
+        if let Some(dark) = parse_value(&answer) {
+            return Some(dark);
         }
     }
     if !answered {
@@ -131,14 +138,42 @@ fn read(bus: &mut Bus) -> Option<bool> {
     None
 }
 
+/// Parse a variant value from the portal settings, which can be a u32 (1: dark, 2: light, 0: none)
+/// per the XDG Desktop Portal specification, or a string ("prefer-dark", "prefer-light").
+#[cfg(target_os = "linux")]
+fn parse_value(val: &zbus::zvariant::Value) -> Option<bool> {
+    match val {
+        zbus::zvariant::Value::Value(inner) => parse_value(inner),
+        zbus::zvariant::Value::U8(1)
+        | zbus::zvariant::Value::U16(1)
+        | zbus::zvariant::Value::U32(1)
+        | zbus::zvariant::Value::U64(1)
+        | zbus::zvariant::Value::I16(1)
+        | zbus::zvariant::Value::I32(1)
+        | zbus::zvariant::Value::I64(1) => Some(true),
+        zbus::zvariant::Value::U8(2)
+        | zbus::zvariant::Value::U16(2)
+        | zbus::zvariant::Value::U32(2)
+        | zbus::zvariant::Value::U64(2)
+        | zbus::zvariant::Value::I16(2)
+        | zbus::zvariant::Value::I32(2)
+        | zbus::zvariant::Value::I64(2) => Some(false),
+        zbus::zvariant::Value::Str(s) => parse(s.as_str()),
+        _ => None,
+    }
+}
+
 /// The portal's `color-scheme` answer. `default` means the desktop states no preference, so
 /// neither does the application.
 #[cfg(target_os = "linux")]
 fn parse(scheme: &str) -> Option<bool> {
-    match scheme {
-        "prefer-dark" => Some(true),
-        "prefer-light" => Some(false),
-        _ => None,
+    let s = scheme.trim();
+    if s.eq_ignore_ascii_case("prefer-dark") || s.eq_ignore_ascii_case("dark") || s == "1" {
+        Some(true)
+    } else if s.eq_ignore_ascii_case("prefer-light") || s.eq_ignore_ascii_case("light") || s == "2" {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -160,6 +195,20 @@ mod tests {
         assert_eq!(parse("prefer-light"), Some(false));
         assert_eq!(parse("default"), None);
         assert_eq!(parse(""), None);
+    }
+
+    /// The portal specification returns a u32 (1: dark, 2: light, 0: none) in a variant.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn portal_value_parsing_handles_u32_and_variants() {
+        use zbus::zvariant::Value;
+        assert_eq!(parse_value(&Value::U32(1)), Some(true));
+        assert_eq!(parse_value(&Value::U32(2)), Some(false));
+        assert_eq!(parse_value(&Value::U32(0)), None);
+        assert_eq!(parse_value(&Value::Value(Box::new(Value::U32(1)))), Some(true));
+        assert_eq!(parse_value(&Value::Value(Box::new(Value::U32(2)))), Some(false));
+        assert_eq!(parse_value(&Value::Str("prefer-dark".into())), Some(true));
+        assert_eq!(parse_value(&Value::Str("prefer-light".into())), Some(false));
     }
 
     /// Off Linux the caller already has winit's answer, so this adds nothing.

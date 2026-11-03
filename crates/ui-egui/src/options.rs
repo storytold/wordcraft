@@ -6,7 +6,7 @@
 
 use std::cell::Cell;
 
-use egui::{RichText, Ui, vec2};
+use egui::{CornerRadius, Rect, RichText, Stroke, Ui, pos2, vec2};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -223,7 +223,7 @@ fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
 /// default apps; the Start screen; and personalization such as user name and initials.
 fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
-    theme_picker(app, ui);
+    theme_picker(app, ui, "interface_theme");
     interface_size_picker(app, ui, "interface_size");
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
@@ -287,7 +287,8 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn display(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Display scale");
+    section(ui, "Display");
+    theme_picker(app, ui, "display_interface_theme");
     interface_size_picker(app, ui, "display_interface_size");
     ui.add_space(8.0);
     section(ui, "Formatting marks");
@@ -695,18 +696,34 @@ fn agents(ui: &mut Ui) {
 }
 
 /// Interface theme: Light, Dark, or follow the system's appearance (#115).
-fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
+fn theme_picker(app: &mut WordApp, ui: &mut Ui, id_salt: &str) {
     use crate::theme::Appearance;
+    let rtl = crate::rtl::on();
+    let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
-        let label = ui.label(tl!("Interface theme:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
-            for a in Appearance::ALL {
-                if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
+        ui.label(tl!("Interface theme:"));
+        ui.push_id(id_salt, |ui| {
+            for (a, icon_name) in [(Appearance::Light, "themeLight"), (Appearance::Dark, "themeDark"), (Appearance::System, "themeSystem")] {
+                let active = app.ui.theme == a;
+                let text = tl!(a.label());
+                let font = if active { semibold(12.5) } else { crate::theme::regular(12.5) };
+                let text_w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), t.text).size().x;
+                let btn_w = (text_w + 38.0).max(84.0);
+                let (r, resp) = ui.allocate_exact_size(vec2(btn_w, 28.0), egui::Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, text));
+                crate::widgets::bg(ui, r, &resp, active, &t);
+                let stroke_color = if active { t.accent } else { t.border };
+                ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+                let icon_center = pos2(crate::rtl::lead_x(rtl, r, 16.0), r.center().y);
+                let icon_rect = Rect::from_center_size(icon_center, vec2(16.0, 16.0));
+                crate::icons::paint(ui.painter(), icon_rect, icon_name, if active { t.accent } else { t.icon }, t.accent);
+                let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                ui.painter().text(pos2(text_x, r.center().y), crate::rtl::lead_center(rtl), text, font, t.text);
+                if resp.clicked() {
                     let _ = app.run("ui.theme", json!({"value": a.code()}));
                 }
             }
         });
-        combo.response.labelled_by(label.id);
     });
 }
 
