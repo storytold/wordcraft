@@ -322,7 +322,9 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
     let document = app.session.document_id();
     let now = ui.input(|i| i.time);
     let offers = missing(app, now);
-    let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p)) else {
+    // The whole list, for a tag closed before it was known (only then: it is a copy).
+    let index = if app.packs_rt.dismissed_tags.is_empty() { Vec::new() } else { packs::available() };
+    let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p, &index)) else {
         if let Some(tag) = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed_tags.contains(&(document, t.clone()))) {
             unlisted_bar(app, ui, &tag);
         }
@@ -366,11 +368,15 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
 
 /// Whether the bar for `pack` was closed in `document`: for the pack itself, or for a language
 /// tag it serves, closed before the list was known (`kl-GL` for `kl`).
-fn dismissed(app: &WordApp, document: u64, pack: &Pack) -> bool {
-    // A closed pack is that pack alone (closing `de-ch` leaves `de`); a closed tag is the pack
-    // it would find.
+fn dismissed(app: &WordApp, document: u64, pack: &Pack, index: &[Pack]) -> bool {
+    // A closed pack is that pack alone (closing `de-ch` leaves `de`); a closed tag is the pack it
+    // finds in the whole list (`de-CH` is `de-ch`'s, not `de`'s, once the list has both).
     app.packs_rt.dismissed.contains(&(document, pack.locale.clone()))
-        || app.packs_rt.dismissed_tags.iter().any(|(d, tag)| *d == document && packs::pack_for_tag(tag, std::slice::from_ref(pack)).is_some())
+        || app
+            .packs_rt
+            .dismissed_tags
+            .iter()
+            .any(|(d, tag)| *d == document && packs::pack_for_tag(tag, index).is_some_and(|p| p.locale == pack.locale))
 }
 
 /// The bar for a language the document asks for while there is no list of packs yet (a fresh
@@ -1572,17 +1578,24 @@ mod tests {
         let doc = a.session.document_id();
         let kl = packs::Pack { locale: "kl".into(), ..FixedBackend::sample().packs[0].clone() };
         let pt_pt = packs::Pack { locale: "pt-pt".into(), ..kl.clone() };
-        assert!(!super::dismissed(&a, doc, &kl));
+        let index = vec![kl.clone(), pt_pt.clone()];
+        assert!(!super::dismissed(&a, doc, &kl, &index));
         a.packs_rt.dismissed_tags.insert((doc, "kl-GL".into()));
-        assert!(super::dismissed(&a, doc, &kl), "closed as kl-GL: kl stays closed");
-        assert!(!super::dismissed(&a, doc, &pt_pt), "other languages aren't");
-        assert!(!super::dismissed(&a, doc.wrapping_add(1), &kl), "nor other documents");
+        assert!(super::dismissed(&a, doc, &kl, &index), "closed as kl-GL: kl stays closed");
+        assert!(!super::dismissed(&a, doc, &pt_pt, &index), "other languages aren't");
+        assert!(!super::dismissed(&a, doc.wrapping_add(1), &kl, &index), "nor other documents");
         // Closing a regional pack's bar leaves the base language's (Swiss German, then German).
         let de = packs::Pack { locale: "de".into(), ..kl.clone() };
         let de_ch = packs::Pack { locale: "de-ch".into(), ..kl.clone() };
+        let index = vec![de.clone(), de_ch.clone()];
         a.packs_rt.dismissed.insert((doc, "de-ch".into()));
-        assert!(super::dismissed(&a, doc, &de_ch));
-        assert!(!super::dismissed(&a, doc, &de), "German's bar still shows");
+        assert!(super::dismissed(&a, doc, &de_ch, &index));
+        assert!(!super::dismissed(&a, doc, &de, &index), "German's bar still shows");
+        // Closed as de-CH before the list was known: Swiss German's pack, not German's.
+        a.packs_rt.dismissed.clear();
+        a.packs_rt.dismissed_tags.insert((doc, "de-CH".into()));
+        assert!(super::dismissed(&a, doc, &de_ch, &index));
+        assert!(!super::dismissed(&a, doc, &de, &index), "a de-CH tag doesn't close German");
     }
 
     /// Martin's test: a spelling issue's context menu heading is in the interface language, not
