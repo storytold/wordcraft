@@ -537,6 +537,7 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
+                "w:tblCellSpacing" => t.cell_spacing = cell_spacing(k),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
@@ -605,10 +606,20 @@ pub fn trpr(e: &El) -> RowProps {
             "w:gridAfter" => r.grid_after = k.attr("w:val").and_then(u32_of).unwrap_or(0).min(63),
             "w:wBefore" => r.w_before = gap_width(k),
             "w:wAfter" => r.w_after = gap_width(k),
+            "w:tblCellSpacing" => r.cell_spacing = cell_spacing(k),
+            "w:jc" => r.align = k.attr("w:val").map(align),
             _ => {}
         }
     }
     r
+}
+
+/// `w:tblCellSpacing` in points: a width in twips (`dxa`, ECMA-376 §17.4.43); `nil` is none.
+fn cell_spacing(k: &El) -> Option<f32> {
+    match k.attr("w:type") {
+        None | Some("dxa") => tw(k, "w:w").filter(|v| v.is_finite() && *v >= 0.0).map(|v| v.min(1584.0)),
+        _ => None,
+    }
 }
 
 /// `w:wBefore`/`w:wAfter` in points: only a width in twips (`dxa`) is kept.

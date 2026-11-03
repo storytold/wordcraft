@@ -512,6 +512,7 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    cell_spacing(w, t.cell_spacing);
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
@@ -545,7 +546,8 @@ pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
     }
     let change = change.zip(r.fmt_change.as_ref());
     let gaps = r.grid_before > 0 || r.grid_after > 0 || r.w_before.is_some() || r.w_after.is_some();
-    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() {
+    let own = r.cell_spacing.is_some() || r.align.is_some();
+    if r.height.is_none() && !r.header && !r.cant_split && !gaps && !own && change.is_none() {
         return;
     }
     w.open("w:trPr", &[]);
@@ -567,6 +569,7 @@ fn tblprex(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    cell_spacing(w, t.cell_spacing);
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
@@ -611,6 +614,17 @@ fn trpr_inner(w: &mut W, r: &RowProps) {
     }
     if r.header {
         w.empty("w:tblHeader", &[]);
+    }
+    cell_spacing(w, r.cell_spacing);
+    if let Some(a) = r.align {
+        w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
+    }
+}
+
+/// `w:tblCellSpacing` (twips), when set.
+fn cell_spacing(w: &mut W, spacing: Option<f32>) {
+    if let Some(s) = spacing.filter(|s| s.is_finite()) {
+        w.empty("w:tblCellSpacing", &[("w:w", &twips(s.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
     }
 }
 
