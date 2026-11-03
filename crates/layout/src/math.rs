@@ -26,7 +26,7 @@ mod rows;
 mod state;
 mod structs;
 
-use bx::St;
+use bx::{Bx, St};
 use state::Ctx;
 
 /// Something to draw.
@@ -239,15 +239,23 @@ pub fn layout_equation(
         _ if display => cx.wrapped(nodes, st, avail, props),
         _ => cx.arg(nodes, st, 0),
     };
-    let mut slots = b.slots;
-    let em = base;
-    for s in &mut slots {
-        if s.a <= 0.0 && s.d <= 0.0 {
-            s.a = em * 0.75;
-            s.d = em * 0.25;
+    cx.finish(b, st)
+}
+
+impl Ctx {
+    fn finish(&self, b: Bx, st: St) -> MathLayout {
+        let mut slots = b.slots;
+        let em = self.base;
+        for s in &mut slots {
+            if s.a <= 0.0 && s.d <= 0.0 {
+                s.a = em * 0.75;
+                s.d = em * 0.25;
+            }
         }
+        // Use only a supplied font metric; keep fallback-font line metrics unchanged.
+        let leading = self.t.as_ref().map_or(0.0, |t| t.get(C::MathLeading) * self.size(st) / self.upem).max(0.0);
+        MathLayout { width: b.w.max(0.0), ascent: (b.a + leading).max(0.0), descent: b.d.max(0.0), items: b.items, slots }
     }
-    MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
 }
 
 #[cfg(test)]
