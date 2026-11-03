@@ -235,7 +235,7 @@ pub fn html_fragment(html: &str) -> &str {
 /// Whether an imported document has anything to paste: text, a table, or a picture it carries.
 fn has_content(d: &Document) -> bool {
     d.body.iter().any(|b| match &**b {
-        Block::Para(p) => !p.text.trim().is_empty() || (!p.objects.is_empty() && !d.media.is_empty()),
+        Block::Para(p) => !p.text.trim().is_empty() || !p.objects.is_empty(),
         Block::Table(_) => true,
     })
 }
@@ -271,6 +271,11 @@ pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+        // If any Image key in the fragment is absent from this document's media store the
+        // clipboard belongs to a different Session (cross-document paste). Fall through so
+        // rich_fragment() imports via the HTML on the system clipboard, which now carries
+        // proper data: URIs after the fix to copy_result() / to_document_with_media().
+        && !f.has_missing_media(&s.doc)
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
