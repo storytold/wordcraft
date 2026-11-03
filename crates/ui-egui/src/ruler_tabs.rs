@@ -53,6 +53,12 @@ pub(crate) fn kind_label(k: TabAlign) -> &'static str {
     }
 }
 
+/// Whether this drag should land off the grid: Alt, or both buttons of a mouse (as Word's fine
+/// drag does). A tablet or pen has no second button, so Alt is its only fine modifier (#4284).
+pub(crate) fn fine(ui: &Ui) -> bool {
+    ui.input(|i| i.modifiers.alt || (i.pointer.primary_down() && i.pointer.secondary_down()))
+}
+
 /// A ruler position for a stop: snapped to `step` (unless `free`, Alt held), within the column.
 pub(crate) fn snap_tab(pt: f32, step: f32, width: f32, free: bool) -> f32 {
     let pt = if pt.is_finite() { pt } else { 0.0 };
