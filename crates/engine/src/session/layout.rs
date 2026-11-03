@@ -5,6 +5,15 @@ use super::view::DRAFT_WIDTH;
 use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
+    /// Geometry for the active caret, including the preceding line's end at an unspaced wrap.
+    pub fn caret_geometry(&self, layout: &DocLayout, pos: &wordcraft_doc::Pos) -> Option<wordcraft_layout::hit::Caret> {
+        self.line_end
+            .as_ref()
+            .filter(|p| *p == pos && self.sel.focus == **p)
+            .and_then(|p| layout.caret_at_line_end(p, self.page_hint))
+            .or_else(|| layout.caret_on(pos, self.page_hint))
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let typing = self.typing_word();
@@ -46,6 +55,10 @@ impl Session {
                     && *sh == shown
             })
         };
+        // A changed layout key also invalidates the visual side when its geometry is cached.
+        if !fits(&self.layout[0]) {
+            self.line_end = None;
+        }
         if !fits(&self.layout[0]) && fits(&self.layout[1]) {
             self.layout.swap(0, 1);
         }

@@ -600,6 +600,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         height: 0.0,
         text_len: p.text.len(),
         joined_cluster_starts,
+        joined_wrap_starts: crate::dictionary::joined_boundaries(&bt.text).into_iter().filter_map(|i| bt.to_para(i)).collect(),
         has_page_fields,
         notes,
         issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
@@ -635,9 +636,13 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
 /// Neither ordinary nor hyphenated wrapping may split a drawing group inside a grapheme.
 fn keep_graphemes_whole(pl: &mut ParaLayout) {
     for c in &mut pl.clusters {
-        c.break_after &= pl.joined_cluster_starts.binary_search(&c.end).is_err();
+        c.break_after &= pl.joined_cluster_starts.binary_search(&c.end).is_err() && pl.joined_wrap_starts.binary_search(&c.end).is_err();
     }
-    pl.hyph_after.retain(|&k| pl.clusters.get(k as usize).is_some_and(|c| pl.joined_cluster_starts.binary_search(&c.end).is_err()));
+    pl.hyph_after.retain(|&k| {
+        pl.clusters
+            .get(k as usize)
+            .is_some_and(|c| pl.joined_cluster_starts.binary_search(&c.end).is_err() && pl.joined_wrap_starts.binary_search(&c.end).is_err())
+    });
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
             c.break_after = true;
@@ -764,5 +769,10 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     }
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    // Khmer class SA needs lexical boundaries, calculated on the visible paragraph as a
+    // whole, independently of style runs. Offsets continue to address the original text:
+    // no ZWSP or other segmentation marker is inserted into the document or shaped glyphs.
+    found.extend(crate::dictionary::breaks(text));
+    crate::dictionary::retain_safe(text, &mut found);
     found
 }

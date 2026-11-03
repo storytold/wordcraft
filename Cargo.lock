@@ -1079,6 +1079,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-khmer"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=6be86aa0f8f7183a01d238a225e77221ce9111ea#6be86aa0f8f7183a01d238a225e77221ce9111ea"
+dependencies = [
+ "brotli",
+ "brotli-decompressor",
+ "crc32fast",
+ "regex",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "craft-pdf"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=92d392cff132eaf53e13afff77f38b5c11b73aa0#92d392cff132eaf53e13afff77f38b5c11b73aa0"
@@ -1103,8 +1116,9 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=47c9f62530db72bc5c3831c86653b47b20c640be#47c9f62530db72bc5c3831c86653b47b20c640be"
+source = "git+https://github.com/storytold/craft-libs?rev=6be86aa0f8f7183a01d238a225e77221ce9111ea#6be86aa0f8f7183a01d238a225e77221ce9111ea"
 dependencies = [
+ "craft-khmer",
  "log",
  "miniz_oxide 0.9.1",
  "toml",
@@ -4733,6 +4747,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

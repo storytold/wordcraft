@@ -291,3 +291,205 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+const KHMER_SENTENCE: &str = "ខ្ញុំស្រឡាញ់ភាសាខ្មែរ";
+
+#[test]
+fn khmer_dictionary_wraps_across_formatting_without_changing_text() {
+    if !wordcraft_proof::khmer::data_available() {
+        eprintln!("skipped: CRAFT_KHMER_DIR was not supplied at build time");
+        return;
+    }
+    let text = KHMER_SENTENCE.repeat(40);
+    let breaks = wordcraft_proof::khmer::line_breaks(&text);
+    assert!(breaks.len() > 40, "fixture contains multiple dictionary words");
+    let mut d = Document::from_text(&text);
+    // A run boundary inside a word must neither create nor remove lexical opportunities.
+    d.format_range(&Pos::body(0, 3), &Pos::body(0, 9), &|c| c.bold = Some(true)).unwrap();
+    d.settings.auto_hyphenation = true;
+    d.last_section.page_w = 344.0; // 200 pt of text; all fixture words fit.
+    let before = serde_json::to_string(&d).unwrap();
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 3);
+    for line in &pl.lines {
+        assert!(line.hyphen.is_none(), "Khmer dictionary breaks never insert hyphens");
+        if line.start > 0 {
+            assert!(breaks.contains(&line.start), "line starts at dictionary boundary {}", line.start);
+        }
+        for off in pl.line_offsets(pl.line_of(line.start)) {
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(&text, off));
+        }
+    }
+    for cluster in &pl.clusters {
+        if cluster.break_after {
+            assert!(breaks.contains(&cluster.end), "no formatting-derived break at {}", cluster.end);
+        }
+    }
+    assert_eq!(serde_json::to_string(&d).unwrap(), before, "layout preserves raw document and runs");
+    assert_eq!(pl.text_len, text.len());
+}
+
+#[test]
+fn khmer_emergency_wrap_keeps_coeng_and_formatted_clusters_whole() {
+    // Deliberately not a dictionary word, and much wider than each line.
+    let text = "ខ្មែ".repeat(50);
+    let mut d = Document::from_text(&text);
+    d.format_range(&Pos::body(0, 3), &Pos::body(0, 9), &|c| c.size = Some(30.0)).unwrap();
+    for width in [1.0, 18.0, 35.0] {
+        d.last_section.page_w = 144.0 + width;
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        assert!(pl.lines.len() > 1);
+        for line in &pl.lines {
+            assert!(line.stop > line.start, "emergency wrapping makes progress");
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(&text, line.start));
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(&text, line.stop));
+            assert!(line.hyphen.is_none());
+        }
+    }
+}
+
+#[test]
+fn khmer_joiners_zwsp_and_mixed_punctuation_keep_original_offsets() {
+    for text in ["ខ្មែរ\u{2060}ភាសា", "ខ្មែរ\u{200b}ភាសា", "Hello ខ្ញុំស្រឡាញ់ភាសាខ្មែរ។ Latin"]
+    {
+        let mut d = Document::from_text(text);
+        d.last_section.page_w = 162.0; // force even emergency boundaries to be exercised
+        let before = serde_json::to_string(&d).unwrap();
+        let l = lay(&d);
+        let pl = para_layout(&l, 0);
+        for line in &pl.lines {
+            assert!(text.is_char_boundary(line.start) && text.is_char_boundary(line.stop));
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(text, line.start));
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(text, line.stop));
+            assert!(!text.get(..line.start).is_some_and(|s| s.ends_with('\u{2060}')));
+            assert!(!text.get(line.start..).is_some_and(|s| s.starts_with('\u{2060}')));
+            assert!(line.hyphen.is_none());
+        }
+        if let Some(at) = text.find('។') {
+            assert!(!pl.clusters.iter().any(|c| c.end == at && c.break_after), "Khmer full stop stays with its word");
+        }
+        if let Some(at) = text.find('\u{200b}') {
+            assert!(pl.clusters.iter().any(|c| c.end == at + '\u{200b}'.len_utf8() && c.break_after), "explicit ZWSP remains a break");
+        }
+        assert_eq!(serde_json::to_string(&d).unwrap(), before);
+    }
+}
+
+#[test]
+fn installed_khmer_fallback_shapes_without_missing_glyphs() {
+    let Some(face) = wordcraft_fonts::FontDb::global().fallback_for('ខ', 0).filter(|f| f.has_layout_tables()) else {
+        eprintln!("skipped: no Khmer system font with OpenType tables installed");
+        return;
+    };
+    assert!(face.has_layout_tables(), "Khmer fallback requires OpenType shaping");
+    let shaped = wordcraft_fonts::shape(&face, "ខ្មែ", &[], |c| c);
+    assert!(!shaped.is_empty() && shaped.iter().all(|g| g.gid != 0));
+    assert!(shaped.iter().all(|g| g.cluster == 0), "COENG syllable is one shaped cluster: {shaped:?}");
+    let l = lay(&Document::from_text(KHMER_SENTENCE));
+    let pl = para_layout(&l, 0);
+    assert!(!pl.glyphs.is_empty());
+    assert!(pl.glyphs.iter().all(|g| g.gid != 0), "no missing Khmer glyphs");
+    assert!(pl.clusters.iter().all(|c| pl.styles[c.style as usize].face.has_layout_tables()));
+}
+
+#[test]
+fn khmer_repetition_sign_stays_with_preceding_word_across_widths() {
+    // Regression from the independent PR comparison: an ICU adapter allowed
+    // the repetition sign to begin a line at 65 pt. Check final layout, not
+    // merely candidate offsets, over a range of available widths.
+    let text = "ខ្មែរអ្វីៗខ្មែរអ្វីៗខ្មែរ";
+    for width in (40..=200).step_by(5) {
+        let mut doc = Document::from_text(text);
+        doc.last_section.page_w = width as f32 + 72.0;
+        doc.last_section.margin_left = 36.0;
+        doc.last_section.margin_right = 36.0;
+        let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        for run in &mut p.runs {
+            run.props.font = Some("Khmer Sangam MN".into());
+            run.props.size = Some(14.0);
+        }
+        let before = serde_json::to_string(&doc).unwrap();
+        let result = lay(&doc);
+        let p = para_layout(&result, 0);
+        assert!(!p.lines.is_empty());
+        if width == 40 {
+            assert!(p.lines.len() > 1, "fixture must exercise wrapping");
+        }
+        for line in &p.lines {
+            assert!(!text.get(line.start..).is_some_and(|s| s.starts_with('ៗ')), "repetition sign at line start, width {width}");
+            assert!(line.hyphen.is_none());
+            assert!(wordcraft_doc::cluster::is_cluster_boundary(text, line.start));
+        }
+        assert_eq!(serde_json::to_string(&doc).unwrap(), before);
+    }
+}
+
+#[test]
+fn khmer_manual_zwsp_wraps_inside_a_model_word_across_formatting() {
+    let text = "មូល\u{200b}ដ្ឋាន";
+    let cut = "មូល\u{200b}".len();
+    let mut doc = Document::from_text(text);
+    doc.last_section.margin_left = 36.0;
+    doc.last_section.margin_right = 36.0;
+    doc.last_section.page_w = 1000.0;
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for run in &mut p.runs {
+        run.props.font = Some("Khmer Sangam MN".into());
+        run.props.size = Some(14.0);
+    }
+    // Keep the marker at a formatting edge; no text rewrite should be needed.
+    doc.format_range(&Pos::body(0, cut), &Pos::body(0, text.len()), &|c| c.bold = Some(true)).unwrap();
+    let wide = lay(&doc);
+    let p = para_layout(&wide, 0);
+    assert_eq!(p.lines.len(), 1, "ZWSP is optional, not a forced newline");
+    let left: f32 = p.clusters.iter().filter(|c| c.end <= cut).map(|c| c.adv).sum();
+    let right: f32 = p.clusters.iter().filter(|c| c.start >= cut).map(|c| c.adv).sum();
+    assert!(left > 0.0 && right > 0.0);
+    doc.last_section.page_w = 72.0 + left.max(right) + left.min(right) * 0.25;
+    let saved = serde_json::to_string(&doc).unwrap();
+    let narrow = lay(&doc);
+    let p = para_layout(&narrow, 0);
+    assert_eq!(p.lines.len(), 2);
+    assert_eq!(p.lines[1].start, cut, "manual marker supplies the actual wrap");
+    assert!(p.lines.iter().all(|l| l.hyphen.is_none()));
+    assert_eq!(serde_json::to_string(&doc).unwrap(), saved);
+}
+
+#[test]
+fn khmer_tabs_and_controls_keep_formatting_and_caret_offsets() {
+    let text = "Label\tមូល\u{200b}ដ្ឋាន ខ្មែរ\u{2060}ភាសា ខ្ញុំស្រឡាញ់ភាសាខ្មែរ";
+    let marker = text.find('\u{200b}').unwrap() + '\u{200b}'.len_utf8();
+    let joined = crate::dictionary::joined_boundaries(text);
+    for align in [wordcraft_doc::props::Align::Left, wordcraft_doc::props::Align::Justify, wordcraft_doc::props::Align::Distribute] {
+        for width in [100.0, 150.0, 220.0] {
+            let mut doc = Document::from_text(text);
+            doc.last_section.page_w = 72.0 + width;
+            doc.last_section.margin_left = 36.0;
+            doc.last_section.margin_right = 36.0;
+            doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align = Some(align);
+            doc.format_range(&Pos::body(0, marker), &Pos::body(0, text.len()), &|c| c.bold = Some(true)).unwrap();
+            let saved = serde_json::to_value(&doc).unwrap();
+            let result = lay(&doc);
+            let p = para_layout(&result, 0);
+            if width == 100.0 {
+                assert!(p.lines.len() > 1, "fixture wraps in {align:?} at {width}");
+            }
+            assert!(p.clusters.iter().any(|c| c.end == marker && c.break_after), "formatting retains explicit ZWSP");
+            let carets: Vec<usize> = (0..p.lines.len()).flat_map(|i| p.line_offsets(i)).collect();
+            for boundary in &joined {
+                assert!(carets.contains(boundary), "WJ remains editable: {boundary}");
+            }
+            for line in &p.lines {
+                assert!(!joined.contains(&line.start), "WJ prevents emergency wrapping in {align:?} at {width}");
+                assert!(wordcraft_doc::cluster::is_cluster_boundary(text, line.start));
+                assert!(line.xs.iter().all(|x| x.is_finite()));
+                assert!(line.hyphen.is_none());
+            }
+            // The tab's label is not moved by justification of the text after it.
+            assert_eq!(p.x_of(0, 0), p.lines.first().map(|line| line.left));
+            assert_eq!(serde_json::to_value(&doc).unwrap(), saved);
+        }
+    }
+}

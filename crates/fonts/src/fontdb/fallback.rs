@@ -62,10 +62,12 @@ impl FontDb {
             return (Some(face), self.read_faces().len());
         }
         let (found, n) = self.loaded_fallback(c, exclude);
-        if found.is_some() {
+        if found.as_ref().is_some_and(|f| !crate::needs_layout_tables(c) || f.has_layout_tables()) {
             return (found, n);
         }
-        self.system_search(c, exclude)
+        // On WASM (or a system without a shaping font), retain the existing coverage.
+        let (system, n) = self.system_search(c, exclude);
+        (system.or(found), n)
     }
 
     fn circle_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
@@ -88,7 +90,7 @@ impl FontDb {
         find()
     }
 
-    /// [`Self::search_fallback`] when no loaded face covers `c`: load a system font that does,
+    /// [`Self::search_fallback`] when no loaded face covers or shapes `c`: load a system font that does,
     /// one search at a time.
     #[cfg(not(target_arch = "wasm32"))]
     fn system_search(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
@@ -96,7 +98,7 @@ impl FontDb {
         // A search that held the lock first may have loaded a font covering `c`: choose among the
         // loaded faces again before loading more.
         let (found, n) = self.loaded_fallback(c, exclude);
-        if found.is_none() && self.system_fallback(c) {
+        if found.as_ref().is_none_or(|f| crate::needs_layout_tables(c) && !f.has_layout_tables()) && self.system_fallback(c) {
             return self.loaded_fallback(c, exclude);
         }
         (found, n)
@@ -180,16 +182,16 @@ impl FontDb {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let (mut base, mut checked) = self.loaded_covering(chars, exclude);
         #[cfg(not(target_arch = "wasm32"))]
-        if base.is_none() {
-            // A character no loaded face covers: load a system font for it, then retry (the run's
+        if base.as_ref().is_none_or(|f| chars.iter().any(|c| crate::needs_layout_tables(*c)) && !f.has_layout_tables()) {
+            // A character no loaded face covers and shapes: load a system font for it, then retry (the run's
             // other characters may already be covered by loaded faces).
             for c in chars {
-                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c)) {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c) && (!crate::needs_layout_tables(*c) || f.has_layout_tables())) {
                     continue;
                 }
                 if self.system_fallback(*c) {
                     (base, checked) = self.loaded_covering(chars, exclude);
-                    if base.is_some() {
+                    if base.as_ref().is_some_and(|f| !chars.iter().any(|c| crate::needs_layout_tables(*c)) || f.has_layout_tables()) {
                         break;
                     }
                 }
@@ -197,7 +199,7 @@ impl FontDb {
             // Each character has a face now, but the families a script prefers may lack the
             // run's other letters (Noto Sans Thai has no Latin): look for one installed font
             // that maps the whole run.
-            if base.is_none() {
+            if base.as_ref().is_none_or(|f| chars.iter().any(|c| crate::needs_layout_tables(*c)) && !f.has_layout_tables()) {
                 // Look again even when this search loaded nothing: another thread's may just have
                 // loaded the font (and taken its files off the index).
                 self.indexed_run_fallback(chars);
@@ -248,7 +250,7 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c) && (!crate::needs_layout_tables(c) || f.has_layout_tables()));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
         let rtl = crate::is_rtl(c) || arabic_block(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
@@ -301,7 +303,11 @@ impl FontDb {
     /// whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
+        let covered = |db: &FontDb| {
+            db.read_faces()
+                .iter()
+                .any(|f| chars.iter().all(|c| f.covers(*c)) && (!chars.iter().any(|c| crate::needs_layout_tables(*c)) || f.has_layout_tables()))
+        };
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

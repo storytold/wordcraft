@@ -818,7 +818,7 @@ impl Scan {
             || self.x + advance - pl.auto_space_after(j) <= self.right_edge + shrink + 0.01
             || c.kind == ClKind::Space
             || c.kind == ClKind::Marker;
-        if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
+        if !fits && pl.is_wrap_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
             self.wrap(bk, pl);
             return true;
         }
@@ -940,10 +940,10 @@ impl Scan {
         // lines: back up to their first segment (unless it starts the line).
         let glyphless = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Text && c.g1 <= c.g0);
         let mut b = j;
-        while b > c0 + 1 && (glyphless(b) || pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start))) {
+        while b > c0 + 1 && (glyphless(b) || pl.clusters.get(b).is_some_and(|c| !pl.is_wrap_boundary(c.start))) {
             b -= 1;
         }
-        while b > c0 && pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start)) {
+        while b > c0 && pl.clusters.get(b).is_some_and(|c| !pl.is_wrap_boundary(c.start)) {
             b -= 1;
         }
         if b < j

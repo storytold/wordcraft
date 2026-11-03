@@ -30,6 +30,13 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    /// Edits and a new selection discard the visual side of an unspaced wrap.
+    fn reset_wrap_affinity_for(&mut self, id: &str, mutates: bool) {
+        if mutates || id.starts_with("select.") {
+            self.line_end = None;
+        }
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -84,6 +91,7 @@ impl Session {
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
             self.doc.settings.track_changes = true;
         }
+        self.reset_wrap_affinity_for(id, spec.mutates);
         // Macro recording and Repeat.
         let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
             && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));

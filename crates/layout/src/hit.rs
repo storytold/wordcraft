@@ -614,9 +614,22 @@ impl DocLayout {
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
+        self.caret_in(pos, page_hint, false)
+    }
+
+    /// The upstream caret at an unspaced LTR wrap, after the preceding line's last grapheme.
+    pub fn caret_at_line_end(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
+        self.caret_in(pos, page_hint, true)
+    }
+
+    fn caret_in(&self, pos: &Pos, page_hint: usize, line_end: bool) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let mut li = para.line_of(pos.off);
+            if line_end {
+                let Some(previous) = li.checked_sub(1).filter(|&prev| para.wraps_into(prev, pos.off)) else { continue };
+                li = previous;
+            }
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -638,7 +651,15 @@ impl DocLayout {
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
-        let c = self.caret_on(pos, page_hint)?;
+        self.vertical_from(pos, self.caret_on(pos, page_hint)?, goal_x, dir)
+    }
+
+    /// Vertical movement from the preceding line's end at an unspaced wrap.
+    pub fn vertical_from_line_end(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
+        self.vertical_from(pos, self.caret_at_line_end(pos, page_hint)?, goal_x, dir)
+    }
+
+    fn vertical_from(&self, pos: &Pos, c: Caret, goal_x: Option<f32>, dir: i32) -> Option<(Pos, f32)> {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);

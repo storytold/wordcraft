@@ -50,7 +50,7 @@ impl SpellingForm {
         self.issue.get("done").and_then(Value::as_bool) == Some(true)
     }
 
-    #[cfg(test)]
+    /// Dynamic text that needs document fallback fonts in the proofing pane.
     pub(crate) fn content_text(&self) -> Vec<String> {
         let mut text: Vec<String> =
             self.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();

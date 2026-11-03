@@ -1,0 +1,528 @@
+{
+  "method": "15 rotating-order fresh processes each; 24 fixed pure-Khmer cases (12 from each author), 100 rounds; 5 maxRSS samples; same compiler/profile/wrapper. Calls use exact segmentation modules only, not full app or all PR3110 features.",
+  "summary": {
+    "aksara": {
+      "cold_us": {
+        "median": 16146,
+        "min": 13830,
+        "max": 24960
+      },
+      "warm_us": {
+        "median": 14132,
+        "min": 12105,
+        "max": 19667
+      },
+      "rss_bytes_median": 10846208,
+      "warm_calls": 2400
+    },
+    "custom": {
+      "cold_us": {
+        "median": 7549,
+        "min": 6546,
+        "max": 9168
+      },
+      "warm_us": {
+        "median": 2781,
+        "min": 2529,
+        "max": 9352
+      },
+      "rss_bytes_median": 7389184,
+      "warm_calls": 2400
+    },
+    "icu": {
+      "cold_us": {
+        "median": 19,
+        "min": 17,
+        "max": 2279
+      },
+      "warm_us": {
+        "median": 1542,
+        "min": 1517,
+        "max": 3773
+      },
+      "rss_bytes_median": 2473984,
+      "warm_calls": 2400
+    },
+    "fourth": {
+      "cold_us": {
+        "median": 15286,
+        "min": 13992,
+        "max": 20362
+      },
+      "warm_us": {
+        "median": 10742,
+        "min": 10038,
+        "max": 14200
+      },
+      "rss_bytes_median": 10846208,
+      "warm_calls": 2400
+    }
+  },
+  "raw_runs": {
+    "aksara": [
+      {
+        "checksum": 2103,
+        "cold_us": 24960,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 15596
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 16233,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 13428
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 13830,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 13008
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 21302,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 15894
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14312,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 15708
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 13986,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 14569
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14554,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12493
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15191,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 14132
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 16652,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 15653
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 18374,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12337
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 16146,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 19667
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 16973,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12105
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14815,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 13365
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 22896,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 13461
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15030,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 15999
+      }
+    ],
+    "custom": [
+      {
+        "checksum": 3703,
+        "cold_us": 8556,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2718
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 7261,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2781
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 9168,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2679
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 8010,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 4280
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 6995,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2564
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 7277,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2867
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 8652,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2632
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 7549,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 4835
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 8312,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 3828
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 6702,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2807
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 6715,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2529
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 6623,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2627
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 7917,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 3472
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 8649,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 9352
+      },
+      {
+        "checksum": 3703,
+        "cold_us": 6546,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2543
+      }
+    ],
+    "icu": [
+      {
+        "checksum": 1402,
+        "cold_us": 2279,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 3773
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 19,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1526
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 18,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1521
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 18,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1542
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 18,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1539
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 22,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1529
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 17,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1901
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 18,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1896
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 20,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 2780
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 17,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1835
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 30,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 3151
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 19,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1637
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 18,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1517
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 19,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1540
+      },
+      {
+        "checksum": 1402,
+        "cold_us": 20,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 1524
+      }
+    ],
+    "fourth": [
+      {
+        "checksum": 2103,
+        "cold_us": 16961,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10461
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15718,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10210
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14685,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10038
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15235,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 11067
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14235,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10162
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 13992,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12693
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14230,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12190
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14241,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10742
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 16427,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10237
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 18057,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 11118
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 17811,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 14200
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15286,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10475
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 15817,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 13017
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 20362,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 10123
+      },
+      {
+        "checksum": 2103,
+        "cold_us": 14764,
+        "inputs": 24,
+        "rounds": 100,
+        "warm_us": 12405
+      }
+    ]
+  },
+  "rss_samples": {
+    "aksara": [11468800, 10502144, 10862592, 10469376, 10846208],
+    "custom": [7389184, 7389184, 7356416, 7372800, 7389184],
+    "icu": [2424832, 2473984, 2473984, 2473984, 2473984],
+    "fourth": [10633216, 10846208, 10469376, 11354112, 11190272]
+  },
+  "standalone_sizes": {
+    "baseline": {
+      "executable": 440544,
+      "zip": 198839
+    },
+    "aksara": {
+      "executable": 1054288,
+      "zip": 700745,
+      "executable_delta_from_empty": 613744,
+      "zip_delta_from_empty": 501906
+    },
+    "custom": {
+      "executable": 754912,
+      "zip": 512470,
+      "executable_delta_from_empty": 314368,
+      "zip_delta_from_empty": 313631
+    },
+    "icu": {
+      "executable": 2290960,
+      "zip": 1102633,
+      "executable_delta_from_empty": 1850416,
+      "zip_delta_from_empty": 903794
+    },
+    "fourth": {
+      "executable": 1054256,
+      "zip": 700916,
+      "executable_delta_from_empty": 613712,
+      "zip_delta_from_empty": 502077
+    }
+  },
+  "custom_dictionary_bytes": 289054
+}

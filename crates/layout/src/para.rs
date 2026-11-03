@@ -58,6 +58,8 @@ pub struct ParaLayout {
     /// Drawing segments that start inside a whole-paragraph grapheme/complex-script cluster.
     /// Font or run formatting can split the drawing, but cannot introduce an edit/wrap stop.
     joined_cluster_starts: Vec<usize>,
+    /// Boundaries glued by wrapping controls or repetition signs, without removing caret stops.
+    joined_wrap_starts: Vec<usize>,
     /// Paragraph contains fields whose text depends on the page.
     pub has_page_fields: bool,
     /// Note references (part id) in this paragraph, by cluster index.
@@ -114,6 +116,10 @@ impl ParaLayout {
     /// joined grapheme cluster.
     fn is_edit_boundary(&self, off: usize) -> bool {
         self.joined_cluster_starts.binary_search(&off).is_err()
+    }
+
+    fn is_wrap_boundary(&self, off: usize) -> bool {
+        self.is_edit_boundary(off) && self.joined_wrap_starts.binary_search(&off).is_err()
     }
 
     /// At a legal group start, include every following drawing segment of that grapheme.
@@ -194,6 +200,17 @@ impl ParaLayout {
             })
             .collect()
     }
+    /// Whether an unspaced LTR wrap ends at `off`, which also starts the next line.
+    /// Such a position has both an upstream and downstream visual caret.
+    pub fn wraps_into(&self, li: usize, off: usize) -> bool {
+        let (Some(l), Some(next)) = (self.lines.get(li), li.checked_add(1).and_then(|next| self.lines.get(next))) else { return false };
+        l.end == LineEnd::Wrap
+            && l.vis.is_empty()
+            && l.c1 > l.c0
+            && next.start == off
+            && self.clusters.get(l.c1 - 1).is_some_and(|c| c.kind == ClKind::Text && c.end == off)
+    }
+
     /// The farthest right a caret goes on left-to-right line `li`: spaces at the end of a line
     /// hang past its right edge, but the caret after them stays at the edge, as in Word (#2146);
     /// text that overflows the line still carries it. `None` on bidirectional lines.
@@ -303,7 +320,7 @@ impl ParaLayout {
                 if lastc.is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)) {
                     continue;
                 }
-                if l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() {
+                if l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some() && !self.wraps_into(li, l.stop) {
                     continue;
                 }
             }

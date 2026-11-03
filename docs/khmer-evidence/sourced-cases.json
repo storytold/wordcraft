@@ -1,0 +1,832 @@
+{
+  "schema": 1,
+  "created": "2026-11-03",
+  "cases": [
+    {
+      "id": "w3c-compound",
+      "text": "សហរដ្ឋអាមេរិក",
+      "source": "https://github.com/w3c/sealreq/issues/35",
+      "category": "W3C compound example",
+      "note": "The W3C discussion explicitly allows សហរដ្ឋ | អាមេរិក for tighter line filling. Keeping the compound whole is also acceptable.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "សហរដ្ឋអាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "fourth": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "សហរដ្ឋអាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "fourth": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["សហរដ្ឋ", "អាមេរិក"]
+      ]
+    },
+    {
+      "id": "icu-space-report",
+      "text": "អស់ នឹង មាន",
+      "source": "https://github.com/unicode-org/icu4x/issues/7218",
+      "category": "Reported spacing case",
+      "note": "The original ICU4X 2.1.1 report asks for breaks after spaces, not isolated spaces. Our probes use the pinned WordCraft proposals, not that old LineSegmenter API. Raw API scope differs; inspect actual native lines.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "អស់ នឹង មាន",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [9, 19],
+              "raw": [3, 7]
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [9, 10, 19, 20],
+              "raw": [3, 4, 7, 8]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": false
+        },
+        "automatic": {
+          "text": "អស់ នឹង មាន",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [9, 19],
+              "raw": [3, 7]
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [9, 10, 19, 20],
+              "raw": [3, 4, 7, 8]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": false
+        }
+      }
+    },
+    {
+      "id": "icu-question",
+      "text": "តើលោកមកពីប្រទេសណា",
+      "source": "https://github.com/unicode-org/icu/blob/b34cf4d07e71acf06f01b3a1902759609c111e2d/icu4c/source/test/testdata/rbbitst.txt#L1341",
+      "category": "ICU regression examples",
+      "note": "Word-boundary fixture reused to exercise line-breaking decisions. Reference divisions are informative; useful compound alternatives are permitted.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "តើលោកមកពីប្រទេសណា",
+          "engines": {
+            "aksara": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "custom": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "icu": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "fourth": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            }
+          },
+          "differs": false
+        },
+        "automatic": {
+          "text": "តើលោកមកពីប្រទេសណា",
+          "engines": {
+            "aksara": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "custom": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "icu": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            },
+            "fourth": {
+              "bytes": [6, 15, 21, 27, 45],
+              "offsets": [2, 5, 7, 9, 15],
+              "raw_bytes": [6, 15, 21, 27, 45],
+              "raw": [2, 5, 7, 9, 15]
+            }
+          },
+          "differs": false
+        }
+      },
+      "accepted_segments": [
+        ["តើ", "លោក", "មក", "ពី", "ប្រទេស", "ណា"]
+      ]
+    },
+    {
+      "id": "icu-short-unit",
+      "text": "សណ្ដូកកបណ្ដែតខ្លួន",
+      "source": "https://github.com/unicode-org/icu/blob/b34cf4d07e71acf06f01b3a1902759609c111e2d/icu4c/source/test/testdata/rbbitst.txt#L1342",
+      "category": "ICU regression examples",
+      "note": "A short standalone unit between longer words challenges maximal matching. The source test provides these divisions.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "សណ្ដូកកបណ្ដែតខ្លួន",
+          "engines": {
+            "aksara": {
+              "bytes": [21, 39],
+              "offsets": [7, 13],
+              "raw_bytes": [21, 39],
+              "raw": [7, 13]
+            },
+            "custom": {
+              "bytes": [18, 21, 39],
+              "offsets": [6, 7, 13],
+              "raw_bytes": [18, 21, 39],
+              "raw": [6, 7, 13]
+            },
+            "icu": {
+              "bytes": [18, 24, 33, 36, 39],
+              "offsets": [6, 8, 11, 12, 13],
+              "raw_bytes": [18, 24, 33, 36, 39],
+              "raw": [6, 8, 11, 12, 13]
+            },
+            "fourth": {
+              "bytes": [21, 39],
+              "offsets": [7, 13],
+              "raw_bytes": [21, 39],
+              "raw": [7, 13]
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "សណ្ដូកកបណ្ដែតខ្លួន",
+          "engines": {
+            "aksara": {
+              "bytes": [21, 39],
+              "offsets": [7, 13],
+              "raw_bytes": [21, 39],
+              "raw": [7, 13]
+            },
+            "custom": {
+              "bytes": [18, 21, 39],
+              "offsets": [6, 7, 13],
+              "raw_bytes": [18, 21, 39],
+              "raw": [6, 7, 13]
+            },
+            "icu": {
+              "bytes": [18, 24, 33, 36, 39],
+              "offsets": [6, 8, 11, 12, 13],
+              "raw_bytes": [18, 24, 33, 36, 39],
+              "raw": [6, 8, 11, 12, 13]
+            },
+            "fourth": {
+              "bytes": [21, 39],
+              "offsets": [7, 13],
+              "raw_bytes": [21, 39],
+              "raw": [7, 13]
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["សណ្ដូក", "ក", "បណ្ដែត", "ខ្លួន"]
+      ]
+    },
+    {
+      "id": "icu-ambiguous-join",
+      "text": "ពណ៌សម្ដេចថាខ្មៅ",
+      "source": "https://github.com/unicode-org/icu/blob/b34cf4d07e71acf06f01b3a1902759609c111e2d/icu4c/source/test/testdata/rbbitst.txt#L1343",
+      "category": "ICU regression examples",
+      "note": "An ambiguous join: inspect where the following consonant belongs. Source reference shown below.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "ពណ៌សម្ដេចថាខ្មៅ",
+          "engines": {
+            "aksara": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            },
+            "custom": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            },
+            "icu": {
+              "bytes": [12, 27, 33],
+              "offsets": [4, 9, 11],
+              "raw_bytes": [12, 27, 33],
+              "raw": [4, 9, 11]
+            },
+            "fourth": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "ពណ៌សម្ដេចថាខ្មៅ",
+          "engines": {
+            "aksara": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            },
+            "custom": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            },
+            "icu": {
+              "bytes": [12, 27, 33],
+              "offsets": [4, 9, 11],
+              "raw_bytes": [12, 27, 33],
+              "raw": [4, 9, 11]
+            },
+            "fourth": {
+              "bytes": [9, 27, 33],
+              "offsets": [3, 9, 11],
+              "raw_bytes": [9, 27, 33],
+              "raw": [3, 9, 11]
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["ពណ៌ស", "ម្ដេច", "ថា", "ខ្មៅ"]
+      ]
+    },
+    {
+      "id": "icu-compounds",
+      "text": "ការថោកទាបបរិប្បូណ៌ដោយ",
+      "source": "https://github.com/unicode-org/icu/blob/b34cf4d07e71acf06f01b3a1902759609c111e2d/icu4c/source/test/testdata/rbbitst.txt#L1348",
+      "category": "ICU regression examples",
+      "note": "Longer units and a prefix-like word. Compare useful smaller units rather than requiring every compound to remain whole.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "ការថោកទាបបរិប្បូណ៌ដោយ",
+          "engines": {
+            "aksara": {
+              "bytes": [9, 18, 27, 54],
+              "offsets": [3, 6, 9, 18],
+              "raw_bytes": [9, 18, 27, 54],
+              "raw": [3, 6, 9, 18]
+            },
+            "custom": {
+              "bytes": [27, 54],
+              "offsets": [9, 18],
+              "raw_bytes": [27, 54],
+              "raw": [9, 18]
+            },
+            "icu": {
+              "bytes": [9, 27, 54],
+              "offsets": [3, 9, 18],
+              "raw_bytes": [9, 27, 54],
+              "raw": [3, 9, 18]
+            },
+            "fourth": {
+              "bytes": [9, 18, 27, 54],
+              "offsets": [3, 6, 9, 18],
+              "raw_bytes": [9, 18, 27, 54],
+              "raw": [3, 6, 9, 18]
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "ការថោកទាបបរិប្បូណ៌ដោយ",
+          "engines": {
+            "aksara": {
+              "bytes": [9, 18, 27, 54],
+              "offsets": [3, 6, 9, 18],
+              "raw_bytes": [9, 18, 27, 54],
+              "raw": [3, 6, 9, 18]
+            },
+            "custom": {
+              "bytes": [27, 54],
+              "offsets": [9, 18],
+              "raw_bytes": [27, 54],
+              "raw": [9, 18]
+            },
+            "icu": {
+              "bytes": [9, 27, 54],
+              "offsets": [3, 9, 18],
+              "raw_bytes": [9, 27, 54],
+              "raw": [3, 9, 18]
+            },
+            "fourth": {
+              "bytes": [9, 18, 27, 54],
+              "offsets": [3, 6, 9, 18],
+              "raw_bytes": [9, 18, 27, 54],
+              "raw": [3, 6, 9, 18]
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["ការ", "ថោកទាប", "បរិប្បូណ៌", "ដោយ"]
+      ]
+    },
+    {
+      "id": "manual-compound",
+      "text": "សហរដ្ឋ​អាមេរិក",
+      "source": "https://github.com/w3c/sealreq/issues/35",
+      "category": "Manual controls",
+      "note": "Derived test: add an authored ZWSP at the documented optional compound division. Keep controls on to see its effect.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "សហរដ្ឋ​អាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [21],
+              "raw": [7]
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [18, 21],
+              "raw": [6, 7]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [21],
+              "raw": [7]
+            }
+          },
+          "differs": false
+        },
+        "automatic": {
+          "text": "សហរដ្ឋអាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "fourth": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            }
+          },
+          "differs": true
+        }
+      }
+    },
+    {
+      "id": "protected-compound",
+      "text": "សហរដ្ឋ⁠អាមេរិក",
+      "source": "https://github.com/w3c/sealreq/issues/35",
+      "category": "Manual controls",
+      "note": "Derived test: add WJ at that division to protect it. This control variant was authored for this comparison; it is not quoted from W3C.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "សហរដ្ឋ⁠អាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": false
+        },
+        "automatic": {
+          "text": "សហរដ្ឋអាមេរិក",
+          "engines": {
+            "aksara": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "fourth": {
+              "bytes": [18],
+              "offsets": [6],
+              "raw_bytes": [18],
+              "raw": [6]
+            }
+          },
+          "differs": true
+        }
+      }
+    },
+    {
+      "id": "reviewed-repetition",
+      "text": "អ្វីៗ",
+      "source": "User review, 2026-11-03",
+      "category": "Human-reviewed examples",
+      "note": "The reviewer rejected a break immediately before the repetition sign.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "អ្វីៗ",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [12],
+              "offsets": [4],
+              "raw_bytes": [12],
+              "raw": [4]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "អ្វីៗ",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "icu": {
+              "bytes": [12],
+              "offsets": [4],
+              "raw_bytes": [12],
+              "raw": [4]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["អ្វីៗ"]
+      ]
+    },
+    {
+      "id": "reviewed-misspelling",
+      "text": "កសីករ",
+      "source": "User review, 2026-11-03",
+      "category": "Human-reviewed examples",
+      "note": "The reviewer rejected fragmenting this misspelling. The combined proofing engine keeps it whole and offers កសិករ first.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "កសីករ",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [3, 9],
+              "offsets": [1, 3],
+              "raw_bytes": [3, 9],
+              "raw": [1, 3]
+            },
+            "icu": {
+              "bytes": [3, 9],
+              "offsets": [1, 3],
+              "raw_bytes": [3, 9],
+              "raw": [1, 3]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "កសីករ",
+          "engines": {
+            "aksara": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            },
+            "custom": {
+              "bytes": [3, 9],
+              "offsets": [1, 3],
+              "raw_bytes": [3, 9],
+              "raw": [1, 3]
+            },
+            "icu": {
+              "bytes": [3, 9],
+              "offsets": [1, 3],
+              "raw_bytes": [3, 9],
+              "raw": [1, 3]
+            },
+            "fourth": {
+              "bytes": [],
+              "offsets": [],
+              "raw_bytes": [],
+              "raw": []
+            }
+          },
+          "differs": true
+        }
+      }
+    },
+    {
+      "id": "reviewed-finer-units",
+      "text": "ក្នុងគោលដៅបង្កើនការយល់ដឹង",
+      "source": "User review, 2026-11-03",
+      "category": "Human-reviewed examples",
+      "note": "The reviewer explicitly accepted the combined divisions. Whole compounds in other engines can also be fine; smaller meaningful units give the layout more flexibility.",
+      "private": false,
+      "variants": {
+        "authored": {
+          "text": "ក្នុងគោលដៅបង្កើនការយល់ដឹង",
+          "engines": {
+            "aksara": {
+              "bytes": [15, 24, 30, 48, 57, 66],
+              "offsets": [5, 8, 10, 16, 19, 22],
+              "raw_bytes": [15, 24, 30, 48, 57, 66],
+              "raw": [5, 8, 10, 16, 19, 22]
+            },
+            "custom": {
+              "bytes": [15, 30, 48],
+              "offsets": [5, 10, 16],
+              "raw_bytes": [15, 30, 48],
+              "raw": [5, 10, 16]
+            },
+            "icu": {
+              "bytes": [15, 30, 48, 66],
+              "offsets": [5, 10, 16, 22],
+              "raw_bytes": [15, 30, 48, 66],
+              "raw": [5, 10, 16, 22]
+            },
+            "fourth": {
+              "bytes": [15, 24, 30, 48, 57, 66],
+              "offsets": [5, 8, 10, 16, 19, 22],
+              "raw_bytes": [15, 24, 30, 48, 57, 66],
+              "raw": [5, 8, 10, 16, 19, 22]
+            }
+          },
+          "differs": true
+        },
+        "automatic": {
+          "text": "ក្នុងគោលដៅបង្កើនការយល់ដឹង",
+          "engines": {
+            "aksara": {
+              "bytes": [15, 24, 30, 48, 57, 66],
+              "offsets": [5, 8, 10, 16, 19, 22],
+              "raw_bytes": [15, 24, 30, 48, 57, 66],
+              "raw": [5, 8, 10, 16, 19, 22]
+            },
+            "custom": {
+              "bytes": [15, 30, 48],
+              "offsets": [5, 10, 16],
+              "raw_bytes": [15, 30, 48],
+              "raw": [5, 10, 16]
+            },
+            "icu": {
+              "bytes": [15, 30, 48, 66],
+              "offsets": [5, 10, 16, 22],
+              "raw_bytes": [15, 30, 48, 66],
+              "raw": [5, 10, 16, 22]
+            },
+            "fourth": {
+              "bytes": [15, 24, 30, 48, 57, 66],
+              "offsets": [5, 8, 10, 16, 19, 22],
+              "raw_bytes": [15, 24, 30, 48, 57, 66],
+              "raw": [5, 8, 10, 16, 19, 22]
+            }
+          },
+          "differs": true
+        }
+      },
+      "accepted_segments": [
+        ["ក្នុង", "គោល", "ដៅ", "បង្កើន", "ការ", "យល់", "ដឹង"]
+      ]
+    }
+  ],
+  "engines": {
+    "aksara": {
+      "label": "Aksara · previous optimized",
+      "short": "Aksara",
+      "source": "Previous optimized native preview; Aksara 31740e9d"
+    },
+    "custom": {
+      "label": "#3110 · custom dictionary",
+      "short": "#3110 custom",
+      "source": "touchde a71c1184e94ffb0a37f15bec8c77e6fdf36b0c32"
+    },
+    "icu": {
+      "label": "#1579 · ICU4X",
+      "short": "#1579 ICU",
+      "source": "NguyenDuc2309 5c9cd9774efd948df467cbb3072ad4f57b7eebb2"
+    },
+    "fourth": {
+      "label": "Fourth · combined candidate",
+      "short": "Fourth",
+      "source": "Local shared candidate on WordCraft 0a5b4221; exact patch digests in sibling submission/manifest.json"
+    }
+  },
+  "local": false,
+  "binary_sha256": {
+    "aksara": "2d5d285ee51c836025a08f8c036d17b9bdeecfe150bf558f2669b51ffaecced1",
+    "custom": "964713be3aaa41f0ed69b76069c8879a37a7ef8e5292f28b2c612b641c1ac463",
+    "icu": "2e7515369732034b16a44dd1cbbcd0eca626e46a2de27fc5726f0d6c97a85a5f",
+    "fourth": "82ea1a91f7cd5ba7085d0f914ecbbf89ffc05fcf7abc918d4c93e4d89bef24da"
+  },
+  "input_sha256": "22c0cd87637d9627aa6213525f7e6d0be3be01292497a273b9a92e9d1c2b3ee5",
+  "counts": {
+    "total": 11,
+    "private": 0
+  },
+  "scope": "Captured segmentation candidates from pinned comparison probes; not current-main application captures."
+}

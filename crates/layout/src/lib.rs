@@ -10,6 +10,7 @@
 
 pub mod balloons;
 mod contour;
+mod dictionary;
 pub mod display;
 pub mod fields;
 pub mod hit;

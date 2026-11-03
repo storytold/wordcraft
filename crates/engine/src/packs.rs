@@ -831,7 +831,13 @@ mod tests {
             .map(|l| l.trim().to_ascii_lowercase())
             .filter(|l| !l.is_empty())
             .collect();
-        let allowed = |base: &str| base == "en" || if named.is_empty() { CARRY_OVER.contains(&base) } else { named.iter().any(|n| n == base) };
+        // Khmer uses an explicit, hash-verified source pack rather than the
+        // Hunspell CRAFT_PROOF_EMBED list; default builds still omit its data.
+        let allowed = |base: &str| {
+            base == "en"
+                || (base == "km" && wordcraft_proof::khmer::data_available())
+                || if named.is_empty() { CARRY_OVER.contains(&base) } else { named.iter().any(|n| n == base) }
+        };
         let embedded = wordcraft_proof::packs::embedded_locales();
         let extra: Vec<&&str> = embedded.iter().filter(|l| !allowed(l.split('-').next().unwrap_or(l))).collect();
         assert!(extra.is_empty(), "embedded beyond English and {named:?} (or the carry-over by default): {extra:?}");

@@ -7217,3 +7217,82 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+#[test]
+fn khmer_proofing_context_borrows_faces_only_when_shown() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    let frame = |app: &mut WordApp| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    };
+    frame(&mut a);
+    assert!(a.canvas.ime_faces.is_empty(), "Latin windows do not preload Khmer fonts");
+    a.spelling_review = Some(crate::proofing_pane::SpellingForm::new(&a, json!({"text": "ភាសា", "suggestions": ["ភាសា"]})));
+    frame(&mut a);
+    if wordcraft_fonts::FontDb::global().fallback_for('ភ', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+        assert!(a.canvas.ime_faces.iter().any(|f| f.covers('ភ')), "proofing borrows a face for its context and suggestions");
+    }
+    let count = a.canvas.ime_faces.len();
+    frame(&mut a);
+    assert_eq!(a.canvas.ime_faces.len(), count, "proofing faces are installed once");
+}
+
+/// The right-click popup must work in a fresh window, without opening the proofing pane.
+/// The strict test font policy catches painting even one frame before fallback installation.
+#[test]
+fn khmer_context_menu_loads_fonts_before_its_first_paint() {
+    let db = wordcraft_fonts::FontDb::global();
+    if !db.fallback_for('ស', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+        return; // No installed Khmer face on this host; native Khmer acceptance supplies one.
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app(),
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert!(h.state().canvas.ime_faces.is_empty());
+    assert!(h.state().spelling_review.is_none());
+    // Document-script fixtures use escapes so the static UI-symbol audit does
+    // not require COENG in the base UI font; these tests exercise fallback.
+    h.state_mut().canvas.context_issue = Some(json!({"message": "អក\u{17d2}ខរាវិរុទ\u{17d2}ធ", "suggestions": ["សម\u{17d2}ដី"]}));
+    h.state_mut().canvas.context_menu_open = true;
+    h.state_mut().canvas.context_menu_at = Some(egui::pos2(300.0, 300.0));
+    for _ in 0..5 {
+        h.step();
+    }
+    assert!(h.query_by_label("សម\u{17d2}ដី").is_some(), "the menu displays its Khmer replacement");
+    assert!(h.query_by_label("អក\u{17d2}ខរាវិរុទ\u{17d2}ធ").is_some(), "the message also has a Khmer font");
+    assert!(h.state().spelling_review.is_none(), "the popup does not rely on opening the pane");
+    let count = h.state().canvas.ime_faces.len();
+    assert!(count > 0);
+    h.step();
+    assert_eq!(h.state().canvas.ime_faces.len(), count, "repainting does not reload the face");
+}
+
+#[test]
+fn context_menu_fonts_cover_messages_suggestions_and_synonyms_independently() {
+    let ctx = egui::Context::default();
+    for (issue, synonyms) in [
+        (json!({"message": "សម\u{17d2}ដី", "suggestions": []}), json!([])),
+        (json!({"message": "Preferred spelling", "suggestions": ["សម\u{17d2}ដី"]}), json!([])),
+        (serde_json::Value::Null, json!(["សម\u{17d2}ដី"])),
+    ] {
+        let mut a = app();
+        a.canvas.context_issue = Some(issue);
+        a.canvas.context_synonyms = Some(synonyms);
+        let ready = a.prepare_context_menu_fonts(&ctx);
+        if wordcraft_fonts::FontDb::global().fallback_for('ស', u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+            assert!(!ready, "new faces need one pass before painting");
+            assert!(a.canvas.ime_faces.iter().any(|f| f.covers('ស')));
+        }
+    }
+    let mut latin = app();
+    latin.canvas.context_issue = Some(json!({"message": "Spelling", "suggestions": ["hello"]}));
+    assert!(latin.prepare_context_menu_fonts(&ctx), "Latin menus have no font warm-up delay");
+    assert!(latin.canvas.ime_faces.is_empty());
+}

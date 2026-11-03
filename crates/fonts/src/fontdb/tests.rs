@@ -408,3 +408,37 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// A preloaded face with coverage but no GSUB must not hide an installed shaping face.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn loaded_unshaped_khmer_does_not_mask_a_system_shaping_font() {
+    let probe = FontDb::with_font_dirs(system_font_dirs());
+    let shaping = crate::script_fallbacks('ខ').iter().find_map(|name| {
+        let face = probe.face(name, "Regular");
+        (face.covers('ខ') && face.has_layout_tables()).then_some(face)
+    });
+    let Some(shaping) = shaping else {
+        eprintln!("skipped: no installed Khmer OpenType font");
+        return;
+    };
+    // An in-memory fixture keeps the installed face's cmap but hides its GSUB directory tag,
+    // reproducing an AAT-only coverage match without depending on one being installed.
+    let mut bytes = shaping.data().to_vec();
+    for i in 0..bytes.len().saturating_sub(3) {
+        if bytes.get(i..i + 4) == Some(b"GSUB") {
+            bytes.get_mut(i..i + 4).unwrap().copy_from_slice(b"TEST");
+        }
+    }
+    let db = FontDb::with_font_dirs(system_font_dirs());
+    db.faces.write().unwrap().retain(|f| !f.covers('ខ'));
+    assert!(db.add_font(bytes.clone()) > 0);
+    assert!(db.read_faces().iter().any(|f| f.covers('ខ') && !f.has_layout_tables()), "fixture has coverage without shaping");
+    let found = db.fallback_for('ខ', 0).expect("installed Khmer shaping face");
+    assert!(found.has_layout_tables(), "{} masks the installed shaping face", found.family);
+    let run_db = FontDb::with_font_dirs(system_font_dirs());
+    run_db.faces.write().unwrap().retain(|f| !f.covers('ខ'));
+    assert!(run_db.add_font(bytes) > 0);
+    let run = run_db.fallback_for_run(&['ខ', '្', 'ម', 'ែ'], 0, false, false).expect("installed Khmer run face");
+    assert!(run.has_layout_tables(), "{} masks the installed run shaping face", run.family);
+}

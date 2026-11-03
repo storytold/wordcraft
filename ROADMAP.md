@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **2026-11-02 — Khmer contribution in preparation:** optional shared Khmer language build, native proofing, safe wrapping and Khmer context-menu font fallback; see [integration scope](docs/khmer-integration.md). Requires companion craft-libs/craft-i18n changes; no official-release readiness claim.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -701,6 +703,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Optional shared Khmer support documented; companion dependency changes and platform acceptance remain required |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
@@ -1111,3 +1114,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+
+Menu-font follow-up: right-click proofing messages, suggestions and synonyms borrow document-script fallback faces before their first paint. A fresh-window Khmer regression runs with the proofing pane closed; no additional fonts are bundled.
+
+Repetition-sign follow-up: proofing accepts a valid spelling before trailing ៗ while retaining exact repeated expressions in the lexicon. Spelling/preferred-form edits exclude the sign so its text and formatting survive correction and undo; layout boundaries are unchanged.
