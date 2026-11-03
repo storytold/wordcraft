@@ -12211,6 +12211,61 @@ fn a_non_breaking_hyphen_and_a_minus_sign_stay_unbreakable() {
     }
 }
 
+/// #3408: Word breaks a compound right after a hyphen that a slash follows ("Dataprotection-" /
+/// "/Secrecyviolation"), where UAX #14 forbids a break before the slash. The first width that
+/// wraps must break after the hyphen, not move the compound whole, and the slash stays with its
+/// word. Table auto-fit reads the same break, so such a column no longer widens to the compound.
+/// Word keeps "fitness-/1589" whole: a slash before a digit gains no break.
+#[test]
+fn a_hyphen_before_a_slash_is_a_break_opportunity_like_word() {
+    let digits = "Deed fitness-/1589";
+    let mut wrapped = false;
+    for m in 100..=540 {
+        let mut d = Document::from_text(digits);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<&str> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Lines { para, l0, l1, .. } = it { Some(&para.lines[*l0..*l1]) } else { None })
+            .flatten()
+            .map(|line| &digits[line.start..line.stop])
+            .collect();
+        if lines.len() >= 2 {
+            assert_eq!(lines, ["Deed ", "fitness-/1589"], "the first wrap breaks at the space, not after the hyphen");
+            wrapped = true;
+            break;
+        }
+    }
+    assert!(wrapped, "no width in the sweep wrapped the digit case");
+
+    let text = "Deed Dataprotection-/Secrecyviolation";
+    for m in 100..=540 {
+        let mut d = Document::from_text(text);
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let lines: Vec<String> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Lines { para, l0, l1, .. } = it {
+                    Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()).collect::<Vec<_>>())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+        if lines.len() < 2 {
+            continue; // still fits on one line at this width
+        }
+        assert_eq!(lines[0], "Deed Dataprotection-", "the first wrap breaks after the hyphen: {lines:?}");
+        assert_eq!(lines[1], "/Secrecyviolation", "the slash starts the next line with its word: {lines:?}");
+        return;
+    }
+    panic!("no width in the sweep wrapped the paragraph");
+}
+
 #[test]
 fn layout_cache_invalidates_on_changed_filename() {
     let mut doc = Document::new();
