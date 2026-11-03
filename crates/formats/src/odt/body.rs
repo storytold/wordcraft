@@ -827,7 +827,11 @@ impl Body<'_> {
             // Outside a paragraph `push_text` drops spaces, so they cost no budget.
             "s" if self.para.is_some() => {
                 let count = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
-                let extra = count.saturating_sub(1).min(self.spaces_left);
+                let want = count.saturating_sub(1);
+                let extra = want.min(self.spaces_left);
+                if extra < want {
+                    model::dropped(model::Dropped::Spaces);
+                }
                 self.spaces_left -= extra;
                 self.push_text(&" ".repeat(1 + extra));
             }

@@ -1075,12 +1075,14 @@ fn text_s_spaces_have_a_budget_for_the_whole_document() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><text:p>a{run}b</text:p><text:p>c<text:s text:c="3"/>d</text:p></office:text></office:body></office:document-content>"#
     );
+    crate::model::begin_import();
     let f = parse(&package(&content, None)).unwrap();
     let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
-    // Once the budget is spent, each element still stands for one space.
+    // Once the budget is spent, each element still stands for one space, and the cut is logged.
     assert_eq!(texts[0].len(), 2 + tags + MAX_EXTRA_SPACES);
     assert!(texts[0].starts_with("a ") && texts[0].ends_with(" b"));
     assert_eq!(texts[1], "c d");
+    assert!(crate::model::Dropped::Spaces.reported());
 }
 
 #[test]
@@ -1090,9 +1092,11 @@ fn text_s_outside_a_paragraph_spends_no_budget() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text>{stray}<text:p>a<text:s text:c="1000"/>b</text:p></office:text></office:body></office:document-content>"#
     );
+    crate::model::begin_import();
     let f = parse(&package(&content, None)).unwrap();
     let texts: Vec<String> = paras(&f).iter().map(|p| p.text()).collect();
     assert_eq!(texts, vec![format!("a{}b", " ".repeat(1000))]);
+    assert!(!crate::model::Dropped::Spaces.reported(), "nothing was cut");
 }
 
 #[test]

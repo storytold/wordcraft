@@ -22,6 +22,11 @@ mod blocks;
 mod export;
 mod inlines;
 
+/// Table cells a Markdown document makes in all, header rows included (hostile input). A short
+/// row is padded to its header's width, so a 197 KB file of one-cell rows under a 63-column
+/// header made 2 million cells and took 3 to 5 GB to convert; past this, rows are left out.
+pub(crate) const MAX_TABLE_CELLS: usize = 1 << 18;
+
 pub use blocks::{Refs, import, import_on, parse};
 pub(crate) use export::escape;
 pub use export::export;
