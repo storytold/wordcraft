@@ -2078,6 +2078,27 @@ fn border_theme_colour_wins_over_the_fixed_colour() {
     assert_eq!(st.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(0xA5, 0xA5, 0xA5)));
 }
 
+/// Given both `themeTint` and `themeShade`, Word applies the tint alone, for text colours,
+/// shading and borders (MS-OI29500 17.3.2.6 b, 17.4.32 a; MS-OE376 2.3.2.3 a).
+#[test]
+fn theme_tint_wins_over_theme_shade() {
+    let both = r#"w:themeColor="accent1" w:themeTint="99" w:themeShade="7F""#;
+    let body = format!(
+        r#"<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" {both}/></w:pBdr></w:pPr><w:r><w:rPr><w:color w:val="000000" {both}/><w:bdr w:val="single" w:sz="4" w:color="000000" {both}/><w:shd w:val="clear" w:color="auto" w:fill="000000" w:themeFill="accent1" w:themeFillTint="99" w:themeFillShade="7F"/></w:rPr><w:t>a</w:t></w:r></w:p>"#
+    );
+    let d = themed_docx(&body, "", None);
+    let p = paras(&d);
+    let ch = p[0].props_of_char(0);
+    // accent1 4472C4 lightened by tint 99 alone, as Word writes it into w:val.
+    let tinted = Rgb(0x8E, 0xAA, 0xDB);
+    assert!(near(ch.color, tinted), "text colour {:?}", ch.color);
+    let run_border = ch.border.and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(run_border, tinted), "text border {run_border:?}");
+    let para_border = p[0].props.borders.and_then(|b| b.top).and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(para_border, tinted), "paragraph border {para_border:?}");
+    assert!(near(ch.shading.map(TextColor::Rgb), tinted), "shading {:?}", ch.shading);
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.

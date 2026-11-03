@@ -172,8 +172,9 @@ impl PropCtx {
     }
 
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour
-    /// scheme mapping, with its `tint` and `shade` (hex bytes) applied to the HSL luminance as
-    /// Word does. When given it supersedes the fixed colour; `None` leaves the fixed one.
+    /// scheme mapping, with its `tint` or else its `shade` (hex bytes) applied to the HSL
+    /// luminance as Word does: given both, Word applies the tint alone (MS-OI29500 17.3.2.6 b,
+    /// 17.4.32 a). When given it supersedes the fixed colour; `None` leaves the fixed one.
     fn theme_color(&self, e: &El, attr: &str, tint: &str, shade: &str) -> Option<Rgb> {
         let logical = |i: usize| self.color_map.and_then(|m| m.get(i).copied()).unwrap_or(i);
         let slot = match e.attr(attr)? {
@@ -199,8 +200,7 @@ impl PropCtx {
         let byte = |a: &str| e.attr(a).and_then(|v| u8::from_str_radix(v.trim(), 16).ok()).map(|v| f64::from(v) / 255.0);
         if let Some(t) = byte(tint) {
             c = adjust_lum(c, |l| l * t + (1.0 - t));
-        }
-        if let Some(s) = byte(shade) {
+        } else if let Some(s) = byte(shade) {
             c = adjust_lum(c, |l| l * s);
         }
         Some(c)
