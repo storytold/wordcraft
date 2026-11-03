@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
+> **Highlight update:** 2026-11-03 · Long document names shorten before the save state and distribution label, including empty-window and RTL titles (#5196). Previous highlight (2026-10-25): Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
@@ -705,6 +705,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | #5196 title follow-up: A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open. |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
@@ -1115,6 +1116,3 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
-
-
-**PR #5196 title follow-up (2026-11-03):** A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open.
