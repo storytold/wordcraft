@@ -340,6 +340,17 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
+    // An opened Word 97-2003 file is never written back over itself (#2445): the .doc writer
+    // leaves shapes, charts, text boxes and comments out, so that would lose them from the
+    // original. Save As .doc under another name writes a copy.
+    if let Some(ext) = legacy_word_ext(&path)
+        && s.path.as_deref().is_some_and(|own| same_file(own, &path))
+    {
+        let name = path.file_name().map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+        return Err(CmdError::Failed(format!(
+            "{name}: can't save as `.{ext}` over the Word 97-2003 file it was opened from: save it as .docx, or as a copy under another name"
+        )));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -386,6 +397,17 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.relayout();
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+}
+
+/// `doc` or `dot` when `path` names a Word 97-2003 file.
+fn legacy_word_ext(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?;
+    ["doc", "dot"].into_iter().find(|e| ext.eq_ignore_ascii_case(e))
+}
+
+/// Do `a` and `b` name the same file (also when spelled differently, as `./x.doc` and `x.doc`)?
+fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b || crate::io::canonical(a).is_some_and(|a| crate::io::canonical(b) == Some(a))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
