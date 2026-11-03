@@ -3607,6 +3607,25 @@ fn text_frames_read_and_round_trip() {
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
 }
 
+/// #5294: Word stores a drop cap's letter at the size it draws it (50 pt, lowered 5 pt, for three
+/// lines of 11 pt text). The layout sizes the letter from the text's size, so the merged paragraph's
+/// letter takes the text's size and position; keeping its own made the letter four times as tall.
+#[test]
+fn a_drop_caps_letter_takes_the_texts_size() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/><w:spacing w:before="0" w:after="0" w:line="758" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:i/><w:position w:val="-10"/><w:sz w:val="100"/></w:rPr><w:t>R</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:i/><w:sz w:val="22"/></w:rPr><w:t>estabat ut Caesar post haec properaret.</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the letter merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap, Some(3));
+    assert!(p[0].text.starts_with("Restabat"));
+    assert!(
+        p[0].runs.iter().all(|r| r.props.size == Some(11.0) && r.props.position.is_none() && r.props.italic == Some(true)),
+        "{:?}",
+        p[0].runs.iter().map(|r| (r.props.size, r.props.position)).collect::<Vec<_>>()
+    );
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other

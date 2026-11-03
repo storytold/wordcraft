@@ -36,6 +36,16 @@ impl Reader<'_> {
                             }
                             props.drop_cap_font = cap_font;
                         }
+                        // Word stores the letter at the size it draws it (50 pt for three lines of
+                        // 11 pt text) and lowered to sit on the last line. The layout sizes the
+                        // letter itself from the text's size, so a letter that keeps its own would
+                        // be scaled up a second time (#5294).
+                        let text_size = p.runs.first().and_then(|r| r.props.size);
+                        let text_position = p.runs.first().and_then(|r| r.props.position);
+                        for r in &mut first.runs {
+                            r.props.size = text_size;
+                            r.props.position = text_position;
+                        }
                         first.append(p);
                         first.props = props;
                         out.push(para_block(first));
