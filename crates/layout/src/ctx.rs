@@ -12,6 +12,7 @@ use super::{
 pub(crate) enum Pass {
     Done(DocLayout),
     Again(Totals),
+    FloatReplay,
     Rewrap(EarlyFloats),
 }
 

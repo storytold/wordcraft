@@ -705,7 +705,7 @@ fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
         pg.items.extend(items);
     }
     if let Some(b) = pb.behind.last_mut() {
-        *b += n_behind;
+        b.behind += n_behind;
     }
 }
 
@@ -722,7 +722,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
     // A different top only matters when there is something to wrap around.
-    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
+    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !(pb.excl.is_empty() && pb.replay_excl.is_empty())) {
         let y0 = pb.y;
         f.reanchor(ctx, pb, (y0, applied_before));
         f.anchor_y = y0 - applied_before;
@@ -825,11 +825,15 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
     // Collapsed, or with something under it hidden by Show Level: the wavy line says so.
     let collapsed = children && o.hidden.get(block + 1).copied().unwrap_or(false);
     items.extend(outline::symbol_items(&pl, x, y, level, children, collapsed));
+    let n_behind = behind.len();
     if let Some(pg) = pb.page() {
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
         pg.items.extend(items);
+    }
+    if let Some(prefix) = pb.behind.last_mut() {
+        prefix.behind += n_behind;
     }
     if let (Some(f), Some(l)) = (pl.lines.first(), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) {
         pb.y = y + (l.top + l.height - f.top);

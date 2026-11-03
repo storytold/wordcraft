@@ -1,3 +1,4 @@
+use super::TableWrap;
 use super::boxes::{BoxInput, clear_of_float_tables, layout_box};
 use super::ctx::{Ctx, with_pct_base};
 use super::floats::{WrapArea, align_in, body_wraps};
@@ -258,7 +259,8 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
     let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
     let w = tl.width.clamp(1.0, 100_000.0);
     let [dl, dt, dr, db] = f.dist_from_text();
-    for attempt in 0..2 {
+    let advances = pb.cols.len().max(1);
+    for attempt in 0..=advances {
         let s = pb.sect;
         let h_area = float_table_h_area(pb, f, ctx.mirror);
         // The text a table anchored to it stands in: where the next paragraph starts.
@@ -280,9 +282,15 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
             covers_text && pb.y + h > pb.bottom + 0.01
         };
-        if attempt == 0 && moves && !pb.at_top() {
+        let blocked_row = matches!(f.v_rel, Anchor::Page | Anchor::Margin) && row_blocks_float(ctx, pb, &r.inset(-dl, -dt, -dr, -db));
+        if attempt < advances && (moves || blocked_row) && (!pb.at_top() || blocked_row) {
             pb.advance(block, body_top);
             continue;
+        }
+        if matches!(f.v_rel, Anchor::Page | Anchor::Margin) {
+            let area = r.inset(-dl, -dt, -dr, -db);
+            pb.late_table |= overlaps_body(pb, &area);
+            pb.placed_tables.push(TableWrap { block, page: pb.pages.len().saturating_sub(1), area });
         }
         if let Some(pg) = pb.page() {
             let mut y = r.y;
@@ -372,4 +380,27 @@ pub(crate) fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
         y = bottom;
     }
     y
+}
+
+fn overlaps_body(pb: &PageBuilder, rect: &Rect) -> bool {
+    let prefix = pb.behind.last().copied().unwrap_or_default();
+    let decor = prefix.behind..prefix.behind.saturating_add(prefix.decor);
+    pb.pages.last().is_some_and(|page| page.items.iter().enumerate().any(|(i, item)| !decor.contains(&i) && placed_intersects(item, rect)))
+}
+fn row_blocks_float(ctx: &Ctx, pb: &PageBuilder, area: &Rect) -> bool {
+    let Some(page) = pb.pages.last() else { return false };
+    page.items.iter().any(|item| {
+        let Placed::Cell { rect, table, row, cell, story: StoryRef::Body, .. } = item else { return false };
+        // Nested cells may extend outside an exact-height outer row's visible area.
+        if table.0.len() != 1 || !rect.intersects(area) {
+            return false;
+        }
+        let Some(table) = ctx.doc.table(StoryRef::Body, table).filter(|t| t.props.float.is_none()) else { return false };
+        let Some(row) = table.rows.get(*row) else { return false };
+        // A merged cell's rectangle spans rows, so it is not this row's fixed height.
+        if !row.cells.get(*cell).is_some_and(|c| c.props.vmerge == wordcraft_doc::props::VMerge::None) {
+            return false;
+        }
+        row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0))
+    })
 }

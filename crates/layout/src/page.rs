@@ -4,6 +4,7 @@ use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
+use super::{PagePrefix, TableWrap, WrapText};
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder<'a> {
@@ -41,8 +42,12 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) restart_at: Option<u32>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
     pub(crate) excl: Vec<WrapArea>,
+    pub(crate) replay_excl: Vec<WrapArea>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
     pub(crate) float_tables: Vec<Rect>,
+    pub(crate) planned_tables: Vec<TableWrap>,
+    pub(crate) placed_tables: Vec<TableWrap>,
+    pub(crate) late_table: bool,
     /// Line numbering counter.
     pub(crate) line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
@@ -60,7 +65,7 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) para_end: Option<(usize, usize, f32)>,
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
-    pub(crate) behind: Vec<usize>,
+    pub(crate) behind: Vec<PagePrefix>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -120,6 +125,10 @@ pub(crate) fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
 }
 
 impl PageBuilder<'_> {
+    pub(super) fn wrap_areas(&self) -> Vec<WrapArea> {
+        self.replay_excl.iter().chain(&self.excl).cloned().collect()
+    }
+
     /// Space footnotes take at the bottom of the page.
     pub(crate) fn notes_h(&self) -> f32 {
         self.stack_h(&self.notes)
@@ -223,7 +232,7 @@ impl PageBuilder<'_> {
     /// A top-level block starts here (see `block_marks`).
     pub(crate) fn mark_block(&mut self) {
         if let Some(pg) = self.pages.last() {
-            let behind = self.behind.last().copied().unwrap_or(0);
+            let behind = self.behind.last().map_or(0, |p| p.behind);
             self.block_marks.push(pg.items.len().saturating_sub(behind));
         }
     }
@@ -234,7 +243,7 @@ impl PageBuilder<'_> {
         if self.web || self.cols.len() > 1 {
             return;
         }
-        let behind = self.behind.last().copied().unwrap_or(0);
+        let behind = self.behind.last().map_or(0, |p| p.behind);
         let first = self.page_items_start;
         // The room is measured below the last paragraph's space after: Word for Mac 16.113.4 keeps
         // it inside the justified height (72 pt after leaves the last line 72 pt above the margin).
@@ -270,9 +279,17 @@ impl PageBuilder<'_> {
         }
         let space = (self.orig_bottom - self.notes_h() - self.y).max(0.0) * k;
         let start = self.page_items_start;
+        let behind = self.behind.last().map_or(0, |p| p.behind);
+        let decor = behind..behind.saturating_add(start);
         if let Some(pg) = self.pages.last_mut() {
-            for it in pg.items.iter_mut().skip(start) {
-                it.translate(0.0, space);
+            // A taken-back break page has already been aligned.
+            if start >= pg.items.len() {
+                return;
+            }
+            for (i, it) in pg.items.iter_mut().enumerate() {
+                if !decor.contains(&i) {
+                    it.translate(0.0, space);
+                }
             }
         }
     }
@@ -302,11 +319,15 @@ impl PageBuilder<'_> {
         self.flush_notes();
         self.beneath = self.sect_beneath;
         self.excl.clear();
+        self.replay_excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
         let early = self.early;
         self.excl.extend(early.get(&self.pages.len()).into_iter().flatten().map(|(_, _, a)| a.clone()));
         self.seeded = self.excl.len();
         self.float_tables.clear();
+        for table in self.planned_tables.iter().filter(|t| t.page == self.pages.len()) {
+            self.replay_excl.push((table.area, false, None, WrapText::BothSides, true));
+        }
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
             self.line_no = 0;
         }
@@ -323,7 +344,7 @@ impl PageBuilder<'_> {
         self.block_marks.clear();
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
-        self.behind.push(0);
+        self.behind.push(PagePrefix { behind: 0, decor: self.page_items_start });
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;

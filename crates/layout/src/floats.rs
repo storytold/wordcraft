@@ -396,7 +396,7 @@ pub(crate) fn anchor_floats(
 
 pub(crate) fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let mut areas = footer_table_wraps(ctx, pb);
-    areas.extend_from_slice(&pb.excl);
+    areas.extend(pb.wrap_areas());
     areas
 }
 

@@ -317,13 +317,15 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut note_passes = 1;
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
+    let mut floats = FloatReplay::default();
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES, &mut floats)) {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
             }
+            Pass::FloatReplay => continue,
             Pass::Rewrap(found) => {
                 merge_early(&mut early, found);
                 rewraps += 1;
@@ -355,3 +357,30 @@ thread_local! {
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Clone, Debug, PartialEq)]
+struct TableWrap {
+    block: usize,
+    page: usize,
+    area: Rect,
+}
+
+#[derive(Default)]
+struct FloatReplay {
+    planned: Vec<TableWrap>,
+    attempts: usize,
+    disabled: bool,
+}
+
+const MAX_FLOAT_PASSES: usize = 3;
+
+/// Seeded decoration stays between prepended paint and body items.
+#[derive(Clone, Copy, Default)]
+struct PagePrefix {
+    behind: usize,
+    decor: usize,
+}
+
+#[cfg(test)]
+#[path = "tests/alignment_prefix.rs"]
+mod alignment_prefix_tests;

@@ -1,3 +1,4 @@
+use super::{FloatReplay, MAX_FLOAT_PASSES, PagePrefix};
 use std::collections::VecDeque;
 
 use super::cache::{LayoutCache, Totals, env_hash, hash_of};
@@ -157,7 +158,7 @@ fn reflow_sect(first: &SectionProps, opts: &LayoutOptions) -> SectionProps {
     s
 }
 
-fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: bool, settle: bool) -> PageBuilder<'p> {
+fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: bool, settle: bool, floats: &FloatReplay) -> PageBuilder<'p> {
     PageBuilder {
         pages: Vec::new(),
         sect,
@@ -178,7 +179,11 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         next_starts_page: false,
         restart_at: None,
         excl: Vec::new(),
+        replay_excl: Vec::new(),
         float_tables: Vec::new(),
+        planned_tables: floats.planned.clone(),
+        placed_tables: Vec::new(),
+        late_table: false,
         line_no: 0,
         page_items_start: 0,
         block_marks: Vec::new(),
@@ -471,7 +476,7 @@ pub(crate) fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
-    (early, may_rewrap): (&EarlyFloats, bool),
+    (early, may_rewrap, floats): (&EarlyFloats, bool, &mut FloatReplay),
 ) -> Pass {
     reset_cache(doc, cache, opts);
     let mut ctx = new_ctx(doc, cache, opts, (note_pages, totals));
@@ -485,7 +490,7 @@ pub(crate) fn layout_pass(
     let first_sect = sections.first().map_or(&default_sect, |(_, s)| *s);
     let web_sect = mode.reflow.then(|| reflow_sect(first_sect, opts));
     let sect_ref = web_sect.as_ref().unwrap_or(first_sect);
-    let mut pb = new_page_builder(sect_ref, early, mode.web, !may_rewrap && !mode.reflow);
+    let mut pb = new_page_builder(sect_ref, early, mode.web, !may_rewrap && !mode.reflow, floats);
     let mut endnotes = endnote_queue(&ctx);
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
@@ -524,6 +529,20 @@ pub(crate) fn layout_pass(
     // The rest of the endnotes after the last paragraph.
     let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
     place_endnotes(&mut ctx, &mut pb, rest, block);
+    // Reflow stable page-relative placements. Clear reservations if an anchor changes
+    // pages, so a later pass cannot wrap text around an obsolete placement.
+    if !floats.disabled && (pb.late_table || !floats.planned.is_empty()) && floats.planned != pb.placed_tables {
+        let placed: HashMap<_, _> = pb.placed_tables.iter().map(|t| (t.block, t.page)).collect();
+        let moved = floats.planned.iter().any(|t| placed.get(&t.block) != Some(&t.page));
+        if moved || floats.attempts >= MAX_FLOAT_PASSES {
+            floats.planned.clear();
+            floats.disabled = true;
+        } else {
+            floats.planned = pb.placed_tables;
+            floats.attempts += 1;
+        }
+        return Pass::FloatReplay;
+    }
     let mut pages = finish_pages(pb, doc, sections, mode.web);
     if mode.web {
         fit_web_page(&mut pages);
@@ -555,7 +574,7 @@ struct Snap<'a> {
     pb: PageBuilder<'a>,
     pages: usize,
     items: usize,
-    behind: usize,
+    prefix: PagePrefix,
     counters: Counters,
     eq_count: u32,
     page_field: u32,
@@ -572,7 +591,7 @@ impl<'a> Snap<'a> {
             pb: copy,
             pages: pb.pages.len(),
             items: pb.pages.last().map_or(0, |p| p.items.len()),
-            behind: pb.behind.last().copied().unwrap_or(0),
+            prefix: pb.behind.last().copied().unwrap_or_default(),
             counters: ctx.counters.clone(),
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
@@ -587,12 +606,12 @@ impl<'a> Snap<'a> {
         pages.truncate(self.pages);
         behind.truncate(self.pages);
         if let Some(pg) = pages.last_mut() {
-            let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
+            let k = behind.last().map_or(0, |p| p.behind).saturating_sub(self.prefix.behind).min(pg.items.len());
             pg.items.drain(..k);
             pg.items.truncate(self.items);
         }
         if let Some(b) = behind.last_mut() {
-            *b = self.behind;
+            *b = self.prefix;
         }
         *pb = self.pb.clone();
         (pb.pages, pb.behind) = (pages, behind);
