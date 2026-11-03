@@ -356,8 +356,7 @@ impl super::Writer<'_> {
         let mut used = HashSet::new();
         rel_attr_values(&root, &mut used, 0);
         // Every relationship the markup uses must be writable, or the object would be broken.
-        let writable: HashSet<&str> =
-            src.refs.iter().filter(|r| r.external || self.embeds.available(&r.target)).map(|r| r.id.as_str()).collect();
+        let writable: HashSet<&str> = src.refs.iter().filter(|r| r.external || self.embeds.available(&r.target)).map(|r| r.id.as_str()).collect();
         if !used.iter().all(|id| writable.contains(id.as_str())) {
             log::warn!("docx: an embedded object's parts are missing; it is left out");
             return None;
@@ -858,7 +857,9 @@ mod tests {
     fn relationship_ids_are_collected_once_each() {
         // A native document's embedded markup skips the reader's id limit: 40,000 distinct ids
         // (each named twice) were a scan of every id collected so far, per attribute.
-        let mut xml = String::from(r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#);
+        let mut xml = String::from(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+        );
         for i in 0..40_000 {
             xml.push_str(&format!(r#"<w:r r:id="rId{i}"/><w:r r:id="rId{i}"/>"#));
         }
