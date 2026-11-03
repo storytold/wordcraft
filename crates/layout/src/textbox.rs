@@ -253,7 +253,12 @@ fn flow(ctx: &mut Ctx, chain: &[u32], depth: usize) -> Vec<Vec<Placed>> {
         // that fits it, else the narrowest. The first box in a direction is laid out (one more
         // layout for each of the few directions at most).
         let near = || {
-            layouts.iter().enumerate().filter(|(_, ((_, v), _))| *v == key.1).min_by_key(|(_, ((k, _), _))| (*k > key.0, k.abs_diff(key.0))).map(|(i, _)| i)
+            layouts
+                .iter()
+                .enumerate()
+                .filter(|(_, ((_, v), _))| *v == key.1)
+                .min_by_key(|(_, ((k, _), _))| (*k > key.0, k.abs_diff(key.0)))
+                .map(|(i, _)| i)
         };
         let kept = layouts.iter().position(|(k, _)| *k == key).or_else(|| if layouts.len() >= MAX_FLOW_WIDTHS { near() } else { None });
         let at = match kept {
