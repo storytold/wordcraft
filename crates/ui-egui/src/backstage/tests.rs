@@ -1121,6 +1121,30 @@ fn a_narrow_file_page_scrolls_sideways_to_its_cut_off_part() {
     assert!(after.right() <= 752.0, "the last template tile must scroll into view: before={before:?}, after={after:?}");
 }
 
+/// #5396: the sideways scrollbar of a narrow File page sits at the bottom of the window, like the
+/// vertical one sits at its right edge (#5282), not under the end of a short page.
+#[test]
+fn a_narrow_file_pages_sideways_bar_sits_at_the_window_bottom() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .find(|r| r.width() > r.height())
+        .expect("the File page's sideways scrollbar");
+    // The harness keeps an 8 point margin, and the page keeps 30 points below it: 500 - 8 - 30.
+    assert!((bar.bottom() - 462.0).abs() < 1.0, "expected the sideways scrollbar at the bottom of the page area: {bar:?}");
+}
+
 /// #5282: the File page scrolls with the wheel over its right side.
 #[test]
 fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
