@@ -46,6 +46,9 @@ pub struct DisplayOptions {
     pub hide_ink: bool,
     /// How tracked changes and comments are marked when `markup` is on (Track Changes Options).
     pub revisions: MarkupOptions,
+    /// The text box story being edited: a turned text box showing it is drawn straight, so its
+    /// caret and selection sit on its text (Word). `None` in print and PDF.
+    pub straight: Option<u32>,
     /// Leave this object out of the page: while it is dragged, the preview under the pointer
     /// stands in for it, so the page must not also show it where it was.
     pub hide_object: Option<wordcraft_doc::Pos>,
@@ -62,6 +65,7 @@ impl Default for DisplayOptions {
             placeholders: false,
             hide_ink: false,
             revisions: MarkupOptions::default(),
+            straight: None,
             hide_object: None,
         }
     }

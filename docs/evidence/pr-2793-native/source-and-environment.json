@@ -1,0 +1,142 @@
+{
+  "qualified_commit": "40e60513624a42babcc8760b729a677373fd2e16",
+  "qualified_tree": "553bf8d9bd226db64e771dadeae39240467faa18",
+  "source_blobs": {
+    "Cargo.toml": "7dc0744b0f420e7e2ed138238505fcca7b2d93e1",
+    "Cargo.lock": "e762610f08c56335dac51d68444de1ac1c1c4f1e",
+    "apps/wordcraft/src/main.rs": "85410340da8af7234a5aca9ca4ba5dbbdb053cde",
+    "apps/wordcraft/Cargo.toml": "e255bafc5a8c8243682b049515ab3c3d3c87fb2f",
+    "apps/wordcraft/build.rs": "d025b2f8921c58b5389a09cff24324fafce82b83",
+    "crates/doc/src/lib.rs": "d2fd975bef2c851786d52d67d50f7fbb66ca963e",
+    "crates/docx/src/read/story.rs": "7322058b9735463ec0b069dd7bd7049e208fcc06",
+    "crates/layout/src/lib.rs": "dd9b94ac64134a0644e2beb55881a1a802e9fa96",
+    "crates/layout/src/hit.rs": "33c9f94aff07904e3c814f8e68290f65559ac4b7",
+    "crates/layout/src/display.rs": "fd1fb07b363364421ad8d49b934a71d4e04ade73",
+    "crates/layout/src/table.rs": "0157099854804c1a4b77c97fd5236516fb4949e5",
+    "crates/layout/src/textbox.rs": "321f7608418e876ce8c669c85f2806d909b474f5",
+    "crates/layout/src/vertical.rs": "7368c671fe4610c77336798a13fba292f78f09f4",
+    "crates/render/src/lib.rs": "ce352a2eb77d751304dae273f9351e2ad294b6d8",
+    "crates/pdf/src/lib.rs": "883dda9de05fc61015770667100bddd82671132d",
+    "crates/ui-egui/src/canvas.rs": "44ea846cc30a0e05b749a165664b0752d41d8f0b",
+    "crates/ui-egui/src/objects.rs": "e5990a38d3f0604ff451d90a6469d670b701a01a",
+    "crates/ui-egui/src/frame.rs": "7b4ce265f81c4ce03747872ea0007f8ccd37e3f1"
+  },
+  "current_upstream_not_qualified": "7ef2633a7e84956522d1ca47b99fe6feef16c1db",
+  "app_version": "wordcraft0.10.0(40e60513)",
+  "app_binary_sha256": "ef515a611f52cc9ed30b223a0b7365ca31cc9df34e260e333842b5f83bb1de7d",
+  "native_app_source_key": "a04138860197027eedeb45c8cb5763ba5b7a7a51224e6598402d879f768d9a35",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "wordcraft",
+      "--bin",
+      "wordcraft"
+    ],
+    "returncode": 0,
+    "profile": "dev, optimized, debug0, incremental0",
+    "rustc": "1.99.0(b940084d7 2026-09-28)",
+    "cargo": "1.99.0(5f94df478 2026-08-27)",
+    "base_image": "sha256:a73a4fc5ad235979b698ea8c9afb36e41e9f6e78723bb25f6922737f15c2177e",
+    "derived_image": "sha256:07ded5ad7327601f5b587c90f9dec1f2b909a005e98022d4d644d405e154486f",
+    "font_snapshot": "bfcbf714e45a3ea8e98f88ab2b7971372a576414",
+    "fonts_required": true,
+    "translations": "English-only development build",
+    "bounds": {
+      "cpus": 2,
+      "memory": "3GiB",
+      "build_jobs": 1
+    }
+  },
+  "runtime": {
+    "os": "Debian12 bookworm",
+    "architecture": "aarch64",
+    "display": "X11 Xvfb1600x1200x24,96dpi",
+    "window_manager": "Openbox3.6.1",
+    "client_pixels": [
+      1440,
+      920
+    ],
+    "client_points": [
+      1440,
+      920
+    ],
+    "winit_scale": 1,
+    "ui_scale": "auto",
+    "document_zoom": 1,
+    "renderer": "wgpu30 Vulkan, Mesa22.3.6 llvmpipe LLVM15 CPU",
+    "network": "none",
+    "uri_handler": "container-local recorder",
+    "input": "native XTest; no egui harness or RPC ui input"
+  },
+  "scope": [
+    {
+      "case": "body-ordinary",
+      "host": "body",
+      "upright": false,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/body-ordinary.json",
+      "native_input_log": "logs/body-ordinary.jsonl",
+      "screenshots": "screenshots/body-ordinary/"
+    },
+    {
+      "case": "body-upright",
+      "host": "body",
+      "upright": true,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/body-upright.json",
+      "native_input_log": "logs/body-upright.jsonl",
+      "screenshots": "screenshots/body-upright/"
+    },
+    {
+      "case": "header-ordinary",
+      "host": "header",
+      "upright": false,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/header-ordinary.json",
+      "native_input_log": "logs/header-ordinary.jsonl",
+      "screenshots": "screenshots/header-ordinary/"
+    },
+    {
+      "case": "header-upright",
+      "host": "header",
+      "upright": true,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/header-upright.json",
+      "native_input_log": "logs/header-upright.jsonl",
+      "screenshots": "screenshots/header-upright/"
+    },
+    {
+      "case": "footer-ordinary",
+      "host": "footer",
+      "upright": false,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/footer-ordinary.json",
+      "native_input_log": "logs/footer-ordinary.jsonl",
+      "screenshots": "screenshots/footer-ordinary/"
+    },
+    {
+      "case": "footer-upright",
+      "host": "footer",
+      "upright": true,
+      "entered_and_left": true,
+      "move_resize_rotate_undo": true,
+      "full_host_paragraphs_restored": true,
+      "states": "cases/footer-upright.json",
+      "native_input_log": "logs/footer-upright.jsonl",
+      "screenshots": "screenshots/footer-upright/"
+    }
+  ]
+}

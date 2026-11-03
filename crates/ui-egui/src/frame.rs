@@ -160,9 +160,10 @@ pub fn paint_outline(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32) {
 }
 
 /// A frame being turned to `deg`: its outline and the angle beside the rotation handle.
-pub fn paint_turning(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32) {
+/// `shown` is the angle the turn gives (a straightened frame's turn adds to the object's own).
+pub fn paint_turning(painter: &Painter, t: &Tokens, f: egui::Rect, deg: f32, shown: f32) {
     paint_outline(painter, t, f, deg);
-    let label = format!("{:.0}°", wordcraft_geom::normalize_degrees(deg.round()));
+    let label = format!("{:.0}°", wordcraft_geom::normalize_degrees(shown.round()));
     painter.text(rotate_handle(f, deg) + vec2(HANDLE_R + 6.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.0), t.accent);
 }
 

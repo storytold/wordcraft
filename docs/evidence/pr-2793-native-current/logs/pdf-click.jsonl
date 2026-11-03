@@ -1,0 +1,14 @@
+{"sequence":0,"elapsed_ms":0,"kind":"XTest","data":["xdotool","windowactivate","--sync","<native-window>"]}
+{"sequence":1,"elapsed_ms":34,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":2,"elapsed_ms":268,"kind":"handler-control","data":{"returncode":0,"stdout":"","stderr":""}}
+{"sequence":3,"elapsed_ms":871,"kind":"actual-viewer-geometry","data":{"client_pixels":[610,610]}}
+{"sequence":4,"elapsed_ms":912,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","40","400"]}
+{"sequence":5,"elapsed_ms":915,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":6,"elapsed_ms":1036,"kind":"XTest","data":["xdotool","click","--repeat","1","--delay","120","1"]}
+{"sequence":7,"elapsed_ms":1159,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":8,"elapsed_ms":2249,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","280","219"]}
+{"sequence":9,"elapsed_ms":2251,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":10,"elapsed_ms":2377,"kind":"actual-pointer","data":{"client_point_recorded":true,"root_coordinates_and_window_identifier_omitted":true}}
+{"sequence":11,"elapsed_ms":2405,"kind":"XTest","data":["xdotool","click","1"]}
+{"sequence":12,"elapsed_ms":2508,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":13,"elapsed_ms":2535,"kind":"result","data":{"status":"passed","expected":"http://127.0.0.1:8799/native-2793/body-ordinary","handler_control":[{"uri":["http://127.0.0.1:8799/native-2793/handler-control"],"utc":"2026-10-25T20:54:50.124469+00:00"}],"negative_uri_unchanged":true,"negative_screen":[40,400],"positive_screen":[280,219],"page_pixel_rect":[16,59,578,434],"calibration":"Actual native normal-view capture. Test points checked inside viewer. Click on displayed turned text.","geometry":"WINDOW=<native-window>\nX=0\nY=590\nWIDTH=610\nHEIGHT=610\nSCREEN=0\n","new_uri_events":[{"uri":["http://127.0.0.1:8799/native-2793/body-ordinary"],"utc":"2026-10-25T20:54:52.283345+00:00"}],"pdf_sha256":"53c72b5aac0ebf38ba01473aab867bc9f0f6672e2983b4fe72d2a18f2d0e903d"}}

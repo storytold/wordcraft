@@ -1,0 +1,28 @@
+# Native evidence for #2793
+
+This synthetic session qualifies commit `40e60513624a42babcc8760b729a677373fd2e16` only. It does not qualify current upstream `7ef2633a` or its egui 0.37 migration.
+
+The real `apps/wordcraft` executable ran on Debian 12 aarch64, Xvfb/Openbox, wgpu Vulkan llvmpipe, at 1 pixel per UI point and 100% document zoom. [Build and source binding](source-and-environment.json), [native smoke capture](screenshots/native-smoke.png).
+
+XTest delivered clicks, drags and Ctrl+Z through winit. RPC supplied setup, inspection, saving and export. The native app and its input route were exercised directly.
+
+| Case | Editing | Gesture result | After native Undo | Records |
+|---|---|---|---|---|
+| body-ordinary | [enter](screenshots/body-ordinary/entered.png), [leave](screenshots/body-ordinary/left.png) | [move](screenshots/body-ordinary/moved.png), [resize](screenshots/body-ordinary/resized.png), [rotate](screenshots/body-ordinary/rotated.png) | [move](screenshots/body-ordinary/move-undo.png), [resize](screenshots/body-ordinary/resize-undo.png), [rotate](screenshots/body-ordinary/rotate-undo.png) | [states](cases/body-ordinary.json), [input](logs/body-ordinary.jsonl) |
+| body-upright | [enter](screenshots/body-upright/entered.png), [leave](screenshots/body-upright/left.png) | [move](screenshots/body-upright/moved.png), [resize](screenshots/body-upright/resized.png), [rotate](screenshots/body-upright/rotated.png) | [move](screenshots/body-upright/move-undo.png), [resize](screenshots/body-upright/resize-undo.png), [rotate](screenshots/body-upright/rotate-undo.png) | [states](cases/body-upright.json), [input](logs/body-upright.jsonl) |
+| header-ordinary | [enter](screenshots/header-ordinary/entered.png), [leave](screenshots/header-ordinary/left.png) | [move](screenshots/header-ordinary/moved.png), [resize](screenshots/header-ordinary/resized.png), [rotate](screenshots/header-ordinary/rotated.png) | [move](screenshots/header-ordinary/move-undo.png), [resize](screenshots/header-ordinary/resize-undo.png), [rotate](screenshots/header-ordinary/rotate-undo.png) | [states](cases/header-ordinary.json), [input](logs/header-ordinary.jsonl) |
+| header-upright | [enter](screenshots/header-upright/entered.png), [leave](screenshots/header-upright/left.png) | [move](screenshots/header-upright/moved.png), [resize](screenshots/header-upright/resized.png), [rotate](screenshots/header-upright/rotated.png) | [move](screenshots/header-upright/move-undo.png), [resize](screenshots/header-upright/resize-undo.png), [rotate](screenshots/header-upright/rotate-undo.png) | [states](cases/header-upright.json), [input](logs/header-upright.jsonl) |
+| footer-ordinary | [enter](screenshots/footer-ordinary/entered.png), [leave](screenshots/footer-ordinary/left.png) | [move](screenshots/footer-ordinary/moved.png), [resize](screenshots/footer-ordinary/resized.png), [rotate](screenshots/footer-ordinary/rotated.png) | [move](screenshots/footer-ordinary/move-undo.png), [resize](screenshots/footer-ordinary/resize-undo.png), [rotate](screenshots/footer-ordinary/rotate-undo.png) | [states](cases/footer-ordinary.json), [input](logs/footer-ordinary.jsonl) |
+| footer-upright | [enter](screenshots/footer-upright/entered.png), [leave](screenshots/footer-upright/left.png) | [move](screenshots/footer-upright/moved.png), [resize](screenshots/footer-upright/resized.png), [rotate](screenshots/footer-upright/rotated.png) | [move](screenshots/footer-upright/move-undo.png), [resize](screenshots/footer-upright/resize-undo.png), [rotate](screenshots/footer-upright/rotate-undo.png) | [states](cases/footer-upright.json), [input](logs/footer-upright.jsonl) |
+
+The gestures began in text editing. Ordinary boxes used straight editing handles; upright boxes kept their turned frame. Rotation changed 30° to 50°. Every gesture's full host paragraph matched its before-state after Undo. Final body blocks and part text matched the initial state. The JSON records retain before/after/Undo structure and selection. Upright flags were checked in the saved synthetic DOCX files.
+
+[Fixtures](fixtures/), [exported PDF](pdf/turned-link.pdf), [offline activation receipt](pdf/activation.json). A native Evince click on the displayed turned text activated the expected loopback URI. A separate handler control succeeded; an off-link click produced no activation. The recorder logs URI dispatch rather than an HTTP response. Runtime networking was disabled.
+
+One initial viewer setup failed to load the document. The first link attempt also used invalid coordinates after leaving presentation mode. A bounded normal-view correction succeeded. [Review notes](review-notes.json) retain these limits. Third-party viewer UI captures remain private under the repository asset policy.
+
+`pdfinfo` emitted `Suspects object is wrong type (boolean)`. This diagnostic is disclosed without attributing it to this source. The PDF rendered and its link activated.
+
+This evidence covers single root boxes and Latin text on software-rendered Linux X11. It does not establish macOS/Windows/Wayland or real-GPU behavior, Word pixel parity, selected-only gesture matrices, groups, cells, nested/linked boxes, complex scripts, or general secondary-click/hover-link behavior. Current-upstream merge and focused qualification remain separate.
+
+The bundle contains only synthetic material. Captures, fixtures and PDF bytes are unchanged. Logs omit host identifiers, use relative times and generic paths, and retain input coordinates/order. [SHA-256 manifest](sha256.json) binds these public files. No claim of independent or signed attestation is made.

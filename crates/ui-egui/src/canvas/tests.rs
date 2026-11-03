@@ -1,6 +1,36 @@
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+/// The page image is redrawn when the edited turned box changes (so it never shows a box
+/// straight that should be turned, or turned while edited), and not for an unturned box.
+#[test]
+fn the_page_image_follows_the_edited_turned_box() {
+    use crate::objects::rotation_control::{H, edit, turned_box_window};
+    let (mut h, id) = turned_box_window();
+    let key = |h: &H| h.state().canvas.textures.get(&0).map(|(k, _)| *k).expect("page 1 is drawn");
+    let turned = key(&h);
+    edit(&mut h, id);
+    let straight = key(&h);
+    assert_ne!(straight, turned, "entering the turned box redraws the page");
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(key(&h), turned, "leaving it redraws it turned");
+    // An unturned box: entering it changes nothing on the page.
+    let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+    let end = Pos { off: pos.off + 3, ..pos.clone() };
+    h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+    h.state_mut().run("arrange.rotation", json!({"degrees": 0})).unwrap();
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    for _ in 0..3 {
+        h.step();
+    }
+    let flat = key(&h);
+    edit(&mut h, id);
+    assert_eq!(key(&h), flat, "entering an unturned box keeps the page image");
+}
+
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
 /// request the page is the document's own again.
@@ -118,7 +148,7 @@ fn editing_notes_keeps_the_body_and_active_note_opaque() {
             let layout = app.session.layout();
             for dark in [false, true] {
                 app.session.view.dark_mode = dark;
-                let opts = page_render_options(&app, dims_body(&app, &layout));
+                let opts = page_render_options(&app, &layout, dims_body(&app, &layout));
                 let draws = page_display(&app.session.doc, &layout.pages[0], &opts.display);
                 for marker in ["Body", "Note", "Header"] {
                     let alphas: Vec<f32> = draws
@@ -345,7 +375,7 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None);
+        let view = view_key(a, false, None, straight_box(a, &layout));
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -363,6 +393,47 @@ fn caret_contrasts_with_what_lies_under_it() {
     assert_eq!(at(&mut a, 2), Color32::WHITE, "again, from the cache");
 }
 
+#[test]
+fn caret_in_straight_box() {
+    use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::{Document, Paragraph, Path, TextBody, para_block};
+    let mut doc = Document::from_text("Host");
+    let id = doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Text", Default::default()))]);
+    doc.parts.get_mut(&id).unwrap().body = TextBody::default();
+    doc.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::Shape {
+            kind: ShapeKind::TextBox,
+            w: 180.0,
+            h: 60.0,
+            fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::BLACK)),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, rot: 90.0, ..Default::default() },
+            story: Some(id),
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+    app.session.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 });
+    let layout = app.session.layout();
+    let object = layout.text_box(id, 0).unwrap();
+    let (x, y) = (object.rect.x + 5.0, object.rect.y + 5.0);
+    let mut turned = screen_render_options();
+    turned.display.dim_header = true;
+    assert_eq!(wordcraft_render::background_at(&app.session.doc, &layout.pages[0], &turned, x, y), Rgb::WHITE);
+    let mut opts = turned.clone();
+    opts.display.straight = Some(id);
+    assert_eq!(wordcraft_render::background_at(&app.session.doc, &layout.pages[0], &opts, x, y), Rgb::BLACK);
+    let view = view_key(&app, false, None, straight_box(&app, &layout));
+    assert_eq!(caret_color_at(&mut app, &layout, 0, x, y, view, false), Color32::WHITE);
+}
+
 /// Read Mode › View › Page Color: the reading columns are drawn on white, sepia or a dark
 /// page, in place of the document's page color; other views keep the page color.
 #[test]
@@ -370,37 +441,38 @@ fn read_mode_page_color_sets_the_reading_paper() {
     use wordcraft_doc::props::Rgb;
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
-    let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
+    let layout = a.session.layout();
+    let paper = |a: &WordApp| page_render_options(a, &layout, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None);
+    let print_key = view_key(&a, false, None, None);
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None);
+    let none_key = view_key(&a, false, None, None);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
-    assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None);
+    assert!(!page_render_options(&a, &layout, false).dark, "Sepia keeps the text's colors");
+    let sepia_key = view_key(&a, false, None, None);
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
-    assert!(page_render_options(&a, false).dark);
+    assert!(page_render_options(&a, &layout, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None);
+    let inverse_key = view_key(&a, false, None, None);
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
     }
     a.run("view.printLayout", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "leaving Read Mode brings the page color back");
-    assert!(!page_render_options(&a, false).dark);
+    assert!(!page_render_options(&a, &layout, false).dark);
     // With Switch Modes on, Read Mode's paper still follows the Page color: None is white and Sepia is sepia.
     a.session.view.dark_mode = true;
     a.run("view.readMode", json!({})).unwrap();
-    assert!(!page_render_options(&a, false).dark);
+    assert!(!page_render_options(&a, &layout, false).dark);
     assert_eq!(paper(&a), Rgb::WHITE);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     a.run("view.printLayout", json!({})).unwrap();
-    assert!(page_render_options(&a, false).dark, "Print Layout keeps Switch Modes");
+    assert!(page_render_options(&a, &layout, false).dark, "Print Layout keeps Switch Modes");
 }
 
 /// #299: the caret's colour is worked out only when the caret is drawn: with text selected
@@ -4805,7 +4877,7 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object));
-    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    let hidden = view_key(&app, false, Some(&object), None);
+    assert_ne!(hidden, view_key(&app, false, None, None), "the page without the dragged object is rendered again");
+    assert_eq!(hidden, view_key(&app, false, Some(&object), None), "the same drag keeps the key: no re-render every frame");
 }

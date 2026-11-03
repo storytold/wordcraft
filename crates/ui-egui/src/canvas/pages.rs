@@ -1,16 +1,18 @@
+use super::straight_box;
 use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
+pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, straight: Option<u32>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
+    straight.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
@@ -44,6 +46,7 @@ fn page_content_key(page: &Page) -> u64 {
                     format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+                Placed::Spun { rect, spin, part, open } => format!("{rect:?}{spin:?}{part}{open}").hash(&mut h),
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }
@@ -222,7 +225,7 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
 }
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
-pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
+pub(super) fn page_render_options(app: &WordApp, layout: &DocLayout, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
@@ -242,6 +245,7 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
+    opts.display.straight = straight_box(app, layout);
     opts
 }
 

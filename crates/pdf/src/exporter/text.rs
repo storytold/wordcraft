@@ -166,9 +166,16 @@ impl Exporter<'_> {
         if ![x0, x1, y0, y1].iter().all(|v| ok(*v)) {
             return;
         }
+        // Annotation rectangles live in page coordinates, outside the drawing transform stack.
+        let bounds = self.link_transform.transform_rect_bbox(kurbo::Rect::new(x0 as f64, y0 as f64, x1 as f64, y1 as f64));
+        let (x0, y0, x1, y1) = (bounds.x0 as f32, bounds.y0 as f32, bounds.x1 as f32, bounds.y1 as f32);
+        if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
+            return;
+        }
         if let Some(prev) = self.links.last_mut()
             && prev.4 == link
             && (prev.1 - y0).abs() < 0.5
+            && (prev.3 - y1).abs() < 0.5
             && x0 - prev.2 < size
         {
             prev.0 = prev.0.min(x0);

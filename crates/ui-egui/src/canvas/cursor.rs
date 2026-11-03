@@ -65,7 +65,7 @@ pub(super) fn caret_color_at(
         return c;
     }
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dim_body), x, y);
+    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, layout, dim_body), x, y);
     let c = caret_contrast(bg);
     app.canvas.caret_bg = Some((key, c));
     c
@@ -75,5 +75,5 @@ pub(super) fn caret_color_at(
 /// dragging, such as an inline picture's insertion cursor.
 pub(crate) fn caret_color_on(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32) -> Color32 {
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    caret_contrast(wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dims_body(app, layout)), x, y))
+    caret_contrast(wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, layout, dims_body(app, layout)), x, y))
 }

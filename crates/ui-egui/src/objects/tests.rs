@@ -1,3 +1,5 @@
+use super::rotation_control::{H, edit, turned_box_window};
+use crate::canvas::straight_box;
 use std::sync::Arc;
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
@@ -492,6 +494,170 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off, "Alt during a drag isn't a keytip tap");
 }
 
+/// Page point (`x`, `y`) of the first page on screen.
+fn on_screen(h: &H, x: f32, y: f32) -> Pos2 {
+    let (r, s) = (h.state().canvas.page_rects[0], h.state().canvas.scale);
+    egui::pos2(r.min.x + x * s, r.min.y + y * s)
+}
+
+/// The box's frame on screen (unturned).
+fn frame_on_screen(h: &mut H, id: u32) -> Rect {
+    let o = h.state_mut().session.layout().text_box(id, 0).expect("the box is laid out");
+    frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, o.rect)
+}
+
+fn press(h: &mut H, at: Pos2, pressed: bool) {
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    h.step();
+}
+
+/// Gap 10: while a turned text box is edited it is drawn straight, so a press on the
+/// straight border the user sees grabs it (to move it, at its real turn).
+#[test]
+fn a_press_on_the_straight_border_of_an_edited_turned_box_grabs_it() {
+    let (mut h, id) = turned_box_window();
+    edit(&mut h, id);
+    let f = frame_on_screen(&mut h, id);
+    let s = h.state().canvas.scale;
+    // On the top edge, 60 pt right of its middle: far off the turned border.
+    let at = egui::pos2(f.center().x + 60.0 * s, f.min.y);
+    press(&mut h, at, true);
+    let d = h.state().canvas.obj_drag.as_ref().expect("the press grabbed the box");
+    assert_eq!(d.drag.grab, Grab::Move);
+    assert_eq!(d.object.text_box, Some(id));
+    assert!((d.drag.deg - 30.0).abs() < 0.01, "the move keeps its real turn: {}", d.drag.deg);
+}
+
+/// Word check P: while a turned text box is edited (drawn straight) its resize and rotation
+/// handles are on the straight frame; selected again, they are at its real angle and turning
+/// starts from it.
+#[test]
+fn an_edited_turned_box_shows_handles_on_its_straight_frame() {
+    let (mut h, id) = turned_box_window();
+    edit(&mut h, id);
+    let f = frame_on_screen(&mut h, id);
+    for (at, want) in [(rotation_handle(f, 0.0), "rotate"), (f.right_top(), "resize"), (f.right_center(), "resize")] {
+        edit(&mut h, id);
+        press(&mut h, at, true);
+        let grab = h.state().canvas.obj_drag.as_ref().map(|d| d.drag.grab);
+        let got = match grab {
+            Some(Grab::Rotate) => "rotate",
+            Some(Grab::Resize(_)) => "resize",
+            _ => "none",
+        };
+        assert_eq!(got, want, "the straight frame's handle at {at:?}");
+        press(&mut h, at, false);
+        h.state_mut().canvas.obj_drag = None;
+    }
+    // Selected (not edited): the rotation handle sits at 30° and a turn starts from 30°.
+    let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+    let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
+    h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    press(&mut h, rotation_handle(f, 30.0), true);
+    let d = h.state().canvas.obj_drag.as_ref().expect("the rotation handle is grabbed");
+    assert_eq!(d.drag.grab, Grab::Rotate);
+    assert!((d.drag.deg - 30.0).abs() < 0.01, "turning starts from the box's angle: {}", d.drag.deg);
+}
+
+/// Press at `from`, move to `to` in a few steps, release.
+fn drag(h: &mut H, from: Pos2, to: Pos2) {
+    press(h, from, true);
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.step();
+    }
+    press(h, to, false);
+    for _ in 0..2 {
+        h.step();
+    }
+}
+
+/// The box's size and turn in the document.
+fn box_frame(h: &H) -> (f32, f32, f32) {
+    let o = h.state().session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).and_then(|p| p.object_at(0)).cloned();
+    let (w, ht, float) = o.as_ref().and_then(|o| o.frame()).map(|(w, ht, f)| (w, ht, f.spin().deg)).expect("the box");
+    (w, ht, float)
+}
+
+/// Resizing an edited turned box from its straight frame: one undo step, wider, still 30°,
+/// and the text stays being edited.
+#[test]
+fn resizing_an_edited_turned_box_keeps_its_turn() {
+    let (mut h, id) = turned_box_window();
+    edit(&mut h, id);
+    let (w0, h0, deg0) = box_frame(&h);
+    assert!((w0 - 200.0).abs() < 0.01 && (deg0 - 30.0).abs() < 0.01);
+    let depth = h.state().session.undo_depth();
+    // The edge held still (the left one) where it is drawn turned, before and after.
+    let left_edge = |h: &mut H| {
+        let r = h.state_mut().session.layout().text_box(id, 0).expect("laid out").rect;
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        wordcraft_geom::Spin::new(30.0, false, false).apply(cx, cy, r.x, cy)
+    };
+    let held = left_edge(&mut h);
+    let f = frame_on_screen(&mut h, id);
+    let s = h.state().canvas.scale;
+    drag(&mut h, f.right_center(), f.right_center() + egui::vec2(40.0 * s, 0.0));
+    let (w, ht, deg) = box_frame(&h);
+    assert!((w - 240.0).abs() < 1.0, "40 pt wider: {w}");
+    assert!((ht - h0).abs() < 0.01, "as tall: {ht}");
+    assert!((deg - 30.0).abs() < 0.01, "still turned 30°: {deg}");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+    assert_eq!(h.state().session.sel.focus.story, wordcraft_doc::StoryRef::Part(id), "still editing its text");
+    // Clicked away, the box turns back: the edge held still is where it was.
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+    h.step();
+    let now = left_edge(&mut h);
+    assert!((now.0 - held.0).abs() < 0.5 && (now.1 - held.1).abs() < 0.5, "the held edge stays put: {held:?} → {now:?}");
+}
+
+/// Turning an edited turned box from its straight frame adds the turn to its real angle.
+#[test]
+fn turning_an_edited_turned_box_adds_to_its_angle() {
+    let (mut h, id) = turned_box_window();
+    edit(&mut h, id);
+    let depth = h.state().session.undo_depth();
+    let f = frame_on_screen(&mut h, id);
+    drag(&mut h, rotation_handle(f, 0.0), rotation_handle(f, 10.0));
+    let (.., deg) = box_frame(&h);
+    assert!((deg - 40.0).abs() < 1.01, "30° + 10°: {deg}");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+    assert_eq!(h.state().session.sel.focus.story, wordcraft_doc::StoryRef::Part(id), "still editing its text");
+    // A handle pressed and released without moving changes nothing.
+    let f = frame_on_screen(&mut h, id);
+    let before = box_frame(&h);
+    let depth = h.state().session.undo_depth();
+    for at in [rotation_handle(f, 0.0), f.right_center()] {
+        press(&mut h, at, true);
+        press(&mut h, at, false);
+        h.step();
+    }
+    assert_eq!(box_frame(&h), before, "nothing changes");
+    assert_eq!(h.state().session.undo_depth(), depth, "no undo step");
+    assert_eq!(h.state().session.sel.focus.story, wordcraft_doc::StoryRef::Part(id));
+}
+
+/// Shift snaps the box's resulting angle to 15° steps (not the turn added to it).
+#[test]
+fn shift_snaps_the_resulting_angle_of_an_edited_turned_box() {
+    let (mut h, id) = turned_box_window();
+    let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+    let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
+    h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+    h.state_mut().run("arrange.rotation", json!({"degrees": 32})).unwrap();
+    edit(&mut h, id);
+    let f = frame_on_screen(&mut h, id);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    drag(&mut h, rotation_handle(f, 0.0), rotation_handle(f, 10.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    let (.., deg) = box_frame(&h);
+    assert!((deg - 45.0).abs() < 0.01 || (deg - 30.0).abs() < 0.01, "a 15° step: {deg}");
+}
+
 /// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a dashed
 /// insertion cursor at the text under the pointer (no alignment guides), and the drop puts the
 /// picture there, still inline and selected. Dropped back where it was, nothing changes.
@@ -622,6 +788,172 @@ fn a_dragged_shape_leaves_the_text_behind_it() {
     assert_eq!(dark, 0, "no text from behind the shape in its preview");
     button(&h, end, false);
     steps(&mut h, 3);
+}
+
+// A control point on the visible handle, independent of the frame's private hit geometry.
+fn rotation_handle(f: Rect, degrees: f32) -> Pos2 {
+    const HANDLE_GAP: f32 = 22.0;
+    let radius = f.height() / 2.0 + HANDLE_GAP;
+    let (sine, cosine) = degrees.to_radians().sin_cos();
+    f.center() + egui::vec2(radius * sine, -radius * cosine)
+}
+#[test]
+fn upright_editor_keeps_frame() {
+    let (mut h, id) = turned_box_window();
+    let session = &mut h.state_mut().session;
+    session.doc.parts.get_mut(&id).unwrap().body.upright = true;
+    session.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 });
+    session.relayout();
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None);
+    let f = frame_on_screen(&mut h, id);
+    press(&mut h, rotation_handle(f, 30.0), true);
+    assert_eq!(h.state().canvas.obj_drag.as_ref().map(|drag| drag.drag.grab), Some(Grab::Rotate));
+}
+
+/// Gap 10: a click on a turned text box's text edits it at the character under the pointer
+/// and the box is drawn straight; a click in the body turns it back.
+#[test]
+fn entering_a_turned_text_box_straightens_it_and_leaving_turns_it_back() {
+    let (mut h, id) = turned_box_window();
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None, "turned while the caret is in the body");
+    // A quarter into the character at byte 8 ("t" of "text"), where it is drawn: turned.
+    let o = layout.text_box(id, 0).expect("laid out");
+    let pos = |off| Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off };
+    let (a, b) = (layout.caret_on(&pos(8), 0).unwrap(), layout.caret_on(&pos(9), 0).unwrap());
+    let (ux, uy) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    let (x, y) = wordcraft_geom::Spin::new(30.0, false, false).apply(o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0, ux, uy);
+    let at = on_screen(&h, x, y);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus, pos(8), "the click lands on the character drawn there");
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), Some(id), "edited, the box is drawn straight");
+    // Back in the body: turned again.
+    let c = layout.caret_on(&Pos::body(0, 2), 0).unwrap();
+    let at = on_screen(&h, c.x + 1.0, c.top + c.height / 2.0);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), None, "left, the box turns back");
+}
+#[test]
+fn header_box_second_click() {
+    use wordcraft_doc::para::{Anchor, Wrap};
+    use wordcraft_doc::{Paragraph, PartKind, StoryRef, para_block};
+    use wordcraft_geom::{Point, Spin};
+    let (mut h, id) = turned_box_window();
+    let header;
+    {
+        let session = &mut h.state_mut().session;
+        let document = &mut session.doc;
+        document.parts.get_mut(&id).unwrap().blocks =
+            vec![para_block(Paragraph::with_text("Original header click probe near the right edge", Default::default()))];
+        let source = document.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let float = source.objects[0].float_mut().unwrap();
+        float.h_rel = Anchor::Page;
+        float.v_rel = Anchor::Page;
+        float.x = 110.0;
+        float.y = 210.0;
+        float.wrap = Wrap::InFrontOfText;
+        let blocks = std::mem::replace(&mut document.body, Document::from_text("Body probe").body);
+        header = document.add_part(PartKind::Header, blocks);
+        document.last_section.headers.default = Some(header);
+        session.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Part(header), path: wordcraft_doc::Path::top(0), off: 0 });
+        session.relayout();
+    }
+    for _ in 0..6 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    let object = layout.text_box(id, 0).unwrap();
+    let position = |off| Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off };
+    let a = layout.caret_on(&position(8), 0).unwrap();
+    let b = layout.caret_on(&position(9), 0).unwrap();
+    let (cx, cy) = (object.rect.x + object.rect.w / 2.0, object.rect.y + object.rect.h / 2.0);
+    let spin = Spin::new(30.0, false, false);
+    let (x, y) = spin.apply(cx, cy, a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    let at = on_screen(&h, x, y);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus, position(8), "first click enters the rotated header box");
+    let layout = h.state_mut().session.layout();
+    assert_eq!(straight_box(h.state(), &layout), Some(id));
+    let length = h.state().session.doc.para(StoryRef::Part(id), &wordcraft_doc::Path::top(0)).unwrap().len();
+    let (off, x, y) = (0..length)
+        .find_map(|off| {
+            let a = layout.caret_on(&position(off), 0)?;
+            let b = layout.caret_on(&position(off + 1), 0)?;
+            if (a.top - b.top).abs() > 0.01 {
+                return None;
+            }
+            let (x, y) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+            let (u, v) = spin.unapply(cx, cy, x, y);
+            (object.rect.contains(Point::new(x, y)) && !object.rect.contains(Point::new(u, v))).then_some((off, x, y))
+        })
+        .expect("visible flat text outside the rotated frame");
+    let at = on_screen(&h, x, y);
+    press(&mut h, at, true);
+    press(&mut h, at, false);
+    assert_eq!(h.state().session.sel.focus, position(off), "second click keeps the shown box story and character");
+}
+
+#[test]
+fn move_preview_text_turns() {
+    use wordcraft_doc::{Paragraph, para_block};
+    let (mut h, id) = turned_box_window();
+    {
+        let session = &mut h.state_mut().session;
+        session.doc.parts.get_mut(&id).unwrap().blocks = vec![para_block(Paragraph::with_text("WWWWWWWWWWWW", Default::default()))];
+        let source = session.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let InlineObject::Shape { fill, stroke, .. } = &mut source.objects[0] else { panic!("text box") };
+        *fill = None;
+        *stroke = None;
+        session.relayout();
+    }
+    for _ in 0..6 {
+        h.step();
+    }
+    let layout = h.state_mut().session.layout();
+    let object = layout.text_box(id, 0).unwrap();
+    let (cx, cy) = (object.rect.x + object.rect.w / 2.0, object.rect.y + object.rect.h / 2.0);
+    let (x, y) = object.spin.apply(cx, cy, object.rect.x + object.rect.w / 3.0, object.rect.y + 2.0);
+    let start = on_screen(&h, x, y);
+    press(&mut h, start, true);
+    assert_eq!(h.state().canvas.obj_drag.as_ref().map(|d| d.drag.grab), Some(Grab::Move));
+    let end = start + egui::vec2(0.0, 210.0 * h.state().canvas.scale);
+    for k in 1..=5 {
+        h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 5.0)));
+        h.step();
+    }
+    h.step();
+    let drag = h.state().canvas.obj_drag.as_ref().unwrap();
+    assert!(drag.drag.moved && drag.preview.is_some(), "real move texture is painted");
+    let bounds = drag.object.bounds();
+    let (dx, dy) = (drag.drag.rect.x - drag.drag.start.x, drag.drag.rect.y - drag.drag.start.y);
+    let top = on_screen(&h, bounds.x + dx, bounds.y + dy);
+    let bottom = on_screen(&h, bounds.right() + dx, bounds.bottom() + dy);
+    let image = h.render().unwrap();
+    let ppp = h.ctx.pixels_per_point();
+    let pointer = Rect::from_min_size(end - egui::vec2(2.0, 2.0), egui::vec2(20.0, 26.0));
+    let mut ink = Vec::new();
+    for y in ((top.y * ppp).ceil() as u32)..((bottom.y * ppp) as u32).min(image.height()) {
+        for x in ((top.x * ppp).ceil() as u32)..((bottom.x * ppp) as u32).min(image.width()) {
+            let [r, g, b, _] = image.get_pixel(x, y).0;
+            if !pointer.contains(egui::pos2(x as f32 / ppp, y as f32 / ppp)) && r.max(g).max(b) < 220 && r.max(g).max(b) - r.min(g).min(b) < 5 {
+                ink.push((x as f32, y as f32));
+            }
+        }
+    }
+    assert!(ink.len() > 50, "preview glyph ink remains visible");
+    let mean_x = ink.iter().map(|p| p.0).sum::<f32>() / ink.len() as f32;
+    let mean_y = ink.iter().map(|p| p.1).sum::<f32>() / ink.len() as f32;
+    let covariance = ink.iter().map(|p| (p.0 - mean_x) * (p.1 - mean_y)).sum::<f32>();
+    let variance = ink.iter().map(|p| (p.0 - mean_x).powi(2)).sum::<f32>();
+    let slope = covariance / variance;
+    assert!(slope > 0.3 && slope < 0.85, "30 degree move preview glyph slope: {slope}");
 }
 
 /// A 100×60 pt rectangle filled E2EFDA: [`fill_pixels`] counts the page's pixels of that colour.

@@ -89,6 +89,14 @@ pub(crate) fn turn_page(page: &mut Page, turn: TextDirection, phys: &SectionProp
         if matches!(it, Placed::Object { .. }) {
             continue;
         }
+        // Keep the marker's frame bit-identical to its object's frame. Translating by the
+        // rounded delta can lose low bits and break the exact text-transform lookup.
+        if let Placed::Spun { part, rect, .. } = it
+            && boxes.iter().any(|(id, frame, _)| id == part && frame == rect)
+        {
+            *rect = upright(*rect);
+            continue;
+        }
         if let Some((dx, dy)) = in_box(it) {
             it.translate(dx, dy);
             continue;
@@ -116,6 +124,7 @@ fn bounds(it: &Placed) -> Option<Rect> {
         | Placed::Shape { rect, .. }
         | Placed::Graphic { rect, .. }
         | Placed::Clip { rect, .. }
+        | Placed::Spun { rect, .. }
         | Placed::Cell { rect, .. }
         | Placed::Object { rect, .. } => Some(*rect),
         Placed::Rule { x0, y0, x1, y1, .. } => Some(Rect::new(x0.min(*x1), y0.min(*y1), (x1 - x0).abs(), (y1 - y0).abs())),

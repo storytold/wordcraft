@@ -494,11 +494,6 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h, pl.rule_room(line, k))
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-            // Floating ones are drawn here; inline ones with their line.
-            if floating {
-                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
-            }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
                     Some(*id)
@@ -507,7 +502,31 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
-            front.push(Placed::Object {
+            // A turned text box's text turns with it (Word; its flips leave the text unmirrored):
+            // its frame (a floating one's shape) and text are drawn turned between two markers.
+            let upright = text_box.and_then(|id| ctx.doc.parts.get(&id)).is_some_and(|part| part.body.upright);
+            let turn = Spin::new(float.spin().deg, false, false);
+            let spun = shown
+                .filter(|_| outer_text_turn(ctx.doc, story, path) && !upright && !turn.is_identity())
+                .map(|part| (Placed::Spun { rect, spin: turn, part, open: true }, part));
+            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            if let Some((open, _)) = &spun {
+                layer.push(open.clone());
+            }
+            // Floating ones are drawn here; inline ones with their line.
+            if floating {
+                let mut items = float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start);
+                if spun.is_some() {
+                    // The turn is the markers'; the shape keeps its flips.
+                    for it in &mut items {
+                        if let Placed::Shape { spin, .. } = it {
+                            *spin = Spin::new(0.0, float.flip_h, float.flip_v);
+                        }
+                    }
+                }
+                layer.extend(items);
+            }
+            layer.push(Placed::Object {
                 rect,
                 spin: float.spin(),
                 story,
@@ -536,6 +555,10 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 let items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
+            }
+            if let Some((_, part)) = spun {
+                let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                layer.push(Placed::Spun { rect, spin: turn, part, open: false });
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
@@ -585,4 +608,32 @@ pub(crate) fn continued_exclusions(rel: &[para::Exclusion], excl: &[WrapArea], x
 /// Is an object floating (not laid out inline)?
 pub fn is_floating(o: &InlineObject) -> bool {
     o.is_floating()
+}
+
+fn outer_text_turn(doc: &Document, story: StoryRef, path: &[u32]) -> bool {
+    path.len() == 1
+        && match story {
+            StoryRef::Body => true,
+            StoryRef::Part(id) => {
+                doc.parts.get(&id).is_some_and(|part| matches!(part.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer))
+            }
+        }
+}
+
+#[cfg(test)]
+mod tests_turn_scope {
+    use super::*;
+    use wordcraft_doc::PartKind;
+
+    #[test]
+    fn outer_turn_scope() {
+        let mut doc = Document::new();
+        assert!(outer_text_turn(&doc, StoryRef::Body, &[0]));
+        assert!(!outer_text_turn(&doc, StoryRef::Body, &[0, 0, 0, 0]));
+        for kind in [PartKind::Header, PartKind::Footer, PartKind::TextBox, PartKind::Footnote, PartKind::Endnote, PartKind::Comment] {
+            let id = doc.add_part(kind, Document::new().body);
+            assert_eq!(outer_text_turn(&doc, StoryRef::Part(id), &[0]), matches!(kind, PartKind::Header | PartKind::Footer), "{kind:?}");
+            assert!(!outer_text_turn(&doc, StoryRef::Part(id), &[0, 0, 0, 0]), "{kind:?} cell");
+        }
+    }
 }

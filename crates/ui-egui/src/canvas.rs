@@ -72,6 +72,7 @@ use reading::{
 use rulers::rulers;
 #[cfg(test)]
 use rulers::{RULER_LABEL_PX, RULER_MAX_MARKS, RULER_SPARSEST, RulerMark, UNIT_TICK, ruler_d, ruler_density, ruler_marks, ruler_x};
+pub(crate) use story::straight_box;
 pub use story::{EquationFrame, editing_header_footer, in_text_box};
 use story::{dims_body, equation_frame};
 pub(crate) use story::{part_kind, text_box_host};
@@ -128,6 +129,8 @@ pub struct CanvasState {
     /// The first press of the current run of presses moved header/footer editing into another
     /// header/footer; the double-click it starts doesn't select a word there.
     hf_press_switched: bool,
+    /// A press that entered a turned text box (drawn straight from then on): where it was.
+    turned_press: Option<Pos2>,
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
@@ -356,6 +359,7 @@ impl Default for CanvasState {
             dragging: false,
             column_drag: None,
             last_press: None,
+            turned_press: None,
             hf_press_switched: false,
             unit_drag: None,
             last_highlight: "yellow".into(),
@@ -905,7 +909,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         // Render before placing the page: a page re-rendered in this frame (a zoom step, an
         // edit) then sits on the pixel grid in this frame too, rather than a frame later.
         if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-            let mut opts = page_render_options(app, dim_body);
+            let mut opts = page_render_options(app, layout, dim_body);
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -966,7 +970,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 visible_tile_keys.insert(id);
                 let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                 if !fresh && rendered < 4 {
-                    let mut opts = page_render_options(app, dim_body);
+                    let mut opts = page_render_options(app, layout, dim_body);
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1258,7 +1262,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         && (resp.hovered() || resp.dragged())
         && let Some(p) = ui.input(|i| i.pointer.latest_pos())
     {
-        let opts = page_render_options(app, dim_body);
+        let opts = page_render_options(app, layout, dim_body);
         let bg = if on_visible_page(&rects, &geo.bands, p) {
             opts.paper_of(&app.session.doc)
         } else {
@@ -1334,7 +1338,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let content_origin = ui.min_rect().min;
         let hidden = app.canvas.dragged_off_page();
-        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let page_view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), straight_box(app, &layout));
         let t0 = crate::now_ms();
         let PagePaintOutput { rects, visible_tile_keys, rendered } = paint_pages(PagePaint {
             app,

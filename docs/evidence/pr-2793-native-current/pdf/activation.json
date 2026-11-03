@@ -1,0 +1,43 @@
+{
+  "source_commit": "ee28fe88afc381b41362cc7780854db989c2d89e",
+  "pdf_sha256": "53c72b5aac0ebf38ba01473aab867bc9f0f6672e2983b4fe72d2a18f2d0e903d",
+  "viewer": "Evince43.1.2 native X11",
+  "network": "none",
+  "handler": "Container-local URI recorder logs argv, not an HTTP response",
+  "handler_control": {
+    "uri": "http://127.0.0.1:8799/native-2793/handler-control",
+    "activated": true
+  },
+  "off_link": {
+    "client_point": [
+      40,
+      400
+    ],
+    "new_uri_events": 0,
+    "viewer_geometry_unchanged": true
+  },
+  "turned_link": {
+    "client_point": [
+      280,
+      219
+    ],
+    "expected_uri": "http://127.0.0.1:8799/native-2793/body-ordinary",
+    "new_uri_events": [
+      [
+        "http://127.0.0.1:8799/native-2793/body-ordinary"
+      ]
+    ]
+  },
+  "client_pixels": [
+    610,
+    610
+  ],
+  "page_pixel_rect": [
+    16,
+    59,
+    578,
+    434
+  ],
+  "events": "../logs/pdf-click.jsonl",
+  "viewer_ui_images_included": false
+}

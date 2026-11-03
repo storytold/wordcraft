@@ -169,9 +169,12 @@ impl Exporter<'_> {
                 }
                 let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                let prior = self.link_transform;
+                self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
                 for it in items {
                     self.draw(s, it);
                 }
+                self.link_transform = prior;
                 s.pop();
             }
             Draw::Rotated { cx, cy, spin, items } => {
@@ -180,9 +183,12 @@ impl Exporter<'_> {
                 }
                 let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                let prior = self.link_transform;
+                self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
                 for it in items {
                     self.draw(s, it);
                 }
+                self.link_transform = prior;
                 s.pop();
             }
         }

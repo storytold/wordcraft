@@ -80,6 +80,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
+        link_transform: kurbo::Affine::IDENTITY,
         bookmarks: std::cell::OnceCell::new(),
     };
     if let Some(o) = ex.outline(pages) {

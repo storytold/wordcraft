@@ -2,6 +2,7 @@ use super::balloons::over_balloon;
 use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
+use super::straight_box;
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
@@ -205,7 +206,13 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && app.canvas.turned_press.is_some_and(|p0| p0.distance(p) < ui.ctx().options(|o| o.input_options.max_click_dist))
+    {
+        // Pressed into a turned text box (now drawn straight) and not yet dragged: nothing to extend.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
+        app.canvas.turned_press = None;
         // Through the command, so from one table cell into another the drag takes whole cells
         // (Word); straight to the session, as the app's `run` would scroll on every frame.
         if let Some(pos) = layout.hit(page, x, y, story)
@@ -220,6 +227,7 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         // content under it, this hit-test keeps the selection growing (#688).
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
+        app.canvas.turned_press = None;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
         apply_format_painter(app);
@@ -324,7 +332,9 @@ fn handle_primary_press(
         app.canvas.dragging = true;
         return;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    // A turned text box not being edited is drawn turned: the click is taken into its frame.
+    let straight = straight_box(app, layout);
+    let Some(pos) = layout.hit_shown(page, x, y, story, straight) else { return };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -352,6 +362,10 @@ fn handle_primary_press(
     }
     app.canvas.column_drag = None;
     let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+    // Clicking into a turned text box draws it straight under the pointer: holding still
+    // mustn't then select from where the pointer is on the straight box.
+    let now = app.session.layout();
+    app.canvas.turned_press = (straight_box(app, &now) != straight).then_some(p);
     // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
     // the button and dragging then extends by whole units (Word, #549).
     let unit = match clicks {
@@ -376,8 +390,8 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
     let is_box = |s| part_kind(app, s) == Some(PartKind::TextBox);
     let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
     let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
-    let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
-    match (hf_box, layout.story_at(page, x, y)) {
+    let hf_box = if in_hf { layout.header_footer_box_shown(page, x, y, straight_box(app, layout)).map(StoryRef::Part) } else { None };
+    match (hf_box, layout.story_at_shown(page, x, y, straight_box(app, layout))) {
         (Some(b), _) => b,
         (None, Some(s)) if is_note(s) => s,
         (None, Some(s)) if is_box(s) && !in_hf => s,

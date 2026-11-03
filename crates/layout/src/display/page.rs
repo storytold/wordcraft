@@ -48,23 +48,46 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    turns: HashMap<usize, Vec<Placed>>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let mut turns = HashMap::new();
+        for items in [&page.header, &page.footer, &page.items] {
+            let mut stack = Vec::new();
+            for item in items {
+                match item {
+                    Placed::Spun { open: true, .. } => stack.push(item.clone()),
+                    Placed::Spun { open: false, .. } => {
+                        stack.pop();
+                    }
+                    _ if !stack.is_empty() => {
+                        turns.insert(std::ptr::from_ref(item) as usize, stack.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), turns }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
     /// (and, for a line in a clipped cell, the cell's clip).
     pub fn draws(&self, it: &Placed, opts: &DisplayOptions) -> Vec<Draw> {
         let mut out = Vec::new();
-        let items = std::slice::from_ref(it);
+        let turned;
+        let items = if let Some(turns) = self.turns.get(&(std::ptr::from_ref(it) as usize)) {
+            turned = turns.iter().cloned().chain(std::iter::once(it.clone())).collect::<Vec<_>>();
+            &turned[..]
+        } else {
+            std::slice::from_ref(it)
+        };
         let (_, ba) = dimming(opts);
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
-        body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
+        body_change_bars(self.doc, self.page, std::slice::from_ref(it), opts, ba, &mut out);
         out
     }
 }
@@ -105,6 +128,7 @@ fn stories_display(
     a: f32,
     out: &mut Vec<Draw>,
 ) {
+    let mut all = std::mem::take(out);
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
@@ -117,11 +141,14 @@ fn stories_display(
             }
         };
         let mut done: Vec<u32> = Vec::new();
+        let mut turns: Vec<(Vec<Draw>, Option<(Rect, Spin)>)> = Vec::new();
+        let mut out = std::mem::take(&mut all);
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
+            let outer = turns.iter().filter_map(|(_, t)| t.map(|(_, s)| s)).fold(Spin::default(), |o, s| s.within(o));
             if let Placed::Lines { story, path, .. } = it
                 && let Some(rect) = cell_clip(clips, *story, &path.0)
             {
@@ -131,6 +158,15 @@ fn stories_display(
                 continue;
             }
             match it {
+                Placed::Spun { rect, spin, part, open: true } => {
+                    let shown = (opts.straight != Some(*part)).then_some((*rect, *spin));
+                    turns.push((std::mem::take(&mut out), shown));
+                }
+                Placed::Spun { open: false, .. } => {
+                    if let Some((before, t)) = turns.pop() {
+                        unturn(before, t, &mut out);
+                    }
+                }
                 Placed::Lines { story: StoryRef::Part(id), .. } if warps.iter().any(|(w, ..)| w == id) => {
                     // A warped text box's lines are drawn together, bent, where its first one is.
                     if done.contains(id) {
@@ -140,30 +176,56 @@ fn stories_display(
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
+                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, &mut out);
                     }
                 }
-                _ => item(doc, it, opts, authors, a, out),
+                _ => item_in(doc, it, opts, authors, a, outer, &mut out),
             }
         }
+        while let Some((before, t)) = turns.pop() {
+            unturn(before, t, &mut out);
+        }
+        all = out;
     }
+    *out = all;
 }
 
 /// One object drawn alone, as its page draws it: the picture, shape or group `o` in `rect` (its
 /// unturned frame) and the text of the text box story `text_box` on `page`. A dragged object's
 /// preview, which mustn't show what was behind it (#1010).
 pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect, text_box: Option<u32>, opts: &DisplayOptions) -> Vec<Draw> {
+    // Use the page's text transform. Upright text has no rotation marker.
+    let turn = text_box.and_then(|id| {
+        page.items.iter().chain(&page.header).chain(&page.footer).find_map(|item| match item {
+            Placed::Spun { rect: frame, spin, part, open: true } if *part == id && *frame == rect => Some((*frame, *spin)),
+            _ => None,
+        })
+    });
+    let straight = turn.is_some() && opts.straight == text_box;
+    let flat_shape = straight.then(|| {
+        let mut shape = o.clone();
+        if let Some(float) = shape.float_mut() {
+            float.rot = 0.0;
+        }
+        shape
+    });
     let mut out = Vec::new();
-    object_draws(o, rect, Spin::default(), 1.0, opts, &mut out);
+    object_draws(flat_shape.as_ref().unwrap_or(o), rect, Spin::default(), 1.0, opts, &mut out);
     let Some(id) = text_box else { return out };
     let authors = Authors::new(doc);
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
+        let mut text = Vec::new();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
             Some((_, rect, warp)) if !lines.is_empty() => {
-                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
+                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut text)
             }
-            _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut out)),
+            _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut text)),
+        }
+        if let Some((frame, spin)) = turn.filter(|_| !straight) {
+            spun(spin, frame, text, &mut out);
+        } else {
+            out.extend(text);
         }
     }
     out
@@ -401,7 +463,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
-        Placed::Cell { .. } | Placed::Object { .. } => {}
+        Placed::Cell { .. } | Placed::Object { .. } | Placed::Spun { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
             lines(
@@ -433,6 +495,14 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
             lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
         }
+    }
+}
+
+fn unturn(before: Vec<Draw>, t: Option<(Rect, Spin)>, out: &mut Vec<Draw>) {
+    let inner = std::mem::replace(out, before);
+    match t {
+        Some((rect, spin)) => spun(spin, rect, inner, out),
+        None => out.extend(inner),
     }
 }
 

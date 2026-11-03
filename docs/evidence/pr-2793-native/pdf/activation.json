@@ -1,0 +1,39 @@
+{
+  "source_commit": "40e60513624a42babcc8760b729a677373fd2e16",
+  "exported_pdf": "turned-link.pdf",
+  "pdf_sha256": "42bb689614e9b991dab5936060c494f3113633a638b35c0295cd88ba4a945095",
+  "viewer": "Evince43.1.2, native X11",
+  "uri_handler": "Container-local GIO default HTTP handler logs argv; network disabled",
+  "handler_control_uri": "http://127.0.0.1:8799/native-2793/handler-control",
+  "handler_control_activated": true,
+  "outside_click": {
+    "client_point": [
+      40,
+      400
+    ],
+    "uri_activations": 0,
+    "window_size_unchanged": true
+  },
+  "turned_text_click": {
+    "client_point": [
+      280,
+      219
+    ],
+    "client_pixels": [
+      610,
+      610
+    ],
+    "expected_uri": "http://127.0.0.1:8799/native-2793/body-ordinary",
+    "new_uri_events": [
+      {
+        "sequence": 1,
+        "uri": [
+          "http://127.0.0.1:8799/native-2793/body-ordinary"
+        ]
+      }
+    ]
+  },
+  "input_log": "../logs/pdf-click.jsonl",
+  "private_viewer_capture_sha256": "967c2478d292bfb8f51cff381058b4ce71fae8d02047da783dba7a58adc2f7e8",
+  "coordinate_retry": "First attempt used presentation coordinates after the viewer returned to normal mode. It is invalid product evidence. One normal-view coordinate correction succeeded."
+}
