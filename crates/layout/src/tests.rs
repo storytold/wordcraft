@@ -370,6 +370,162 @@ fn contextual_spacing_preserves_each_side_and_style_identity() {
     }
 }
 
+/// Contextual spacing reaches across a continuous section break: the first paragraph of a section
+/// starting mid-page drops its space before under a paragraph of its style, as in Word (docxide-pdf
+/// `continuous-context-frame0-same1-ctx1`; it kept its 12 pt), and keeps it under another style or
+/// without contextual spacing. An empty mark closing the section takes no room but is still the
+/// paragraph above (as the framed empty marks of `continuous-context-frame1-same{0,1}-ctx1` are).
+#[test]
+fn contextual_spacing_applies_across_a_continuous_section_break() {
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let gap = |contextual: bool, different_style: bool, empty_mark: bool| {
+        let mut d = Document::new();
+        for id in ["SpacingA", "SpacingB"] {
+            d.styles.upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
+        }
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+        let props = ParaProps {
+            style: Some("SpacingA".into()),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(LineSpacing::Exactly(24.0)),
+            ..Default::default()
+        };
+        let mut a = wordcraft_doc::Paragraph::with_text("Alpha probe", chr.clone());
+        a.props = props.clone();
+        let mut b = wordcraft_doc::Paragraph::with_text("Beta probe", chr.clone());
+        b.props = ParaProps { space_before: Some(12.0), contextual_spacing: Some(contextual), ..props.clone() };
+        // The paragraph closing the section has `b`'s style unless `different_style`.
+        let closing_style = Some(if different_style { "SpacingB" } else { "SpacingA" }.to_string());
+        d.body = if empty_mark {
+            let mut mark = wordcraft_doc::Paragraph::with_text("", chr);
+            mark.props = ParaProps { style: closing_style, ..props };
+            mark.section = Some(Box::new(SectionProps::default()));
+            vec![wordcraft_doc::para_block(a), wordcraft_doc::para_block(mark), wordcraft_doc::para_block(b)]
+        } else {
+            a.props.style = closing_style;
+            a.section = Some(Box::new(SectionProps::default()));
+            vec![wordcraft_doc::para_block(a), wordcraft_doc::para_block(b)]
+        };
+        d.last_section.start = SectionStart::Continuous;
+        let l = lay(&d);
+        let baselines: Vec<_> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, y, .. } = i { para.lines.first().map(|line| y + line.baseline) } else { None })
+            .collect();
+        // The empty mark's own (blank) line, if any, sits between the two.
+        let (Some(first), Some(last)) = (baselines.first(), baselines.last()) else { panic!("no lines") };
+        last - first - 24.0
+    };
+    for empty_mark in [false, true] {
+        for (contextual, different, expected) in [(true, false, 0.0), (true, true, 12.0), (false, false, 12.0)] {
+            let g = gap(contextual, different, empty_mark);
+            assert!(
+                (g - expected).abs() < 0.01,
+                "empty mark={empty_mark}, contextual={contextual}, different style={different}: gap={g}, expected {expected}"
+            );
+        }
+    }
+}
+
+/// Paragraphs of style `SpacingA` (exactly 24 pt lines), each `(space before, space after,
+/// contextual spacing, section it closes, lines)`, then laid out: each one's first piece's (page,
+/// x, top, bottom).
+fn spaced_section_boxes(paras: &[(f32, f32, bool, Option<wordcraft_doc::section::SectionProps>, usize)]) -> (DocLayout, Vec<(usize, f32, f32, f32)>) {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::new();
+    d.styles.upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    d.body = paras
+        .iter()
+        .enumerate()
+        .map(|(i, (before, after, contextual, section, lines))| {
+            let text = vec![format!("Probe {i}"); *lines].join("\n");
+            let mut p = wordcraft_doc::Paragraph::with_text(&text, chr.clone());
+            p.props = ParaProps {
+                style: Some("SpacingA".into()),
+                space_before: Some(*before),
+                space_after: Some(*after),
+                contextual_spacing: Some(*contextual),
+                line_spacing: Some(LineSpacing::Exactly(24.0)),
+                // (Columns split where they are full, not where widow control puts the split.)
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            p.section = section.clone().map(Box::new);
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    d.last_section.start = wordcraft_doc::section::SectionStart::Continuous;
+    let l = lay(&d);
+    let boxes = para_boxes(&l);
+    (l, boxes)
+}
+
+/// The paragraph closing a section before a continuous one drops its own space after above a
+/// same-style paragraph when it asks for contextual spacing (docxide-pdf
+/// `continuous-context-after-same1-ctx1`), and the new section's columns and the line between
+/// them start that much higher; under a section whose last column is shorter than another, the
+/// next section's text stays below the tallest one, whatever the spacing.
+#[test]
+fn contextual_space_after_comes_off_at_a_continuous_section_top() {
+    use wordcraft_doc::section::SectionProps;
+    let mut two = SectionProps { start: wordcraft_doc::section::SectionStart::Continuous, ..Default::default() };
+    two.columns.count = 2;
+    two.columns.separator = true;
+    // Its own space after drops: the next line right below.
+    let (_, boxes) = spaced_section_boxes(&[(0.0, 12.0, true, Some(SectionProps::default()), 1), (0.0, 0.0, false, None, 1)]);
+    assert!((boxes[1].2 - boxes[0].3).abs() < 0.01, "no gap: {boxes:?}");
+
+    // The next section in two columns with a line between: the line starts with its text.
+    let (l, boxes) = spaced_section_boxes(&[
+        (0.0, 12.0, true, Some(SectionProps::default()), 1),
+        (0.0, 0.0, false, None, 1),
+        (0.0, 0.0, false, None, 1),
+        (0.0, 0.0, false, Some(two.clone()), 1),
+        (0.0, 0.0, false, None, 1),
+    ]);
+    assert!((boxes[1].2 - boxes[0].3).abs() < 0.01, "no gap above the columns: {boxes:?}");
+    let rules = vertical_rules(&l, 0);
+    let [(_, top, _)] = rules[..] else { panic!("one line between the columns: {rules:?}") };
+    assert!((top - boxes[1].2).abs() < 0.01, "the line from the columns' text, {top}: {boxes:?}");
+
+    // A four-line paragraph balanced in two columns under a closing paragraph whose contextual
+    // space after came off: two lines in each, the columns as high as the top they start at says.
+    let (l, boxes) = spaced_section_boxes(&[
+        (0.0, 24.0, true, Some(SectionProps::default()), 1),
+        (0.0, 0.0, false, Some(two.clone()), 4),
+        (0.0, 0.0, false, None, 1),
+    ]);
+    let pieces: Vec<(f32, f32, usize)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Lines { path, x, y, l0, l1, .. } if path.0[..] == [1] => Some((*x, *y, l1 - l0)),
+            _ => None,
+        })
+        .collect();
+    let [(x0, y0, 2), (x1, y1, 2)] = pieces[..] else { panic!("two lines in each column: {pieces:?}") };
+    assert!(x1 > x0 + 100.0 && (y0 - boxes[0].3).abs() < 0.01 && (y1 - y0).abs() < 0.01, "both from the new top: {pieces:?} {boxes:?}");
+
+    // Three lines balanced in two columns, the last (shorter) one closing with contextual space
+    // after, as long as or shorter than the gap to the tallest column's bottom: the next same-style
+    // paragraph doesn't go up into the first column's last line.
+    for after in [10.0, 24.0] {
+        let (_, boxes) = spaced_section_boxes(&[
+            (0.0, 0.0, false, None, 1),
+            (0.0, 0.0, false, None, 1),
+            (0.0, after, true, Some(two.clone()), 1),
+            (0.0, 0.0, true, None, 1),
+        ]);
+        let tallest = boxes[..3].iter().map(|b| b.3).fold(0.0f32, f32::max);
+        assert!(boxes[2].3 + 0.01 < tallest, "after {after}: the last column is the shorter one: {boxes:?}");
+        assert!(boxes[3].2 + 0.01 >= tallest, "after {after}: below the tallest column: {boxes:?}");
+    }
+}
+
 #[test]
 fn contextual_spacing_removes_every_gap_in_a_four_paragraph_run() {
     use wordcraft_doc::props::LineSpacing;
