@@ -15,11 +15,12 @@ list (author, source, license) is in ATTRIBUTION.md.
 - Source Sans 3 and Source Serif 4 (assets/fonts/Source*) — SIL Open Font License 1.1. See assets/fonts/OFL-SourceSans3.txt, OFL-SourceSerif4.txt.
 - Inter (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 - JetBrains Mono (assets/fonts/JetBrainsMono-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-JetBrainsMono.txt.
-- Japanese fonts (craft-fonts): builds made with craft-fonts (CRAFT_FONTS_DIR; all official
-  releases) embed the fonts listed in
+- Japanese and Arabic fonts (craft-fonts): builds made with craft-fonts (CRAFT_FONTS_DIR; all
+  official releases) embed the fonts listed in
   https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
-  Shippori Mincho), under the SIL Open Font License 1.1. Their licence texts ship with the
-  packages as OFL-<family>.txt. Builds without CRAFT_FONTS_DIR do not include them.
+  Shippori Mincho, Noto Sans Arabic), under the SIL Open Font License 1.1; the web build embeds Noto
+  Sans Arabic as well. Their licence texts ship with the packages as OFL-<family>.txt. Builds
+  without CRAFT_FONTS_DIR do not include them.
 - Language data (craft-i18n): the word lists, dictionaries and hyphenation patterns below are embedded at build
   time from https://github.com/storytold/craft-i18n (language-data/, CRAFT_I18N_DIR at the commit
   in craft-i18n.rev; all official releases) by craft-proof (storytold/craft-libs). Builds without
