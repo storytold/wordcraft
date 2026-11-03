@@ -916,10 +916,31 @@ fn a_picture_border_goes_round_what_the_crop_leaves() {
     };
     let quarter = json!({"left": 0.25, "top": 0.25, "right": 0.25, "bottom": 0.25});
     s.run("picture.crop", &quarter).unwrap();
-    window(&bitmap(&s));
+    let cropped = bitmap(&s);
+    window(&cropped);
+    // Saved and opened again, the picture keeps its crop and the border is in its bitmap.
+    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let mut pictures = Vec::new();
+    reopened.objects_in_reading_order(&mut |o| {
+        if let InlineObject::Image { media, crop, .. } = o {
+            pictures.push((media.clone(), *crop));
+        }
+    });
+    let [(media, crop)] = pictures.as_slice() else { panic!("one picture: {pictures:?}") };
+    assert_eq!(*crop, [0.25; 4], "the crop is saved");
+    window(&image::load_from_memory(&reopened.media[media]).unwrap().to_rgba8());
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(bitmap(&s), uncropped, "undo takes back the crop and its border");
-    s.run("picture.crop", &quarter).unwrap();
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(bitmap(&s), cropped, "redo puts them back");
+    // The same crop at a new size leaves the bitmap alone.
+    let media = |s: &Session| match selected(s) {
+        Some((_, InlineObject::Image { media, .. })) => media,
+        other => panic!("expected image, got {other:?}"),
+    };
+    let key = media(&s);
+    s.run("picture.crop", &json!({"left": 0.25, "top": 0.25, "right": 0.25, "bottom": 0.25, "width": 60.0})).unwrap();
+    assert_eq!(media(&s), key, "an unchanged crop isn't drawn again");
     s.run("picture.crop", &json!({})).unwrap();
     assert_eq!(bitmap(&s), uncropped, "uncropped, only the outer border");
 
@@ -929,6 +950,47 @@ fn a_picture_border_goes_round_what_the_crop_leaves() {
     s.run("picture.crop", &quarter).unwrap();
     s.run("picture.border", &json!({"color": "0000FF", "width": 2})).unwrap();
     window(&bitmap(&s));
+
+    // With a picture style the border goes round the window of the styled bitmap.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(40, 20))})).unwrap();
+    s.run("picture.style", &json!({"style": "thickFrame"})).unwrap();
+    s.run("picture.border", &json!({"color": "0000FF", "width": 2})).unwrap();
+    s.run("picture.crop", &quarter).unwrap();
+    let b = bitmap(&s);
+    let (w, h) = b.dimensions();
+    let (x0, x1, y0, y1) = (w / 4, w - w / 4 - 1, h / 4, h - h / 4 - 1);
+    assert!(w % 4 == 0 && h % 4 == 0, "{w} × {h}");
+    for (x, y) in [(x0, h / 2), (x1, h / 2), (w / 2, y0), (w / 2, y1)] {
+        assert_eq!(*b.get_pixel(x, y), blue, "styled: border at ({x}, {y}) of {w} × {h}");
+    }
+}
+
+/// #5298: the line goes inside the window the renderer draws: a crop edge inside a pixel takes
+/// that pixel, so the line shows at least its width; crops of an axis past 100% (as a file can
+/// have them) outline the sliver the renderer keeps; junk crops don't panic.
+#[test]
+fn outline_crop_follows_the_drawn_window() {
+    let (blue, clear) = (image::Rgba([0, 0, 255, 255]), image::Rgba([0, 0, 0, 0]));
+    let outline = |crop: [f32; 4]| {
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::new(100, 10));
+        super::picture::outline_crop(img, crop, 2, blue.0).to_rgba8()
+    };
+    assert!(outline([0.0; 4]).pixels().all(|p| *p == clear), "uncropped: nothing drawn");
+    // Left edge at 10.5 px: columns 10–12 (2.5 px visible), right edge at the bitmap's.
+    let b = outline([0.105, 0.0, 0.0, 0.0]);
+    for (x, painted) in [(9, false), (10, true), (12, true), (13, false), (97, false), (98, true), (99, true)] {
+        assert_eq!(*b.get_pixel(x, 5) == blue, painted, "fractional crop, column {x}");
+    }
+    // 60% off each side: the renderer draws its 0.5% sliver from 60%, half of column 60.
+    let b = outline([0.6, 0.0, 0.6, 0.0]);
+    for (x, painted) in [(59, false), (60, true), (61, false)] {
+        assert_eq!(*b.get_pixel(x, 5) == blue, painted, "crop past 95%, column {x}");
+    }
+    for crop in [[f32::NAN, 0.2, f32::INFINITY, -1.0], [2.0, 2.0, 2.0, 2.0], [-0.5, f32::NEG_INFINITY, 0.0, 0.0]] {
+        let b = outline(crop);
+        assert_eq!(b.dimensions(), (100, 10), "{crop:?}");
+    }
 }
 
 /// #3135: a picture can be cropped to any part of itself, not just its middle. A side goes to
