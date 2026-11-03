@@ -143,6 +143,11 @@ impl Body<'_> {
                 }
                 // Its name, and the box its text continues in (§19.112 `draw:chain-next-name`).
                 let next = get(a, "draw:chain-next-name").map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(256).collect::<String>());
+                if let Some(n) = &next
+                    && self.chain_targets.len() < super::MAX_LOOSE
+                {
+                    self.chain_targets.push(n.clone());
+                }
                 if let Some(name) = self.frame_name.take().filter(|n| !n.is_empty()) {
                     self.frame_look.chain = Some(Box::new(model::Chain { name, next }));
                 }

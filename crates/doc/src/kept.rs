@@ -48,6 +48,9 @@ pub struct KeptXml {
     pub indexes: HashMap<u64, (usize, u64, Arc<str>)>,
     /// While reading: by the first paragraph's `rev`, how many paragraphs, and the markup.
     pub pending_indexes: HashMap<u64, (usize, Arc<str>)>,
+    /// Each text box's or shape's story's [`story_fingerprint`] when read: a paragraph showing
+    /// one is written as read only while it is as read.
+    pub story_fps: HashMap<u32, u64>,
     /// Each top-level comment's [`comments_fingerprint`] when read (it and its replies): a
     /// paragraph holding comments is written as read only while they are as read.
     pub comment_fps: HashMap<u32, u64>,
@@ -146,6 +149,10 @@ impl KeptXml {
         }
         count == in_markup
     }
+    /// Whether the stories paragraph `p` shows (its text boxes' and shapes' text) are as read.
+    pub fn stories_as_read(&self, doc: &crate::Document, p: &Paragraph) -> bool {
+        p.objects.iter().flat_map(|o| o.text_boxes()).all(|id| self.story_fps.get(&id).is_some_and(|fp| *fp == story_fingerprint(doc, id)))
+    }
     /// The wrappers kept around table `t`, while it still is what was read.
     pub fn table_wrap(&self, t: &crate::Table) -> Option<&(Vec<Arc<str>>, u32)> {
         if self.table_wraps.is_empty() {
@@ -236,6 +243,42 @@ pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
     match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
         Ok(v) => v.hash(&mut h),
         Err(_) => u64::MAX.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// How deep [`story_fingerprint`] follows stories in stories (text boxes in text boxes, notes).
+const MAX_STORY_DEPTH: usize = 8;
+
+/// What story `id` (a text box's or a shape's text) is: its blocks, and the stories and notes
+/// they hold in turn.
+pub fn story_fingerprint(doc: &crate::Document, id: u32) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut todo = vec![(id, 0usize)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((id, depth)) = todo.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let blocks = doc.parts.get(&id).map(|p| &p.blocks);
+        match serde_json::to_vec(&(id, blocks)) {
+            Ok(v) => v.hash(&mut h),
+            Err(_) => u64::MAX.hash(&mut h),
+        }
+        if depth >= MAX_STORY_DEPTH {
+            continue;
+        }
+        let Some(blocks) = blocks else { continue };
+        let mut held = Vec::new();
+        paras(blocks, 0, &mut held);
+        for p in held {
+            for o in &p.objects {
+                todo.extend(o.text_boxes().into_iter().map(|s| (s, depth + 1)));
+                if let crate::para::InlineObject::NoteRef { id, .. } = o {
+                    todo.push((*id, depth + 1));
+                }
+            }
+        }
     }
     h.finish()
 }
@@ -395,6 +438,14 @@ impl crate::Document {
                         k.table_wraps.insert(*fp, w);
                     }
                 }
+            }
+        }
+        // The text boxes' and shapes' stories as read, for paragraphs showing them.
+        if self.kept.get().is_some_and(|k| !k.pending.is_empty()) {
+            let fps: HashMap<u32, u64> =
+                self.parts.iter().filter(|(_, p)| p.kind == crate::PartKind::TextBox).map(|(id, _)| (*id, story_fingerprint(self, *id))).collect();
+            if let Some(k) = self.kept.get_mut() {
+                k.story_fps = fps;
             }
         }
         // The comments as read, for paragraphs holding them.

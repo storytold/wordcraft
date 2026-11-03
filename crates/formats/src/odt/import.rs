@@ -426,6 +426,31 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
     parse_tracked(bytes, default_paper(), &OdfProfile::default()).map(|p| (p.flow, p.last))
 }
 
+/// `blocks` without the markup kept as read that holds a text box another box continues in
+/// (one of `targets`): WordCraft names both boxes afresh.
+fn unkeep_chained(blocks: &mut [FBlock], targets: &[String], depth: usize) {
+    if targets.is_empty() {
+        return;
+    }
+    let names: Vec<String> = targets.iter().map(|t| format!("draw:name=\"{}\"", super::writer::x(t))).collect();
+    let holds = |x: &str| names.iter().any(|n| x.contains(n.as_str()));
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => p.kept = p.kept.take().filter(|x| !holds(x)),
+            FBlock::Table(t) => {
+                t.kept = t.kept.take().filter(|x| !holds(x));
+                if depth < crate::model::MAX_DEPTH {
+                    for r in &mut t.rows {
+                        for c in r {
+                            unkeep_chained(&mut c.blocks, targets, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The markup kept as read in `blocks` (paragraphs', tables', the paragraphs' in tables not
 /// kept whole) that links to package files, added to `out`.
 fn kept_markup(blocks: &[FBlock], depth: usize, out: &mut Vec<(String, std::sync::Arc<str>)>) {
@@ -645,6 +670,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
     let sources = std::mem::take(&mut body.sources);
+    unkeep_chained(&mut blocks, &body.chain_targets, 0);
     let section_masters = std::mem::take(&mut body.section_masters);
     // And the pictures paragraphs and tables kept as read show.
     let mut linking: Vec<(String, std::sync::Arc<str>)> = kept_defs.clone();

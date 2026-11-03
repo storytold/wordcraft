@@ -93,7 +93,7 @@ fn shapes_open_with_their_kind_size_look_and_text() {
 #[test]
 fn shapes_round_trip() {
     let d = open();
-    let bytes = export(&d).unwrap();
+    let bytes = crate::odt::tests::export_model(&d).unwrap();
     let c = content_of(&bytes);
     for el in ["<draw:rect ", "<draw:ellipse ", "<draw:line ", r#"draw:type="round-rectangle""#, r#"draw:type="heart""#] {
         assert!(c.contains(el), "{el} in {c}");
@@ -175,7 +175,7 @@ fn a_shape_keeps_its_size_unless_it_grows_to_its_text() {
         d.body[0].as_para().unwrap().objects.iter().filter_map(|o| o.text_box()).map(|id| d.parts.get(&id).unwrap().body.auto_fit).collect()
     };
     assert_eq!(fits(&d), [false, true]);
-    let bytes = export(&d).unwrap();
+    let bytes = crate::odt::tests::export_model(&d).unwrap();
     // LibreOffice resizes a shape with text to it unless told not to.
     assert!(content_of(&bytes).contains(r#"draw:auto-grow-height="false" draw:auto-grow-width="false""#));
     assert_eq!(fits(&import(&bytes).unwrap()), [false, true]);

@@ -136,7 +136,7 @@ fn a_box_growing_from_nothing_stays_that_way() {
     let d = import(&package(&content, None)).unwrap();
     assert!(looks(&d)[0].3);
     assert_eq!(boxes(&d)[0].0, (72.0, 1.0));
-    let saved = crate::odt::tests::content_of(&export(&d).unwrap());
+    let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(saved.contains(r#"<draw:text-box fo:min-height="1pt">"#) && !saved.contains("svg:height"), "{saved}");
 }
 
@@ -145,7 +145,7 @@ fn a_text_box_frame_derives_from_the_frame_style() {
     // LibreOffice draws a frame's border (`fo:border`) only when its style derives from the
     // Frame style; otherwise it outlines the box in its default shape line instead.
     let d = open(r#"text:anchor-type="paragraph" svg:width="2in""#, "<text:p>In the box.</text:p>");
-    let pkg = export(&d).unwrap();
+    let pkg = crate::odt::tests::export_model(&d).unwrap();
     let content = crate::odt::tests::content_of(&pkg);
     let style = content.split("<style:style ").find(|s| s.contains("fo:border")).unwrap_or_default();
     assert!(style.contains(r#"style:parent-style-name="Frame""#), "{content}");

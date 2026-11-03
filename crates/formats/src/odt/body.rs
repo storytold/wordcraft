@@ -39,6 +39,9 @@ pub(super) struct Body<'a> {
     pub(super) entries: &'a [String],
     /// The bibliography sources the citations carry.
     pub(super) sources: Vec<wordcraft_doc::Source>,
+    /// The names of text boxes others continue in (§19.112 `draw:chain-next-name`): markup
+    /// holding one isn't kept, its name being WordCraft's to give.
+    pub(super) chain_targets: Vec<String>,
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
     /// Shapes' ids (`xml:id`, `draw:id`) as WordCraft drawing ids, and where the shapes with one
@@ -198,6 +201,7 @@ impl<'a> Body<'a> {
             watermark_shape: None,
             break_next: false,
             sources: Vec::new(),
+            chain_targets: Vec::new(),
             ruby: None,
             placeholder: None,
             index_marks: Vec::new(),
@@ -1707,9 +1711,10 @@ struct KeptComments {
     /// The names of those begun, and of those ended.
     opened: Vec<String>,
     ended: Vec<String>,
-    /// The comment being read: its depth and how many paragraphs were finished before it.
+    /// The comment or drawing being read: its depth and how many paragraphs were finished
+    /// before it.
     open: Option<(usize, usize)>,
-    /// The comments' own paragraphs, which aren't the paragraph's.
+    /// The comments' and drawings' own paragraphs, which aren't the paragraph's.
     paras: usize,
 }
 
@@ -1719,7 +1724,9 @@ impl KeptComments {
     fn start(&mut self, q: &str, a: &Attrs, depth: usize, done: usize) -> bool {
         let name = || get(a, "office:name").map(str::to_string);
         match q {
-            "office:annotation" if self.open.is_none() && self.opened.len() < 64 => {
+            // A comment in a drawing's text (its own story): not kept.
+            "office:annotation" if self.open.is_some() => false,
+            "office:annotation" if self.opened.len() < 64 => {
                 if get(a, "loext:parent-name").is_some_and(|p| !self.opened.iter().any(|n| n == p)) {
                     return false;
                 }
@@ -1747,12 +1754,19 @@ impl KeptComments {
                 _ => false,
             },
             "text:change" => get(a, "text:change-id").is_some(),
+            // A text box continuing in another box, or continued from one: their names tie them.
+            "draw:text-box" if get(a, "draw:chain-next-name").is_some() => false,
+            // A drawing: the paragraphs of its text (a text box's, a shape's) are its story's.
+            q if self.open.is_none() && q.starts_with("draw:") && is_drawing(q) => {
+                self.open = Some((depth, done));
+                true
+            }
             "text:change-start" => false,
             _ => true,
         }
     }
 
-    /// Whether the comment being read is the element ending at `depth`.
+    /// Whether the comment or drawing being read is the element ending at `depth`.
     fn ends_at(&self, depth: usize) -> bool {
         self.open.is_some_and(|(d, _)| d == depth)
     }
@@ -1770,19 +1784,39 @@ impl KeptComments {
     }
 }
 
-/// Whether markup holding element `q` can be kept as read. Pictures and shapes can (a shape's
-/// text, or a text box's, is read as paragraphs, which keeps the paragraph holding it from being
-/// kept); embedded objects (charts and formulas, written on their own), form controls, plugins
-/// and text boxes (whose text is the document's own story) can't, nor comments, tracked changes
-/// and marks that pair up with others elsewhere.
+/// Whether markup holding element `q` can be kept as read. Pictures, shapes and text boxes can
+/// (their text is a story of its own, kept while it is as read: see `KeptComments`); embedded
+/// objects (charts and formulas, written on their own), form controls and plugins can't, nor
+/// marks that pair up with others elsewhere (comments and tracked changes are paired apart).
 fn keepable(q: &str) -> bool {
-    !(matches!(q, "draw:object" | "draw:object-ole" | "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame" | "draw:text-box")
+    !(matches!(q, "draw:object" | "draw:object-ole" | "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame")
         || q.starts_with("office:annotation")
         || q.starts_with("text:change")
         || q.starts_with("form:")
         || q.ends_with("-start")
         || q.ends_with("-end")
         || q == "text:bookmark")
+}
+
+/// Whether `q` is a drawing that can hold text: a frame, a group or a shape.
+fn is_drawing(q: &str) -> bool {
+    matches!(
+        local(q),
+        "frame"
+            | "g"
+            | "rect"
+            | "ellipse"
+            | "circle"
+            | "line"
+            | "custom-shape"
+            | "polygon"
+            | "polyline"
+            | "path"
+            | "regular-polygon"
+            | "connector"
+            | "caption"
+            | "measure"
+    )
 }
 
 /// The section wrappers kept around top-level block `b` (a paragraph or a table), made empty

@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-03: ODT paragraphs showing text boxes and shapes holding text are written as read while that text is unchanged (gap 19). Over the corpus 111 of 133 files now round-trip pixel-identical (103), the round-trip difference falls from 44k to 39k pixels, and the element kinds a save loses fall from 16 to 8.
 - 2026-11-03: ODT paragraphs holding comments or tracked changes are written as read while those are unchanged (gap 19): a comment edited, resolved or answered, or a change accepted, sends its paragraph to the model; the file's change regions are kept beside WordCraft's own. Over the corpus the words a save loses fall from 29 to 4.
 - 2026-11-03: ODT paragraphs and tables holding pictures and shapes are written as read while unchanged (gap 19), with their pictures and frame styles; over the corpus the attributes and values a save loses halve (1,551 → 789), the pages unchanged.
 - 2026-11-03: ODT sections inside text boxes are written as read (gap 19), as LibreOffice's letter and fax templates hold the sender's address; seven of those templates now round-trip pixel-identical; over the corpus 103 of 133 files do (95), the round-trip difference falls from 51k to 44k pixels, and the losses a save makes fall from 59 to 35.

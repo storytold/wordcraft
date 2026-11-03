@@ -257,8 +257,17 @@ const CHANGES: Sample = Sample {
     meta: "",
 };
 
+/// A text box with styled text in a styled frame, and a shape holding text, each with what
+/// WordCraft doesn't model.
+const TEXT_BOXES: Sample = Sample {
+    name: "text boxes",
+    content: r##"<office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Frame"><style:graphic-properties style:wrap="parallel" fo:padding="0.05in" fo:border="0.5pt solid #000000" style:shadow="none" draw:shadow-opacity="100%" wcx:box="kept"/></style:style><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:text-align="center" wcx:para="kept"/></style:style><style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill-color="#ffcc00" draw:textarea-vertical-align="middle"/></style:style></office:automatic-styles><office:body><office:text><text:p>A box <draw:frame draw:style-name="fr1" draw:name="Aside" text:anchor-type="paragraph" svg:width="2in" draw:z-index="0"><draw:text-box fo:min-height="0.5in"><text:p text:style-name="P1">Inside the box.</text:p><text:p>A second line.</text:p></draw:text-box></draw:frame>beside the text.</text:p><text:p>A shape <draw:custom-shape draw:style-name="gr1" draw:name="Sign" text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="1"><text:p>Stop</text:p><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="octagon" draw:modifiers="5000" draw:enhanced-path="M ?f7 0 X 0 ?f8 L 0 ?f9 Y ?f7 21600 L ?f10 21600 X 21600 ?f9 L 21600 ?f8 Y ?f10 0 Z N"/></draw:custom-shape>with words.</text:p></office:text></office:body>"##,
+    styles: r##"<office:styles><style:style style:name="Frame" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph" svg:x="0in" svg:y="0in" style:wrap="parallel" style:number-wrapped-paragraphs="no-limit" style:vertical-pos="top" style:vertical-rel="paragraph-content" style:horizontal-pos="center" style:horizontal-rel="paragraph-content"/></style:style></office:styles>"##,
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 12] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES];
+const SAMPLES: [Sample; 13] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES, TEXT_BOXES];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -485,4 +494,43 @@ fn a_change_accepted_is_written_from_the_model_the_others_as_read() {
     }
     let c = content_of(&export(&e).unwrap());
     assert!(c.contains(r#"text:id="wcct1""#) && c.contains(r#"text:id="ct13""#), "{c}");
+}
+
+#[test]
+fn a_text_box_edited_is_written_from_the_model() {
+    // Its text edited: the paragraph showing the box is written from the model, with the edit.
+    let d = import(&package(&TEXT_BOXES)).unwrap();
+    assert!(content_of(&export(&d).unwrap()).contains(r#"wcx:box="kept""#));
+    let mut e = d.clone();
+    let id = e
+        .parts
+        .iter()
+        .find(|(_, p)| {
+            p.kind == wordcraft_doc::PartKind::TextBox && p.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.starts_with("Inside")))
+        })
+        .map(|(id, _)| *id)
+        .unwrap();
+    let mut blocks = e.parts.get(&id).unwrap().blocks.clone();
+    if let Some(wordcraft_doc::Block::Para(p)) = blocks.get_mut(1).map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
+    if let Some(part) = e.parts.get_mut(&id) {
+        part.blocks = blocks;
+    }
+    let saved = export(&e).unwrap();
+    let c = content_of(&saved);
+    assert!(!c.contains(r#"wcx:box="kept""#) && c.contains("Inside the box."), "{c}");
+    assert!(parts_well_formed(&saved).is_ok());
+}
+
+#[test]
+fn linked_text_boxes_keep_their_link() {
+    // A box continuing in another (§19.112 `draw:chain-next-name`): both written from the model,
+    // which names them, and the link survives.
+    let content = r##"<office:body><office:text><text:p>First <draw:frame draw:name="One" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="Two"><text:p>Text that flows on.</text:p></draw:text-box></draw:frame>box.</text:p><text:p>Second <draw:frame draw:name="Two" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box/></draw:frame>box.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "linked", content, styles: "", meta: "" })).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    let next = c.split("draw:chain-next-name=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default().to_string();
+    assert!(!next.is_empty() && c.contains(&format!("draw:name=\"{next}\"")), "{c}");
 }
