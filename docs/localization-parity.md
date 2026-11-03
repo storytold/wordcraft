@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -256,6 +256,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | craft-proof pin moved to craft-libs main with #589 and #590: French suggestions offer the elided form first (`Jadore` → `J'adore` before `J adore`; English keeps plural fixes first), and Valencian (`ca-ES-valencia`) text reads the `ca-valencia` pack |
 | 2026-11-03 | minor | Arabic (`ar`) interface: ~2,730 catalog rows from craft-i18n, `ar-*` locales, mirrored shell (ribbon, panes, File page, dialogs, menus), Arabic UI font fallback, document canvas independent (#1195); 28 languages; Hebrew UI still open |
 | 2026-11-03 | trivial | Language packs: language-packs-2 published and pinned, 75 packs, with Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto |
 | 2026-11-02 | trivial | Language packs (CP4.4): language-packs-1 published and pinned, 61 packs; Lithuanian, Romanian, Catalan, French, Greek, Slovak, Serbian and Latvian available; Dutch, German and the other compounding languages wait on craft-proof; Basque, Ukrainian and Uyghur excluded |
