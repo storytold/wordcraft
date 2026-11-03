@@ -63,6 +63,7 @@ struct TableBlockContext<'ctx, 'state, 'doc> {
     depth: usize,
     y: &'state mut f32,
     items: &'state mut Vec<Placed>,
+    anchored_rules: &'state mut Vec<table::AnchoredRule>,
     exclusions: &'state mut Vec<WrapArea>,
     float_tables: &'state mut Vec<Rect>,
     table_areas: &'state mut Vec<Rect>,
@@ -131,6 +132,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         depth,
         y,
         items,
+        anchored_rules,
         exclusions,
         float_tables,
         table_areas,
@@ -165,7 +167,19 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
         None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width)),
     };
     let mut row_y = ty;
-    for row in &layout.rows {
+    for (ri, row) in layout.rows.iter().enumerate() {
+        let start = items.len();
+        for cell in &row.cells {
+            anchored_rules.extend(cell.anchored_rules.iter().map(|r| table::AnchoredRule { item: start + r.item, top: row_y + r.top }));
+            if t.rows
+                .get(ri)
+                .is_some_and(|r| r.props.height_rule == wordcraft_doc::props::HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0))
+                && let Some(item) = cell.bottom_rule
+            {
+                // An exact nested row keeps its closing rule on the page where it starts.
+                anchored_rules.push(table::AnchoredRule { item: start + item, top: row_y });
+            }
+        }
         for item in &row.items {
             let mut item = item.clone();
             item.translate(tx, row_y);
@@ -199,6 +213,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
     let mut items = Vec::new();
+    let mut anchored_rules: Vec<table::AnchoredRule> = Vec::new();
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
     // Wrap areas of the box's floating objects.
@@ -339,6 +354,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     }
                     let at = behind.min(items.len());
                     behind += back.len();
+                    for rule in &mut anchored_rules {
+                        if rule.item >= at {
+                            rule.item += back.len();
+                        }
+                    }
                     items.splice(at..at, back);
                     items.extend(front);
                 }
@@ -362,6 +382,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     depth,
                     y: &mut y,
                     items: &mut items,
+                    anchored_rules: &mut anchored_rules,
                     exclusions: &mut excl,
                     float_tables: &mut float_tables,
                     table_areas: &mut table_areas,
@@ -376,7 +397,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, anchored_rules, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -431,6 +452,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 pub(crate) struct BoxLayout {
     pub(crate) items: Vec<Placed>,
+    pub(crate) anchored_rules: Vec<table::AnchoredRule>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
     pub(crate) height: f32,
