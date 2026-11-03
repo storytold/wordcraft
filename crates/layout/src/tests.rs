@@ -582,6 +582,49 @@ fn hit_and_caret_agree() {
     assert_eq!(up.path, Path::top(0));
 }
 
+/// #4282: a list's number or bullet is a place of its own on the page. A press on it finds the
+/// paragraph and the list level (so a click can take the level, not the text); a press on the
+/// text right after it does not.
+#[test]
+fn label_at_finds_the_number_and_not_the_text() {
+    use wordcraft_doc::props::NumRef;
+    let mut d = Document::from_text("One\nTwo\nNested\nPlain");
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let mut at = |i: usize, level: u8| {
+        d.format_paragraphs(&Pos::body(i, 0), &Pos::body(i, 0), &|p| p.numbering = Some(NumRef { num, level })).unwrap();
+    };
+    at(0, 0);
+    at(1, 0);
+    at(2, 1);
+    let l = lay(&d);
+    // Where the layout drew a paragraph's label: page x, top and size.
+    let label_box = |path: &Path| {
+        let page = l.pages.first().expect("a page");
+        let it = page.items.iter().find(|it| matches!(it, Placed::Lines { path: p, .. } if p == path)).expect("the paragraph is drawn");
+        let Placed::Lines { para, x, y, l0, .. } = it else { panic!("lines") };
+        let lab = para.label.as_ref().expect("a numbered paragraph's label");
+        let line = para.lines.get(*l0).expect("a first line");
+        (*x + lab.x, *y, lab.width, line.height)
+    };
+    let (x, top, w, h) = label_box(&Path::top(1));
+    let middle = (x + w / 2.0, top + h / 2.0);
+    assert_eq!(l.label_at(0, middle.0, middle.1, StoryRef::Body), Some((Path::top(1), 0)), "the second item's number");
+    assert_eq!(l.label_at(0, x + w, top + h, StoryRef::Body), Some((Path::top(1), 0)), "the label's far corner");
+    // The level the label numbers comes with it.
+    let (nx, ntop, nw, nh) = label_box(&Path::top(2));
+    assert_eq!(l.label_at(0, nx + nw / 2.0, ntop + nh / 2.0, StoryRef::Body), Some((Path::top(2), 1)), "a nested item's level");
+    // The text after the number is the text's, a plain paragraph has no label, and a miss is none.
+    let start = l.caret(&Pos::body(1, 0)).expect("the second item's caret");
+    assert_eq!(l.label_at(0, start.x + 2.0, start.top + 2.0, StoryRef::Body), None, "the item's own text");
+    let plain = l.caret(&Pos::body(3, 0)).expect("the plain paragraph's caret");
+    assert_eq!(l.label_at(0, plain.x, plain.top + 2.0, StoryRef::Body), None, "a paragraph with no list has no label");
+    assert_eq!(l.label_at(0, middle.0, top - 40.0 * h, StoryRef::Body), None, "above the page");
+    assert_eq!(l.label_at(0, middle.0, top + 40.0 * h, StoryRef::Body), None, "below the page's text");
+    assert_eq!(l.label_at(0, x - w, middle.1, StoryRef::Body), None, "left of the number");
+    assert_eq!(l.label_at(0, f32::NAN, middle.1, StoryRef::Body), None, "no point");
+    assert_eq!(l.label_at(9, middle.0, middle.1, StoryRef::Body), None, "no such page");
+}
+
 #[test]
 fn selection_bar_finds_the_line_beside_the_pointer() {
     // #856: the left margin beside a line is Word's selection bar.
