@@ -2423,17 +2423,21 @@ fn symbol_runs_read_the_character_and_font_from_sprm_c_symbol() {
 }
 
 /// Paragraph borders around a block are read from both storage forms: the Word 97 Brc80
-/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour).
+/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour). A thick
+/// border (type 0x02) stays thick in both, as tables read it too.
 #[test]
 fn paragraph_borders_read_from_both_forms() {
+    use wordcraft_doc::props::BorderStyle as S;
     let b80 = [8u8, 0x01, 0x06, 0x01]; // 1 pt single line, palette red (6), 1 pt from the text
+    let thick80 = [8u8, 0x02, 0x06, 0x01];
     let brc = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x01, 0x02, 0x00]; // cb 8, red COLORREF, 1 pt single, space 2
+    let thick = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x02, 0x02, 0x00];
     let text = "boxed\r\r";
     let spec = StructSpec {
         text,
         papx_entries: vec![
-            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &b80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
-            (6, 0, grpprl(&[(0xC64E, &brc)])),
+            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &thick80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
+            (6, 0, grpprl(&[(0xC64E, &brc), (0xC64F, &thick)])),
         ],
         ..structured_spec(text, text.chars().count() as u32)
     };
@@ -2441,13 +2445,16 @@ fn paragraph_borders_read_from_both_forms() {
     let p0 = doc.body.first().and_then(|b| b.as_para()).expect("first paragraph");
     let b = p0.props.borders.expect("borders");
     let top = b.top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 1.0));
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 1.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
-    assert!(b.left.is_some() && b.bottom.is_some() && b.right.is_some() && b.between.is_some());
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "Brc80 thick");
+    assert!(b.bottom.is_some() && b.right.is_some() && b.between.is_some());
     let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("second paragraph");
-    let top = p1.props.borders.expect("borders").top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 2.0));
+    let b = p1.props.borders.expect("borders");
+    let top = b.top.expect("top border");
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 2.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "BrcOperand thick");
 }
 
 /// #3642: a small compound file whose DIFAT names one FAT sector thousands of times made `cfb`
