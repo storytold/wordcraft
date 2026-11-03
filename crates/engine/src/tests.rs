@@ -12003,4 +12003,15 @@ fn save_as_adds_the_extension_to_a_name_without_a_format() {
         assert!(crate::io::save_bytes(&path, &doc).is_ok(), "{path}");
     }
     assert!(crate::io::save_bytes("Report v1.2", &doc).is_err(), "it used to fail");
+    // Other spellings name the same format.
+    assert_eq!(crate::io::save_format("HTM"), Some("html"));
+    assert_eq!(crate::io::save_format("text"), Some("txt"));
+    assert_eq!(crate::io::save_format("2"), None);
+    // An export writes its own format, whatever format's extension the name has.
+    use crate::io::with_export_ext;
+    assert_eq!(with_export_ext("/a/Handout", "pdf"), "/a/Handout.pdf");
+    assert_eq!(with_export_ext("/a/Handout.docx", "pdf"), "/a/Handout.docx.pdf");
+    assert_eq!(with_export_ext("/a/Handout.PDF", "pdf"), "/a/Handout.PDF");
+    assert_eq!(with_export_ext("/a/page.htm", "html"), "/a/page.htm");
+    assert_eq!(with_export_ext("/a/shot.pdf", "png"), "/a/shot.pdf.png");
 }

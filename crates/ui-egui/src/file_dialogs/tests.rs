@@ -738,6 +738,12 @@ fn save_as_adds_the_format_to_a_name_without_one() {
     answer(&shown, Some(&dir.join("Handout").to_string_lossy()));
     assert!(a.poll_file_dialog().unwrap().is_ok());
     assert!(std::fs::read(dir.join("Handout.pdf")).unwrap().starts_with(b"%PDF"), "an export keeps its format");
+    // A name with another format's extension is still a PDF.
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Handout.docx").to_string_lossy()));
+    assert!(a.poll_file_dialog().unwrap().is_ok());
+    assert!(std::fs::read(dir.join("Handout.docx.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(!dir.join("Handout.docx").exists(), "no Word file written for a PDF export");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

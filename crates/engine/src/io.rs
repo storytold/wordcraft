@@ -44,19 +44,45 @@ fn ext_of(name: &str) -> String {
     file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
 }
 
-/// Other spellings of [`SAVE_EXTS`] that save the same format.
-const SAVE_ALIASES: &[&str] = &["text", "markdown", "htm", "xhtml", "latex", "ltx"];
+/// The format a file extension (any case) saves as, named by its [`SAVE_EXTS`] entry, other
+/// spellings included (`htm` is `html`, `text` is `txt`); `None` for one WordCraft doesn't save.
+pub fn save_format(ext: &str) -> Option<&'static str> {
+    let ext = ext.to_ascii_lowercase();
+    let ext = match ext.as_str() {
+        "text" => "txt",
+        "markdown" => "md",
+        "htm" | "xhtml" => "html",
+        "latex" | "ltx" => "tex",
+        other => other,
+    };
+    SAVE_EXTS.iter().copied().find(|e| *e == ext)
+}
 
 /// The path Save As writes for a `path` the user named, in format `ext` (`docx`, `pdf`…): a file
 /// name with no extension, or with one WordCraft doesn't save (`Report v1.2`, `notes.final`),
 /// gets `.ext` added, as Word adds `.docx` (#5368). The format is chosen by the extension, so
 /// such a name used to fail to save at all.
 pub fn with_save_ext(path: &str, ext: &str) -> String {
-    let current = ext_of(path);
-    if SAVE_EXTS.contains(&current.as_str()) || SAVE_ALIASES.contains(&current.as_str()) {
+    if save_format(&ext_of(path)).is_some() {
         return path.to_string();
     }
-    // Windows drops a file name's trailing dots, so `Report.` is `Report.docx`, not `Report..docx`.
+    add_ext(path, ext)
+}
+
+/// The path an export in format `ext` writes for a `path` the user named: one whose extension
+/// isn't that format's (`Report`, `Report.docx` for a PDF) gets `.ext` added, so an export
+/// writes the format it was asked for (#5368).
+pub fn with_export_ext(path: &str, ext: &str) -> String {
+    let current = ext_of(path);
+    if current == ext.to_ascii_lowercase() || save_format(&current).is_some_and(|f| save_format(ext) == Some(f)) {
+        return path.to_string();
+    }
+    add_ext(path, ext)
+}
+
+/// `path` with `.ext` after it. Windows drops a file name's trailing dots, so `Report.` is
+/// `Report.docx`, not `Report..docx`.
+fn add_ext(path: &str, ext: &str) -> String {
     format!("{}.{ext}", path.trim_end_matches('.'))
 }
 

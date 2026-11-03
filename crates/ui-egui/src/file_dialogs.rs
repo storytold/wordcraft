@@ -139,6 +139,22 @@ impl AfterPick {
         let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty()).unwrap_or("docx");
         AfterPick::SaveAs { after, document, ext: ext.to_ascii_lowercase() }
     }
+
+    /// The path a save or export writes for the `path` picked (#5368): Save As adds the format's
+    /// extension to a name with none it saves, an export to a name without its own format's.
+    /// Applied before asking to replace a file too, so the file asked about is the one written.
+    pub(crate) fn written_path(&self, path: &str) -> String {
+        match self {
+            AfterPick::SaveAs { ext, .. } => wordcraft_engine::io::with_save_ext(path, ext),
+            AfterPick::Export { ext } => wordcraft_engine::io::with_export_ext(path, export_file_ext(ext)),
+            _ => path.to_string(),
+        }
+    }
+}
+
+/// The file extension an export in format `ext` writes (Word 2003 XML is an `.xml` file).
+fn export_file_ext(ext: &str) -> &str {
+    if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext }
 }
 
 /// What to do once Save As has written the document.
@@ -301,6 +317,7 @@ impl WordApp {
 
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
+        let picked = picked.map(|p| after.written_path(&p));
         match after {
             AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -352,8 +369,6 @@ impl WordApp {
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext.as_str() };
-                let path = wordcraft_engine::io::with_save_ext(&path, file_ext);
                 let r = if ext == "png" {
                     self.run("file.exportPng", json!({"path": path}))
                 } else if ext == crate::print_page::EXPORT_WORD_2003 {
@@ -376,7 +391,7 @@ impl WordApp {
                 }
                 r
             }
-            AfterPick::SaveAs { after, document, ext } => {
+            AfterPick::SaveAs { after, document, .. } => {
                 // The document it was for may wait behind another one: it is shown and saved.
                 if document != self.session.document_id() {
                     if !self.session.is_open(document) {
@@ -389,7 +404,7 @@ impl WordApp {
                 // otherwise dropped: a failed write (no permission, disk full, a bad path) left the
                 // Save As page sitting there with nothing to say why, since its own render loop
                 // skips the status bar while Backstage is open. `fail_save_as` reaches both.
-                let result = picked.map(|path| self.run("file.save", json!({"path": wordcraft_engine::io::with_save_ext(&path, &ext)})));
+                let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
                 if saved {
                     self.ui.backstage = false;
@@ -495,8 +510,7 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
-        let name = format!("{}.{file_ext}", self.title_stem());
+        let name = format!("{}.{}", self.title_stem(), export_file_ext(ext));
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 

@@ -197,8 +197,8 @@ impl FileBrowser {
         }
         let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*").cloned() else { return };
         let path = Path::new(&self.name);
-        let typed = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
-        if typed.is_some_and(|t| wordcraft_engine::io::SAVE_EXTS.contains(&t.as_str())) {
+        let typed = path.extension().and_then(std::ffi::OsStr::to_str);
+        if typed.and_then(wordcraft_engine::io::save_format).is_some() {
             self.name = path.with_extension(ext).to_string_lossy().into_owned();
         }
     }
@@ -232,10 +232,13 @@ impl FileBrowser {
                 Step::Stay
             }
             FileDialogRequest::Save { .. } => {
-                // A name with no extension WordCraft saves (`Report v1.2`) gets the type's (#5368).
+                // A name with no extension WordCraft saves (`Report v1.2`) gets the type's (#5368);
+                // then the save's own rule (All files: the suggested format; an export: its
+                // format), so a file about to be replaced is asked about under its written name.
                 if let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*") {
                     path = PathBuf::from(wordcraft_engine::io::with_save_ext(&path.to_string_lossy(), ext));
                 }
+                path = PathBuf::from(self.after.written_path(&path.to_string_lossy()));
                 if path.exists() && self.note != Note::Replace(path.clone()) {
                     self.note = Note::Replace(path);
                     return Step::Stay;
@@ -563,13 +566,14 @@ mod tests {
     }
 
     /// #5368: the built-in Save As lists every format WordCraft saves, the suggested one first;
-    /// picking a type changes the name's extension to it, and a name with no format's extension
-    /// gets the type's.
+    /// picking a type changes the name's extension to it, a name with no format's extension gets
+    /// the type's, and the replace prompt is about the file that will be written.
     #[test]
     fn save_lists_every_format_and_the_type_picked_is_saved() {
         let dir = scratch("save-types");
         let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let after = AfterPick::save_as(crate::file_dialogs::AfterSave::Nothing, 0, "Document1.docx");
+        let mut b = FileBrowser::new(req, after, dir.clone(), false);
         assert_eq!(b.filters.len(), wordcraft_engine::io::SAVE_EXTS.len() + 1, "every format, then All files");
         assert_eq!(b.filters[0].1, ["docx"]);
         assert_eq!(b.filters.last().map(|f| f.1.clone()), Some(vec!["*".to_string()]));
@@ -582,11 +586,18 @@ mod tests {
         b.retype();
         assert_eq!(b.name, "Report v1.2", "a name with no format's extension isn't changed");
         assert_eq!(b.accept(), Step::Pick(dir.join("Report v1.2.pdf")));
-        // All files adds nothing: Save As then adds the suggested format.
+        // Another spelling of a format is a format's extension too.
+        b.name = "Page.htm".into();
+        b.retype();
+        assert_eq!(b.name, "Page.pdf");
+        // All files: the suggested format, and a file of that name is asked about before it's replaced.
         b.filter = b.filters.len() - 1;
         b.retype();
         b.name = "Bare".into();
-        assert_eq!(b.accept(), Step::Pick(dir.join("Bare")));
+        assert_eq!(b.accept(), Step::Pick(dir.join("Bare.docx")));
+        std::fs::write(dir.join("Bare.docx"), b"x").unwrap();
+        assert_eq!(b.accept(), Step::Stay, "asks before replacing Bare.docx");
+        assert_eq!(b.accept(), Step::Pick(dir.join("Bare.docx")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
