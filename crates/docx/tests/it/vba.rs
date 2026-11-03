@@ -32,11 +32,21 @@ fn record(out: &mut Vec<u8>, id: u16, payload: &[u8]) {
     out.extend_from_slice(payload);
 }
 
+/// PROJECTVERSION ([MS-OVBA] §2.3.4.2.1.11): id, reserved size 4, then 4 + 2 bytes of
+/// version — not a `record()`.
+fn project_version(out: &mut Vec<u8>) {
+    out.extend(0x0009u16.to_le_bytes());
+    out.extend(0x00000004u32.to_le_bytes()); // Reserved
+    out.extend(0x00000002u32.to_le_bytes()); // VersionMajor
+    out.extend(0x0001u16.to_le_bytes()); // VersionMinor
+}
+
 /// The dir stream for one procedural module: its names, offset, and type.
 fn dir_module() -> Vec<u8> {
     let mut dir = Vec::new();
     record(&mut dir, 0x0001, &0x00000001u32.to_le_bytes()); // SysKind: Windows
     record(&mut dir, 0x0003, &CODE_PAGE_1252.to_le_bytes()); // CodePage
+    project_version(&mut dir); // PROJECTVERSION, before PROJECTMODULES as real projects have
     record(&mut dir, 0x000F, &1u32.to_le_bytes()); // PROJECTMODULES: one module
     record(&mut dir, 0x0013, &0xFFFFu16.to_le_bytes()); // ProjectCookie
     record(&mut dir, 0x0019, b"Module1"); // MODULENAME
@@ -102,11 +112,13 @@ fn a_raw_chunk_comes_through_as_literals() {
 #[test]
 fn a_copy_token_copies_what_came_before() {
     // Three literals, then one copy token: flags 0b0000_1000 — bits 0..2 clear (literals),
-    // bit 3 set (copy). 12-bit offset and 4-bit length at difference < 16 — copying the three
-    // bytes before it.
+    // bit 3 set (copy). Per [MS-OVBA] §2.4.1.3.19.4 at difference 3 (≤ 16): 4 offset bits
+    // (the token's high bits) and 12 length bits (the low bits) — copying the three bytes
+    // before it.
     let mut chunk = vec![0x08, b'a', b'b', b'c'];
-    // difference 3 < 16: length bits 4, offset bits 12. offset 3 → stored 2; length 3 → stored 0.
-    let token = 2u16 << 4;
+    // difference 3: offset 3 → stored 2 (offset − 1, in the high 4 bits);
+    // length 3 → stored 0 (length − 3, in the low 12 bits).
+    let token = 2u16 << 12;
     chunk.extend(token.to_le_bytes());
     let mut container = vec![0x01];
     // The chunk is the data: the stored size is the data length - 1.
@@ -115,6 +127,30 @@ fn a_copy_token_copies_what_came_before() {
     container.extend(chunk);
     let round = wordcraft_docx::vba::decompress(&container, 1 << 20).unwrap();
     assert_eq!(round, b"abcabc".as_slice());
+}
+
+#[test]
+fn a_copy_token_at_the_16_byte_boundary_uses_four_offset_bits() {
+    // [MS-OVBA] §2.4.1.3.19.4: at difference == 16 the offset still takes 4 bits
+    // (ceil(log2(16)) = 4); a 5-bit table would decode real tokens wrong.
+    let literals: Vec<u8> = (0..16u32).map(|i| b'a' + (i % 26) as u8).collect();
+    let mut chunk = Vec::new();
+    for group in literals.chunks(8) {
+        chunk.push(0x00); // flag byte: eight literals
+        chunk.extend_from_slice(group);
+    }
+    // At difference 16: offset 16 → stored 15 (the token's high 4 bits),
+    // length 3 → stored 0 (the low 12 bits).
+    chunk.push(0x01); // flag byte: one copy token
+    chunk.extend(0xF000u16.to_le_bytes());
+    let mut container = vec![0x01];
+    let header = 0xB000u16 | (chunk.len() as u16 - 1);
+    container.extend(header.to_le_bytes());
+    container.extend(chunk);
+    let round = wordcraft_docx::vba::decompress(&container, 1 << 20).unwrap();
+    let mut expected = literals.clone();
+    expected.extend_from_slice(&literals[0..3]);
+    assert_eq!(round, expected);
 }
 
 #[test]
@@ -254,4 +290,7 @@ fn more_than_the_module_cap_is_truncated() {
     let project = wordcraft_docx::vba::project(&cfb_project(&compress(&dir), &module_stream(b""))).unwrap();
     assert_eq!(project.modules.len(), wordcraft_docx::vba::MAX_MODULES);
     assert!(project.truncated);
+    // A module beyond the cap is skipped whole: the last kept one keeps its own records.
+    assert_eq!(project.modules[255].stream_name, "Module255");
+    assert_eq!(project.modules[255].name, "Module255");
 }

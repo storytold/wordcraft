@@ -14,7 +14,6 @@ mod custom;
 mod flat;
 mod fonts;
 mod package;
-pub mod vba;
 mod read;
 mod smart_art;
 #[cfg(test)]
