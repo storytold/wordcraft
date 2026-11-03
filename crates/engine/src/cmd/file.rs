@@ -176,6 +176,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
+        CommandSpec::new("document.macros", "Macro Modules", "Agents", macros)
+            .params(r#"{"source"?: bool} → what word/vbaProject.bin carries (read-only, never run): modules with names, offsets and source lengths; "source": true adds each module's text"#)
+            .pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
             Ok(json!({"text": s.doc.final_text(story)}))
@@ -567,6 +570,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "comments": s.doc.comments.len(),
         "sections": s.doc.sections().len(),
         "encrypted": s.password.is_some(),
+        "hasMacros": crate::io::has_macros(&s.doc),
         "layoutMs": l.ms,
     }))
 }
@@ -636,6 +640,43 @@ fn inspect(s: &mut Session, v: &Value) -> CmdResult {
         "properties": s.doc.core,
         "canUndo": s.can_undo(),
         "canRedo": s.can_redo(),
+    }))
+}
+
+/// What `word/vbaProject.bin` carries, read-only ([MS-OVBA]): the modules it holds and — with
+/// `"source": true` — what they say. The project is never run; this exists so an agent or user
+/// can audit what a document would have run elsewhere.
+fn macros(s: &mut Session, v: &Value) -> CmdResult {
+    let Some(bytes) = s.doc.passthrough.get(wordcraft_docx::VBA_PROJECT_PART) else {
+        return Ok(json!({"hasMacros": false, "modules": []}));
+    };
+    let with_source = p::bool(v, "source").unwrap_or(false);
+    let project = wordcraft_docx::vba::project(bytes).map_err(|e| CmdError::Params(e.to_string()))?;
+    let modules: Vec<Value> = project
+        .modules
+        .iter()
+        .map(|m| {
+            let mut o = json!({
+                "name": m.name,
+                "streamName": m.stream_name,
+                "procedural": m.procedural,
+                "readOnly": m.read_only,
+                "private": m.private,
+                "textOffset": m.text_offset,
+                "sourceLen": m.source.as_ref().map_or(0, |t| t.chars().count()),
+                "truncated": m.truncated,
+            });
+            if with_source {
+                o["text"] = json!(m.source);
+            }
+            o
+        })
+        .collect();
+    Ok(json!({
+        "hasMacros": true,
+        "codePage": project.code_page,
+        "truncated": project.truncated,
+        "modules": modules,
     }))
 }
 

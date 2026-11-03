@@ -42,6 +42,7 @@ mod text_boxes;
 mod toc_ranges;
 mod twips_wrap;
 mod undefined_style;
+mod vba;
 mod vml_shapes;
 mod word_xml;
 mod wordml2003_write;

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 
+use serde_json::json;
 use wordcraft_doc::Document;
 use wordcraft_engine::io::{open_bytes, save_bytes};
 
@@ -472,4 +473,22 @@ fn vba_part_names_with_a_colon_stay_relative_references() {
         assert_package_consistent(&out);
         pkg = zip(&out);
     }
+}
+
+/// The macros audit (`document.macros`) reads what `word/vbaProject.bin` carries, read-only
+/// (#5444), and `file.info` flags a macro document. Nothing runs.
+#[test]
+fn the_macros_audit_reports_the_project_without_running_it() {
+    let mut doc = Document::from_text("Macro host\nSecond paragraph");
+    doc.passthrough.insert("word/vbaProject.bin".into(), std::sync::Arc::new(fake_vba()));
+    let mut s = wordcraft_engine::Session::new(doc);
+    assert_eq!(s.run("file.info", &json!({})).unwrap()["hasMacros"], true);
+    // fake_vba is not a readable project: the audit says an error, never a panic.
+    assert!(s.run("document.macros", &json!({})).is_err());
+    // A document without a project: no macros, and the audit reads nothing.
+    let mut plain = wordcraft_engine::Session::new(Document::from_text("Plain"));
+    assert_eq!(plain.run("file.info", &json!({})).unwrap()["hasMacros"], false);
+    let report = plain.run("document.macros", &json!({})).unwrap();
+    assert_eq!(report["hasMacros"], false);
+    assert_eq!(report["modules"], json!([]));
 }
