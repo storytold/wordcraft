@@ -280,7 +280,6 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     write_indentation(w, p);
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
     toggle(w, "w:mirrorIndents", p.mirror_indents);
-    toggle(w, "w:adjustRightInd", p.adjust_right_indent);
     if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
     }
@@ -367,6 +366,7 @@ fn write_text_flow(w: &mut W, p: &ParaProps) {
     toggle(w, "w:autoSpaceDE", p.auto_space_de);
     toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
+    toggle(w, "w:adjustRightInd", p.adjust_right_indent);
     toggle(w, "w:snapToGrid", p.snap_to_grid);
 }
 
