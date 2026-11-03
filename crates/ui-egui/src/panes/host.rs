@@ -74,7 +74,9 @@ pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
     match request {
         PaneRequest::Close(pane) => close(app, pane),
         PaneRequest::Place(Pane::Styles, place) => {
-            let dock = match mirrored(place) {
+            // Physical sides: the host is not RTL-flipped, and Dock Left / Dock Right mean the
+            // window's left and right (same as `ui.paneDock` / `view.stylesPaneDock`).
+            let dock = match place {
                 Place::Docked(Edge::Start) => "left",
                 Place::Docked(Edge::End) => "right",
                 Place::Floating => "float",
@@ -138,7 +140,8 @@ pub(crate) fn dock_command(app: &mut WordApp, p: &Value) -> Result<Value, String
     if let Some(dock) = dock {
         app.ui.pane_places.entry(key.into()).or_default().dock = Some(dock);
     }
-    let name = match mirrored(pane_state(app, pane).place) {
+    // Report the physical side the pane occupies (matches what was stored / requested).
+    let name = match pane_state(app, pane).place {
         Place::Docked(Edge::Start) => "left",
         Place::Floating => "float",
         Place::Docked(_) => "right",

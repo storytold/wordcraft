@@ -197,7 +197,9 @@ pub fn organizer(app: &mut WordApp, ui: &mut Ui, f: &mut OrganizerForm) -> bool 
         crate::rtl::vertical(ui, |ui| {
             ui.add_space(60.0);
             let w = vec2(96.0, 0.0);
-            copy = ui.add_enabled(!f.right.is_empty(), egui::Button::new(format!("◀ {}", tl!("Copy"))).min_size(w)).clicked();
+            // Point at the Document column (destination of copyFrom): left in LTR, right in RTL.
+            let copy_arrow = if crate::rtl::flows(ui) { "▶" } else { "◀" };
+            copy = ui.add_enabled(!f.right.is_empty(), egui::Button::new(format!("{copy_arrow} {}", tl!("Copy"))).min_size(w)).clicked();
             delete = ui.add_enabled(!left_builtin, egui::Button::new(tl!("Delete")).min_size(w)).clicked();
             rename = ui.add_enabled(!left_builtin, egui::Button::new(tl!("Rename…")).min_size(w)).clicked();
         });

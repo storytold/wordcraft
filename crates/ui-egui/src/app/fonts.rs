@@ -155,9 +155,9 @@ impl WordApp {
     /// face has changed since the last install.
     pub(super) fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
-        // An Arabic interface asks for an installed Arabic font when none is embedded; the installed
-        // CJK font is not read for it.
-        let system_arabic = lang.rtl();
+        // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
+        // another interface language, asks for an installed Arabic font when none is embedded.
+        let system_arabic = lang.rtl() || self.want_system_arabic;
         if !self.styled
             || lang.prefers_hans() != self.fonts_hans
             || lang.prefers_korean() != self.fonts_korean
