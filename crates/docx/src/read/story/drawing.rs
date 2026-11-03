@@ -129,18 +129,22 @@ impl Reader<'_> {
         Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
     }
 
-    /// [`Self::drawing_link`] for native ink or an Office 2016 chart kept with its fallback
-    /// (`mc:AlternateContent`): the link on its choice's drawing, else on its fallback's.
-    pub(super) fn alternate_link(ac: &El, rels: &Rels) -> Option<String> {
-        ac.els()
-            .filter(|e| matches!(e.name.as_str(), "mc:Choice" | "mc:Fallback"))
-            .filter_map(|e| e.child("w:drawing"))
-            .find_map(|d| Self::drawing_link(d, rels))
+    /// Native ink or an Office 2016 chart kept with its fallback (`mc:AlternateContent`), and the
+    /// [`Self::drawing_link`] of the choice it was read from, else of its fallback: another
+    /// choice's link is not this object's.
+    pub(super) fn read_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
+        let (object, choice) = match self.read_ink_alternate(sc, ac, rels) {
+            Some(o) => (o, children_of_choice(ac).filter(|e| e.name == "mc:Choice")),
+            None => (self.read_chartex_alternate(sc, ac, rels)?, chartex_choice(ac)),
+        };
+        let link =
+            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| Self::drawing_link(d, rels));
+        Some((object, link))
     }
 
     /// Keep the selected native-ink branch and its picture fallback as one object. Reading only
     /// the fallback flattens the ink; reading only the choice loses its preview on the next save.
-    pub(super) fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
+    fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
         let choice = children_of_choice(ac).filter(|e| e.name == "mc:Choice")?;
         let drawing = choice.child("w:drawing")?;
         if drawing.find("a:graphicData")?.attr("uri") != Some(INK_URI) {
@@ -169,10 +173,8 @@ impl Reader<'_> {
     /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) drawn from its
     /// fallback picture, keeping both branches so saving writes the chart back rather than only
     /// the picture. `None` (read the fallback alone) when it can't be kept whole.
-    pub(super) fn read_chartex_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
-        let choice = ac
-            .children("mc:Choice")
-            .find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))?;
+    fn read_chartex_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
+        let choice = chartex_choice(ac)?;
         // A requirement in a namespace we can't name couldn't be written back.
         let requires = choice.attr("Requires").unwrap_or("");
         if requires.split_whitespace().next().is_none() || requires.split_whitespace().any(|p| p == "?") {
@@ -581,6 +583,11 @@ impl Reader<'_> {
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
+}
+
+/// The `mc:Choice` holding an Office 2016 chart (`cx:chart`) in an `mc:AlternateContent`.
+fn chartex_choice(ac: &El) -> Option<&El> {
+    ac.children("mc:Choice").find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))
 }
 
 /// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376
