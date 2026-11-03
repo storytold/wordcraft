@@ -67,7 +67,8 @@ pub(crate) use reading::turn_read_page;
 #[cfg(test)]
 use reading::{READ_NAV_BAR, RESIZE_SETTLE, place_read_pages};
 use reading::{
-    Settle, read_wheel_turns, reading_anchor_page, reading_animation_step, reading_page_start, reading_size, reading_viewport, web_layout_width,
+    Settle, read_touch_turns, read_wheel_turns, reading_anchor_page, reading_animation_step, reading_page_start, reading_size, reading_viewport,
+    web_layout_width,
 };
 use rulers::rulers;
 #[cfg(test)]
@@ -624,29 +625,34 @@ struct ScrollMotion {
     middle: egui::Vec2,
 }
 
-/// A finger's horizontal travel turns reading columns like a touchpad's pixels: 55 points a
-/// column, discarding the excess so a long swipe doesn't turn several at once on the next move.
-fn read_touch_turns(dx: f32, accum: &mut f32) -> i32 {
-    if !dx.is_finite() {
-        return 0;
-    }
-    *accum = (*accum + dx).clamp(-300.0, 300.0);
-    if accum.abs() >= 55.0 {
-        let turns = -accum.signum() as i32;
-        *accum = 0.0;
-        turns
-    } else {
-        0
-    }
-}
-
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
+    // Touch first: a finger produces pointer events, not wheel events. eframe's web runner also
+    // runs a frame inside pointerdown, before touchstart, so adopt a press when the finger's
+    // Touch Start arrives a frame later (#1503).
+    let touch_start = ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => Some(*pos),
+            _ => None,
+        })
+    });
+    if let Some(pos) = touch_start
+        && app.canvas.touch.adopt(pos, ui.input(|i| i.time))
+    {
+        // The pointerdown frame may have started a text, object or table drag: the finger owns
+        // the gesture now (#1503, #2155).
+        app.canvas.cancel_pointer_drags();
+    }
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
     let long_press = ui.ctx().options(|o| o.input_options).max_click_duration;
     let mut touch_delta = ui.input(|i| app.canvas.touch.advance(i, i.unstable_dt, long_press, !app.session.view.read_mode));
+    if let Some(before) = app.canvas.touch.take_restore() {
+        app.session.sel = before;
+        // A pan (or a pinch) is not the first tap of a double-tap.
+        app.canvas.last_press = None;
+    }
     let wheel_delta = if app.session.view.read_mode {
         // A finger's horizontal travel turns reading columns like a touchpad's — but a dialog
         // owns the pointer, and a swipe must not turn the page behind it.

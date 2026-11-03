@@ -94,9 +94,34 @@ fn apply_format_painter(app: &mut WordApp) {
 /// handles, then page hit testing, outlines, headers and footers, equations, selection and caret
 /// interaction.
 pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
-    let Some(pointer) = route_pointer_targets(app, ui, resp, rects, layout, scale) else {
+    // A finger lifted: end a selection it started, and let the format painter apply as it does
+    // on a mouse release.
+    let touch_release = app.canvas.touch.take_release();
+    if touch_release.is_some() {
+        if app.canvas.dragging {
+            app.canvas.cancel_text_drag();
+            if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
+                let _ = app.run("edit.pasteFormat", json!({}));
+            }
+        }
+        // A double-tap still selects a word (and a triple-tap a paragraph); every other finger
+        // release ends here.
+        if !resp.double_clicked() && !resp.triple_clicked() {
+            return;
+        }
+    }
+    // A finger owns the page: it pans, or waits for a long press. Never start a text drag from
+    // it (#1503, #2155). A pointer release may arrive a frame before the finger's `Touch End`
+    // (the web runner runs a frame inside `pointerup`), so let that frame through: its click or
+    // double-click is what a tap ends with.
+    let releasing = ui.input(|i| i.pointer.primary_released());
+    if app.canvas.touch.panning() || app.canvas.touch.pinching() || (app.canvas.touch.down() && !app.canvas.touch.selecting() && !releasing) {
+        return;
+    }
+    let Some(route) = route_pointer_targets(app, ui, resp, rects, layout, scale, touch_release) else {
         return;
     };
+    let pointer = route.pointer;
     // While drag-selecting, the pointer may sit past the viewport's edge (or the window's):
     // hit-test where it would be inside the view, so as the edge auto-scroll moves the content the
     // selection keeps growing under a stationary pointer (#688).
@@ -104,38 +129,99 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
         && ui.input(|i| i.pointer.primary_down())
         && let Some(vp) = app.canvas.viewport
     {
-        vp.clamp(pointer)
+        pointer.map(|pnt| vp.clamp(pnt))
     } else {
         pointer
     };
+    let Some(p) = p else { return };
     let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
+    // A long press starts a selection where the finger rests; moving now extends it (below).
+    if app.canvas.touch.selecting() && !app.canvas.touch.selection_started() {
+        app.canvas.touch.mark_selection_started();
+        app.canvas.last_press = None;
+        if let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story) {
+            app.session.sel = wordcraft_engine::Selection::caret(pos);
+            app.session.page_hint = page;
+        }
+        app.canvas.dragging = true;
+        return;
+    }
     let story = app.session.sel.focus.story;
-    handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
+    handle_page_pointer(
+        app,
+        PagePointer { ui, resp, layout, p, page, x, y, story, pressed: route.pressed, finger: route.finger, finger_press: route.finger_press },
+    );
 }
 
-fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
+/// Where the pointer is this frame, plus the press state the page handlers reuse: a finger's
+/// press is armed here, before any object or table handler can take the same press and start a
+/// drag from it (#1503, #2155).
+struct PointerRoute {
+    pointer: Option<Pos2>,
+    pressed: bool,
+    finger: bool,
+    finger_press: bool,
+}
+
+fn route_pointer_targets(
+    app: &mut WordApp,
+    ui: &Ui,
+    resp: &egui::Response,
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+    touch_release: Option<Pos2>,
+) -> Option<PointerRoute> {
     // A pen or the eraser (Draw tab) owns the pointer.
     if crate::ink::pointer(app, ui, resp, rects, layout, scale) {
         return None;
     }
-    let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
+    let pointer = if app.canvas.touch.selecting() {
+        // egui's long-touch is a click, not a drag: it stops reporting an interaction position
+        // after the flag fired, but the finger's position is still what the selection follows.
+        ui.input(|i| i.pointer.latest_pos())
+    } else {
+        resp.interact_pointer_pos().or_else(|| resp.hover_pos()).or_else(|| {
+            // egui-winit sends `PointerGone` with a touch's end, so a double-tap's click has no
+            // pointer position left by the time the word is selected.
+            if resp.double_clicked() || resp.triple_clicked() { touch_release } else { None }
+        })
+    };
     // An object (or crop handle) drag follows the pointer anywhere until it's released.
     let dragging = app.canvas.obj_drag.is_some() || app.canvas.crop_drag.is_some();
     let object_pointer = pointer.or_else(|| dragging.then(|| ui.input(|i| i.pointer.latest_pos())).flatten());
-    if let Some(at) = object_pointer
-        && crate::objects::pointer(app, ui, resp, rects, layout, scale, at)
-    {
-        return None;
+    // A finger press owns the page before any object or table handler can take the same press
+    // and start a drag from it: a swipe must pan, not move an object or resize a table (#1503,
+    // #2155). Arm first, before any branch below can return: eframe's web runner runs a frame
+    // inside pointerdown, before touchstart, and the finger's `Touch Start` next frame adopts
+    // the press and undoes the drag it started (#1503).
+    let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() && pointer.is_some_and(|at| !over_balloon(app, at));
+    let finger = ui.input(|i| i.any_touches());
+    let finger_press = pressed && finger && !app.canvas.touch.down() && !app.canvas.touch.pinching();
+    if pressed && let Some(p) = pointer {
+        let now = ui.input(|i| i.time);
+        app.canvas.touch.arm(p, now, app.session.sel.clone());
+        if finger_press {
+            app.canvas.cancel_pointer_drags();
+            app.canvas.touch.press(p, app.session.sel.clone());
+        }
     }
-    // A press on a table border (or the table's resize handle) drags it instead of the caret.
-    if crate::table_resize::pointer(app, ui, resp, rects, layout, scale) {
-        return None;
+    if !finger_press {
+        if let Some(at) = object_pointer
+            && crate::objects::pointer(app, ui, resp, rects, layout, scale, at)
+        {
+            return None;
+        }
+        // A press on a table border (or the table's resize handle) drags it instead of the caret.
+        if crate::table_resize::pointer(app, ui, resp, rects, layout, scale) {
+            return None;
+        }
+        // A press on a table's selection area, insert button or move handle.
+        if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
+            return None;
+        }
     }
-    // A press on a table's selection area, insert button or move handle.
-    if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
-        return None;
-    }
-    pointer
+    Some(PointerRoute { pointer, pressed, finger, finger_press })
 }
 
 #[derive(Clone, Copy)]
@@ -148,10 +234,17 @@ struct PagePointer<'a> {
     x: f32,
     y: f32,
     story: StoryRef,
+    /// A press this frame (moved out of `handle_page_pointer` so the finger's press can be
+    /// armed before any object or table handler can take it, #1503, #2155).
+    pressed: bool,
+    /// The pointer belongs to a finger (`any_touches`).
+    finger: bool,
+    /// A finger press that starts its own gesture (not one the touch state already owns).
+    finger_press: bool,
 }
 
 fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
-    let PagePointer { ui, resp, layout, p, page, x, y, story, .. } = pointer;
+    let PagePointer { ui, layout, p, page, x, y, story, pressed, .. } = pointer;
     let mods = ui.input(|i| i.modifiers);
     if skip_equation_or_outline(app, &pointer) {
         return;
@@ -166,7 +259,6 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         None
     };
     let hf_enter = enters_header_footer(app, story, hf_zone);
-    let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() && !over_balloon(app, p);
     // The equation frame's grip and options strip stay in the equation (the strip's click opens
     // its menu, in `show`).
     if pressed && on_frame {
@@ -320,8 +412,12 @@ fn handle_primary_press(
             let (start, end) = app.session.sel.ordered();
             (unit, start, end)
         };
-        app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
-        app.canvas.dragging = true;
+        // A finger selects the line on a tap, but its gesture owns the movement: never
+        // start a mouse drag-select from it.
+        if !pointer.finger {
+            app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
+            app.canvas.dragging = true;
+        }
         return;
     }
     let Some(pos) = layout.hit(page, x, y, story) else { return };
@@ -343,11 +439,21 @@ fn handle_primary_press(
     }
     let pj = serde_json::to_value(&pos).unwrap_or_default();
     // Alt+drag selects a column (block) of text.
-    if mods.alt && !mods.shift && !mods.command {
+    if mods.alt && !mods.shift && !mods.command && !pointer.finger {
         let _ = app.run("caret.set", json!({"pos": pj}));
         app.session.page_hint = page;
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
+        return;
+    }
+    // A finger: the press above began its gesture; a tap places the caret, a drag pans (the
+    // gesture owns the movement above), and a long press selects (above). Never start a
+    // mouse drag-select here (#1503, #2155).
+    if pointer.finger {
+        if pointer.finger_press {
+            let _ = app.run("caret.set", json!({"pos": pj}));
+            app.session.page_hint = page;
+        }
         return;
     }
     app.canvas.column_drag = None;
