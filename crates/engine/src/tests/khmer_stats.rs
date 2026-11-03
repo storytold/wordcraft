@@ -76,3 +76,16 @@ fn khmer_word_counts_reach_fields_and_saved_docx_metadata() {
     zip.by_name("docProps/app.xml").unwrap().read_to_string(&mut xml).unwrap();
     assert!(xml.contains(&format!("<Words>{n}</Words>")), "{xml}");
 }
+
+/// Formatting runs do not split words: bold that starts inside a word still counts it once.
+#[test]
+fn khmer_word_split_by_a_formatting_run_counts_as_one_word() {
+    let n = if wordcraft_proof::khmer::data_available() { 4 } else { 1 };
+    let split = "ខ្ញុំស្រឡាញ់ភា".len();
+    assert!(PHRASE.is_char_boundary(split) && PHRASE[..split].ends_with('ា'));
+    let mut s = crate::Session::new(Document::from_text(PHRASE));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, split), "focus": Pos::body(0, PHRASE.len())}));
+    run(&mut s, "format.bold", json!({}));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).unwrap().runs.len() > 1, "the word really is split across runs");
+    assert_eq!(s.word_count(), n);
+}

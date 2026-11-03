@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "craft-khmer"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eaee2204c9bcaed2788afe12d2ec96cb2759db55#eaee2204c9bcaed2788afe12d2ec96cb2759db55"
+source = "git+https://github.com/storytold/craft-libs?rev=b0a7897a7d46b0fe290ce39b4644271d79807883#b0a7897a7d46b0fe290ce39b4644271d79807883"
 dependencies = [
  "brotli",
  "brotli-decompressor",
@@ -1116,7 +1116,7 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=eaee2204c9bcaed2788afe12d2ec96cb2759db55#eaee2204c9bcaed2788afe12d2ec96cb2759db55"
+source = "git+https://github.com/storytold/craft-libs?rev=b0a7897a7d46b0fe290ce39b4644271d79807883#b0a7897a7d46b0fe290ce39b4644271d79807883"
 dependencies = [
  "craft-khmer",
  "log",

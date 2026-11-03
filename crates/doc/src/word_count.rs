@@ -21,13 +21,28 @@ pub fn count_words(text: &str) -> usize {
 // Counts recur on every document edit and in multiple statistics surfaces. Cache
 // complete paragraph text, so changes to public fields cannot leave a stale count.
 // Bound retained text and entry count; unusually large paragraphs are not cached.
-const MAX_TEXT: usize = 8 * 1024 * 1024;
-const MAX_ENTRIES: usize = 4096;
+// Saturation stops admission rather than evicting existing paragraphs: sequential
+// scans of a document larger than the cache must retain the hits that fit. This
+// bounded memo keeps those entries until process exit; it is not an LRU cache.
+const MAX_TEXT: usize = 64 * 1024 * 1024;
+const MAX_ENTRIES: usize = 1 << 18;
 const MAX_PARAGRAPH: usize = 64 * 1024;
 #[derive(Default)]
 struct Counts {
     words: HashMap<String, usize>,
     bytes: usize,
+}
+impl Counts {
+    fn remember(&mut self, text: &str, words: usize) {
+        self.remember_with_limits(text, words, MAX_ENTRIES, MAX_TEXT);
+    }
+    fn remember_with_limits(&mut self, text: &str, words: usize, max_entries: usize, max_text: usize) {
+        if self.words.contains_key(text) || self.words.len() >= max_entries || self.bytes.saturating_add(text.len()) > max_text {
+            return;
+        }
+        self.bytes = self.bytes.saturating_add(text.len());
+        self.words.insert(text.to_owned(), words);
+    }
 }
 fn counts() -> &'static Mutex<Counts> {
     static COUNTS: OnceLock<Mutex<Counts>> = OnceLock::new();
@@ -44,19 +59,18 @@ fn khmer_words(text: &str) -> usize {
     // cache hits for the duration of segmentation.
     let words = segmented_words(text);
     if text.len() <= MAX_PARAGRAPH {
-        let mut cache = counts().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cache.words.contains_key(text) {
-            if cache.words.len() >= MAX_ENTRIES || cache.bytes.saturating_add(text.len()) > MAX_TEXT {
-                cache.words.clear();
-                cache.bytes = 0;
-            }
-            cache.bytes = cache.bytes.saturating_add(text.len());
-            cache.words.insert(text.to_owned(), words);
-        }
+        counts().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remember(text, words);
     }
     words
 }
+#[cfg(test)]
+thread_local! {
+    // Per-thread instrumentation isolates cache reuse assertions from parallel tests.
+    static SEGMENTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 fn segmented_words(text: &str) -> usize {
+    #[cfg(test)]
+    SEGMENTATIONS.with(|n| n.set(n.get().saturating_add(1)));
     let mut words = 0usize;
     let mut end = 0;
     for range in wordcraft_proof::khmer::word_ranges(text) {
@@ -115,6 +129,70 @@ mod tests {
             let words = wordcraft_proof::khmer::line_breaks(PHRASE).len() + 1;
             assert_eq!(count_words(PHRASE), words);
         }
+    }
+    /// A document many times larger than a long book keeps every paragraph for its next count.
+    #[test]
+    fn a_large_document_keeps_its_paragraphs_cached_between_counts() {
+        let mut cache = Counts::default();
+        let paragraphs: Vec<String> = (0..20_000).map(|n| format!("ខ្មែរ {n}")).collect();
+        for _ in 0..2 {
+            for paragraph in &paragraphs {
+                cache.remember(paragraph, 2);
+            }
+        }
+        assert_eq!(cache.words.len(), paragraphs.len(), "no entry was cleared before its next use");
+        assert!(paragraphs.iter().all(|paragraph| cache.words.contains_key(paragraph)));
+        let bytes: usize = paragraphs.iter().map(String::len).sum();
+        assert_eq!(cache.bytes, bytes, "a repeated paragraph is not charged twice");
+    }
+    #[test]
+    fn saturated_cache_preserves_reuse_across_scans_and_bounds_memory() {
+        // Exceed both budgets independently without allocating production-sized caches.
+        for (max_entries, max_text) in [(64, usize::MAX), (usize::MAX, 256)] {
+            let paragraphs: Vec<_> = (0..256).map(|n| format!("ខ្មែរ {n}")).collect();
+            let mut cache = Counts::default();
+            for text in &paragraphs {
+                cache.remember_with_limits(text, 2, max_entries, max_text);
+            }
+            let retained = cache.words.len();
+            let bytes = cache.bytes;
+            assert!(retained > 0 && retained < paragraphs.len());
+            let mut hits = 0;
+            for _ in 0..3 {
+                for text in &paragraphs {
+                    hits += usize::from(cache.words.contains_key(text));
+                    cache.remember_with_limits(text, 2, max_entries, max_text);
+                }
+                assert_eq!((cache.words.len(), cache.bytes), (retained, bytes));
+            }
+            assert_eq!(hits, retained * 3, "a sequential scan cannot evict all earlier hits");
+            assert!(cache.words.len() <= max_entries && cache.bytes <= max_text);
+            assert_eq!(cache.bytes, cache.words.keys().map(String::len).sum::<usize>());
+        }
+    }
+    #[test]
+    fn repeated_large_document_counts_segment_only_changed_paragraphs() {
+        if !wordcraft_proof::khmer::data_available() {
+            return;
+        }
+        // This goes through Document::word_count, not just cache insertion, and
+        // exceeds the old 4,096-entry limit several times over.
+        let paragraphs: Vec<_> = (0..20_000).map(|n| format!("ខ្មែរ full-scan-regression-{n}")).collect();
+        let mut doc = crate::Document::from_text(&paragraphs.join("\n"));
+        let calls = || SEGMENTATIONS.with(std::cell::Cell::get);
+        let before = calls();
+        assert_eq!(doc.word_count(), 40_000);
+        assert_eq!(calls() - before, paragraphs.len(), "cold count segments each paragraph once");
+        let warm = calls();
+        assert_eq!(doc.word_count(), 40_000);
+        assert_eq!(doc.word_count(), 40_000);
+        assert_eq!(calls(), warm, "warm full scans reuse every unchanged paragraph");
+        doc.para_mut(crate::StoryRef::Body, &crate::Path::top(0)).unwrap().text.push_str(" extra");
+        assert_eq!(doc.word_count(), 40_001);
+        assert_eq!(calls(), warm + 1, "an edit segments only the changed paragraph");
+        assert_eq!(doc.word_count(), 40_001);
+        assert_eq!(calls(), warm + 1, "the edited paragraph is cached for subsequent scans too");
+        eprintln!("large-document cache: {} cold segmentations; 0 on repeated scans; 1 after an edit", warm - before);
     }
     #[test]
     fn mixed_scripts_numbers_and_newlines_keep_their_counts() {
