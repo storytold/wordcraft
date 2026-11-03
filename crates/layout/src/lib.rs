@@ -305,6 +305,12 @@ pub struct DocLayout {
     pub text_boxes: usize,
 }
 
+/// Word excludes a zero-numbered title page from NUMPAGES (MS-OI29500 §2.1.489).
+fn num_pages(doc: &Document, physical: u32) -> u32 {
+    let omit_title = doc.sections().first().is_some_and(|(_, s)| s.title_page && s.page_num_start == Some(0));
+    physical.saturating_sub(u32::from(omit_title))
+}
+
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
     let t0 = now_ms();

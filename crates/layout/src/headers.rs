@@ -246,7 +246,7 @@ pub(crate) fn marks_key(marks: &fields::BookmarkPages) -> u64 {
 }
 
 pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
-    let total = pages.len() as u32;
+    let total = super::num_pages(ctx.doc, pages.len() as u32);
     let hf = Arc::clone(&ctx.hf);
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));

@@ -79,7 +79,7 @@ fn new_ctx<'a>(
         counters: Counters::default(),
         fields: FieldCtx {
             page: 1,
-            pages: totals.pages,
+            pages: super::num_pages(doc, totals.pages),
             section_pages: totals.section(0),
             section: 1,
             notes: Arc::new(notes),
