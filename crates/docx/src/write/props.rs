@@ -24,9 +24,9 @@ fn round(v: f32) -> i64 {
 fn cell_spacing(w: &mut W, spacing: CellSpacing) {
     let max = match spacing.kind {
         wordcraft_doc::props::CellSpacingKind::Pct => 50_000,
-        wordcraft_doc::props::CellSpacingKind::Dxa
-        | wordcraft_doc::props::CellSpacingKind::Auto
-        | wordcraft_doc::props::CellSpacingKind::Nil => 31_680,
+        wordcraft_doc::props::CellSpacingKind::Dxa | wordcraft_doc::props::CellSpacingKind::Auto | wordcraft_doc::props::CellSpacingKind::Nil => {
+            31_680
+        }
     };
     w.empty("w:tblCellSpacing", &[("w:w", &spacing.width.min(max).to_string()), ("w:type", spacing.kind.ooxml())]);
 }
