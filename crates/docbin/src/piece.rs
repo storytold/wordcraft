@@ -188,6 +188,7 @@ impl PieceTable {
 }
 
 /// What a piece's `Prm` refers to.
+#[derive(Clone, Copy)]
 pub(crate) enum PrmRef<'a> {
     None,
     /// Prm0: a short sprm index into the isprm table, with a 1-byte operand.

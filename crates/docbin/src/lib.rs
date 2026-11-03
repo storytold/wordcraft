@@ -566,7 +566,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
                 }
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-                pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, &CharProps::default());
+                let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                pb.mark = char_props(chpx, ctx.fonts, &CharProps::default());
+                // A tracked paragraph mark: an inserted or deleted paragraph break.
+                ctx.revs.mark(&mut pb.mark, chpx, ctx.pieces.piece_prm(cp));
                 let done = std::mem::take(&mut pb);
                 out.push(ParaOut {
                     para: Paragraph {
@@ -870,8 +873,9 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
                 }
             };
             let mut props = char_props(grpprl, ctx.fonts, base);
-            apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
-            ctx.revs.mark(&mut props, grpprl);
+            let piece_prm = ctx.pieces.piece_prm(cp);
+            apply_prm(&mut props, piece_prm, ctx.fonts, base, ctx.work);
+            ctx.revs.mark(&mut props, grpprl, piece_prm);
             *memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props: props.clone() });
             props
         }

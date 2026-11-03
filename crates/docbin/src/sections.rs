@@ -13,6 +13,7 @@ const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
+const S_PGN_RESTART: u16 = 0x3011; // sprmSFPgnRestart
 const S_PGN_START: u16 = 0x501C; // sprmSPgnStart97
 const S_NFC_PGN: u16 = 0x300E;
 const S_DXA_COLUMNS: u16 = 0x900C;
@@ -49,35 +50,45 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
         let Some(end_cp) = cp_at(i + 1) else { break };
         let sed_at = (n + 1) * 4 + i * 12;
         let fc_sepx = plc.get(sed_at + 2..sed_at + 6).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0xFFFF_FFFF);
-        let mut props = SectionProps::default();
         // Sepx: cb u16, then a grpprl of section sprms.
-        let mut explicit_orient = false;
-        if let Some(grpprl) =
-            word.get(fc_sepx as usize..).and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)).and_then(|cb| {
-                let at = (fc_sepx as usize).checked_add(2)?;
-                word.get(at..at.checked_add(cb)?)
-            })
-        {
-            for prl in sprm::iter(grpprl) {
-                // Only a defined operand counts as explicit; anything else leaves the
-                // orientation to the page shape.
-                if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
-                    explicit_orient = true;
-                }
-                apply_section(&mut props, &prl);
-            }
-        }
-        // Without an explicit orientation sprm, infer it from the page shape.
-        if !explicit_orient {
-            if props.page_w < props.page_h {
-                props.landscape = false;
-            } else if props.page_w > props.page_h {
-                props.landscape = true;
-            }
-        }
-        out.push(Section { end_cp, props });
+        let grpprl = word.get(fc_sepx as usize..).and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)).and_then(|cb| {
+            let at = (fc_sepx as usize).checked_add(2)?;
+            word.get(at..at.checked_add(cb)?)
+        });
+        out.push(Section { end_cp, props: sepx_props(grpprl.unwrap_or_default()) });
     }
     out
+}
+
+/// A section's properties from its Sepx grpprl.
+fn sepx_props(grpprl: &[u8]) -> SectionProps {
+    let mut props = SectionProps::default();
+    let (mut explicit_orient, mut restart) = (false, false);
+    for prl in sprm::iter(grpprl) {
+        // Only a defined operand counts as explicit; anything else leaves the
+        // orientation to the page shape.
+        if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
+            explicit_orient = true;
+        }
+        if prl.op == S_PGN_RESTART {
+            restart = prl.operand.first().is_some_and(|&v| v != 0);
+        }
+        apply_section(&mut props, &prl);
+    }
+    // The start number counts only when the section restarts its page numbers
+    // ([MS-DOC] sprmSPgnStart97), whichever of the two comes first.
+    if !restart {
+        props.page_num_start = None;
+    }
+    // Without an explicit orientation sprm, infer it from the page shape.
+    if !explicit_orient {
+        if props.page_w < props.page_h {
+            props.landscape = false;
+        } else if props.page_w > props.page_h {
+            props.landscape = true;
+        }
+    }
+    props
 }
 
 /// Apply a section sprm to the model's section properties. All the measurement sprms here
@@ -211,4 +222,22 @@ pub(crate) fn header_stories(table: &[u8], fib: &Fib) -> Vec<(u32, u32)> {
         }
     }
     stories
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// sprmSPgnStart97 alone doesn't restart the numbering: only with sprmSFPgnRestart on, in
+    /// either order.
+    #[test]
+    fn a_page_number_start_counts_only_with_a_restart() {
+        let start = [0x1C, 0x50, 5, 0];
+        let restart = [0x11, 0x30, 1];
+        let off = [0x11, 0x30, 0];
+        assert_eq!(sepx_props(&start).page_num_start, None);
+        assert_eq!(sepx_props(&[&off[..], &start].concat()).page_num_start, None);
+        assert_eq!(sepx_props(&[&restart[..], &start].concat()).page_num_start, Some(5));
+        assert_eq!(sepx_props(&[&start[..], &restart].concat()).page_num_start, Some(5));
+    }
 }

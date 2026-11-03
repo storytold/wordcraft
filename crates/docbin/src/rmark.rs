@@ -9,6 +9,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Revision, RevisionKind};
 
 use crate::fib::Fib;
+use crate::piece::PrmRef;
 use crate::sprm;
 
 const C_RMARK_DEL: u16 = 0x0800;
@@ -42,28 +43,31 @@ impl Revisions {
         Revisions { authors, list: RefCell::new(Vec::new()), index: RefCell::new(HashMap::new()) }
     }
 
-    /// Set `props.ins` / `props.del` from the revision marks in `grpprl`.
-    pub(crate) fn mark(&self, props: &mut CharProps, grpprl: &[u8]) {
-        let (mut ins, mut del) = (false, false);
-        let (mut ibst_ins, mut dttm_ins, mut ibst_del, mut dttm_del) = (0u16, 0u32, 0u16, 0u32);
+    /// Set `props.ins` / `props.del` from the revision marks of a run: those in its CHPX
+    /// `grpprl`, then those of its piece's `prm`, which apply after the CHPX's.
+    pub(crate) fn mark(&self, props: &mut CharProps, grpprl: &[u8], prm: PrmRef<'_>) {
+        let mut m = Marks::default();
         for prl in sprm::iter(grpprl) {
-            let u16v = || prl.operand.get(..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
-            let u32v = || prl.operand.get(..4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-            match prl.op {
-                C_RMARK_INS => ins = prl.operand.first().is_some_and(|&v| v == 1 || v == 0x81),
-                C_RMARK_DEL => del = prl.operand.first().is_some_and(|&v| v == 1 || v == 0x81),
-                C_IBST_RMARK => ibst_ins = u16v(),
-                C_DTTM_RMARK => dttm_ins = u32v(),
-                C_IBST_RMARK_DEL => ibst_del = u16v(),
-                C_DTTM_RMARK_DEL => dttm_del = u32v(),
-                _ => {}
+            m.apply(prl.op, prl.operand);
+        }
+        match prm {
+            PrmRef::Sprm0 { isprm, val } => {
+                if let Some(op) = sprm::from_prm0(isprm) {
+                    m.apply(op, &[val]);
+                }
             }
+            PrmRef::Grpprl(Some(g)) => {
+                for prl in sprm::iter(g) {
+                    m.apply(prl.op, prl.operand);
+                }
+            }
+            PrmRef::Grpprl(None) | PrmRef::None => {}
         }
-        if ins {
-            props.ins = self.id(true, ibst_ins, dttm_ins);
+        if m.ins {
+            props.ins = self.id(true, m.ibst_ins, m.dttm_ins);
         }
-        if del {
-            props.del = self.id(false, ibst_del, dttm_del);
+        if m.del {
+            props.del = self.id(false, m.ibst_del, m.dttm_del);
         }
     }
 
@@ -90,6 +94,33 @@ impl Revisions {
     }
 }
 
+/// The revision-mark sprms seen so far for one run, a later one replacing an earlier one.
+#[derive(Default)]
+struct Marks {
+    ins: bool,
+    del: bool,
+    ibst_ins: u16,
+    dttm_ins: u32,
+    ibst_del: u16,
+    dttm_del: u32,
+}
+
+impl Marks {
+    fn apply(&mut self, op: u16, operand: &[u8]) {
+        let u16v = || operand.get(..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+        let u32v = || operand.get(..4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        match op {
+            C_RMARK_INS => self.ins = operand.first().is_some_and(|&v| v == 1 || v == 0x81),
+            C_RMARK_DEL => self.del = operand.first().is_some_and(|&v| v == 1 || v == 0x81),
+            C_IBST_RMARK => self.ibst_ins = u16v(),
+            C_DTTM_RMARK => self.dttm_ins = u32v(),
+            C_IBST_RMARK_DEL => self.ibst_del = u16v(),
+            C_DTTM_RMARK_DEL => self.dttm_del = u32v(),
+            _ => {}
+        }
+    }
+}
+
 /// A `DTTM` ([MS-DOC] §2.9.75) as an ISO 8601 UTC time; empty for 0 or an impossible date.
 pub(crate) fn dttm_iso(d: u32) -> String {
     if d == 0 {
@@ -103,5 +134,48 @@ pub(crate) fn dttm_iso(d: u32) -> String {
     match chrono::NaiveDate::from_ymd_opt(year, month, day).and_then(|date| date.and_hms_opt(hour, minute, 0)) {
         Some(t) => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn revisions() -> Revisions {
+        Revisions { authors: vec!["Ada".into(), "Grace".into()], list: RefCell::new(Vec::new()), index: RefCell::new(HashMap::new()) }
+    }
+
+    fn marked(chpx: &[u8], prm: PrmRef<'_>) -> (CharProps, Vec<Revision>) {
+        let r = revisions();
+        let mut props = CharProps::default();
+        r.mark(&mut props, chpx, prm);
+        (props, r.take())
+    }
+
+    const INS: [u8; 3] = [0x01, 0x08, 1];
+    const NOT_INS: [u8; 3] = [0x01, 0x08, 0];
+    /// sprmCFRMarkDel on, by the author at index 1.
+    const DEL_BY_GRACE: [u8; 7] = [0x00, 0x08, 1, 0x63, 0x48, 1, 0];
+
+    #[test]
+    fn a_piece_prm_marks_a_run() {
+        // Prm1: a grpprl from the piece table's Prc.
+        let (p, revs) = marked(&[], PrmRef::Grpprl(Some(&DEL_BY_GRACE)));
+        assert_eq!(p.del, Some(0));
+        assert_eq!((revs[0].kind, revs[0].author.as_str()), (RevisionKind::Delete, "Grace"));
+        // Prm0: sprmCFRMarkIns by its isprm.
+        let (p, revs) = marked(&[], PrmRef::Sprm0 { isprm: 0x42, val: 1 });
+        assert_eq!(p.ins, Some(0));
+        assert_eq!((revs[0].kind, revs[0].author.as_str()), (RevisionKind::Insert, "Ada"));
+    }
+
+    #[test]
+    fn the_piece_prm_applies_after_the_chpx() {
+        let (p, _) = marked(&INS, PrmRef::Grpprl(Some(&NOT_INS)));
+        assert_eq!(p.ins, None, "the Prm turns the CHPX's insertion off");
+        let (p, _) = marked(&NOT_INS, PrmRef::Sprm0 { isprm: 0x42, val: 1 });
+        assert_eq!(p.ins, Some(0));
+        let (p, _) = marked(&INS, PrmRef::None);
+        assert_eq!(p.ins, Some(0));
     }
 }

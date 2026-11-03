@@ -397,6 +397,30 @@ fn tracked_changes_round_trip() {
     let del = q.props_at(12).del.and_then(|i| r.revisions.get(i as usize)).expect("a deletion");
     assert_eq!((del.kind, del.author.as_str(), del.date.as_str()), (RevisionKind::Delete, "Grace", "2025-03-05T10:20:00Z"));
     assert_eq!(q.props_at(1).ins, None);
+    assert_eq!(q.mark.ins, None);
+}
+
+/// An inserted or deleted paragraph break (the paragraph mark's revision) round-trips too.
+#[test]
+fn tracked_paragraph_marks_round_trip() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions = vec![
+        Revision::new(RevisionKind::Insert, "Ada", "2025-03-04T05:06:00Z"),
+        Revision::new(RevisionKind::Delete, "Grace", "2025-03-05T10:20:00Z"),
+    ];
+    let (mut inserted, mut deleted) = (para("inserted break"), para("deleted break"));
+    inserted.mark.ins = Some(0);
+    deleted.mark.del = Some(1);
+    d.body = vec![para_block(inserted), para_block(deleted), para_block(para("last"))];
+    let r = round(&d);
+    let mark = |i: usize| r.body[i].as_para().unwrap().mark.clone();
+    let ins = mark(0).ins.and_then(|i| r.revisions.get(i as usize)).expect("an inserted mark");
+    assert_eq!((ins.kind, ins.author.as_str()), (RevisionKind::Insert, "Ada"));
+    let del = mark(1).del.and_then(|i| r.revisions.get(i as usize)).expect("a deleted mark");
+    assert_eq!((del.kind, del.author.as_str()), (RevisionKind::Delete, "Grace"));
+    assert_eq!((mark(2).ins, mark(2).del), (None, None));
+    assert_eq!(r.body[0].as_para().unwrap().props_at(1).ins, None, "the text itself isn't marked");
 }
 
 #[test]
