@@ -1,11 +1,19 @@
 use super::{FaceRef, MItem, Rgb, Slot};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FracSize {
+    Display,
+    Text,
+    Script,
+}
+
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
 /// cramped (superscripts lowered: inside radicals, denominators, subscripts).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct St {
     pub(super) level: u8,
     pub(super) display: bool,
+    pub(super) fraction_size: FracSize,
     pub(super) cramped: bool,
     /// Letters default to upright (function names).
     pub(super) upright: bool,
@@ -20,7 +28,12 @@ impl St {
     }
     /// Numerator / denominator style.
     pub(super) fn frac(self) -> St {
-        if self.display { St { display: false, ..self } } else { self.script() }
+        // Display fractions retain text-sized arguments after entering text layout style.
+        match self.fraction_size {
+            FracSize::Display => St { display: false, fraction_size: FracSize::Script, ..self },
+            FracSize::Text => St { display: false, ..self },
+            FracSize::Script => self.script(),
+        }
     }
 }
 
@@ -219,3 +232,6 @@ pub(super) fn hcat(parts: Vec<Bx>) -> Bx {
     out.last = last;
     out
 }
+
+#[cfg(test)]
+mod tests;

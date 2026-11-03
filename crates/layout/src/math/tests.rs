@@ -383,7 +383,8 @@ fn hostile_trees_never_panic() {
     let runs: Vec<MNode> = (0..2000).map(|i| MNode::Run(MRun { brk: (i % 3 == 0).then_some((i % 256) as u8), ..MRun::new("−+=") })).collect();
     for avail in [0.0, f32::NAN, 1e9] {
         for brk_bin in [BrkBin::Before, BrkBin::After, BrkBin::Repeat] {
-            let mp = MathProps { brk_bin, brk_bin_sub: BrkBinSub::PlusMinus, wrap_indent: f32::INFINITY, wrap_right: avail == 0.0 };
+            let mp =
+                MathProps { brk_bin, brk_bin_sub: BrkBinSub::PlusMinus, wrap_indent: f32::INFINITY, wrap_right: avail == 0.0, ..Default::default() };
             let m = layout_equation(&Math { nodes: runs.clone(), ..Default::default() }, "", &rc(), true, avail, &mp, &mut 0);
             assert!(m.width.is_finite() && m.descent.is_finite());
         }

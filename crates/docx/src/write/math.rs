@@ -133,6 +133,7 @@ pub fn math_pr(w: &mut W, m: &MathProps) {
         BrkBinSub::PlusMinus => "+-",
     };
     val(w, "m:brkBinSub", sub);
+    val(w, "m:smallFrac", if m.small_frac { "1" } else { "0" });
     if m.wrap_right {
         w.empty("m:wrapRight", &[]);
     } else {

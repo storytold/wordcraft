@@ -1,4 +1,4 @@
-use super::bx::{Bx, Cls, St, hcat};
+use super::bx::{Bx, Cls, FracSize, St, hcat};
 use super::state::wide_accent;
 use super::{Arg, C, ColJc, Ctx, FracKind, MItem, MNode, glyph_bounds};
 
@@ -205,7 +205,12 @@ impl Ctx {
         let mut x0 = 0.0f32;
         let mut out = Bx::default();
         if !deg_hide {
-            let db = self.sub(0, deg, St { level: (st.level + 2).min(2), display: false, cramped: true, upright: st.upright }, d);
+            let db = self.sub(
+                0,
+                deg,
+                St { level: (st.level + 2).min(2), display: false, fraction_size: FracSize::Script, cramped: true, upright: st.upright },
+                d,
+            );
             let kb = self.k(C::RadicalKernBeforeDegree, st);
             let ka = self.k(C::RadicalKernAfterDegree, st);
             let raise = self.t.as_ref().map_or(60.0, |t| t.radical_degree_bottom_raise_percent) / 100.0 * (ga + gd);

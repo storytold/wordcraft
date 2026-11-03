@@ -26,7 +26,7 @@ mod rows;
 mod state;
 mod structs;
 
-use bx::St;
+use bx::{FracSize, St};
 use state::Ctx;
 
 /// Something to draw.
@@ -231,7 +231,13 @@ pub fn layout_equation(
         path: Vec::new(),
         node_stack: Vec::new(),
     };
-    let st = St { level: 0, display, cramped: false, upright: false };
+    let st = St {
+        level: 0,
+        display,
+        fraction_size: if display { if props.small_frac { FracSize::Display } else { FracSize::Text } } else { FracSize::Script },
+        cramped: false,
+        upright: false,
+    };
     let avail = if avail.is_finite() { avail.clamp(0.0, 1e5) } else { 0.0 };
     let b = match nodes.as_slice() {
         [] => cx.hint(st),
