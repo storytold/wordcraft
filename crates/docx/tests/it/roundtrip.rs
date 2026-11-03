@@ -258,9 +258,14 @@ fn textbox_tight_wrap_survives_two_docx_saves() {
     let mut doc = doc_with(
         modes
             .iter()
-            .map(|mode| {
+            .enumerate()
+            .map(|(index, mode)| {
                 let mut p = Paragraph::with_text("text", CharProps::default());
                 p.props.textbox_tight_wrap = Some(*mode);
+                if index == 0 {
+                    p.props.align = Some(Align::Center);
+                    p.props.outline_level = Some(1);
+                }
                 p
             })
             .chain([Paragraph::with_text("ordinary", CharProps::default())])
@@ -275,7 +280,12 @@ fn textbox_tight_wrap_survives_two_docx_saves() {
     let mut inherited = Paragraph::with_text("inherited", CharProps::default());
     inherited.props.style = Some("TightWrapStyle".into());
     doc.body.push(para_block(inherited));
-    let first = wordcraft_docx::read(&wordcraft_docx::write(&doc).expect("first write")).expect("first read");
+    let first_bytes = wordcraft_docx::write(&doc).expect("first write");
+    let xml = part(&first_bytes, "word/document.xml");
+    let ppr = xml.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
+    assert!(ppr.find("w:jc").unwrap() < ppr.find("w:textboxTightWrap").unwrap(), "{ppr}");
+    assert!(ppr.find("w:textboxTightWrap").unwrap() < ppr.find("w:outlineLvl").unwrap(), "{ppr}");
+    let first = wordcraft_docx::read(&first_bytes).expect("first read");
     let second = wordcraft_docx::read(&wordcraft_docx::write(&first).expect("second write")).expect("second read");
     assert_eq!(second.styles.get("TightWrapStyle").unwrap().para.textbox_tight_wrap, Some(TextboxTightWrap::AllLines));
     let got = paras(&second);
