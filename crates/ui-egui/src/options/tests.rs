@@ -477,3 +477,34 @@ fn length_units_follow_the_interface_language() {
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
+
+/// Display tab offers the interface scale / zoom option to scale UI elements up or down,
+/// which updates the zoom factor, survives a restart in ui.json, and scales the UI globally.
+#[test]
+fn display_tab_offers_interface_scale_and_survives_restart() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "display"})).unwrap();
+    assert!(a.ui.backstage);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Display scale").is_some(), "Display scale section is present in Display tab");
+    assert!(h.query_by_label("Interface size:").is_some(), "Interface size combo is present in Display tab");
+
+    // Setting a 150% scale
+    h.state_mut().run("ui.interfaceSize", json!({"percent": 150})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.interface_size.percent(), Some(150));
+
+    // Survives restart in ui.json
+    let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert_eq!(b.ui.interface_size.percent(), Some(150));
+}

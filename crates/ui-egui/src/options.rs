@@ -224,7 +224,7 @@ fn flag(app: &mut WordApp, ui: &mut Ui, label: &str, key: &str, value: bool) {
 fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
-    interface_size_picker(app, ui);
+    interface_size_picker(app, ui, "interface_size");
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -287,6 +287,9 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn display(app: &mut WordApp, ui: &mut Ui) {
+    section(ui, "Display scale");
+    interface_size_picker(app, ui, "display_interface_size");
+    ui.add_space(8.0);
     section(ui, "Formatting marks");
     note(ui, "These marks show even when Show/Hide ¶ is off.");
     let m = app.session.prefs.marks;
@@ -709,7 +712,7 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
 
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
 /// draws at, or an absolute size, so "100%" means one screen pixel per point.
-fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
+fn interface_size_picker(app: &mut WordApp, ui: &mut Ui, id_salt: &str) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
@@ -720,7 +723,7 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
-        let combo = craft_ui::ComboBox::from_id_salt("interface_size").selected_text(selected).width(220.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt(id_salt).selected_text(selected).width(220.0).show_ui(ui, |ui| {
             if ui.selectable_label(size.is_auto(), auto).clicked() {
                 let _ = app.run("ui.interfaceSize", json!({"value": "auto"}));
             }
