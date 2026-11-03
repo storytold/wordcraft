@@ -59,11 +59,10 @@ fn right_click_inside_an_equation_keeps_editing_it() {
     let (doc, rev, undo) = (h.state().session.doc.clone(), h.state().session.rev(), h.state().session.undo_depth());
     let layout = h.state_mut().session.layout();
     let story = h.state().session.sel.focus.story;
-    let (x, y, at, inner) = (0..2000)
-        .flat_map(|i| (0..2000).map(move |j| (i as f32 * 0.5, j as f32 * 0.5)))
-        .find_map(|(x, y)| layout.equation_hit(0, x, y, story).map(|(at, inner)| (x, y, at, inner)))
-        .expect("the equation is on the first page");
-    let screen = page_to_screen(h.state_mut(), 0, x, y).unwrap();
+    let equation = layout.equation_box(&open.at, 0).expect("the open equation has layout geometry");
+    let (x, y) = (equation.x + equation.math.width / 2.0, equation.base);
+    let (at, inner) = layout.equation_hit(equation.page, x, y, story).expect("the equation's midpoint is hittable");
+    let screen = page_to_screen(h.state_mut(), equation.page, x, y).unwrap();
     h.event(egui::Event::PointerMoved(screen));
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: screen, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });

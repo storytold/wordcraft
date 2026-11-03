@@ -104,3 +104,16 @@ line wrapping and actual whitespace used for justification. Regressions cover
 mixed scripts and numbers, authored zero-width breaks, repetition signs,
 selections, referenced text boxes, edits/undo/redo, NUMWORDS fields and saved DOCX
 statistics. The counter does not change paragraph text or character statistics.
+
+Cache-saturation follow-up: the 3,331-paragraph probe did not exceed the original
+4,096-entry limit. A regression now counts an actual 20,000-paragraph synthetic
+document repeatedly, measuring segmentation calls rather than elapsed time: no
+unchanged paragraph is segmented again, and one edit requires one new segmentation.
+Separate tests exceed entry and retained-text budgets and verify stable cache hits,
+correct byte accounting and bounded storage. Saturation stops admission rather
+than clearing existing entries; it does not promise to retain an unlimited working set.
+
+The equation right-click regression now obtains one interior point from
+`DocLayout::equation_box` and calls `equation_hit` once, using the measured page.
+Its open-equation, caret, document, revision and undo assertions are unchanged;
+the test no longer searches a 2,000-by-2,000 coordinate grid.

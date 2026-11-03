@@ -104,8 +104,13 @@ Document statistics use the shared model/dictionary Khmer word spans. The status
 bar, selected-text count, Word Count dialog, NUMWORDS fields and saved DOCX word
 statistics share the same counter within their existing story scopes. The count is independent of page width, fonts and justification;
 no separators are inserted into document text. Real whitespace remains the input
-for justification spacing. A bounded paragraph cache avoids repeated segmentation
-of unchanged text. Without Khmer data, authored zero-width boundaries still count,
+for justification spacing. A paragraph-text memo retains at most 64 MiB of text
+and 262,144 entries; paragraphs over 64 KiB are not retained. Once either budget
+is full, new entries are not admitted, so sequential scans keep the reusable
+entries that fit instead of flushing them. These entries live until process exit;
+new text beyond a full budget is recomputed, and counts remain correct. Repeated
+20,000-paragraph counts reuse every unchanged paragraph; a one-paragraph edit
+segments only its new text. Without Khmer data, authored zero-width boundaries still count,
 while otherwise unspaced Khmer uses the existing token fallback.
 
 The acceptance target is good Khmer wrapping: reject malformed cluster splits,
