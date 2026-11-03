@@ -198,7 +198,7 @@ const TABLE: Sample = Sample {
 /// Named sections, one protected.
 const SECTIONS: Sample = Sample {
     name: "sections",
-    content: r##"<office:automatic-styles><style:style style:name="Sect1" style:family="section"><style:section-properties style:editable="false" wcx:tint="none"><style:columns fo:column-count="1" fo:column-gap="0in"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:section text:style-name="Sect1" text:name="Terms"><text:p>Inside the terms.</text:p></text:section><text:section text:name="Locked" text:protected="true"><text:p>Inside the lock.</text:p></text:section><text:section text:style-name="Sect1" text:name="Grouped"><table:table table:name="Group"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>A cell alone.</text:p></table:table-cell></table:table-row></table:table></text:section><text:section text:name="Outer"><text:section text:name="Inner"><table:table table:name="Agenda"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>Item one.</text:p></table:table-cell></table:table-row></table:table><text:p>Notes under the agenda.</text:p></text:section><text:p>Closing the outer one.</text:p></text:section><text:p>After.</text:p></office:text></office:body>"##,
+    content: r##"<office:automatic-styles><style:style style:name="Sect1" style:family="section"><style:section-properties style:editable="false" wcx:tint="none"><style:columns fo:column-count="1" fo:column-gap="0in"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:p>Before.</text:p><text:section text:style-name="Sect1" text:name="Terms"><text:p>Inside the terms.</text:p></text:section><text:section text:name="Locked" text:protected="true"><text:p>Inside the lock.</text:p></text:section><text:section text:style-name="Sect1" text:name="Grouped"><table:table table:name="Group"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>A cell alone.</text:p></table:table-cell></table:table-row></table:table></text:section><text:section text:name="Outer"><text:section text:name="Inner"><table:table table:name="Agenda"><table:table-column/><table:table-row><table:table-cell office:value-type="string"><text:p>Item one.</text:p></table:table-cell></table:table-row></table:table><text:p>Notes under the agenda.</text:p></text:section><text:p>Closing the outer one.</text:p></text:section><text:p><draw:frame draw:name="Sender" text:anchor-type="paragraph" svg:width="3in" draw:z-index="0"><draw:text-box fo:min-height="1in"><text:section text:style-name="Sect1" text:name="Sender Address"><text:p>Ada Lovelace</text:p><text:p>12 Example Street</text:p></text:section><text:p>Below the address.</text:p></draw:text-box></draw:frame>A boxed sender.</text:p><text:p>After.</text:p></office:text></office:body>"##,
     styles: "",
     meta: "",
 };
@@ -313,4 +313,26 @@ fn content_of(bytes: &[u8]) -> String {
     let mut s = String::new();
     std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut s).unwrap();
     s
+}
+
+#[test]
+fn a_section_in_a_text_box_closes_in_it_whatever_is_edited() {
+    // The paragraph closing the box's section edited (its wrapper gone): the section still
+    // closes inside the box, before the box ends.
+    let d = import(&package(&SECTIONS)).unwrap();
+    for (id, part) in d.parts.iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox) {
+        for i in 0..part.blocks.len() {
+            let mut e = d.clone();
+            let Some(b) = e.parts.get_mut(id).and_then(|p| p.blocks.get_mut(i)) else { continue };
+            let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
+            // Restyled: no longer what was read.
+            p.props.style = Some("Edited".into());
+            p.touch();
+            let saved = export(&e).unwrap();
+            assert!(parts_well_formed(&saved).is_ok(), "{i}");
+            let c = content_of(&saved);
+            let in_box = c.split("<draw:text-box").nth(1).and_then(|r| r.split("</draw:text-box>").next()).unwrap_or("");
+            assert_eq!(in_box.matches("<text:section ").count(), in_box.matches("</text:section>").count(), "{c}");
+        }
+    }
 }

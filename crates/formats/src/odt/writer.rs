@@ -181,6 +181,9 @@ pub(super) struct Writer {
     pub(super) kept_pages: bool,
     /// Sections kept as read that are open (see `Para::wrap`).
     pub(super) sections_open: usize,
+    /// The depth of the blocks being written whose section wrappers are written too, besides
+    /// the body's top (0): a text box's story's own top.
+    story_top: Option<usize>,
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<String>,
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
@@ -654,10 +657,25 @@ impl Writer {
     /// Paragraph `p` (`chain`: the paragraphs a tracked deletion joins it to) with the sections
     /// kept as read that open before it and close after it, at the top only.
     fn wrapped_para(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String, depth: usize) {
-        let wrap = p.wrap.as_deref().filter(|_| depth == 0);
+        let wrap = p.wrap.as_deref().filter(|_| self.wraps_at(depth));
         self.open_wrap(wrap, out);
         self.para_in(p, chain, out);
         self.close_wrap(wrap, out);
+    }
+
+    /// Whether blocks at `depth` are written with the section wrappers kept around them: the
+    /// body's top-level ones and a text box's story's.
+    fn wraps_at(&self, depth: usize) -> bool {
+        depth == 0 || self.story_top == Some(depth)
+    }
+
+    /// `blocks` (a text box's story, at `depth`) with the sections kept around them, all closed
+    /// inside it: the sections open outside it stay open.
+    pub(in crate::odt) fn story_blocks(&mut self, blocks: &[FBlock], out: &mut String, depth: usize) {
+        let saved = (self.story_top.replace(depth), std::mem::take(&mut self.sections_open));
+        self.blocks(blocks, out, depth);
+        self.close_sections(out);
+        (self.story_top, self.sections_open) = saved;
     }
 
     /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`).
@@ -720,7 +738,7 @@ impl Writer {
             match b {
                 FBlock::Table(t) => {
                     if depth < model::MAX_DEPTH {
-                        let wrap = t.wrap.as_deref().filter(|_| depth == 0);
+                        let wrap = t.wrap.as_deref().filter(|_| self.wraps_at(depth));
                         self.open_wrap(wrap, out);
                         self.table(t, out, depth);
                         self.close_wrap(wrap, out);

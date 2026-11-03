@@ -94,9 +94,10 @@ pub(super) struct Body<'a> {
     kept_table: Option<KeptOpen>,
     /// The body index (a table of contents…) whose markup is being kept, likewise.
     kept_index: Option<KeptOpen>,
-    /// Body sections whose wrapper is kept as read: start tag, depth, the body's length before
-    /// it; `None` for one read as a columned section (kept as a section break).
-    kept_sections: Vec<Option<(std::sync::Arc<str>, usize, usize)>>,
+    /// Sections whose wrapper is kept as read (in the body's or a text box's top level): start
+    /// tag, depth, the length of what holds it before it and how many containers are open;
+    /// `None` for one read as a columned section (kept as a section break) or anywhere else.
+    kept_sections: Vec<Option<(std::sync::Arc<str>, usize, usize, usize)>>,
     /// Each section's master page, as the paragraph or table starting it named it (`None`: as
     /// the file's default, or a columned section), in order; and the one just named.
     pub(super) section_masters: Vec<Option<String>>,
@@ -350,12 +351,10 @@ impl<'a> Body<'a> {
                 let body = !self.raw.is_empty()
                     && self.in_text
                     && self.skip == 0
-                    && self.containers.len() == 1
-                    && self.tables.is_empty()
                     && self.frame.is_none()
-                    && self.note.is_none()
                     && self.del.is_none()
-                    && self.lists.is_empty();
+                    && self.lists.is_empty()
+                    && self.at_story_top();
                 let tag = self.raw.get(at.0..at.1).and_then(|b| std::str::from_utf8(b).ok()).filter(|t| !t.ends_with("/>")).map(std::sync::Arc::from);
                 let depth = self.depth + 1;
                 let cols = self.cols_at;
@@ -363,14 +362,16 @@ impl<'a> Body<'a> {
                 // Read as a columned section (a section break): no wrapper besides.
                 let columned = self.cols_at != cols;
                 let len = self.container().len();
-                self.kept_sections.push(tag.filter(|_| body && !columned).map(|t| (t, depth, len)));
+                let open = self.containers.len();
+                self.kept_sections.push(tag.filter(|_| body && !columned).map(|t| (t, depth, len, open)));
                 return;
             }
             Ev::End(q) if q == "text:section" && !self.kept_sections.is_empty() => {
                 let depth = self.depth;
                 self.feed(ev);
-                if let Some(Some((tag, _, from))) = self.kept_sections.pop().filter(|s| s.as_ref().is_none_or(|s| s.1 == depth))
-                    && self.containers.len() == 1
+                if let Some(Some((tag, _, from, open))) = self.kept_sections.pop().filter(|s| s.as_ref().is_none_or(|s| s.1 == depth))
+                    && self.containers.len() == open
+                    && self.at_story_top()
                 {
                     // Around top-level paragraphs and tables: the first opens it, the last closes it.
                     let blocks = self.container();
@@ -582,6 +583,15 @@ impl<'a> Body<'a> {
 }
 
 impl Body<'_> {
+    /// Whether what is read goes in the body's top level or a text box's (not a table's cell, a
+    /// note or a comment): where sections are kept around the blocks.
+    fn at_story_top(&self) -> bool {
+        match &self.note {
+            None => self.containers.len() == 1 && self.tables.is_empty(),
+            Some(n) => n.text_box.is_some() && self.containers.len() == n.containers + 1 && self.tables.len() == n.tables,
+        }
+    }
+
     fn container(&mut self) -> &mut Vec<FBlock> {
         if self.containers.is_empty() {
             self.containers.push(Vec::new());

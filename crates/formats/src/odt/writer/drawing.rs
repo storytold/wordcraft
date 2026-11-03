@@ -539,7 +539,7 @@ impl Writer {
     pub(in crate::odt) fn story(&mut self, blocks: &[FBlock]) -> String {
         let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
         let mut body = String::new();
-        self.blocks(blocks, &mut body, 1);
+        self.story_blocks(blocks, &mut body, 1);
         self.close_ins(&mut body);
         (self.cur_style, self.chain, self.part, self.note_parent) = saved;
         body
