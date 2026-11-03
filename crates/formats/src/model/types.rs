@@ -418,6 +418,11 @@ impl FTable {
                             return;
                         }
                         let Some(row) = self.rows.get_mut(r + k) else { break };
+                        // A full row takes no covered cell: checked before it is walked, so a
+                        // wide row isn't scanned for every span above it.
+                        if row.len() >= 64 {
+                            continue;
+                        }
                         // Find the index in that row at grid column `g`.
                         let mut x = 0usize;
                         let mut at = row.len();
@@ -428,9 +433,7 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
-                        if row.len() < 64 {
-                            row.insert(at, Cell { colspan: span as u32, covered: true, ..Default::default() });
-                        }
+                        row.insert(at, Cell { colspan: span as u32, covered: true, ..Default::default() });
                     }
                 }
                 g += span;

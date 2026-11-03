@@ -59,6 +59,23 @@ mod tests {
     }
 
     #[test]
+    fn insert_covered_skips_full_rows_without_walking_them() {
+        // 50,000 spanning cells over a 50,000-cell row: each walked the row below to its grid
+        // column before finding it full (billions of steps). A full row is now skipped at once.
+        let n = 50_000;
+        let mut t = FTable {
+            rows: vec![vec![Cell { rowspan: 2, ..Default::default() }; n], vec![Cell::default(); n]],
+            widths: Vec::new(),
+            borderless: false,
+        };
+        let start = std::time::Instant::now();
+        t.insert_covered();
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+        assert_eq!(t.rows[1].len(), n, "a full row takes no covered cell");
+        assert!(t.rows[1].iter().all(|c| !c.covered));
+    }
+
+    #[test]
     fn base64_round_trip() {
         for data in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar", &[0, 255, 128, 7]] {
             let e = base64_encode(data);
