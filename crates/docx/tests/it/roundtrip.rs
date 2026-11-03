@@ -281,7 +281,9 @@ fn textbox_tight_wrap_survives_two_docx_saves() {
     inherited.props.style = Some("TightWrapStyle".into());
     doc.body.push(para_block(inherited));
     let first_bytes = wordcraft_docx::write(&doc).expect("first write");
-    let xml = part(&first_bytes, "word/document.xml");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&first_bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     let ppr = xml.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
     assert!(ppr.find("w:jc").unwrap() < ppr.find("w:textboxTightWrap").unwrap(), "{ppr}");
     assert!(ppr.find("w:textboxTightWrap").unwrap() < ppr.find("w:outlineLvl").unwrap(), "{ppr}");
