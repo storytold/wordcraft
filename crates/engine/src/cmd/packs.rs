@@ -11,7 +11,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("proof.packs", "Language Packs", "File › Options › Language", list)
-            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on; in the app it runs in the background: see "refreshing")} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "installed": [{"locale", "name", "licence"}], "installing": [{"locale", "done", "total"} (bytes)], "refreshing": bool, "errors": {locale or "" (the list): message} (the last failure of each), "index_override": string|null (a test index in use instead of the pinned one), "network": bool (downloading on), "available": bool (a font store to install into)}"#)
+            .params(r#"{"refresh"?: bool (fetch the pinned index again; only while downloading is on; in the app it runs in the background: see "refreshing")} — opens nothing. Returns {"packs": [{"locale", "name", "size" (bytes), "licence" (SPDX), "class", "source" (where the data comes from), "archive" (the download), "spelling", "hyphenation", "installed"}], "languages": [{"tags", "pack", "installed", "size", "proofing" (built_in, installed, own_dictionary, system_dictionary, install, grammar_built_in, not_available), "default"}] (Options › Language › Your languages), "installed": [{"locale", "name", "licence"}], "installing": [{"locale", "done", "total"} (bytes)], "refreshing": bool, "errors": {locale or "" (the list): message} (the last failure of each), "index_override": string|null (a test index in use instead of the pinned one), "network": bool (downloading on), "available": bool (a font store to install into)}"#)
             .pure(),
         CommandSpec::new("proof.installPack", "Install Language Pack", "File › Options › Language", install)
             .params(r#"{"locale": string (a pack's locale from proof.packs, like nl or pt-pt)} — downloads, verifies (sha256) and installs it; spelling and hyphenation in that language use it at once. Needs downloading on (only the person in the app can turn it on). Opens nothing. In the app it runs in the background and returns {"started": true}: follow it with proof.packs ("installing", then "installed" or "errors"); elsewhere it returns when installed."#)
@@ -33,7 +33,7 @@ fn locale_param(v: &Value) -> Result<String, CmdError> {
     packs::parse_locale(raw)
 }
 
-fn list(_: &mut Session, v: &Value) -> CmdResult {
+fn list(s: &mut Session, v: &Value) -> CmdResult {
     if p::bool(v, "refresh") == Some(true) {
         packs::start_refresh().map_err(CmdError::Failed)?;
         if let Some(e) = packs::error("") {
@@ -55,6 +55,7 @@ fn list(_: &mut Session, v: &Value) -> CmdResult {
         .collect();
     Ok(json!({
         "packs": rows,
+        "languages": packs::your_languages(s),
         "installed": installed.iter().map(|i| json!({"locale": i.locale, "name": i.name, "licence": i.licence})).collect::<Vec<_>>(),
         "installing": packs::installing(),
         "refreshing": packs::fetching(),
@@ -160,6 +161,166 @@ mod tests {
             assert_eq!(packs::available_len(), n, "same length");
             assert_ne!(packs::index_generation(), before);
         });
+    }
+
+    /// Options › Language › Your languages: fresh, with Dutch installed, a document with Thai,
+    /// Turkish without a pack, and en-GB as the default.
+    mod your_languages {
+        use super::*;
+        use crate::packs::Proofing;
+
+        fn none(_: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+
+        fn row<'a>(rows: &'a [packs::LanguageRow], tag: &str) -> &'a packs::LanguageRow {
+            rows.iter().find(|r| r.is_tag(tag) || r.pack.as_deref() == Some(tag)).unwrap_or_else(|| panic!("no row for {tag}: {rows:?}"))
+        }
+
+        fn mark(s: &mut Session, para: usize, lang: &str) {
+            s.run("caret.set", &json!({"pos": {"block": para, "off": 0}})).unwrap();
+            s.run("select.paragraph", &json!({})).unwrap();
+            s.run("review.language", &json!({"lang": lang})).unwrap();
+        }
+
+        #[test]
+        fn a_fresh_install_lists_only_english() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(rows.len(), 1, "{rows:?}");
+                assert_eq!(rows[0].proofing, Proofing::BuiltIn);
+                assert!(rows[0].default);
+                assert_eq!(rows[0].pack, None);
+            });
+        }
+
+        #[test]
+        fn an_installed_pack_is_a_row_with_remove() {
+            with_backend(FixedBackend::sample(), |s, b| {
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(rows.len(), 2);
+                let nl = row(&rows, "nl");
+                assert!(nl.installed && nl.tags.is_empty() && !nl.default);
+                assert_eq!(nl.proofing, Proofing::Installed);
+                let r = s.run("proof.packs", &json!({})).unwrap();
+                assert_eq!(r["languages"].as_array().unwrap().len(), 2, "MCP sees the same rows");
+            });
+        }
+
+        #[test]
+        fn document_languages_show_install_grammar_and_not_available() {
+            with_backend(FixedBackend::sample(), |s, b| {
+                s.run("document.setText", &json!({"text": "Hallo\nMerhaba\nสวัสดี\nCześć\nBonjour"})).unwrap();
+                mark(s, 0, "nl-NL");
+                mark(s, 1, "tr-TR");
+                mark(s, 2, "th-TH");
+                mark(s, 3, "pl-PL");
+                mark(s, 4, "fr-FR");
+                let rows = packs::your_languages_with(s, None, &none);
+                let nl = row(&rows, "nl-NL");
+                assert_eq!((nl.proofing, nl.size, nl.installed), (Proofing::Install, 1_950_000, false));
+                // Turkish has grammar rules built in and no pack in the sample index.
+                assert_eq!(row(&rows, "tr-TR").proofing, Proofing::NotAvailable);
+                assert_eq!(row(&rows, "th-TH").proofing, Proofing::NotAvailable);
+                let pl = row(&rows, "pl-PL");
+                assert_eq!((pl.proofing, pl.size), (Proofing::GrammarBuiltIn, 4_620_000));
+                // Installing turns Install into Installed; the document keeps the row.
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "nl-NL").proofing, Proofing::Installed);
+                s.run("proof.removePack", &json!({"locale": "nl"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "nl-NL").proofing, Proofing::Install, "still used by the document");
+            });
+        }
+
+        #[test]
+        fn valencian_text_is_on_the_valencian_packs_row() {
+            let mut b = FixedBackend::sample();
+            let mut v = b.packs.first().cloned().unwrap();
+            v.locale = "ca-valencia".into();
+            v.size = 1_500_000;
+            b.packs.push(v);
+            with_backend(b, |s, b| {
+                s.run("document.setText", &json!({"text": "Bon dia"})).unwrap();
+                mark(s, 0, "ca-ES-valencia");
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "ca-ES-valencia").pack.as_deref(), Some("ca-valencia"), "as the bar offers it");
+                // Installing the Catalan pack doesn't make Valencian installed.
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "ca"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                let v = row(&rows, "ca-ES-valencia");
+                assert_eq!((v.pack.as_deref(), v.installed, v.proofing), (Some("ca-valencia"), false, Proofing::Install));
+            });
+        }
+
+        #[test]
+        fn the_own_folder_and_the_default_language() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "Cześć\nMerhaba"})).unwrap();
+                mark(s, 0, "pl-PL");
+                mark(s, 1, "tr-TR");
+                let dic = |tag: &str| {
+                    if tag.starts_with("pl") {
+                        Some(std::path::PathBuf::from("/mine/dicts/pl_PL.dic"))
+                    } else if tag.starts_with("tr") {
+                        Some(std::path::PathBuf::from("/usr/share/hunspell/tr_TR.dic"))
+                    } else {
+                        None
+                    }
+                };
+                let rows = packs::your_languages_with(s, Some("/mine/dicts"), &dic);
+                assert_eq!(row(&rows, "pl-PL").proofing, Proofing::OwnDictionary);
+                assert_eq!(row(&rows, "tr-TR").proofing, Proofing::SystemDictionary);
+                // en-GB as the default is its own row, the default one; en-US stays if the document uses it.
+                s.run("review.language", &json!({"lang": "en-GB", "default": true})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                let gb = row(&rows, "en-GB");
+                assert!(gb.default && gb.proofing == Proofing::BuiltIn);
+                assert_eq!(rows.iter().filter(|r| r.default).count(), 1);
+            });
+        }
+
+        #[test]
+        fn set_as_default_sets_the_pref_and_nothing_else() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "Hello"})).unwrap();
+                s.run("select.all", &json!({})).unwrap();
+                let (doc, sel) = (s.doc.styles.default_chr.lang.clone(), s.sel.clone());
+                let normal = s.doc.styles.styles.iter().find(|x| x.id == "Normal").map(|x| x.chr.lang.clone());
+                // A redo step exists: the setting is no edit, so it neither adds an undo step nor clears it.
+                s.run("text.insert", &json!({"text": "x"})).unwrap();
+                s.run("edit.undo", &json!({})).unwrap();
+                let rev = s.rev();
+                let (depth, redo, dirty) = (s.undo_depth(), s.can_redo(), s.dirty);
+                assert!(redo);
+                s.run("review.language.preferred", &json!({"lang": "nl-NL"})).unwrap();
+                assert_eq!((s.undo_depth(), s.can_redo(), s.dirty), (depth, redo, dirty), "history, redo and modified flag are kept");
+                assert_eq!(s.prefs.default_language.as_deref(), Some("nl-NL"));
+                assert_eq!(s.doc.styles.default_chr.lang, doc);
+                assert_eq!(s.doc.styles.styles.iter().find(|x| x.id == "Normal").map(|x| x.chr.lang.clone()), normal);
+                assert_eq!(s.sel, sel);
+                assert_eq!(packs::document_languages(s), ["en-US"], "the text keeps its language");
+                assert_eq!(s.rev(), rev);
+                assert!(s.run("review.language.preferred", &json!({})).is_err());
+                assert!(s.run("review.language.preferred", &json!({"lang": "not a tag!!"})).is_err());
+            });
+        }
+
+        #[test]
+        fn hostile_tags_never_panic() {
+            with_backend(FixedBackend::sample(), |s, _| {
+                s.run("document.setText", &json!({"text": "a b"})).unwrap();
+                s.prefs.default_language = Some("x".repeat(10_000));
+                let _ = packs::your_languages_with(s, Some(""), &none);
+                s.prefs.default_language = Some("\u{0}-\u{202e}".into());
+                let _ = packs::your_languages_with(s, None, &none);
+            });
+        }
     }
 
     #[test]
