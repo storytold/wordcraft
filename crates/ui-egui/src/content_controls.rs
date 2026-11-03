@@ -259,10 +259,17 @@ mod tests {
     use super::*;
     use egui::{Event, PointerButton};
 
-    /// #5389: pressing a drop-down's list button opens the list and leaves the caret in the
-    /// control, even when text follows the control and the button hangs over it.
-    #[test]
-    fn pressing_the_list_button_keeps_the_caret_in_the_control() {
+    fn press(at: egui::Pos2) -> Event {
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() }
+    }
+
+    fn release(at: egui::Pos2) -> Event {
+        Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() }
+    }
+
+    /// A harness showing a drop-down control followed by text, with the caret in the control and
+    /// its list button on screen.
+    fn dropdown_harness() -> egui_kittest::Harness<'static, WordApp> {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
         app.run("text.insert", json!({"text": "tail text"})).unwrap();
         app.run("caret.docStart", json!({})).unwrap();
@@ -281,16 +288,53 @@ mod tests {
         }
         let before = h.state().session.sel.focus.clone();
         assert!(h.state().session.doc.control_at(&before).is_some(), "the caret starts in the control");
+        h
+    }
+
+    /// #5389: pressing a drop-down's list button opens the list and leaves the caret in the
+    /// control, even when text follows the control and the button hangs over it.
+    #[test]
+    fn pressing_the_list_button_keeps_the_caret_in_the_control() {
+        let mut h = dropdown_harness();
         let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
         h.event(Event::PointerMoved(at));
-        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.event(press(at));
         h.step();
-        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.event(release(at));
         for _ in 0..3 {
             h.step();
         }
         let after = h.state().session.sel.focus.clone();
         assert!(h.state().session.doc.control_at(&after).is_some(), "the caret stays in the control");
         assert!(h.state().controls.popup_open(), "the list is open");
+    }
+
+    /// The same click when press and release arrive in one frame: egui has no press origin left
+    /// by then.
+    #[test]
+    fn a_click_that_presses_and_releases_in_one_frame_keeps_the_caret_in_the_control() {
+        let mut h = dropdown_harness();
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.event(press(at));
+        h.event(release(at));
+        for _ in 0..3 {
+            h.step();
+        }
+        let after = h.state().session.sel.focus.clone();
+        assert!(h.state().session.doc.control_at(&after).is_some(), "the caret stays in the control");
+        assert!(h.state().controls.popup_open(), "the list is open");
+    }
+
+    /// A table tool owns the pointer: a press over the list button starts a stroke.
+    #[test]
+    fn the_draw_table_tool_starts_a_stroke_over_the_list_button() {
+        let mut h = dropdown_harness();
+        h.state_mut().canvas.table_tool = Some(crate::table_pen::TableTool::Draw);
+        let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
+        h.event(Event::PointerMoved(at));
+        h.event(press(at));
+        h.step();
+        assert!(h.state().canvas.table_stroke.is_some(), "the stroke started on the button");
     }
 }
