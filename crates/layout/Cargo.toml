@@ -9,7 +9,7 @@ description = "WordCraft layout: shaping, line breaking, tabs, lists, tables, pa
 workspace = true
 
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-proof = { workspace = true }

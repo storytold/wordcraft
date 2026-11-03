@@ -48,6 +48,110 @@ fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
 }
 
+/// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
+/// including where a table expects rows or cells (ECMA-376 Part 3).
+#[test]
+fn table_alternate_content_keeps_selected_rows_and_cells() {
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let row = |text: &str| format!("<w:tr>{}</w:tr>", cell(text));
+    let table =
+        |rows: &str, columns: usize| format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid>{rows}</w:tbl>"#, r#"<w:gridCol w:w="2400"/>"#.repeat(columns));
+    let alternate = |chosen: &str, fallback: &str, requires: &str| {
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="{requires}">{chosen}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    };
+    for (requires, use_choice) in [("wps", true), ("alias", true), ("unknown", false), ("wps unknown", false)] {
+        for cells in [false, true] {
+            let choice = if cells { cell("Chosen cell") } else { row("Chosen row") };
+            let fallback = if cells { cell("Fallback cell") } else { row("Fallback row") };
+            let selected = if use_choice { &choice } else { &fallback };
+            let middle = alternate(&choice, &fallback, requires);
+            let (actual, expected) = if cells {
+                (
+                    format!("<w:tr>{}{middle}{}</w:tr>", cell("Before"), cell("After")),
+                    format!("<w:tr>{}{selected}{}</w:tr>", cell("Before"), cell("After")),
+                )
+            } else {
+                (format!("{}{middle}{}", row("Before"), row("After")), format!("{}{selected}{}", row("Before"), row("After")))
+            };
+            let columns = if cells { 3 } else { 1 };
+            let expected = read_body(&table(&expected, columns));
+            let wrapped = format!(
+                r#"<w:customXml xmlns:alias="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:unknown="urn:original:unsupported">{}</w:customXml>"#,
+                table(&actual, columns)
+            );
+            let mut actual = read_body(&wrapped);
+            for round in 0..=2 {
+                assert_eq!(actual.body, expected.body, "requires={requires}, cells={cells}, round={round}");
+                if round < 2 {
+                    actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_alternate_content_keeps_nested_row_and_cell_controls() {
+    let wrap =
+        |tag: &str, content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+    let alternate =
+        |content: &str| format!(r#"<mc:AlternateContent><mc:Choice Requires="wps">{content}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#);
+    let cell = "<w:tc><w:p><w:r><w:t>Controlled cell</w:t></w:r></w:p></w:tc>";
+    let oracle_cell = wrap("cell", cell);
+    let actual_cell = alternate(&wrap("cell", &alternate(cell)));
+    let oracle_row = wrap("row", &format!("<w:tr>{oracle_cell}</w:tr>"));
+    let actual_row = wrap("row", &alternate(&format!("<w:tr>{actual_cell}</w:tr>")));
+    let expected = read_body(&format!("<w:tbl>{oracle_row}</w:tbl>"));
+    let mut actual = read_body(&format!("<w:tbl>{}</w:tbl>", alternate(&actual_row)));
+    for round in 0..=2 {
+        assert_eq!(actual.body, expected.body, "round={round}");
+        let table = actual.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].controls.open[0].tag, "row");
+        assert_eq!(table.rows[0].controls.close, 1);
+        assert_eq!(table.rows[0].cells[0].controls.open[0].tag, "cell");
+        assert_eq!(table.rows[0].cells[0].controls.close, 1);
+        if round < 2 {
+            actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn repeated_style_ids_use_last() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="First"/>
+          <w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:smallCaps/><w:sz w:val="28"/></w:rPr>
+        </w:style>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="Last"/>
+          <w:pPr><w:spacing w:before="120"/></w:pPr><w:rPr><w:i/><w:caps/><w:sz w:val="20"/></w:rPr>
+        </w:style></w:styles>"#
+    );
+    let bytes = docx(
+        r#"<w:p><w:pPr><w:pStyle w:val="Repeated"/></w:pPr><w:r><w:t>Original style probe</w:t></w:r></w:p>"#,
+        &[("styles", "styles", "styles.xml")],
+        &[("word/styles.xml", &styles)],
+    );
+    let mut document = wordcraft_docx::read(&bytes).unwrap();
+    for round in 0..=2 {
+        let style = document.styles.get("Repeated").unwrap();
+        assert_eq!(style.name, "Last");
+        assert_eq!(style.chr.size, Some(10.0));
+        assert_eq!(style.chr.italic, Some(true));
+        assert_eq!(style.chr.bold, None);
+        assert_eq!(style.chr.caps, Some(true));
+        assert_eq!(style.chr.small_caps, None);
+        assert_eq!(style.para.space_before, Some(6.0));
+        assert_eq!(style.para.space_after, None);
+        assert_eq!(document.styles.styles.iter().filter(|style| style.id == "Repeated").count(), 1);
+        if round < 2 {
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+        }
+    }
+}
+
 #[test]
 fn paragraph_default_presence_survives_repeated_saves() {
     // Omission leaves paragraph defaults application-defined (ISO 29500 pPrDefault).
@@ -77,6 +181,68 @@ fn paragraph_default_presence_survives_repeated_saves() {
             assert_eq!(d.styles.default_para.space_after, after);
             assert_eq!(paras(&d).iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
         }
+    }
+}
+
+#[test]
+fn zero_frame_keeps_normal_flow() {
+    const ROUND_TRIPS: usize = 2;
+    let zero = r#"<w:framePr w:w="0" w:h="0" w:xAlign="left" w:y="0" w:hRule="exact" w:vAnchor="margin"/>"#;
+    let sized = r#"<w:framePr w:w="2400" w:h="1200" w:x="1440" w:y="2880" w:hAnchor="page" w:vAnchor="page" w:hRule="exact"/>"#;
+    for frame in [zero, sized] {
+        let styles = format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:pPrDefault><w:pPr>{frame}<w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
+            <w:style w:type="paragraph" w:styleId="Framed"><w:name w:val="Framed"/><w:pPr>{sized}</w:pPr></w:style></w:styles>"#
+        );
+        let header = format!(r#"<w:hdr {W_NS}><w:p><w:r><w:t>Header alpha</w:t></w:r></w:p><w:p><w:r><w:t>Header beta</w:t></w:r></w:p></w:hdr>"#);
+        let footer = format!(r#"<w:ftr {W_NS}><w:p><w:r><w:t>Footer delta</w:t></w:r></w:p></w:ftr>"#);
+        let body = format!(
+            r#"<w:p><w:r><w:t>Body one</w:t></w:r></w:p>
+            <w:p><w:pPr>{sized}</w:pPr><w:r><w:t>Direct frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/></w:pPr><w:r><w:t>Styled frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/>{zero}</w:pPr><w:r><w:t>Frame reset</w:t></w:r></w:p>
+            <w:sectPr><w:headerReference w:type="default" r:id="header"/><w:footerReference w:type="default" r:id="footer"/></w:sectPr>"#
+        );
+        let mut document = wordcraft_docx::read(&docx(
+            &body,
+            &[("styles", "styles", "styles.xml"), ("header", "header", "header1.xml"), ("footer", "footer", "footer1.xml")],
+            &[("word/styles.xml", &styles), ("word/header1.xml", &header), ("word/footer1.xml", &footer)],
+        ))
+        .unwrap();
+        for pass in 0..=ROUND_TRIPS {
+            let body = paras(&document);
+            let resolved = document.styles.resolve_para(&body[0].props);
+            assert!(resolved.frame.is_none(), "document defaults never create a frame");
+            assert!(document.styles.default_para.frame.is_none());
+            let reset = body[3].props.frame.as_ref().unwrap();
+            assert_eq!((reset.w, reset.h), (Some(0.0), Some(0.0)), "the direct reset survives saving");
+            assert_eq!(resolved.space_after, 8.0);
+            assert!(document.styles.resolve_para(&body[1].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[2].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[3].props).frame.is_none());
+            for id in [document.last_section.headers.default, document.last_section.footers.default] {
+                for block in &document.parts.get(&id.unwrap()).unwrap().blocks {
+                    let paragraph = block.as_para().unwrap();
+                    assert!(document.styles.resolve_para(&paragraph.props).frame.is_none(), "defaults do not frame headers or footers");
+                }
+            }
+            if pass == ROUND_TRIPS {
+                break;
+            }
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn frame_zero_side_is_automatic() {
+    for (attrs, width, height) in
+        [(r#"w:w="0" w:h="1200""#, None, Some(60.0)), (r#"w:w="2400" w:h="0" w:hRule="exact""#, Some(120.0), None), ("", None, None)]
+    {
+        let document = read_body(&format!(r#"<w:p><w:pPr><w:framePr {attrs}/></w:pPr><w:r><w:t>Original automatic frame</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        let frame = document.styles.resolve_para(&paragraph.props).frame.unwrap();
+        assert_eq!((frame.w, frame.h), (width, height));
     }
 }
 
@@ -340,6 +506,18 @@ fn pcl6_symbol_roundtrip() {
 }
 
 #[test]
+fn sym_hex_prefixes_and_break_type_casing() {
+    let body = r##"
+<w:p>
+ <w:r><w:sym w:font="Wingdings" w:char="0xF0FC"/><w:sym w:font="Symbol" w:char="U+F061"/><w:sym w:font="Webdings" w:char="#xF061"/></w:r>
+ <w:r><w:br w:type="Page"/><w:br w:type="Column"/><w:br w:type="textWrapping"/></w:r>
+</w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = paras(&d);
+    assert_eq!(p[0].plain_text(), "\u{F0FC}\u{F061}\u{F061}\u{C}\u{E}\n");
+}
+
+#[test]
 fn alternate_content_choice_and_fallback() {
     let body = r#"
 <w:p><w:r><mc:AlternateContent>
@@ -449,6 +627,12 @@ fn styles_numbering_settings_notes_comments_from_parts() {
         ("docProps/core.xml", core.as_bytes()),
     ]);
     let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_imported_styles(&d);
+    assert_imported_numbering_and_settings(&d);
+    assert_imported_body_and_metadata(&d);
+}
+
+fn assert_imported_styles(d: &Document) {
     // Styles: localized default id renamed to Normal; display names mapped.
     let h = d.styles.get("1").unwrap();
     assert_eq!(h.name, "Heading 1");
@@ -465,6 +649,9 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(g.header_chr.bold, Some(true));
     assert_eq!(d.settings.theme_colors[4], wordcraft_doc::Rgb(0x44, 0x72, 0xC4));
     assert_eq!(d.settings.major_font, "Major Face");
+}
+
+fn assert_imported_numbering_and_settings(d: &Document) {
     // Numbering.
     let lv = d.numbering.level(2, 0).unwrap();
     assert_eq!((lv.start, lv.text.as_str(), lv.indent, lv.hanging, lv.align), (3, "%1)", 36.0, 18.0, Align::Right));
@@ -479,8 +666,11 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     // A hostile start is clamped, an unknown position left out.
     let fp = d.settings.footnote_pr;
     assert_eq!((fp.pos, fp.num_start, fp.num_restart), (None, Some(1), Some(wordcraft_doc::section::NoteRestart::EachPage)));
+}
+
+fn assert_imported_body_and_metadata(d: &Document) {
     // Body.
-    let p = paras(&d);
+    let p = paras(d);
     assert_eq!(p[0].props.style.as_deref(), Some("1"));
     assert_eq!(p[0].props.numbering, Some(wordcraft_doc::props::NumRef { num: 2, level: 1 }));
     assert_eq!(p[0].props_of_char(4).font.as_deref(), Some("Major Face"));
@@ -681,6 +871,32 @@ fn a_style_defined_twice_is_its_last_definition() {
     assert_eq!((h.chr.bold, h.chr.italic, h.chr.size), (Some(true), None, Some(12.0)));
     assert_eq!(h.chr.color, Some(TextColor::Rgb(Rgb(0, 0, 0xFF))));
     assert_eq!(h.para.align, None, "nothing kept from the first definition");
+}
+
+/// #3889: Word in another language writes the TOC styles under ids in that language (`toc 1` is
+/// `Sumrio1` in Portuguese). They take the engine's ids, which Update Table and the writer know
+/// the entries by, with their formatting and references; an id the file already uses stays.
+#[test]
+fn localized_toc_style_ids_take_the_engine_ids() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="CabealhodoSumrio"><w:name w:val="TOC Heading"/><w:next w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio1"><w:name w:val="toc 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="100"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio2"><w:name w:val="toc 2"/><w:basedOn w:val="Sumrio1"/><w:pPr><w:ind w:left="220"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio3"><w:name w:val="toc 3"/></w:style>
+</w:styles>"#
+    );
+    let p = |st: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr><w:r><w:t>{st}</w:t></w:r></w:p>"#);
+    let body = ["CabealhodoSumrio", "Sumrio1", "Sumrio2", "Sumrio3"].map(p).concat();
+    let d = wordcraft_docx::read(&docx(&body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let ids: Vec<Option<&str>> = paras(&d).iter().map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(ids, [Some("TOCHeading"), Some("TOC1"), Some("TOC2"), Some("Sumrio3")]);
+    let toc2 = d.styles.get("TOC2").unwrap();
+    assert_eq!((toc2.name.as_str(), toc2.based_on.as_deref(), toc2.para.indent_left), ("TOC 2", Some("TOC1"), Some(11.0)));
+    assert_eq!(d.styles.get("TOC1").unwrap().para.space_after, Some(5.0));
+    assert!(d.styles.get("Sumrio1").is_none() && d.styles.get("TOC3").is_some() && d.styles.get("Sumrio3").is_some());
 }
 
 #[test]
@@ -2329,6 +2545,52 @@ fn vml_lines_and_rectangles() {
     ));
 }
 
+/// An arrowhead's kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML
+/// `startarrow`/`startarrowwidth`/`startarrowlength`) are read and saved: they set the size Word
+/// draws it at. An end without `w`/`len` is medium.
+#[test]
+fn arrowheads_keep_their_kind_and_size() {
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+    let style = |kind, width, length| ArrowStyle { kind, width, length };
+    let body = [
+        anchored_wsp(
+            "Line",
+            1270000,
+            0,
+            r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="stealth" w="sm" len="lg"/><a:tailEnd type="diamond" w="lg" len="sm"/></a:ln>"#,
+            "",
+            "<wps:cNvCnPr/>",
+        ),
+        anchored_wsp("Plain", 1270000, 0, r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#, "", "<wps:cNvCnPr/>"),
+        r#"<w:r><w:pict><v:line style="position:absolute" from="10pt,20pt" to="40pt,20pt"><v:stroke startarrow="classic" startarrowwidth="narrow" startarrowlength="long" endarrow="oval" endarrowwidth="wide" endarrowlength="short"/></v:line></w:pict></w:r>"#.to_string(),
+    ]
+    .concat();
+    let ends = |d: &Document| -> Vec<(bool, ArrowStyle, bool, ArrowStyle)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { extra, .. } => (extra.arrow_start, extra.start_style, extra.arrow_end, extra.end_style),
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let expected = vec![
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Diamond, ArrowSize::Large, ArrowSize::Small)),
+        (false, ArrowStyle::default(), true, ArrowStyle::default()),
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Oval, ArrowSize::Large, ArrowSize::Small)),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(ends(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
+    assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
@@ -3546,6 +3808,22 @@ fn html_auto_spacing_off_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// `w:doNotExpandShiftReturn` in the settings' `w:compat`: justified lines ending in a manual line
+/// break keep their spacing (#3924).
+#[test]
+fn do_not_expand_shift_return_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
+    };
+    assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
+    assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
+    assert_eq!(settings(""), (false, false));
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]
@@ -3687,6 +3965,50 @@ fn shape_dashes_import_and_save() {
     }
 }
 
+/// Preserve explicit caps, default missing/unknown caps, and retain caps on unpainted outlines.
+#[test]
+fn shape_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in
+        [("", LineCap::Flat), ("flat", LineCap::Flat), ("sq", LineCap::Square), ("rnd", LineCap::Round), ("unknown", LineCap::Flat)]
+    {
+        for outline in [true, false] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" cap="{attr}""#) };
+            let fill = if outline { r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill>"# } else { "<a:noFill/>" };
+            let sppr = format!(r#"<a:prstGeom prst="line"/><a:noFill/><a:ln w="12700"{cap}>{fill}</a:ln>"#);
+            let body = anchored_wsp("Cap probe", 889000, 0, &sppr, "", "<wps:cNvSpPr/>");
+            let d = read_body(&format!("<w:p>{body}</w:p>"));
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, outline={outline}");
+            }
+        }
+    }
+}
+
+/// Preserve direct and shapetype-inherited VML end caps through a DrawingML save.
+#[test]
+fn vml_line_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in [("", LineCap::Flat), ("flat", LineCap::Flat), ("square", LineCap::Square), ("round", LineCap::Round)] {
+        for inherited in [false, true] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" endcap="{attr}""#) };
+            let stroke = format!("<v:stroke{cap}/>");
+            let (base, own) = if inherited { (stroke.as_str(), "") } else { ("", stroke.as_str()) };
+            let body = format!(
+                r##"<w:p><w:r><w:pict><v:shapetype id="probe" o:spt="32">{base}</v:shapetype><v:shape type="#probe" style="width:40pt;height:1pt" strokecolor="#ff0000">{own}</v:shape></w:pict></w:r></w:p>"##
+            );
+            let d = read_body(&body);
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, inherited={inherited}");
+            }
+        }
+    }
+}
+
 #[test]
 fn bookmark_end_name_and_id_trim() {
     let body = r#"<w:p>
@@ -3768,6 +4090,30 @@ fn equation_in_alternate_content_is_read() {
     let p = paras(&d)[0];
     assert_eq!(equations(p), vec![("x+1".to_string(), false)]);
     assert!(!p.plain_text().contains("[picture]"));
+}
+
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Solid { color, transparency }), .. } => (Some(*color), *transparency),
+        o => panic!("{o:?}"),
+    };
+    const FILL_ALPHA: u32 = 30_980;
+    const ALPHA_SCALE: f32 = 100_000.0;
+    // Canonical Fill stores the percentage computed from opacity, including f32 rounding.
+    let expected = 100.0 - (FILL_ALPHA as f32 / ALPHA_SCALE) * 100.0;
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), expected));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let parts = unzip(&bytes);
+    let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+    assert!(xml.contains(&format!("<a:alpha val=\"{FILL_ALPHA}\"/>")), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), expected));
 }
 
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
@@ -3965,4 +4311,63 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
+/// line when it has no width and no `o:hrpct`, a share of it (`o:hrpct`, tenths of a percent), or
+/// its own width (`o:hrpct="0"`), placed by `o:hralign`. It saves back as the same VML rule.
+#[test]
+fn vml_horizontal_rules_are_read_and_kept() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let hr = |attrs: &str, style: &str| format!(r#"<w:p><w:r><w:pict><v:rect style="{style}" {attrs}/></w:pict></w:r></w:p>"#);
+    let body = [
+        hr(r#"o:hralign="center" o:hrstd="t" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="500" o:hralign="right" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="0" o:hralign="center" o:hr="t""#, "width:100pt;height:3pt"),
+        hr("", "width:100pt;height:3pt"),
+    ]
+    .concat();
+    let rules = |d: &Document| -> Vec<(Option<HorizontalRule>, f32)> {
+        paras(d)
+            .iter()
+            .filter_map(|p| p.objects.iter().find_map(|o| if let InlineObject::Shape { extra, w, .. } = o { Some((extra.hr, *w)) } else { None }))
+            .collect()
+    };
+    let d = read_body(&body);
+    let got = rules(&d);
+    assert_eq!(
+        got,
+        [
+            (Some(HorizontalRule { pct: 100.0, align: Align::Center, standard: true }), 0.0),
+            (Some(HorizontalRule { pct: 50.0, align: Align::Right, standard: false }), 0.0),
+            (Some(HorizontalRule { pct: 0.0, align: Align::Center, standard: false }), 100.0),
+            (None, 100.0),
+        ]
+    );
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(rules(&again)[..3], got[..3]);
+    // A rule's rotation and flips are kept.
+    let spin = |d: &Document| paras(d)[0].objects.iter().find_map(|o| o.frame()).map(|(_, _, f)| f.spin());
+    let d = read_body(&hr(r#"o:hrpct="500" o:hr="t""#, "width:0;height:1.5pt;rotation:45;flip:x y"));
+    assert_eq!(spin(&d), Some(wordcraft_geom::Spin::new(45.0, true, true)));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(spin(&again), spin(&d));
+    // A see-through rule stays see-through.
+    let fill = |d: &Document| paras(d)[0].objects.iter().find_map(|o| if let InlineObject::Shape { fill, .. } = o { fill.clone() } else { None });
+    let d = read_body(
+        r##"<w:p><w:r><w:pict><v:rect style="width:0;height:1.5pt" o:hr="t" fillcolor="#ff0000"><v:fill opacity="0.25"/></v:rect></w:pict></w:r></w:p>"##,
+    );
+    let Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) = fill(&d) else { panic!("{:?}", fill(&d)) };
+    assert!((transparency - 75.0).abs() < 0.01, "{transparency}");
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(fill(&again), fill(&d));
+    // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
+    let body = [
+        hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),
+        hr(r#"o:hralign="center" o:hr="t""#, "visibility:hidden;width:0;height:2pt"),
+    ]
+    .concat();
+    let d = read_body(&body);
+    assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }

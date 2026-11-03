@@ -15,6 +15,8 @@ use crate::DocxError;
 pub const MAX_DEPTH: usize = 256;
 /// Maximum number of elements in one part.
 pub const MAX_ELEMENTS: usize = 8_000_000;
+/// Maximum number of attributes on one element (#3702).
+pub const MAX_ATTRS: usize = 1024;
 
 /// Known namespaces and the canonical prefix we use for them (read and write).
 pub const NAMESPACES: &[(&str, &str)] = &[
@@ -309,6 +311,16 @@ pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
 /// [`parse`] with `extra` namespaces (prefix, URI) mapped to canonical prefixes first, so a
 /// related vocabulary (WordprocessingML 2003) reads with the prefixes the reader knows.
 pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, DocxError> {
+    parse_with(bytes, extra, false)
+}
+
+/// [`parse`] for a part whose loss would be silent data loss (the main document): a mismatched end
+/// tag or an element left open at the end of the data is an error, not a cue to stop reading.
+pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
+    parse_with(bytes, &[], true)
+}
+
+fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
     let bytes = match &transcoded {
@@ -321,7 +333,7 @@ pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, Docx
         c.trim_text_start = false;
         c.trim_text_end = false;
         c.expand_empty_elements = false;
-        c.check_end_names = false;
+        c.check_end_names = strict;
     }
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
@@ -336,6 +348,9 @@ pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, Docx
         };
         match ev {
             Event::Start(ref e) | Event::Empty(ref e) => {
+                if strict && root.is_some() && stack.is_empty() {
+                    return Err(DocxError::Xml("more than one root element".into()));
+                }
                 count += 1;
                 if count > MAX_ELEMENTS {
                     return Err(DocxError::Limit("too many XML elements".into()));
@@ -347,6 +362,9 @@ pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, Docx
                 };
                 let mut el = El { name, attrs: Vec::new(), kids: Vec::new() };
                 for a in e.attributes().with_checks(false) {
+                    if el.attrs.len() >= MAX_ATTRS {
+                        return Err(DocxError::Limit("too many attributes on one element".into()));
+                    }
                     let Ok(a) = a else { continue };
                     let key = a.key;
                     let raw_key = key.as_ref();
@@ -423,17 +441,22 @@ pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, Docx
                         }
                         Err(_) => None,
                     };
-                    if let Some(c) = ch {
-                        push_text(top, &c);
+                    match ch {
+                        Some(c) => push_text(top, &c),
+                        None if strict => return Err(DocxError::Xml("an entity is not defined".into())),
+                        None => {}
                     }
                 }
             }
             Event::Eof => break,
             _ => {}
         }
-        if root.is_some() && stack.is_empty() {
+        if !strict && root.is_some() && stack.is_empty() {
             break;
         }
+    }
+    if strict && !stack.is_empty() {
+        return Err(DocxError::Xml("an element is not closed".into()));
     }
     // Unclosed elements at EOF: close them (lenient).
     while let Some(el) = stack.pop() {
@@ -555,6 +578,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strict_parsing_rejects_a_dropped_entity_and_trailing_markup() {
+        let bad = [&b"<w:t>before &unknown; after</w:t>"[..], b"<a></a><b></b>", b"<a></a><b>"];
+        for xml in bad {
+            assert!(parse_strict(xml).is_err(), "{}", String::from_utf8_lossy(xml));
+        }
+        assert!(
+            parse_strict(
+                b"<a>x &amp; y</a>
+"
+            )
+            .is_ok()
+        );
+        assert!(parse(b"<a></a><b></b>").is_ok(), "lenient parsing still stops at the root");
+    }
+
+    #[test]
     fn a_relationship_attribute_is_the_namespaced_one_or_the_alias_of_one() {
         // The relationship namespace, and VML's `o:relid`.
         assert!(is_rel_attr("w:hyperlink", "r:id"));
@@ -633,6 +672,39 @@ mod tests {
         }
         s.push_str("><b/></a>");
         assert!(parse(s.as_bytes()).is_err());
+    }
+
+    /// One start tag carrying 200,000 attributes (distinct or duplicate names) is refused or
+    /// truncated instead of allocated: a 59 KB `.docx` used to cost 611 MB (#3702, WC-06).
+    #[test]
+    fn too_many_attributes_on_one_element_is_capped() {
+        // The cap the issue suggests; a fix may pick a lower one, never a higher one.
+        const CAP: usize = 1024;
+        let distinct: String = (0..200_000).map(|i| format!(" a{i}=\"\"")).collect();
+        let duplicate = " a=\"\"".repeat(200_000);
+        for (label, attrs) in [("distinct", distinct), ("duplicate", duplicate)] {
+            let x = format!("<w:p xmlns:w=\"{}\"{attrs}/>", NAMESPACES[0].1);
+            match parse(x.as_bytes()) {
+                Err(DocxError::Limit(_)) => {}
+                Ok(p) => assert!(p.attrs.len() <= CAP, "{label}: kept {} attributes", p.attrs.len()),
+                Err(e) => panic!("{label}: expected a Limit error or a capped element, got {e}"),
+            }
+        }
+        // Real-world attribute counts are untouched.
+        let x = format!(
+            r#"<w:p xmlns:w="{}" w:rsidR="00A1" w:rsidRDefault="00A1" w:rsidP="00A1" w:rsidRPr="00A1"><w:rPr><w:rFonts w:ascii="A" w:hAnsi="B" w:eastAsia="C" w:cs="D" w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi" w:hint="eastAsia"/></w:rPr></w:p>"#,
+            NAMESPACES[0].1
+        );
+        let p = parse(x.as_bytes()).unwrap();
+        assert_eq!(p.attrs.len(), 4);
+        let fonts = p.child("w:rPr").and_then(|r| r.child("w:rFonts")).unwrap();
+        assert_eq!(fonts.attrs.len(), 9);
+        assert_eq!(fonts.attr("w:cstheme"), Some("minorBidi"));
+        // Far more than any real producer writes, still well under any sane cap.
+        let many: String = (0..256).map(|i| format!(" a{i}=\"{i}\"")).collect();
+        let p = parse(format!("<p{many}/>").as_bytes()).unwrap();
+        assert_eq!(p.attrs.len(), 256);
+        assert_eq!(p.attr("a255"), Some("255"));
     }
 
     #[test]

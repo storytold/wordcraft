@@ -18,11 +18,25 @@ if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/wordcraft-signing.keychain-db"
-CERT="$TMP/wordcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
 
-trap 'rm -f "$CERT"' EXIT
+# The decoded bundle and the keychain go in a fresh private directory with an unpredictable name:
+# a predictable name in a shared temp folder could be planted beforehand (a link that sends the key
+# somewhere readable, or a keychain someone else made) (#3692). The bundle is removed on exit; the
+# keychain is kept for the signing steps that follow, unless this script fails.
+WORK="$(mktemp -d "$TMP/wordcraft-signing.XXXXXXXX")"
+CERT="$WORK/wordcraft-signing.p12"
+KEYCHAIN="$WORK/wordcraft-signing.keychain-db"
+cleanup() {
+  local status=$?
+  rm -f "$CERT"
+  if [[ "$status" -ne 0 ]]; then
+    security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+    rm -rf "$WORK"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"

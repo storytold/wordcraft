@@ -32,6 +32,12 @@ fn records(id: &str) -> bool {
 /// Tables nested deeper than this aren't compared (hostile documents).
 const MAX_DEPTH: usize = 16;
 
+/// A paragraph's, table's or cell's tracked formatting change, if it carries one.
+type Slot<T> = Option<Box<PropChange<T>>>;
+
+/// What a [`Slot`] should become (which may be no change at all).
+struct Replacement<T>(Slot<T>);
+
 struct Recorder<'a> {
     author: String,
     date: String,
@@ -64,14 +70,7 @@ impl Recorder<'_> {
 
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
-    #[allow(clippy::type_complexity, clippy::option_option)]
-    fn change<T: Clone + PartialEq>(
-        &mut self,
-        before: &T,
-        after: &T,
-        f: fn(&T) -> T,
-        get: fn(&T) -> &Option<Box<PropChange<T>>>,
-    ) -> Option<Option<Box<PropChange<T>>>> {
+    fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
         let want = if fb == fa {
@@ -92,7 +91,7 @@ impl Recorder<'_> {
                 PropChange::boxed(rev, old)
             }
         };
-        (want != *has).then_some(want)
+        (want != *has).then_some(Replacement(want))
     }
 
     /// Record the formatting changes between `b` and `a` (the same text) into `a`.
@@ -108,7 +107,7 @@ impl Recorder<'_> {
                 && !own_insert
                 && let Some(want) = self.change(*pb, *pa, CharProps::formatting, |c| &c.fmt_change)
             {
-                runs.push((from, to, want));
+                runs.push((from, to, want.0));
             }
             if x.end <= y.end {
                 i += 1;
@@ -125,10 +124,10 @@ impl Recorder<'_> {
         for (from, to, want) in runs {
             let _ = a.format(from, to, &|c| c.fmt_change = want.clone());
         }
-        if let Some(m) = mark {
+        if let Some(Replacement(m)) = mark {
             a.mark.fmt_change = m;
         }
-        if let Some(p) = props {
+        if let Some(Replacement(p)) = props {
             a.props.fmt_change = p;
         }
         a.normalize();
@@ -149,18 +148,18 @@ impl Recorder<'_> {
                         self.para(pb, pa);
                         // The section's properties on the paragraph (`w:sectPrChange`).
                         let (Some(b), Some(x)) = (pb.section.as_deref(), pa.section.as_deref_mut()) else { continue };
-                        if let Some(w) = self.change(b, x, strip_section, |s| &s.fmt_change) {
+                        if let Some(Replacement(w)) = self.change(b, x, strip_section, |s| &s.fmt_change) {
                             x.fmt_change = w;
                         }
                     }
                 }
                 (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
                     let Block::Table(ta) = Arc::make_mut(a) else { continue };
-                    if let Some(w) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
+                    if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
                         ta.props.fmt_change = w;
                     }
                     for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
-                        if let Some(w) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
+                        if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
                             ra.props.fmt_change = w;
                         }
                         if rb.cells.len() != ra.cells.len() {
@@ -168,7 +167,7 @@ impl Recorder<'_> {
                         }
                         for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
                             // Merges are structure, not formatting: span and vertical merge stay out.
-                            if let Some(w) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
+                            if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
                                 ca.props.fmt_change = w;
                             }
                             self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);

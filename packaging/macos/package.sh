@@ -80,6 +80,21 @@ sign() {
   codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
 }
 
+# `stapler staple` and `stapler validate` both fetch the ticket from Apple's CloudKit, and a dropped
+# connection there (NSURLErrorDomain -1005, "Error 68") fails them although notarization worked.
+# Both are idempotent, so retry with a pause; a missing or bad ticket still fails every try.
+stapler_retry() {
+  local try
+  for try in 1 2 3 4; do
+    xcrun stapler "$1" "$2" && return 0
+    [[ "$try" = 4 ]] && break
+    echo "stapler $1 failed (try $try of 4); retrying in $((try * 20)) s" >&2
+    sleep $((try * 20))
+  done
+  echo "error: stapler $1 $(basename "$2") failed 4 times" >&2
+  exit 1
+}
+
 notarize() {
   local file="$1" out id status
   echo "==> notarizing $(basename "$file") (this can take a few minutes)"
@@ -104,7 +119,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK/bin/wordcraft" "$APP/Contents/MacOS/WordCraft"
 cp "$ROOT/assets/app-icon/wordcraft.icns" "$APP/Contents/Resources/WordCraft.icns"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
-copy_font_licences "$APP/Contents/Resources"
+copy_docs "$APP/Contents/Resources"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
   -e "s/@BUILD_SHA@/${WORDCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
@@ -124,8 +139,8 @@ codesign --verify --strict --deep --verbose=2 "$APP"
 if [[ "$NOTARIZE" = 1 ]]; then
   ditto -c -k --keepParent "$APP" "$WORK/WordCraft-notarize.zip"
   notarize "$WORK/WordCraft-notarize.zip"
-  xcrun stapler staple "$APP"
-  xcrun stapler validate "$APP"
+  stapler_retry staple "$APP"
+  stapler_retry validate "$APP"
   spctl --assess --type execute -vvv "$APP"
 fi
 
@@ -198,8 +213,8 @@ verify_dmg_app() {
 verify_dmg_app "$DMG"
 if [[ "$NOTARIZE" = 1 ]]; then
   notarize "$DMG"
-  xcrun stapler staple "$DMG"
-  xcrun stapler validate "$DMG"
+  stapler_retry staple "$DMG"
+  stapler_retry validate "$DMG"
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
