@@ -764,7 +764,34 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // Unicode 15.1 (LB19a) lets a line break before an opening curly quote and after a closing
+    // one between East Asian characters ("确保|“双减”|工作"); unicode-linebreak follows 15.0, which
+    // never breaks beside them, so a Chinese line ending before “ lost its last character.
+    let quote_breaks = curly_quote_breaks(text);
+    if !quote_breaks.is_empty() {
+        found.extend(quote_breaks);
+        found.sort_unstable();
+        found.dedup();
+    }
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+/// LB19a's break opportunities beside curly quotes with East Asian characters on both sides:
+/// before an opening quote (“ ‘) and after a closing one (” ’). Kinsoku then removes those a line
+/// may not take (a closing mark starting the next line).
+fn curly_quote_breaks(text: &str) -> Vec<usize> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let east_asian = |k: Option<&(usize, char)>| k.is_some_and(|(_, c)| super::grid::is_east_asian(*c));
+    let mut out = Vec::new();
+    for (k, &(i, c)) in chars.iter().enumerate() {
+        let (before, after) = (k.checked_sub(1).and_then(|j| chars.get(j)), chars.get(k + 1));
+        match c {
+            '“' | '‘' if k > 0 && east_asian(before) && east_asian(after) => out.push(i),
+            '”' | '’' if east_asian(before) && east_asian(after) => out.push(i + c.len_utf8()),
+            _ => {}
+        }
+    }
+    out
 }

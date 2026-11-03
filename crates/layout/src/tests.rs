@@ -12052,3 +12052,23 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+/// Unicode 15.1 (LB19a): between East Asian characters a line may break before an opening curly
+/// quote and after a closing one (`确保|“双减”|工作`); `unicode-linebreak` follows 15.0, which
+/// never breaks beside them. Kinsoku still forbids a break after the opening quote or before the
+/// closing one.
+#[test]
+fn curly_quotes_between_ideographs_are_break_opportunities() {
+    let text = "确保“双减”工作";
+    let d = Document::from_text(text);
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let breaks_after = |ch: char| {
+        let at = text.find(ch).unwrap();
+        para.clusters.iter().find(|c| c.start <= at && at < c.end).map(|c| c.break_after).unwrap()
+    };
+    assert!(breaks_after('保'), "a break before “");
+    assert!(breaks_after('”'), "a break after ”");
+    assert!(!breaks_after('“'), "no break after the opening quote");
+    assert!(!breaks_after('减'), "no break before the closing quote");
+}
