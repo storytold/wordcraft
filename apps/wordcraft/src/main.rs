@@ -496,7 +496,7 @@ fn main() -> eframe::Result {
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
                 let doc = app.session.blank_document();
-                app.session.set_document(doc);
+                app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
             if prefs_enabled()

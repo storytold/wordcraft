@@ -2,7 +2,7 @@
 //! document, one undo step, Track Changes respected.
 
 use serde_json::json;
-use wordcraft_doc::{Path, Pos, RevisionKind, SectionProps, StoryRef};
+use wordcraft_doc::{InlineObject, Path, Pos, RevisionKind, SectionProps, StoryRef};
 
 use crate::Session;
 
@@ -124,6 +124,17 @@ fn a_space_run_at_the_end_collapses() {
 }
 
 #[test]
+fn extra_spaces_collapse_without_removing_tabs_or_page_breaks() {
+    use wordcraft_doc::para::PAGE_BREAK;
+
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": format!("a  \t  b  {PAGE_BREAK}  c\t  ")}));
+    select_all(&mut s);
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+    assert_eq!(text(&s), format!("a \t b {PAGE_BREAK} c\t "), "only repeated spaces collapse");
+}
+
+#[test]
 fn indented_spaces_become_an_indent() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "   a\nb"}));
@@ -136,6 +147,24 @@ fn indented_spaces_become_an_indent() {
 }
 
 #[test]
+fn spaces_to_indent_keeps_spaces_the_indent_limit_cannot_represent() {
+    let mut many = s();
+    run(&mut many, "document.setText", json!({"text": format!("{}a", " ".repeat(24))}));
+    select_all(&mut many);
+    run(&mut many, "para.spacesToIndent", json!({"scope": "all"}));
+    assert_eq!(text(&many), "  a", "22 spaces fit in the 1584 pt maximum; two stay as text");
+    assert_eq!(many.doc.para(StoryRef::Body, &Path::top(0)).unwrap().props.indent_first, Some(1584.0));
+
+    let mut nearly_full = s();
+    run(&mut nearly_full, "document.setText", json!({"text": "  a"}));
+    run(&mut nearly_full, "para.indents", json!({"firstLine": 1548.0}));
+    select_all(&mut nearly_full);
+    run(&mut nearly_full, "para.spacesToIndent", json!({"scope": "all"}));
+    assert_eq!(text(&nearly_full), "  a", "less than 72 pt of room cannot replace one space");
+    assert_eq!(nearly_full.doc.para(StoryRef::Body, &Path::top(0)).unwrap().props.indent_first, Some(1548.0));
+}
+
+#[test]
 fn indents_become_leading_spaces() {
     let mut s = s();
     run(&mut s, "document.setText", json!({"text": "a"}));
@@ -145,6 +174,94 @@ fn indents_become_leading_spaces() {
     assert_eq!(text(&s), "   a", "72 + 144 pt become three spaces");
     let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
     assert_eq!((p.props.indent_left, p.props.indent_first), (Some(0.0), Some(0.0)));
+}
+
+#[test]
+fn a_hanging_indent_that_sums_to_zero_is_still_removed() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a"}));
+    run(&mut s, "para.indents", json!({"left": 72.0, "firstLine": -72.0}));
+    select_all(&mut s);
+    run(&mut s, "para.indentToSpaces", json!({"scope": "all"}));
+    assert_eq!(text(&s), "a", "the cancelling indents need no leading spaces");
+    let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((p.props.indent_left, p.props.indent_first), (Some(0.0), Some(0.0)));
+
+    let mut tracked = Session::new(wordcraft_doc::Document::new());
+    run(&mut tracked, "document.setText", json!({"text": "a"}));
+    run(&mut tracked, "para.indents", json!({"left": 72.0, "firstLine": -72.0}));
+    run(&mut tracked, "review.trackChanges", json!({"value": true}));
+    select_all(&mut tracked);
+    run(&mut tracked, "para.indentToSpaces", json!({"scope": "all"}));
+    assert!(!tracked.doc.revisions.iter().any(|r| r.kind == RevisionKind::Insert), "no inserted text means no insert revision");
+    assert!(tracked.doc.revisions.iter().any(|r| r.kind == RevisionKind::Format), "the removed hanging indent is tracked as formatting");
+}
+
+#[test]
+fn cleanup_keeps_fields_footnote_anchors_and_mixed_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "aa  bb  "}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 4), focus: Pos::body(0, 6) };
+    run(&mut s, "format.bold", json!({"value": true}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "insert.field", json!({"instr": "AUTHOR", "result": "Ada"}));
+    let note = s.run("references.footnote", &json!({"text": "keep this note"})).unwrap()["id"].as_u64().unwrap() as u32;
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "text.insert", json!({"text": "  tail"}));
+
+    select_all(&mut s);
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+
+    let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((p.props_of_char(3).bold, p.props_of_char(4).bold), (Some(true), Some(true)), "the bold run moved but kept its formatting");
+    assert!(p.object_offsets().iter().any(|off| matches!(p.object_at(*off), Some(InlineObject::Field { .. }))), "the field stays");
+    assert!(p.object_offsets().iter().any(|off| matches!(p.object_at(*off), Some(InlineObject::NoteRef { .. }))), "the footnote anchor stays");
+    assert!(s.doc.parts.contains_key(&note), "the anchored footnote story stays");
+}
+
+#[test]
+fn cleanup_inside_a_table_keeps_the_table_and_its_cell() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "a  b"}));
+    select_all(&mut s);
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+    let table = s.doc.body.iter().find_map(|block| block.as_table()).expect("the table stays");
+    let cell = table.rows[0].cells[0].blocks.iter().find_map(|block| block.as_para()).expect("the cell paragraph stays");
+    assert_eq!(cell.text, "a b");
+}
+
+#[test]
+fn whole_document_scope_from_a_table_cell_reaches_the_body() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "body  text"}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    let table_index = s.doc.body.iter().position(|block| block.as_table().is_some()).expect("the table was inserted") as u32;
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path(vec![table_index, 0, 0, 0]), off: 0 });
+    run(&mut s, "text.insert", json!({"text": "cell  text"}));
+    assert!(s.sel.focus.path.depth() > 0, "the caret is inside the table");
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+    assert!(text(&s).contains("body text"), "body text outside the table was cleaned too: {}", text(&s));
+    let table = s.doc.body.iter().find_map(|block| block.as_table()).expect("the table stays");
+    let cell = table.rows[0].cells[0].blocks.iter().find_map(|block| block.as_para()).expect("the cell stays");
+    assert_eq!(cell.text, "cell text");
+}
+
+#[test]
+fn paragraph_tools_refuse_content_locked_controls() {
+    for (text, command) in [("a  b", "para.removeExtraSpaces"), ("a\nb", "para.convertBreaks")] {
+        let mut s = s();
+        type_breaks(&mut s, text);
+        select_all(&mut s);
+        run(&mut s, "developer.richText", json!({"tag": "locked"}));
+        run(&mut s, "developer.properties", json!({"control": "locked", "lockEdit": true}));
+        select_all(&mut s);
+        let before = s.doc.clone();
+        let error = s.run(command, &json!({"scope": "all"})).unwrap_err();
+        assert!(error.to_string().contains("can't be edited"), "{command}: {error}");
+        assert_eq!(s.doc, before, "{command} changed locked content");
+    }
 }
 
 #[test]
@@ -164,6 +281,109 @@ fn the_selection_is_the_scope() {
     s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 4) };
     run(&mut s, "para.removeExtraSpaces", json!({}));
     assert_eq!(text(&s), "a b\nc  d", "the second paragraph is untouched");
+}
+
+#[test]
+fn structural_tools_do_not_cross_the_selection() {
+    let mut breaks = s();
+    type_breaks(&mut breaks, "one\ntwo");
+    run(&mut breaks, "text.newParagraph", json!({}));
+    run(&mut breaks, "text.insert", json!({"text": "outside"}));
+    breaks.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 7) };
+    run(&mut breaks, "para.convertBreaks", json!({}));
+    let last = breaks.doc.para_paths(StoryRef::Body).last().cloned().unwrap();
+    assert_eq!(breaks.doc.para(StoryRef::Body, &last).unwrap().text, "outside");
+
+    let mut between = s();
+    run(&mut between, "document.setText", json!({"text": "a\nb\nc"}));
+    between.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 1) };
+    run(&mut between, "para.blankBetween", json!({}));
+    assert_eq!(text(&between), "a\n\nb\nc", "only a and b get a blank between them");
+
+    let mut separate = s();
+    run(&mut separate, "document.setText", json!({"text": "a\nb\nc"}));
+    separate.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 1) };
+    run(&mut separate, "para.separateParagraphs", json!({}));
+    assert_eq!(text(&separate), "a\n\nb\n\nc", "the blank after b stays before the unselected c");
+
+    let mut blank = s();
+    run(&mut blank, "document.setText", json!({"text": "a\n\nb\n\nc"}));
+    blank.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut blank, "para.removeBlank", json!({}));
+    assert_eq!(text(&blank), "a\nb\n\nc", "the other blank paragraph is outside the selection");
+}
+
+#[test]
+fn indent_space_conversions_are_reversible_track_changes() {
+    let mut to_indent = s();
+    run(&mut to_indent, "document.setText", json!({"text": "  a"}));
+    run(&mut to_indent, "review.trackChanges", json!({"value": true}));
+    select_all(&mut to_indent);
+    run(&mut to_indent, "para.spacesToIndent", json!({"scope": "all"}));
+    assert_eq!(to_indent.doc.para(StoryRef::Body, &Path::top(0)).unwrap().props.indent_first, Some(144.0));
+    run(&mut to_indent, "review.rejectAll", json!({}));
+    let p = to_indent.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((p.text.as_str(), p.props.indent_first), ("  a", None));
+
+    let mut to_spaces = s();
+    run(&mut to_spaces, "document.setText", json!({"text": "a"}));
+    run(&mut to_spaces, "para.indents", json!({"firstLine": 144.0}));
+    run(&mut to_spaces, "review.trackChanges", json!({"value": true}));
+    select_all(&mut to_spaces);
+    run(&mut to_spaces, "para.indentToSpaces", json!({"scope": "all"}));
+    run(&mut to_spaces, "review.rejectAll", json!({}));
+    let p = to_spaces.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((p.text.as_str(), p.props.indent_first), ("a", Some(144.0)));
+
+    let mut accepted = s();
+    run(&mut accepted, "document.setText", json!({"text": "a"}));
+    run(&mut accepted, "para.indents", json!({"firstLine": 144.0}));
+    run(&mut accepted, "review.trackChanges", json!({"value": true}));
+    select_all(&mut accepted);
+    run(&mut accepted, "para.indentToSpaces", json!({"scope": "all"}));
+    run(&mut accepted, "review.acceptAll", json!({}));
+    let p = accepted.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!((p.text.as_str(), p.props.indent_first), ("  a", Some(0.0)));
+}
+
+#[test]
+fn indent_to_spaces_does_not_inherit_revision_marks() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 1) };
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "text.delete", json!({}));
+    run(&mut s, "review.trackChanges", json!({"value": false}));
+    run(&mut s, "para.indents", json!({"firstLine": 72.0}));
+    select_all(&mut s);
+    run(&mut s, "para.indentToSpaces", json!({"scope": "all"}));
+    let space = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().props_of_char(0);
+    assert_eq!((space.ins, space.del, space.fmt_change.as_ref().map(|_| ())), (None, None, None));
+}
+
+#[test]
+fn converting_too_many_line_breaks_is_atomic() {
+    let original = format!("{}end", "x\n".repeat(10_001));
+    let mut s = s();
+    type_breaks(&mut s, &original);
+    select_all(&mut s);
+    let before = s.doc.clone();
+    let error = s.run("para.convertBreaks", &json!({"scope": "all"})).unwrap_err();
+    assert!(error.to_string().contains("at most"), "{error}");
+    assert_eq!(s.doc, before, "the refused conversion is all-or-nothing");
+}
+
+#[test]
+fn repeating_a_tracked_deletion_creates_no_empty_revision() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "  a"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    select_all(&mut s);
+    run(&mut s, "para.trimLeadingSpaces", json!({"scope": "all"}));
+    let revisions = s.doc.revisions.len();
+    run(&mut s, "para.trimLeadingSpaces", json!({"scope": "all"}));
+    assert_eq!(s.doc.revisions.len(), revisions, "already-deleted spaces create no revision");
 }
 
 #[test]

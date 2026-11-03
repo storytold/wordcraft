@@ -212,6 +212,18 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
 }
 
+/// Build the tracked paragraph-property change for a command that also changes the paragraph's
+/// text. The ordinary after-command recorder deliberately compares only paragraphs with identical
+/// text, so mixed text/paragraph-format transformations call this before assigning their props.
+pub(crate) fn changed_para_props(s: &mut Session, before: &ParaProps, after: &ParaProps) -> Option<Box<PropChange<ParaProps>>> {
+    if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
+        return after.fmt_change.clone();
+    }
+    let revisions_before = s.doc.revisions.clone();
+    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &revisions_before, revisions: &mut s.doc.revisions, rid: None };
+    r.change(before, after, ParaProps::formatting, |p| &p.fmt_change).map(|Replacement(change)| change).unwrap_or_else(|| after.fmt_change.clone())
+}
+
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
 /// differently from `old` as tracked formatting changes by `author`.
 pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {

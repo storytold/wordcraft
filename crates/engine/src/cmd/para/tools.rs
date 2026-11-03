@@ -4,11 +4,11 @@
 
 use serde_json::{Value, json};
 
-use wordcraft_doc::para::{LINE_BREAK, PAGE_BREAK};
+use wordcraft_doc::para::LINE_BREAK;
 use wordcraft_doc::{Path, Pos, RevisionKind, StoryRef};
 
 use super::{CmdError, CmdResult, Session, p, sel_result};
-use crate::cmd::{has_next_para, new_revision, split_para, track_delete_as};
+use crate::cmd::{has_next_para, new_revision, split_para, track_delete};
 
 /// The maximum number of paragraphs one call may touch: the work, and the blank paragraphs a
 /// command can add, stay bounded whatever the document says.
@@ -24,11 +24,28 @@ fn scope_all(s: &mut Session, v: &Value) -> Result<(), CmdError> {
     match p::str(v, "scope").unwrap_or("selection") {
         "selection" => Ok(()),
         "all" => {
-            s.run("select.all", &json!({}))?;
+            s.run("select.all", &json!({"whole": true}))?;
             Ok(())
         }
         x => Err(CmdError::Params(format!("unknown scope `{x}` (selection|all)"))),
     }
+}
+
+/// Refuse a paragraph rewrite that would touch content locked against editing. Commands operate
+/// on whole paragraphs, so checking each full paragraph also covers controls outside the exact
+/// selection offsets in a selected paragraph.
+fn check_target_edits(s: &mut Session, story: StoryRef, paths: &[Path]) -> Result<(), CmdError> {
+    let ranges: Vec<(Pos, Pos)> = paths
+        .iter()
+        .filter_map(|path| {
+            let len = s.doc.para(story, path)?.len();
+            Some((Pos { story, path: path.clone(), off: 0 }, Pos { story, path: path.clone(), off: len }))
+        })
+        .collect();
+    for (a, b) in ranges {
+        crate::cmd::controls::check_edit(s, &a, &b)?;
+    }
+    Ok(())
 }
 
 /// The paragraphs a command runs over, in document order, and the story they are in.
@@ -53,9 +70,9 @@ fn delete_in_para(s: &mut Session, story: StoryRef, path: &Path, a: usize, b: us
         return Ok(());
     }
     let at = |off: usize| Pos { story, path: path.clone(), off };
+    crate::cmd::controls::check_delete(s, &at(a), &at(b))?;
     if s.doc.settings.track_changes {
-        let rid = new_revision(s, RevisionKind::Delete);
-        track_delete_as(s, &at(a), &at(b), rid)?;
+        track_delete(s, &at(a), &at(b))?;
     } else {
         s.doc.delete_range(&at(a), &at(b))?;
     }
@@ -89,6 +106,11 @@ fn break_ranges(para: &wordcraft_doc::Paragraph) -> Vec<(usize, usize)> {
 pub(super) fn convert_breaks(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
+    let breaks: usize = paths.iter().filter_map(|path| s.doc.para(story, path)).map(|p| p.text.chars().filter(|c| *c == LINE_BREAK).count()).sum();
+    if breaks > MAX_TOOL_PARAS {
+        return Err(CmdError::Params(format!("convert at most {MAX_TOOL_PARAS} line breaks at once")));
+    }
     for path in paths.iter().rev() {
         let Some(para) = s.doc.para(story, path) else { continue };
         for (i, _) in break_ranges(para).into_iter().rev() {
@@ -106,6 +128,7 @@ pub(super) fn blank_between(s: &mut Session, v: &Value) -> CmdResult {
     let after = p::bool(v, "after").unwrap_or(false);
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     let count = paths.len().saturating_sub(1) + usize::from(after);
     if count > MAX_TOOL_PARAS {
         return Err(CmdError::Params(format!("insert at most {MAX_TOOL_PARAS} blank paragraphs at once")));
@@ -133,6 +156,7 @@ pub(super) fn separate_paragraphs(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn remove_blank(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     // Last first: removing a block leaves the paths before it as they are.
     for path in paths.iter().rev() {
         let Some(para) = s.doc.para(story, path) else { continue };
@@ -142,10 +166,11 @@ pub(super) fn remove_blank(s: &mut Session, v: &Value) -> CmdResult {
         if !para.is_empty() || para.section.is_some() || !has_next_para(s, story, path) {
             continue;
         }
+        let next = path.with_last(path.last() + 1);
+        let (a, b) = (Pos { story, path: path.clone(), off: 0 }, Pos { story, path: next, off: 0 });
+        crate::cmd::controls::check_delete(s, &a, &b)?;
         if s.doc.settings.track_changes {
-            let next = path.with_last(path.last() + 1);
-            let rid = new_revision(s, RevisionKind::Delete);
-            track_delete_as(s, &Pos { story, path: path.clone(), off: 0 }, &Pos { story, path: next, off: 0 }, rid)?;
+            track_delete(s, &a, &b)?;
         } else {
             s.doc.remove_block(story, path)?;
         }
@@ -162,6 +187,7 @@ fn leading_spaces(para: &wordcraft_doc::Paragraph) -> usize {
 pub(super) fn trim_leading(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let n = leading_spaces(para);
@@ -171,17 +197,18 @@ pub(super) fn trim_leading(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// `para.removeExtraSpaces`: every run of spaces outside the paragraph's start becomes one
-/// space; tabs and page breaks count as spaces, so spaces around a tab collapse to it.
+/// space. Tabs and page breaks are document structure, not redundant spaces, and stay in place.
 /// Leading spaces stay (that is `para.trimLeadingSpaces`).
 pub(super) fn remove_extra_spaces(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let mut runs = Vec::new();
         let mut start = None;
         for (i, c) in para.text.char_indices() {
-            if matches!(c, ' ' | '\t' | PAGE_BREAK) {
+            if c == ' ' {
                 start.get_or_insert(i);
             } else if let Some(a) = start.take() {
                 // A run at the paragraph's start stays; a run inside the text collapses to one space.
@@ -207,20 +234,30 @@ pub(super) fn remove_extra_spaces(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn spaces_to_indent(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let spaces = leading_spaces(para);
         if spaces == 0 {
             continue;
         }
+        let current = para.props.indent_first.unwrap_or(0.0).clamp(-1584.0, 1584.0);
+        let represented = spaces.min(((1584.0 - current).max(0.0) / 72.0).floor() as usize);
+        if represented == 0 {
+            continue;
+        }
+        let before = para.props.clone();
+        let mut after = before.clone();
+        after.indent_first = Some(current + represented as f32 * 72.0);
+        after.cancel_char_indents(false, false, true);
+        after.fmt_change = crate::cmd::fmt_revisions::changed_para_props(s, &before, &after);
         {
             let p = s.doc.para_mut(story, &path)?;
-            p.props.indent_first = Some((p.props.indent_first.unwrap_or(0.0) + spaces as f32 * 72.0).clamp(-1584.0, 1584.0));
-            p.props.cancel_char_indents(false, false, true);
+            p.props = after;
             p.touch();
         }
         // A space is one byte, so the byte range is the count.
-        apply_deletions(s, story, &path, vec![(0, spaces)])?;
+        apply_deletions(s, story, &path, vec![(0, represented)])?;
     }
     sel_result(s)
 }
@@ -230,24 +267,35 @@ pub(super) fn spaces_to_indent(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn indent_to_spaces(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let pts = para.props.indent_left.unwrap_or(0.0) + para.props.indent_first.unwrap_or(0.0);
         let n = (pts / 72.0).round().clamp(0.0, MAX_INDENT_SPACES as f32) as usize;
-        if n == 0 {
+        if n == 0 && para.props.indent_left.unwrap_or(0.0) == 0.0 && para.props.indent_first.unwrap_or(0.0) == 0.0 {
             continue;
         }
         let mut props = s.doc.para(story, &path).map(|p| p.props_at(0)).cloned().unwrap_or_default();
         // The revision first: `new_revision` edits `s.doc`, so it runs before the paragraph borrow.
         // The spaces are marked as a tracked insertion through `props.ins`, as typing is.
-        if s.doc.settings.track_changes {
+        props.fmt_change = None;
+        props.del = None;
+        if s.doc.settings.track_changes && n > 0 {
             props.ins = Some(new_revision(s, RevisionKind::Insert));
+        } else {
+            props.ins = None;
         }
+        let before = s.doc.para(story, &path).map(|p| p.props.clone()).unwrap_or_default();
+        let mut after = before.clone();
+        after.indent_first = Some(0.0);
+        after.indent_left = Some(0.0);
+        after.cancel_char_indents(true, false, true);
+        after.fmt_change = crate::cmd::fmt_revisions::changed_para_props(s, &before, &after);
         let p = s.doc.para_mut(story, &path)?;
-        p.insert_text(0, &" ".repeat(n), &props)?;
-        p.props.indent_first = Some(0.0);
-        p.props.indent_left = Some(0.0);
-        p.props.cancel_char_indents(true, false, true);
+        if n > 0 {
+            p.insert_text(0, &" ".repeat(n), &props)?;
+        }
+        p.props = after;
         p.touch();
     }
     sel_result(s)
@@ -258,6 +306,7 @@ pub(super) fn indent_to_spaces(s: &mut Session, v: &Value) -> CmdResult {
 pub(super) fn remove_line_breaks(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
+    check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         apply_deletions(s, story, &path, break_ranges(para))?;
