@@ -35,8 +35,12 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         let drawn = pb.page().map_or(0, |page| page.items.len());
         pb.bottom = f32::MAX / 4.0;
+        let footer_limited = std::mem::replace(&mut pb.footer_limited, false);
         place_para_in_flow(ctx, pb, p, block, body_top);
-        pb.bottom = bottom;
+        if pb.pages.len() == at.0 {
+            pb.bottom = bottom;
+            pb.footer_limited = footer_limited;
+        }
         if (pb.pages.len(), pb.col) == at {
             (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
             if let Some(page) = pb.page() {
@@ -51,9 +55,11 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         let drawn = pb.page().map_or(0, |page| page.items.len());
         pb.bottom = f32::MAX / 4.0;
+        let footer_limited = std::mem::replace(&mut pb.footer_limited, false);
         place_para_in_flow(ctx, pb, p, block, body_top);
         if pb.pages.len() == at.0 {
             pb.bottom = bottom;
+            pb.footer_limited = footer_limited;
         }
         if (pb.pages.len(), pb.col) == at && pb.y > bottom + 0.01 {
             (pb.y, pb.prev, pb.content_bottom) = (bottom.max(y), prev, content_bottom);
@@ -305,14 +311,28 @@ impl<'a> Flow<'a> {
     /// the space before applied (`before`, or what is left of it at the top of the next column).
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
-        let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        let has_notes = !pb.notes.is_empty()
+            || ((rp.keep_lines || rp.keep_next)
+                && para_notes(ctx.doc, self.p, &self.pl)
+                    .iter()
+                    .any(|(_, id)| ctx.doc.parts.get(id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Footnote)));
+        let fit_space = if has_notes { FitSpace::Reserved } else { FitSpace::Margin };
+        let height = self.pl.lines.last().map_or(self.pl.height, |line| self.pl.height - line.height + line_fit_height(line, fit_space))
+            + rooms.top
+            + rooms.bottom;
+        let footer_over = pb.footer_limited && pb.y + self.pl.height + rooms.top + rooms.bottom > pb.orig_bottom + 0.01;
+        if !(self.pl.height > 0.0 && (rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01 && !footer_over))) {
             return before;
         }
-        let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        let next = if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        let need = height + next;
+        // The pair starts its successor after the current full box, including its leading.
+        let full_need = self.pl.height + rooms.top + rooms.bottom + next;
+        let footer_over = pb.footer_limited && pb.y + full_need > pb.orig_bottom + 0.01;
+        let next_need = if footer_over { full_need } else { need };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.fresh() && need <= pb.next_room(self.body_top) {
+        if (pb.y + need > pb.bottom + 0.01 || footer_over) && !pb.fresh() && next_need <= pb.next_room(self.body_top) {
             pb.advance(self.block, self.body_top);
             pb.y += rp.space_before.min(0.0);
             return rp.space_before.min(0.0);
@@ -383,7 +403,8 @@ impl<'a> Flow<'a> {
             let line_notes = notes_on_line(ctx, pb, l, notes, &fit.notes);
             let limit = notes_limit(pb, &fit.notes, &line_notes);
             let free = pb.notes.is_empty() && fit.notes.is_empty() && line_notes.is_empty();
-            let bottom = pb.y + lead + (l.top + fit_height(pb, l, &pl.rp, free) - first_top);
+            let fit_space = if free { FitSpace::Margin } else { FitSpace::Reserved };
+            let bottom = pb.y + lead + (l.top + line_fit_height(l, fit_space) - first_top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
@@ -393,7 +414,9 @@ impl<'a> Flow<'a> {
             } else {
                 0.0
             };
-            let over = bottom + tail > limit + 0.01;
+            let footer_over =
+                pb.footer_limited && item_bottom(pb.y + lead, pl, l0, fit.l1 + 1).is_some_and(|box_bottom| box_bottom > pb.orig_bottom + 0.01);
+            let over = pl.height > 0.0 && (bottom + tail > limit + 0.01 || footer_over);
             let split = bottom > limit + 0.01 && notes_split(pb, (&fit.notes, &line_notes), bottom);
             if over && fit.l1 > l0 && !split {
                 break;
@@ -623,18 +646,17 @@ fn notes_limit(pb: &PageBuilder, new_notes: &[NoteBox], line_notes: &[NoteBox]) 
     pb.bottom - height(new_notes) - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 } - extra
 }
 
-/// How much of the line has to fit. Multiple spacing above single puts its extra leading below
-/// the text (see `baseline_offset`), and Word lets that leading of a page's last line run into the
-/// bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on the page
-/// while its text ends above the margin, about half a line lower than when the whole line must
-/// fit). Only the bottom margin takes that leading: a footer taller than the margin, or
-/// footnotes (`free` is false), keep the whole line clear of them.
-fn fit_height(pb: &PageBuilder, l: &para::Line, rp: &wordcraft_doc::resolve::ResolvedPara, free: bool) -> f32 {
-    let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
-    match rp.line_spacing {
-        // `baseline` is from the paragraph's top; the text ends a descent below it.
-        wordcraft_doc::props::LineSpacing::Multiple(m) if m > 1.0 && at_margin && free => (l.baseline - l.top + l.text_desc).clamp(0.0, l.height),
-        _ => l.height,
+#[derive(Clone, Copy)]
+enum FitSpace {
+    Margin,
+    Reserved,
+}
+
+// Multiple spacing may leave extra leading past a margin or balanced cut, never in notes.
+fn line_fit_height(line: &para::Line, space: FitSpace) -> f32 {
+    match space {
+        FitSpace::Margin => line.fit_height,
+        FitSpace::Reserved => line.height,
     }
 }
 

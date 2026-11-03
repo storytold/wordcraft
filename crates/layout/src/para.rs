@@ -37,11 +37,41 @@ pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
-pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
+pub use model::{CellText, ClKind, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
 pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text};
+
+/// One drawing segment of a grapheme cluster (or object, tab, break).
+/// Font/style changes may split its drawing; paragraph edit/wrap boundaries keep it atomic.
+#[derive(Clone, Debug)]
+pub struct Cluster {
+    pub start: usize,
+    pub end: usize,
+    pub adv: f32,
+    pub kind: ClKind,
+    /// Index into `ParaLayout::styles`.
+    pub style: u32,
+    /// Glyph range in `ParaLayout::glyphs`.
+    pub g0: u32,
+    pub g1: u32,
+    /// A line may break after this cluster.
+    pub break_after: bool,
+    /// Height above the baseline for objects (images), points.
+    pub obj_h: f32,
+    /// Depth below the baseline for objects (equations), points.
+    pub obj_d: f32,
+    /// The cluster is a decimal separator (decimal tabs align on it).
+    pub dot: bool,
+    /// A visible inline drawing eligible for picture-only fitting.
+    picture: bool,
+}
+
+#[cfg(test)]
+pub(super) fn word_cluster(kind: ClKind, adv: f32) -> Cluster {
+    Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false, picture: false }
+}
 
 /// A laid-out paragraph.
 #[derive(Clone, Debug)]
