@@ -406,8 +406,11 @@ fn legacy_word_ext(path: &std::path::Path) -> Option<&'static str> {
 }
 
 /// Do `a` and `b` name the same file (also when spelled differently, as `./x.doc` and `x.doc`)?
+/// A path is resolved when it may be read or written here, so a save under roots that grant
+/// writing but not reading still recognises the file it would replace.
 fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
-    a == b || crate::io::canonical(a).is_some_and(|a| crate::io::canonical(b) == Some(a))
+    let resolved = |p: &std::path::Path| crate::io::canonical(p).or_else(|| crate::io::canonical_writable(p));
+    a == b || resolved(a).is_some_and(|a| resolved(b) == Some(a))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?

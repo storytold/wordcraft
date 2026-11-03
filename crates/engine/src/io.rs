@@ -129,6 +129,20 @@ pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
+/// [`canonical`] for a path that may be written here, though perhaps not read (a save under
+/// roots that grant only writing): for telling whether a save would replace a given file.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn canonical_writable(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::file_access::check_write(&path.to_string_lossy()).ok()?;
+    std::fs::canonicalize(path).ok()
+}
+
+/// [`canonical_writable`]: on the web files come through the browser, never by path.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn canonical_writable(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Can files with this extension be saved with a password (Word's packages)?
 pub fn can_encrypt(name: &str) -> bool {
     is_word_package(&ext_of(name))

@@ -5339,19 +5339,27 @@ fn saving_a_text_file_over_itself_saves_the_document() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// #2445: an opened Word 97-2003 file is never written back over itself, now that `.doc` can be
-/// written: not by a plain `file.save` (a script's or an agent's), not by its own path, not by
-/// another spelling of that path. Save As `.doc` under another name writes a copy.
+/// A `contract.doc` written into a new scratch folder `name`, opened and edited: the folder, the
+/// file's path, its bytes as written and the session.
 #[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn an_opened_doc_is_never_saved_over_itself() {
-    let dir = scratch_dir("engine-own-doc");
+fn opened_doc_with_an_edit(name: &str) -> (std::path::PathBuf, std::path::PathBuf, Vec<u8>, Session) {
+    let dir = scratch_dir(name);
     let path = dir.join("contract.doc");
     let bytes = crate::io::save_bytes("contract.doc", &crate::sample::letter()).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     let mut s = s();
     run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
     run(&mut s, "text.insert", json!({"text": "Revised "}));
+    (dir, path, bytes, s)
+}
+
+/// #2445: an opened Word 97-2003 file is never written back over itself, now that `.doc` can be
+/// written: not by a plain `file.save` (a script's or an agent's), not by its own path, not by
+/// another spelling of that path. Save As `.doc` under another name writes a copy.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_opened_doc_is_never_saved_over_itself() {
+    let (dir, path, bytes, mut s) = opened_doc_with_an_edit("engine-own-doc");
     let respelled = dir.join(".").join("contract.doc");
     for params in [json!({}), json!({"path": path.to_string_lossy()}), json!({"path": respelled.to_string_lossy()})] {
         let e = s.run("file.save", &params).unwrap_err().to_string();
@@ -5366,6 +5374,24 @@ fn an_opened_doc_is_never_saved_over_itself() {
     assert!(crate::io::open_bytes("copy.doc", &std::fs::read(&copy).unwrap()).unwrap().plain_text(StoryRef::Body).contains("Revised"));
     assert!(s.dirty, "a .doc copy leaves the document unsaved");
     assert_eq!(s.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The opened `.doc` is recognised under another spelling also when the save runs under roots
+/// that grant writing but not reading, where its path can't be resolved for reading.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_opened_doc_is_not_saved_over_itself_under_write_only_roots() {
+    let (dir, path, bytes, mut s) = opened_doc_with_an_edit("engine-own-doc-write-only");
+    let roots = crate::file_access::AutomationRoots::new(None, Some(&dir)).unwrap();
+    // `..` stays in the path (a `.` would compare equal as is), so only resolving it tells.
+    std::fs::create_dir(dir.join("sub")).unwrap();
+    let respelled = dir.join("sub").join("..").join("contract.doc");
+    assert_ne!(respelled, path);
+    let e =
+        crate::file_access::confine(roots.as_ref(), || s.run("file.save", &json!({"path": respelled.to_string_lossy()}))).unwrap_err().to_string();
+    assert!(e.contains("can't save as `.doc`"), "{e}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the original is untouched");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
