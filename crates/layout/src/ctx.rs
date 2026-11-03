@@ -89,6 +89,8 @@ struct ParaEnvInput<'a> {
 pub(crate) struct Pin {
     pub(crate) story: StoryRef,
     pub(crate) sect: SectionProps,
+    /// Rendered header Margin boundary; absent in footers and height probes.
+    pub(crate) margin_top: Option<f32>,
     pub(crate) number: u32,
     pub(crate) mirror: bool,
     pub(crate) behind: Vec<Placed>,
@@ -108,7 +110,14 @@ pub(crate) fn page_anchored(f: &Float) -> bool {
 /// Run `f`, a layout of header or footer `id` for page `number` of `sect`, with the floats in its
 /// table cells that are placed on the page put there (see [`Pin`]). Returns `f`'s result and those
 /// floats' items, in page coordinates: behind the header's text, and in front.
-pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl FnOnce(&mut Ctx) -> T) -> (T, Vec<Placed>, Vec<Placed>) {
+pub(crate) fn with_pin<T>(
+    ctx: &mut Ctx,
+    id: u32,
+    sect: &SectionProps,
+    number: u32,
+    margin_top: Option<f32>,
+    f: impl FnOnce(&mut Ctx) -> T,
+) -> (T, Vec<Placed>, Vec<Placed>) {
     let tables = ctx.doc.parts.get(&id).is_some_and(|p| p.blocks.iter().any(|b| matches!(**b, Block::Table(_))));
     if !tables {
         return (f(ctx), Vec::new(), Vec::new());
@@ -116,6 +125,7 @@ pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u
     let pin = Pin {
         story: StoryRef::Part(id),
         sect: sect.clone(),
+        margin_top,
         number,
         mirror: ctx.mirror,
         behind: Vec::new(),
