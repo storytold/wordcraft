@@ -299,8 +299,7 @@ fn show_in_folder(path: &std::path::Path) -> Result<(), String> {
     };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = {
-        let folder =
-            path.parent().filter(|folder| !folder.as_os_str().is_empty()).ok_or_else(|| "the document has no containing folder".to_string())?;
+        let folder = path.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
         let mut command = std::process::Command::new("xdg-open");
         command.arg(folder);
         command
