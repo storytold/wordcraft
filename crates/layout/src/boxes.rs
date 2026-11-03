@@ -149,7 +149,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     {
         return false;
     }
-    let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
+    let layout = table::layout_table(ctx, story, t, path, width, depth + 1, in_cell);
     let (tx, ty) = match t.props.float {
         Some(float) => {
             let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
