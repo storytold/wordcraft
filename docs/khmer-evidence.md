@@ -55,7 +55,7 @@ The combined model is slower and more memory intensive than both alternatives. T
 
 All 39,127 model weights and complete dictionaries remain: 714,343 compressed resource bytes from 4,230,002 canonical bytes. No linguistic pruning is proposed. Before the current-main reconciliation, 37,424 comparisons retained the previous optimized engine’s core/proof/suggestion output exactly; 3,331 contained private book paragraphs whose text is not published. This is preservation evidence, not independent accuracy. Historical native safety checks covered 480 book layouts and 10,707 continuation starts with no tested structural bad starts, not a linguistic verdict for every line.
 
-No general syntax/semantic grammar claim is made. Dictionary-based Khmer word counts, full Aksara web-plugin parity, runtime download support for this custom data format, Windows runtime acceptance and official signing remain outside this draft. See [integration details](khmer-integration.md).
+No general syntax/semantic grammar claim is made. Full Aksara web-plugin parity, runtime download support for this custom data format, Windows runtime acceptance and official signing remain outside this draft. See [integration details](khmer-integration.md).
 
 ## Validation scope
 
@@ -98,3 +98,9 @@ Arabic/Khmer/Indic/Thai shaping fallback with a Latin control, repeated header
 and footer page hints, empty/rejected edits, nested rollback, and mixed
 English/Vietnamese/Khmer proofing. These synthetic checks do not replace native
 platform and Khmer-reader acceptance.
+
+Khmer statistics follow the shared segmentation spans independently of physical
+line wrapping and actual whitespace used for justification. Regressions cover
+mixed scripts and numbers, authored zero-width breaks, repetition signs,
+selections, referenced text boxes, edits/undo/redo, NUMWORDS fields and saved DOCX
+statistics. The counter does not change paragraph text or character statistics.

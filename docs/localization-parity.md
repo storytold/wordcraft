@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (optional Khmer language build: native proofing and safe wrapping, bounded refinement, Khmer-only dictionary-wrap carets and shaping-capable fallback; companion PRs required; readiness estimates unchanged); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Khmer document statistics count shared word spans independently of justification whitespace; previously minor: optional Khmer language build: native proofing and safe wrapping, bounded refinement, Khmer-only dictionary-wrap carets and shaping-capable fallback; companion PRs required; readiness estimates unchanged); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -254,6 +254,8 @@ WordCraft keeps 2,54 cm).
 
 ## Revision history
 
+> 2026-11-03 · KM11: Khmer word counts use shared segmentation for document/selection statistics, fields and DOCX metadata, with a bounded paragraph cache. Counting adds no spaces and does not depend on wrapping width.
+
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-03 | trivial | Khmer review: dictionary-only caret affinity, typing/page/pointer/accessibility regressions, shaping-first font fallback and bounded refinement; dependency updates and native platform acceptance remain required. |
@@ -327,3 +329,8 @@ WordCraft keeps 2,54 cm).
 Menu-font follow-up: right-click proofing messages, suggestions and synonyms borrow document-script fallback faces before their first paint. A fresh-window Khmer regression runs with the proofing pane closed; no additional fonts are bundled.
 
 Repetition-sign follow-up: proofing accepts a valid spelling before trailing ៗ while retaining exact repeated expressions in the lexicon. Spelling/preferred-form edits exclude the sign so its text and formatting survive correction and undo; layout boundaries are unchanged.
+
+Khmer statistics: explicit-data builds count model/dictionary word spans in the
+status bar, selections, Word Count, NUMWORDS fields and DOCX statistics. Authored
+zero-width boundaries are honored; without the data, otherwise unspaced Khmer
+retains the fallback token count. Justification still uses actual document spaces.

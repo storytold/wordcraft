@@ -100,9 +100,13 @@ probe timings are not packaged-app typing latency. See the evidence for scope.
 
 ## Acceptance and remaining decisions
 
-Document statistics retain the existing whitespace/CJK counting rules; this
-draft does not add dictionary-based Khmer word counts. Unspaced Khmer prose can
-therefore appear as one word in the status bar and Word Count dialog.
+Document statistics use the shared model/dictionary Khmer word spans. The status
+bar, selected-text count, Word Count dialog, NUMWORDS fields and saved DOCX word
+statistics share the same counter within their existing story scopes. The count is independent of page width, fonts and justification;
+no separators are inserted into document text. Real whitespace remains the input
+for justification spacing. A bounded paragraph cache avoids repeated segmentation
+of unchanged text. Without Khmer data, authored zero-width boundaries still count,
+while otherwise unspaced Khmer uses the existing token fallback.
 
 The acceptance target is good Khmer wrapping: reject malformed cluster splits,
 detached marks and ignored valid manual opportunities; permit multiple reasonable

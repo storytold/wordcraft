@@ -16,6 +16,8 @@ test-support = []
 
 [dependencies]
 wordcraft-geom = { workspace = true }
+# The same optional Khmer boundary model used by layout and proofing.
+wordcraft-proof = { workspace = true }
 base64 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
