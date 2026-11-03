@@ -12031,11 +12031,15 @@ fn an_inserted_or_pasted_picture_fits_where_it_goes() {
     // A table in that cell: its own narrower cell.
     let mut s = in_cell(2);
     let outer = s.room_at(&s.sel.focus.clone());
-    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    // (A table inserted in a cell takes the page's text width for its columns, so four columns
+    // make its cells narrower than the outer one.)
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 4}));
     assert!(s.sel.focus.path.depth() > 1, "the caret is in the nested cell");
+    let nested = s.room_at(&s.sel.focus.clone());
+    assert!(nested < outer - 50.0, "the nested cell ({nested}) is narrower than the outer one ({outer})");
     run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
     let w = widths(&s)[0].0;
-    assert!(w <= outer / 2.0, "{w} fits the nested cell (outer cell {outer})");
+    assert!((w - nested).abs() < 0.5 && w <= text_w / 4.0, "{w} fits the nested cell ({nested})");
     // Two text columns: one column's width.
     let mut s = Session::new(wordcraft_doc::Document::new());
     run(&mut s, "layout.columns", json!({"count": 2}));
