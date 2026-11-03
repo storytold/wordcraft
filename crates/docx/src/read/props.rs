@@ -515,7 +515,14 @@ fn cell_spacing(e: &El) -> Option<wordcraft_doc::props::CellSpacing> {
         Some(value) => CellSpacingKind::from_ooxml(value)?,
         None => CellSpacingKind::Dxa,
     };
-    let width = e.attr("w:w")?.parse::<u32>().ok()?;
+    let width = match (kind, e.attr("w:w")) {
+        (_, None) | (CellSpacingKind::Pct, Some(_)) => 0,
+        (CellSpacingKind::Dxa, Some(value)) => {
+            let points = measure(value, 20.0).filter(|points| *points >= 0.0)?;
+            (points * 20.0).round().clamp(0.0, 31_680.0) as u32
+        }
+        (CellSpacingKind::Auto | CellSpacingKind::Nil, Some(value)) => value.parse::<u32>().ok()?,
+    };
     let max = match kind {
         CellSpacingKind::Pct => 50_000,
         CellSpacingKind::Dxa | CellSpacingKind::Auto | CellSpacingKind::Nil => 31_680,

@@ -36,10 +36,22 @@ fn docx_with_styles(body: &str, styles: &str) -> Vec<u8> {
 }
 
 fn document_xml(bytes: &[u8]) -> String {
+    part_xml(bytes, "word/document.xml")
+}
+
+fn part_xml(bytes: &[u8], name: &str) -> String {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let mut s = String::new();
-    z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
+    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
     s
+}
+
+fn assert_order(xml: &str, tags: &[&str]) {
+    let mut rest = xml;
+    for tag in tags {
+        let pos = rest.find(tag).unwrap_or_else(|| panic!("missing {tag} in {xml}"));
+        rest = &rest[pos + tag.len()..];
+    }
 }
 
 fn row(ex: &str, text: &str) -> String {
@@ -104,11 +116,15 @@ fn table_cell_spacing_preserves_supported_types_and_bounds_hostile_widths() {
     };
     let cases = [
         (r#"<w:tblCellSpacing w:w="0" w:type="dxa"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Dxa })),
-        (r#"<w:tblCellSpacing w:w="240" w:type="pct"/>"#, Some(CellSpacing { width: 240, kind: CellSpacingKind::Pct })),
+        (r#"<w:tblCellSpacing w:w="240" w:type="pct"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Pct })),
+        (r#"<w:tblCellSpacing w:w="5%" w:type="pct"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Pct })),
         (r#"<w:tblCellSpacing w:w="1" w:type="auto"/>"#, Some(CellSpacing { width: 1, kind: CellSpacingKind::Auto })),
         (r#"<w:tblCellSpacing w:w="2" w:type="nil"/>"#, Some(CellSpacing { width: 2, kind: CellSpacingKind::Nil })),
+        (r#"<w:tblCellSpacing w:w="6pt" w:type="dxa"/>"#, Some(CellSpacing { width: 120, kind: CellSpacingKind::Dxa })),
+        (r#"<w:tblCellSpacing w:type="dxa"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Dxa })),
+        (r#"<w:tblCellSpacing w:type="pct"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Pct })),
         (r#"<w:tblCellSpacing w:w="31681" w:type="dxa"/>"#, Some(CellSpacing { width: 31680, kind: CellSpacingKind::Dxa })),
-        (r#"<w:tblCellSpacing w:w="999999" w:type="pct"/>"#, Some(CellSpacing { width: 50000, kind: CellSpacingKind::Pct })),
+        (r#"<w:tblCellSpacing w:w="999999" w:type="pct"/>"#, Some(CellSpacing { width: 0, kind: CellSpacingKind::Pct })),
         (r#"<w:tblCellSpacing w:w="-1" w:type="dxa"/>"#, None),
         (r#"<w:tblCellSpacing w:w="oops" w:type="dxa"/>"#, None),
         (r#"<w:tblCellSpacing w:w="12" w:type="unsupported"/>"#, None),
@@ -120,6 +136,33 @@ fn table_cell_spacing_preserves_supported_types_and_bounds_hostile_widths() {
         let table = doc.body.iter().find_map(|b| b.as_table()).unwrap();
         assert_eq!(table.props.cell_spacing, expected, "{spacing}");
     }
+}
+
+#[test]
+fn new_table_properties_are_written_in_schema_order() {
+    let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="Fit"><w:name w:val="Fit"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:fill="FFFF00"/><w:vAlign w:val="bottom"/><w:tcFitText/></w:tcPr></w:tblStylePr></w:style></w:styles>"#;
+    let body = r#"
+      <w:p><w:pPr><w:suppressOverlap/><w:pBdr><w:top w:val="single" w:sz="4"/></w:pBdr><w:shd w:fill="FFFF00"/><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs><w:spacing w:before="120"/><w:ind w:left="120"/><w:contextualSpacing/><w:mirrorIndents/><w:jc w:val="center"/></w:pPr><w:r><w:t>P</w:t></w:r></w:p>
+      <w:tbl><w:tblPr><w:tblStyle w:val="Fit"/><w:tblW w:w="3000" w:type="dxa"/><w:jc w:val="center"/><w:tblCellSpacing w:w="6pt" w:type="dxa"/><w:tblInd w:w="120" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4"/></w:tblBorders><w:shd w:fill="FFFF00"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="3000" w:type="dxa"/><w:jc w:val="center"/><w:tblCellSpacing w:w="6pt" w:type="dxa"/><w:tblInd w:w="120" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4"/></w:tblBorders><w:shd w:fill="FFFF00"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="60" w:type="dxa"/></w:tblCellMar></w:tblPrEx><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:noWrap/><w:tcFitText/><w:tcMar><w:top w:w="60" w:type="dxa"/></w:tcMar><w:textDirection w:val="tbRl"/><w:vAlign w:val="bottom"/></w:tcPr><w:p><w:r><w:t>T</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#;
+    let input = docx_with_styles(body, styles);
+    let output = wordcraft_docx::write(&wordcraft_docx::read(&input).unwrap()).unwrap();
+    let document = document_xml(&output);
+
+    let ppr = document.split_once("<w:pPr>").unwrap().1.split_once("</w:pPr>").unwrap().0;
+    assert_order(ppr, &["w:mirrorIndents", "w:suppressOverlap", "w:jc"]);
+
+    let tblpr = document.split_once("<w:tblPr>").unwrap().1.split_once("</w:tblPr>").unwrap().0;
+    assert_order(tblpr, &["w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders", "w:shd", "w:tblLayout", "w:tblCellMar"]);
+
+    let tblprex = document.split_once("<w:tblPrEx>").unwrap().1.split_once("</w:tblPrEx>").unwrap().0;
+    assert_order(tblprex, &["w:jc", "w:tblCellSpacing", "w:tblInd", "w:tblBorders"]);
+
+    let tcpr = document.split_once("<w:tcPr>").unwrap().1.split_once("</w:tcPr>").unwrap().0;
+    assert_order(tcpr, &["w:tcMar", "w:textDirection", "w:tcFitText", "w:vAlign"]);
+
+    let styles = part_xml(&output, "word/styles.xml");
+    let style_tcpr = styles.split_once("<w:tcPr>").unwrap().1.split_once("</w:tcPr>").unwrap().0;
+    assert_order(style_tcpr, &["w:tcFitText", "w:vAlign"]);
 }
 
 #[test]

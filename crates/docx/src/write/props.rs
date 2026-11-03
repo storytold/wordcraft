@@ -268,7 +268,6 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
         w.close("w:numPr");
     }
     toggle(w, "w:suppressLineNumbers", p.suppress_line_numbers);
-    toggle(w, "w:suppressOverlap", p.suppress_overlap);
     if let Some(b) = &p.borders {
         borders(w, "w:pBdr", b, Some("w:between"), &[]);
     }
@@ -281,6 +280,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     write_indentation(w, p);
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
     toggle(w, "w:mirrorIndents", p.mirror_indents);
+    toggle(w, "w:suppressOverlap", p.suppress_overlap);
     if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
     }
@@ -513,6 +513,9 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    if let Some(v) = t.cell_spacing {
+        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
+    }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
@@ -527,9 +530,6 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
-    }
-    if let Some(v) = t.cell_spacing {
-        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
     }
     let look = look_attrs(&t.look);
     let refs: Vec<(&str, &str)> = look.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -571,6 +571,9 @@ fn tblprex(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    if let Some(v) = t.cell_spacing {
+        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
+    }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
@@ -585,9 +588,6 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
-    }
-    if let Some(v) = t.cell_spacing {
-        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
     }
     w.close("w:tblPrEx");
 }
@@ -654,7 +654,6 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     if c.no_wrap {
         w.empty("w:noWrap", &[]);
     }
-    toggle(w, "w:tcFitText", c.fit_text);
     if let Some(m) = &c.margins {
         margins(w, "w:tcMar", m);
     } else if let Some(m) = &c.partial_margins {
@@ -663,6 +662,7 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     if c.text_direction.is_turned() || c.text_direction_set {
         w.val("w:textDirection", c.text_direction.ooxml());
     }
+    toggle(w, "w:tcFitText", c.fit_text);
     match c.valign {
         None => {}
         Some(VAlign::Top) => w.val("w:vAlign", "top"),

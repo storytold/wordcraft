@@ -169,6 +169,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
                 if let Some(c) = f.fill {
                     w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
                 }
+                tc_fit_text(w, f.fit_text);
                 if let Some(v) = f.v_align {
                     w.val(
                         "w:vAlign",
@@ -179,7 +180,6 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
                         },
                     );
                 }
-                tc_fit_text(w, f.fit_text);
                 w.close("w:tcPr");
             }
             w.close("w:tblStylePr");
