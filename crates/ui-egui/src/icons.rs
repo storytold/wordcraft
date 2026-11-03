@@ -742,6 +742,12 @@ fn draw_text(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red:
             pen.rows(4.5, 11.5, &[4.25, 7.25]);
             color_bar(pen, a);
         }
+        // The Shading buttons draw the last colour as their own bar (the icon's accent), so this one
+        // has no bar of its own.
+        "shadingNoBar" => {
+            pen.block(2.0, 1.5, 14.0, 10.0, 1.0, pen.t);
+            pen.rows(4.5, 11.5, &[4.25, 7.25]);
+        }
         "borders" => {
             for (x, y) in [
                 (5.0, 2.0),
@@ -2789,5 +2795,12 @@ mod tests {
     fn no_colour_highlight_icon_has_no_colour_bar() {
         assert!(draws_colour_bar("highlight"));
         assert!(!draws_colour_bar("highlightNoColor"));
+    }
+
+    /// #4412: the Shading buttons paint the last colour as their bar, so their icon has none of its own.
+    #[test]
+    fn the_shading_button_icon_has_no_bar_of_its_own() {
+        assert!(draws_colour_bar("shading"));
+        assert!(!draws_colour_bar("shadingNoBar"));
     }
 }
