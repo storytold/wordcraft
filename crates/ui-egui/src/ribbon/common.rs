@@ -80,20 +80,30 @@ pub(super) fn size_field(ui: &mut Ui, app: &mut WordApp, label: &str, pt: f32, i
     // it (a 1 px picture, a thin line) and report it as a change, resizing the object unasked.
     let field = egui::DragValue::new(&mut v).speed(1.0 / k).range(lo..=hi).clamp_existing_to_range(false).measure(unit).max_decimals(2);
     let r = ui.add(field.update_while_editing(false)).labelled_by(name.id).on_hover_text(hint);
-    // While typing, the field reports each keystroke as a change; only a new value (Enter, Tab,
-    // a click elsewhere, a drag) resizes, and Esc cancels.
+    // Only a new value (Enter, Tab, a click elsewhere, a drag) resizes, and Esc cancels.
     let cancelled = esc_cancelled(ui, &r, id);
     // Left without typing, the field reads back the text it showed, the size rounded to two
     // decimals and kept in range: no change (#4196 review). Only a field edited since it took
-    // focus (or dragged) applies, a size at the range's bound too. Text typed, pasted or composed
-    // counts in the frame that ends the editing as well (a character and Enter in one frame).
+    // focus (or dragged) applies, a size at the range's bound too. Text typed, pasted, cut,
+    // composed or deleted counts while the field has focus (egui 0.37 reports no change until the
+    // editing ends) and in the frame that ends the editing (a character and Enter in one frame).
     let typed_key = id.with("typed");
     if r.gained_focus() {
         ui.data_mut(|d| d.insert_temp(typed_key, false));
     }
-    let edits = ui
-        .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(egui::ImeEvent::Commit(_)))));
-    if (r.has_focus() && r.changed()) || (r.lost_focus() && edits) {
+    let edits = ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Ime(egui::ImeEvent::Commit(_))
+                    | egui::Event::Key { key: egui::Key::Backspace | egui::Key::Delete, pressed: true, .. }
+            )
+        })
+    });
+    if (r.has_focus() && (r.changed() || edits)) || (r.lost_focus() && edits) {
         ui.data_mut(|d| d.insert_temp(typed_key, true));
     }
     let typed = ui.data(|d| d.get_temp::<bool>(typed_key)).unwrap_or(false);
