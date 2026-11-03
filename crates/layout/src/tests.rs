@@ -7592,6 +7592,36 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+#[test]
+fn a_line_may_break_before_a_slash_standing_alone_between_spaces() {
+    // UAX #14 (LB13) forbids a break between a space and a slash; Word breaks there when the
+    // slash between spaces no longer fits, starting the next line with "/ string" (measured in
+    // Word for Mac and Windows: "object (GeoJSON)" / "/ string (WKT)" in a narrow column).
+    let text = "object (GeoJSON) / string (WKT)";
+    let starts = (0..200).any(|k| {
+        let mut d = Document::from_text(text);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 90.0 - k as f32 * 0.5)).unwrap();
+        body_lines(&lay(&d), text).iter().any(|l| l.starts_with("/ "))
+    });
+    assert!(starts, "no line width starts a line with the slash");
+}
+
+/// The lines of the body's first paragraph, as text.
+fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|it| {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect()
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
