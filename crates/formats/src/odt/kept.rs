@@ -33,8 +33,8 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
             let depth = path.len();
             // The namespaces the root declares, which kept markup may use.
             if depth == 1 {
-                // ODF 1.2 and before measured some angles in tenths of a degree (see `to_1_3`).
-                before_1_3 = get(&a, "office:version").is_none_or(|v| v.trim() < "1.3");
+                // Older files' unitless gradient angles are tenths of a degree (see `to_1_3`).
+                before_1_3 = super::strokes::legacy_angles(get(&a, "office:version"));
                 for (k, v) in &a {
                     if let Some(p) = k.strip_prefix("xmlns:").filter(|p| !p.is_empty() && p.len() <= 64)
                         && out.len() < MAX_DEFS
@@ -80,9 +80,10 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
     out
 }
 
-/// Markup kept from an ODF 1.2 (or older) file, written as ODF 1.3: a gradient's,
-/// transparency gradient's or hatch's angle without a unit was tenths of a degree there and is
-/// degrees in 1.3 (§19.112 `draw:angle`, §19.209 `draw:rotation`), so it is given its unit.
+/// Markup kept from a file older than ODF 1.3, written as ODF 1.3: a gradient's, transparency
+/// gradient's or hatch's angle without a unit is given its unit, as the file meant it — tenths
+/// of a degree (`300` → `30deg`). That reading deviates from the standard out of necessity
+/// (§18.3.1 says degrees): see `strokes::legacy_angles`.
 fn to_1_3(xml: &str) -> String {
     if !(xml.contains("<draw:gradient") || xml.contains("<draw:opacity") || xml.contains("<draw:hatch")) {
         return xml.to_string();

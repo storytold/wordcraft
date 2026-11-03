@@ -1121,7 +1121,8 @@ impl Styles {
                         }
                     }
                 }
-                "stroke-dash" | "gradient" if q.starts_with("draw:") => self.defs.read(local(&q), &a),
+                // Dashes and gradients; and the part's root, whose version they depend on.
+                "stroke-dash" | "gradient" | "document-styles" | "document-content" | "document" => self.defs.element(&q, &a),
                 "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),
                 "outline-style" => self.outline = Some(vec![ListLevel::default(); 10]),
                 "outline-level-style" => {

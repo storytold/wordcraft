@@ -173,3 +173,26 @@ fn hostile_definitions_do_not_panic() {
         let _ = export(&d).unwrap();
     }
 }
+
+#[test]
+fn unitless_gradient_angles_follow_the_files_version() {
+    // §18.3.1: an angle without a unit is in degrees. LibreOffice and OpenOffice wrote gradient
+    // angles in tenths of a degree in files before ODF 1.3 and read them so: a deviation from
+    // the standard, out of necessity (`strokes::legacy_angles`). From 1.3 on, the standard.
+    let fill = |version: &str, angle: &str| {
+        let styles = format!(
+            r##"<office:document-styles {NS_T} {NS_D} office:version="{version}"><office:styles><draw:gradient draw:name="G" draw:style="linear" draw:start-color="#000000" draw:end-color="#ffffff" draw:angle="{angle}"/></office:styles></office:document-styles>"##
+        );
+        let content = format!(
+            r##"<office:document-content {NS_T} {NS_D} office:version="{version}"><office:automatic-styles><style:style style:name="gr" style:family="graphic"><style:graphic-properties draw:fill="gradient" draw:fill-gradient-name="G"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:rect text:anchor-type="paragraph" draw:style-name="gr" svg:width="1in" svg:height="1in"/></text:p></office:text></office:body></office:document-content>"##
+        );
+        let d = import(&package(&content, Some(&styles))).unwrap();
+        looks(&d).into_iter().next().and_then(|(_, _, f)| f)
+    };
+    // 30° as written before 1.3 (tenths), as 1.3 writes it (with a unit), and as 1.3 reads a
+    // bare number (degrees) are the same gradient.
+    assert_eq!(fill("1.2", "300"), fill("1.3", "30deg"));
+    assert_eq!(fill("1.3", "30"), fill("1.3", "30deg"));
+    assert_ne!(fill("1.3", "300"), fill("1.3", "30deg"));
+    assert!(fill("1.2", "300").is_some());
+}

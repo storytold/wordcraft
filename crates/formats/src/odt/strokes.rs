@@ -127,7 +127,22 @@ pub(super) fn dash_def(name: &str, dash: &LineDash) -> Option<String> {
 
 /// An angle (§18.3.1): degrees, radians or grads by its unit, tenths of a degree without one
 /// (as ODF 1.2 wrote a gradient's).
-fn angle(v: &str) -> Option<f32> {
+/// Whether a part of ODF `version` (its `office:version`; none: before 1.2) has its gradients'
+/// and hatches' unitless angles in tenths of a degree.
+///
+/// **A deviation from the standard, out of necessity.** ODF's angle (§18.3.1, since ODF 1.2)
+/// is in degrees when it has no unit, so `draw:angle="300"` (§19.112) and `draw:rotation`
+/// (§19.209) mean 300°. But LibreOffice and OpenOffice wrote these angles in tenths of a degree
+/// in their files before ODF 1.3 (`300` for 30°), and LibreOffice still reads such files so
+/// (observed: the same gradient turns 30° in an ODF 1.2 file and 300° in an ODF 1.3 one). Read
+/// by the standard, the gradients of every older LibreOffice document would turn the wrong
+/// way. So for files older than 1.3 WordCraft reads them as written; from 1.3 on, as the
+/// standard says. WordCraft writes them with a unit (`30deg`), which both read the same.
+pub(super) fn legacy_angles(version: Option<&str>) -> bool {
+    version.is_none_or(|v| v.trim() < "1.3")
+}
+
+fn angle(v: &str, legacy: bool) -> Option<f32> {
     let v = v.trim();
     let (n, scale) = if let Some(n) = v.strip_suffix("deg") {
         (n, 1.0)
@@ -135,8 +150,12 @@ fn angle(v: &str) -> Option<f32> {
         (n, 0.9)
     } else if let Some(n) = v.strip_suffix("rad") {
         (n, 180.0 / std::f32::consts::PI)
-    } else {
+    } else if legacy {
+        // A deviation from the standard, out of necessity: see `legacy_angles`.
         (v, 0.1)
+    } else {
+        // §18.3.1: without a unit, degrees.
+        (v, 1.0)
     };
     n.trim().parse::<f32>().ok().map(|a| a * scale).filter(|a| a.is_finite()).map(|a| a.rem_euclid(360.0))
 }
@@ -151,7 +170,7 @@ fn percent(v: Option<&str>) -> Option<f32> {
 /// radial, ellipsoid, square and rectangular ones run from their end colour in the middle to
 /// their start colour at the edge. The border is where the start colour stays plain; intensity
 /// darkens a colour.
-pub(super) fn gradient(a: &Attrs) -> Option<Fill> {
+pub(super) fn gradient(a: &Attrs, legacy: bool) -> Option<Fill> {
     let color = |k: &str, intensity: &str, default: Rgb| {
         let c = get(a, k).and_then(parse_color).unwrap_or(default);
         let i = percent(get(a, intensity)).unwrap_or(100.0) / 100.0;
@@ -162,7 +181,7 @@ pub(super) fn gradient(a: &Attrs) -> Option<Fill> {
     let end = color("draw:end-color", "draw:end-intensity", Rgb::WHITE);
     let border = percent(get(a, "draw:border")).unwrap_or(0.0);
     let stop = |pos: f32, color: Rgb| GradStop { pos, color, transparency: 0.0 };
-    let along = (90.0 - get(a, "draw:angle").and_then(angle).unwrap_or(0.0)).rem_euclid(360.0);
+    let along = (90.0 - get(a, "draw:angle").and_then(|v| angle(v, legacy)).unwrap_or(0.0)).rem_euclid(360.0);
     let centre = || {
         let (cx, cy) = (percent(get(a, "draw:cx")).unwrap_or(50.0), percent(get(a, "draw:cy")).unwrap_or(50.0));
         [cx, cy, 100.0 - cx, 100.0 - cy]
@@ -243,9 +262,23 @@ pub(super) struct Defs {
     /// How what the standard leaves open is filled in (shapes' default colours and lines among
     /// it), with the effective values.
     pub(super) profile: wordcraft_doc::odf_profile::OdfProfile,
+    /// The part read is older than ODF 1.3: unitless angles are tenths of a degree (see
+    /// [`legacy_angles`]).
+    pub(super) legacy_angles: bool,
 }
 
 impl Defs {
+    /// Element `q` with attributes `a`: a dash or gradient definition, or a part's root, whose
+    /// version says how unitless gradient angles are read (see [`legacy_angles`]).
+    pub(super) fn element(&mut self, q: &str, a: &Attrs) {
+        match q {
+            "office:document-styles" | "office:document-content" | "office:document" => self.legacy_angles = legacy_angles(get(a, "office:version")),
+            "draw:stroke-dash" => self.read("stroke-dash", a),
+            "draw:gradient" => self.read("gradient", a),
+            _ => {}
+        }
+    }
+
     /// Element `name` (local) with attributes `a`, when it is a definition.
     pub(super) fn read(&mut self, name: &str, a: &Attrs) {
         let Some(id) = get(a, "draw:name").map(String::from) else { return };
@@ -257,7 +290,7 @@ impl Defs {
                 self.dashes.insert(id, Dash::read(a));
             }
             "gradient" => {
-                if let Some(g) = gradient(a) {
+                if let Some(g) = gradient(a, self.legacy_angles) {
                     self.gradients.insert(id, g);
                 }
             }

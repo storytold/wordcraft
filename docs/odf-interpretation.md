@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-03 · **Change:** major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-03 · **Change:** minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -27,7 +27,11 @@ knows of, so none gets lost.
    height and spacing combine, what a stated width of 0 draws at, and a frame position stated
    against something the standard doesn't define for its anchor. They are marked *(meaning)*
    below. `formats::odt::tests_more::profile` checks that stated values survive every preset.
-4. The profile applies to ODF files (`.odt`, `.ott`, `.fodt`) *as they are opened*. A document
+4. **A deviation from the standard is made only out of necessity**: where the files in
+   circulation contradict it and following it would damage every such file. Each one is listed
+   under "Deviations from the standard, out of necessity" below, with the standard's rule, what
+   WordCraft does instead and why; WordCraft never writes the deviating form.
+5. The profile applies to ODF files (`.odt`, `.ott`, `.fodt`) *as they are opened*. A document
    keeps what it was opened with. Changing the setting affects the next file opened.
 
 Where to set it:
@@ -95,9 +99,14 @@ Paragraphs and tables holding drawings, comments, tracked changes or ranged mark
 the model, as is everything edited. `odt::tests_more::lossless` saves samples without edits and
 fails on anything lost.
 
-Files are saved as ODF 1.3, whatever version they were read as (as LibreOffice does). Markup kept
-from an older file is brought to 1.3's meaning where it changed: a gradient's, transparency
-gradient's or hatch's angle without a unit was tenths of a degree before 1.3 (§19.112, §19.209).
+Files are saved as ODF 1.3, whatever version they were read as (as LibreOffice does). The changes
+from ODF 1.2 (ODF 1.3 Part 3, Appendix G, with their OASIS issues) were checked: none gives a
+value written for 1.2 another meaning, apart from a narrow rule on line caps
+(OFFICE-3742: a line style's `svg:stroke-linecap` now wins over its dash's `draw:style`), which
+matches how LibreOffice drew them. A few give defaults ODF 1.2 left unsaid (`text:anchor-type`
+paragraph, `style:run-through` foreground, `number:forced-exponent-sign` true), again as
+LibreOffice did. Markup kept from an older file is brought to 1.3 where its producers' meaning
+differs: gradient and hatch angles, a deviation from the standard described below.
 
 What WordCraft writes from its model, it writes so that every reader takes it the same way. It
 states what the standard leaves open instead of relying on any application's default:
@@ -109,6 +118,16 @@ states what the standard leaves open instead of relying on any application's def
 - tab stops measured as the file it was opened from measured them (`TabsRelativeToIndent` in
   `settings.xml`), from the margin for WordCraft's own documents;
 - widow and orphan control, on or off, in the default paragraph style.
+
+## Deviations from the standard, out of necessity
+
+WordCraft follows the standard wherever it says something. These are the exceptions: places
+where the files in circulation contradict the standard, and following it would damage every
+such file. Each is kept as narrow as possible, and WordCraft never writes the deviating form.
+
+| Case | Standard | What WordCraft does, and why |
+|---|---|---|
+| A gradient's, transparency gradient's or hatch's angle without a unit (`draw:angle`, §19.112; `draw:rotation`, §19.209) in a file older than ODF 1.3 | §18.3.1 (since ODF 1.2): an angle without a unit is in degrees, so `300` is 300° | Read as tenths of a degree (`300` is 30°). LibreOffice and OpenOffice wrote these angles in tenths in every file before ODF 1.3 and still read them so (observed: the same `draw:angle="300"` draws at 30° in an ODF 1.2 file and at 300° in an ODF 1.3 one). Read by the standard, the gradients of every older LibreOffice document would turn the wrong way. Files declaring ODF 1.3 or later are read by the standard. WordCraft writes these angles with a unit (`30deg`), which every reader takes the same way, and markup it keeps from an older file is given that unit. (`strokes::legacy_angles`) |
 
 ## Known differences between WordCraft's and LibreOffice's layout of the same file
 
@@ -157,6 +176,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Deviations from the standard listed: unitless gradient and hatch angles in files older than ODF 1.3 are read as tenths of a degree, as their producers wrote them, out of necessity (in ODF 1.3 files, degrees, as the standard says). The ODF 1.2 → 1.3 changes checked. |
 | 2026-11-03 | More written as read (tables, pages, sections, properties, declarations); files saved as ODF 1.3 with older markup brought to 1.3's meaning; drawings state `style:flow-with-text`. |
 | 2026-11-03 | Unedited content written as read (see How WordCraft writes ODF). |
 | 2026-11-03 | Tabs measured from the indent: default stops count from the indent too (measured in LibreOffice), in WordCraft's layout, and a file measuring tabs so is written back so (it was written from the margin, moving LibreOffice's default stops). |
