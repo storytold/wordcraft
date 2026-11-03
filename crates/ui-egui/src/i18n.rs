@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -126,6 +126,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ro", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Tamil; `ta`, `ta-IN` Tamil (India), `ta-LK` Tamil (Sri Lanka), `ta-MY` Tamil (Malaysia), `ta-SG` Tamil (Singapore), `ta-IN.UTF-8` resolve here.
+    LangInfo { code: "fr", prefer_hans: false, editing_lang: None },
+
 ];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
