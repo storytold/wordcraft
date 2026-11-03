@@ -30,9 +30,9 @@ struct ElsewhereContext {
 }
 
 impl Session {
-    fn restore_layouts(&mut self, before: Option<LayoutSlots>) {
+    fn restore_layouts(&mut self, before: Option<LayoutSlots>, key: (u64, u64)) {
         if let Some(entries) = before {
-            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == self.rev));
+            self.layout = entries.map(|entry| entry.filter(|entry| entry.0 == key));
         }
     }
 
@@ -283,7 +283,7 @@ impl Session {
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
                 }
-                self.restore_layouts(layout_before);
+                self.restore_layouts(layout_before, (self.rev, wordcraft_proof::dictionary_generation()));
                 if let Some(b) = blocks_before {
                     self.building_blocks = b;
                 }
@@ -509,5 +509,48 @@ impl Session {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Restore snapshot owners only when both document and dictionary keys match.
+    #[test]
+    fn rollback_and_noop_layout_keys() {
+        let mut s = Session::new(Document::from_text("Cache owner"));
+        let owner = s.layout();
+        let entry = s.layout[0].clone().unwrap();
+        let key = entry.0;
+        let document = s.doc.clone();
+        let revision = s.rev();
+
+        // These keys belong to copied slots, never the process-wide dictionary counter.
+        for stale_key in [(key.0 ^ 1, key.1), (key.0, key.1 ^ 1)] {
+            let mut stale = entry.clone();
+            stale.0 = stale_key;
+            s.restore_layouts(Some([Some(entry.clone()), Some(stale.clone())]), key);
+            assert!(Arc::ptr_eq(&s.layout[0].as_ref().unwrap().5, &owner));
+            assert!(s.layout[1].is_none(), "a stale document or dictionary key is discarded");
+            s.restore_layouts(Some([Some(stale), Some(entry.clone())]), key);
+            assert!(s.layout[0].is_none());
+            assert!(Arc::ptr_eq(&s.layout[1].as_ref().unwrap().5, &owner));
+        }
+
+        s.restore_layouts(Some([Some(entry.clone()), Some(entry)]), key);
+        s.restore_layouts(None, key);
+        const NOOP: &str = "test.layoutNoop";
+        let mut specs = s.registry.all().to_vec();
+        specs.push(CommandSpec::new(NOOP, "Layout no-op", "Test", |_, _| Ok(Value::Null)).pure());
+        s.registry = Arc::new(crate::Registry::new(specs));
+        s.run(NOOP, &serde_json::json!({})).unwrap();
+        for slot in &s.layout {
+            let entry = slot.as_ref().unwrap();
+            assert_eq!(entry.0, key);
+            assert!(Arc::ptr_eq(&entry.5, &owner), "a no-op keeps eligible snapshot owners");
+        }
+        assert_eq!(s.doc, document);
+        assert_eq!(s.rev(), revision);
     }
 }
