@@ -182,7 +182,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             return;
         }
         // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
-        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+        // A page wider than a narrow window scrolls sideways instead of being cut off (#5396).
+        egui::ScrollArea::both().auto_shrink([false, true]).show(ui, |ui| {
             pad.show(ui, |ui| {
                 crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
                     "home" => home_page(app, ui),

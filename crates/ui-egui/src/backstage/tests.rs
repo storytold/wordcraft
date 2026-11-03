@@ -1090,6 +1090,37 @@ fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
     (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
 }
 
+/// #5396: on a window narrower than a File page, the page scrolls sideways, so the part past the
+/// right edge can be reached instead of being cut off.
+#[test]
+fn a_narrow_file_page_scrolls_sideways_to_its_cut_off_part() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    // The harness keeps an 8 point margin, so the window edge is at x=752.
+    let before = h.get_by_label("Résumé").rect();
+    assert!(before.right() > 752.0, "the last template tile must start out past the window edge: {before:?}");
+    h.event(egui::Event::PointerMoved(egui::pos2(400.0, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-400.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    let after = h.get_by_label("Résumé").rect();
+    assert!(after.right() <= 752.0, "the last template tile must scroll into view: before={before:?}, after={after:?}");
+}
+
 /// #5282: the File page scrolls with the wheel over its right side.
 #[test]
 fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
