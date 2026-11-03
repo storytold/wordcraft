@@ -14,11 +14,13 @@ mod custom;
 mod flat;
 mod fonts;
 mod package;
+pub mod vba;
 mod read;
 mod smart_art;
 #[cfg(test)]
 mod test_log;
 mod units;
+pub mod vba;
 mod wordml2003;
 mod wordml2003_write;
 mod write;
@@ -32,6 +34,7 @@ pub use crypt::{
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
 pub use fonts::{EmbeddedFont, embedded_fonts};
+pub use package::VBA_PROJECT_PART;
 pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
