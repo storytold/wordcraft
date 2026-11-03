@@ -136,7 +136,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 ui.label(text);
             });
         };
-        egui::Grid::new("layout_para").spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("layout_para").spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y), |ui| {
             ui.label(egui::RichText::new(tl!("Indent")).small().strong());
             ui.label("");
             spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
