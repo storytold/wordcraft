@@ -1,5 +1,11 @@
+use super::Source;
 use super::styles::{Cite, Name, Names, style};
-use super::*;
+
+/// A source's corporate author, when it has one: written as it is in place of the person names
+/// (Word's Corporate Author, #4848).
+pub(super) fn corporate(src: &Source) -> Option<&str> {
+    Some(src.corporate.trim()).filter(|c| !c.is_empty())
+}
 
 pub(super) fn authors(a: &str) -> Vec<(String, String)> {
     a.split(';')
@@ -110,12 +116,13 @@ pub fn cite(src: &Source, style_name: &str, n: usize, pages: &str) -> String {
     let st = style(style_name);
     let au = authors(&src.author);
     let lasts: Vec<&str> = au.iter().map(|a| a.0.as_str()).collect();
-    let who = match lasts.as_slice() {
-        [] => src.title.clone(),
-        [one] => one.to_string(),
-        [first, ..] if lasts.len() >= st.et_al_from.max(2) => format!("{first} et al."),
-        [a, b] => format!("{a} {} {b}", st.and),
-        [init @ .., z] => format!("{} {} {z}", init.join(", "), st.and),
+    let who = match (corporate(src), lasts.as_slice()) {
+        (Some(c), _) => c.to_string(),
+        (None, []) => src.title.clone(),
+        (None, [one]) => one.to_string(),
+        (None, [first, ..]) if lasts.len() >= st.et_al_from.max(2) => format!("{first} et al."),
+        (None, [a, b]) => format!("{a} {} {b}", st.and),
+        (None, [init @ .., z]) => format!("{} {} {z}", init.join(", "), st.and),
     };
     match st.cite {
         Cite::AuthorPage if pages.is_empty() => format!("({who})"),
@@ -148,7 +155,7 @@ pub fn entry(src: &Source, style_name: &str, n: usize) -> String {
     let field = |key: &str| -> String {
         match key {
             "n" => n.to_string(),
-            "names" => name_list(&au, &st.names),
+            "names" => corporate(src).map_or_else(|| name_list(&au, &st.names), str::to_string),
             "year" if src.year.is_empty() => "n.d.".into(),
             "year" => src.year.clone(),
             "title" => src.title.clone(),

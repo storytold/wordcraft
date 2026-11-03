@@ -1,6 +1,6 @@
 use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
-use super::*;
+use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
@@ -9,66 +9,13 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
-        if self.st.dest == Dest::Skip && !(self.in_info() && matches!(w, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim")) {
-            if self.in_creatim {
-                let v = pv.clamp(0, 9999) as u32;
-                let c = self.created.get_or_insert((0, 1, 1, 0, 0));
-                match w {
-                    "yr" => c.0 = v,
-                    "mo" => c.1 = v,
-                    "dy" => c.2 = v,
-                    "hr" => c.3 = v,
-                    "min" => c.4 = v,
-                    _ => {}
-                }
-            }
+        if self.skip_destination_word(w, pv) {
             return;
         }
-        // Destinations.
-        let dest = match w {
-            "fonttbl" => Some(Dest::FontTbl),
-            "colortbl" => Some(Dest::ColorTbl),
-            "stylesheet" => Some(Dest::StyleSheet),
-            "info" => Some(Dest::Skip),
-            "title" if self.st.dest == Dest::Skip && self.in_info() => Some(Dest::Info(1)),
-            "author" if self.in_info() => Some(Dest::Info(2)),
-            "subject" if self.in_info() => Some(Dest::Info(3)),
-            "keywords" if self.in_info() => Some(Dest::Info(4)),
-            "doccomm" if self.in_info() => Some(Dest::Info(5)),
-            "listtable" => Some(Dest::ListTable),
-            "revtbl" => Some(Dest::RevTbl),
-            "oldcprops" => Some(Dest::OldProps(false)),
-            "oldpprops" => Some(Dest::OldProps(true)),
-            "listoverridetable" => Some(Dest::ListOverride),
-            "fldinst" => Some(Dest::FldInst),
-            // Transparent wrapper: read the nested pict without changing the destination.
-            "shppict" => return,
-            "pict" => Some(Dest::Pict),
-            "bkmkstart" => Some(Dest::Bookmark),
-            "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf"
-                if self.hf.is_none() && self.st.dest == Dest::Body && !self.st.intbl =>
-            {
-                let footer = w.starts_with("footer");
-                let pages = match w.strip_prefix(if footer { "footer" } else { "header" }) {
-                    Some("f") => HfPages::First,
-                    Some("l") => HfPages::Even,
-                    _ => HfPages::Default,
-                };
-                self.start_header_footer(HeaderFooter { footer, pages });
-                return;
-            }
-            "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
-            | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
-            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
-            | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
-            | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
-            | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
-            "creatim" if self.in_info() => {
-                self.in_creatim = true;
-                Some(Dest::Skip)
-            }
-            _ => None,
-        };
+        if w == "shppict" || self.start_header_footer_word(w) {
+            return;
+        }
+        let dest = self.destination_for_word(w);
         if let Some(d) = dest {
             match d {
                 Dest::Bookmark => {
@@ -83,6 +30,8 @@ impl Reader {
                     self.pict_h = None;
                     self.pict_sx = 0.0;
                     self.pict_sy = 0.0;
+                    self.pict_nat = (0, 0);
+                    self.pict_mm = 0;
                 }
                 Dest::FldInst if self.st.field.is_none() => self.start_field(),
                 // Old character formatting holds the properties that changed (Word) or, after a
@@ -97,161 +46,11 @@ impl Reader {
             self.st.dest = d;
             return;
         }
-        if starred && first_in_group {
-            // Unknown ignorable destination.
-            if !matches!(w, "fldinst" | "bkmkstart") {
-                self.st.dest = Dest::Skip;
-                return;
-            }
+        if self.skip_ignorable_destination(w, starred, first_in_group) {
+            return;
         }
-        match self.st.dest {
-            Dest::Skip => {
-                if self.in_creatim {
-                    let v = pv.clamp(0, 9999) as u32;
-                    let c = self.created.get_or_insert((0, 1, 1, 0, 0));
-                    match w {
-                        "yr" => c.0 = v,
-                        "mo" => c.1 = v,
-                        "dy" => c.2 = v,
-                        "hr" => c.3 = v,
-                        "min" => c.4 = v,
-                        _ => {}
-                    }
-                }
-                return;
-            }
-            // Font names take Unicode escapes (with fallback skipping) like the body.
-            Dest::FontTbl if !matches!(w, "u" | "uc") => {
-                match w {
-                    "f" => {
-                        self.font_cur = pv;
-                        self.font_name.clear();
-                        self.font_cp_cur = None;
-                    }
-                    "fcharset" => self.font_cp_cur = wordcraft_doc::encoding::charset_code_page(pv),
-                    // A font's explicit code page (`\cpg1251`, `\cpg932`) wins over its charset.
-                    "cpg" => {
-                        if let Some(cp) = u16::try_from(pv).ok().filter(|cp| wordcraft_doc::encoding::is_text_code_page(*cp)) {
-                            self.font_cp_cur = Some(cp);
-                        }
-                    }
-                    _ => {}
-                }
-                return;
-            }
-            Dest::FontTbl => {}
-            Dest::ColorTbl => {
-                let v = pv.clamp(0, 255) as u8;
-                match w {
-                    "red" => {
-                        self.color_cur.0 = v;
-                        self.color_cur.3 = true;
-                    }
-                    "green" => {
-                        self.color_cur.1 = v;
-                        self.color_cur.3 = true;
-                    }
-                    "blue" => {
-                        self.color_cur.2 = v;
-                        self.color_cur.3 = true;
-                    }
-                    _ => {}
-                }
-                return;
-            }
-            Dest::StyleSheet => {
-                let d = &mut self.style_def_cur;
-                match w {
-                    "s" | "cs" | "ds" | "ts" => {
-                        self.style_cur = if w == "s" { pv } else { -1 - pv.saturating_abs() };
-                        self.style_name.clear();
-                        *d = StyleDef::default();
-                    }
-                    "sbasedon" => d.based_on = Some(pv),
-                    "b" => d.bold = Some(on),
-                    "i" => d.italic = Some(on),
-                    "fs" => d.size = (pv > 0).then(|| (pv as f32 / 2.0).clamp(1.0, 1638.0)),
-                    "f" => d.font = Some(pv),
-                    _ => {}
-                }
-                return;
-            }
-            Dest::ListTable => {
-                match w {
-                    "list" => {
-                        self.list_cur.clear();
-                        self.list_cur_id = 0;
-                    }
-                    "listlevel" if self.list_cur.len() < 9 => {
-                        self.list_cur.push(true);
-                    }
-                    "levelnfc" | "levelnfcn" => {
-                        if let Some(l) = self.list_cur.last_mut() {
-                            *l = !matches!(pv, 23 | 255);
-                        }
-                    }
-                    "listid" => {
-                        self.list_cur_id = pv;
-                        if self.lists.len() < 4096 {
-                            self.lists.insert(pv, self.list_cur.clone());
-                        }
-                    }
-                    _ => {}
-                }
-                return;
-            }
-            Dest::ListOverride => {
-                match w {
-                    "listid" => self.ov_list = pv,
-                    "ls" => {
-                        self.ov_ls = pv;
-                        if self.overrides.len() < 4096 {
-                            self.overrides.insert(pv, self.ov_list);
-                        }
-                    }
-                    _ => {}
-                }
-                return;
-            }
-            // Author names take Unicode escapes like the other text destinations.
-            Dest::RevTbl if !matches!(w, "u" | "uc") => return,
-            Dest::RevTbl => {}
-            Dest::Pict => {
-                match w {
-                    "pngblip" => self.pict_kind = 1,
-                    "jpegblip" => self.pict_kind = 2,
-                    "picwgoal" => self.pict_w = Some(pv.clamp(1, 31_680) as f32 / 20.0),
-                    "pichgoal" => self.pict_h = Some(pv.clamp(1, 31_680) as f32 / 20.0),
-                    "picscalex" => self.pict_sx = pv.clamp(1, 1000) as f32,
-                    "picscaley" => self.pict_sy = pv.clamp(1, 1000) as f32,
-                    _ => {}
-                }
-                return;
-            }
-            // Text destinations take Unicode escapes (with fallback skipping) like the body.
-            Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(w, "u" | "uc") => return,
-            Dest::Info(_) | Dest::FldInst | Dest::Bookmark => {}
-            // Who changed the formatting and when, inside the old formatting (as Word writes it).
-            Dest::OldProps(false) if matches!(w, "crauth" | "crdate") => {
-                if w == "crauth" {
-                    self.st.old_rev.0 = Some(pv);
-                } else {
-                    self.st.old_rev.1 = Some(pv as u32);
-                }
-                return;
-            }
-            // Old formatting takes formatting words only: no text, structure or document state,
-            // and no paragraph reset among the character formatting.
-            Dest::OldProps(_) if !is_format_word(w) => return,
-            Dest::OldProps(false) if w == "pard" => return,
-            // Border words there would edit the cell definition being read, not the group's copy.
-            Dest::OldProps(_) if self.cell_side.is_some() && w.starts_with("brdr") => return,
-            Dest::OldProps(false) => {
-                if is_char_format_word(w) && self.st.old_words.len() < MAX_OLD_WORDS {
-                    self.st.old_words.push((w.to_string(), p));
-                }
-            }
-            Dest::OldProps(true) | Dest::Body => {}
+        if self.destination_word(w, p, on, pv) {
+            return;
         }
         match w {
             "par" => self.end_para_mark(),
@@ -463,6 +262,235 @@ impl Reader {
                     self.st.fmt.link = link.as_deref().and_then(model::kept_link);
                 }
             }
+            _ => {}
+        }
+    }
+
+    fn destination_for_word(&mut self, w: &str) -> Option<Dest> {
+        match w {
+            "fonttbl" => Some(Dest::FontTbl),
+            "colortbl" => Some(Dest::ColorTbl),
+            "stylesheet" => Some(Dest::StyleSheet),
+            "info" => Some(Dest::Skip),
+            "title" if self.st.dest == Dest::Skip && self.in_info() => Some(Dest::Info(1)),
+            "author" if self.in_info() => Some(Dest::Info(2)),
+            "subject" if self.in_info() => Some(Dest::Info(3)),
+            "keywords" if self.in_info() => Some(Dest::Info(4)),
+            "doccomm" if self.in_info() => Some(Dest::Info(5)),
+            "listtable" => Some(Dest::ListTable),
+            "revtbl" => Some(Dest::RevTbl),
+            "oldcprops" => Some(Dest::OldProps(false)),
+            "oldpprops" => Some(Dest::OldProps(true)),
+            "listoverridetable" => Some(Dest::ListOverride),
+            "fldinst" => Some(Dest::FldInst),
+            // Transparent wrapper: read the nested pict without changing the destination.
+            "pict" => Some(Dest::Pict),
+            "bkmkstart" => Some(Dest::Bookmark),
+            "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
+            | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
+            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
+            | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
+            | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
+            | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
+            "creatim" if self.in_info() => {
+                self.in_creatim = true;
+                Some(Dest::Skip)
+            }
+            _ => None,
+        }
+    }
+
+    fn start_header_footer_word(&mut self, word: &str) -> bool {
+        if !matches!(word, "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf")
+            || self.hf.is_some()
+            || self.st.dest != Dest::Body
+            || self.st.intbl
+        {
+            return false;
+        }
+        let footer = word.starts_with("footer");
+        let pages = match word.strip_prefix(if footer { "footer" } else { "header" }) {
+            Some("f") => HfPages::First,
+            Some("l") => HfPages::Even,
+            _ => HfPages::Default,
+        };
+        self.start_header_footer(HeaderFooter { footer, pages });
+        true
+    }
+
+    fn skip_ignorable_destination(&mut self, word: &str, starred: bool, first_in_group: bool) -> bool {
+        if !starred || !first_in_group || matches!(word, "fldinst" | "bkmkstart") {
+            return false;
+        }
+        self.st.dest = Dest::Skip;
+        true
+    }
+
+    fn destination_word(&mut self, word: &str, param: Option<i32>, on: bool, value: i32) -> bool {
+        match self.st.dest {
+            Dest::Skip => {
+                if self.in_creatim {
+                    self.record_created_part(word, value);
+                }
+                true
+            }
+            Dest::FontTbl if !matches!(word, "u" | "uc") => {
+                self.font_table_word(word, value);
+                true
+            }
+            Dest::FontTbl => false,
+            Dest::ColorTbl => {
+                let color = value.clamp(0, 255) as u8;
+                match word {
+                    "red" => (self.color_cur.0, self.color_cur.3) = (color, true),
+                    "green" => (self.color_cur.1, self.color_cur.3) = (color, true),
+                    "blue" => (self.color_cur.2, self.color_cur.3) = (color, true),
+                    _ => {}
+                }
+                true
+            }
+            Dest::StyleSheet => {
+                let def = &mut self.style_def_cur;
+                match word {
+                    "s" | "cs" | "ds" | "ts" => {
+                        self.style_cur = if word == "s" { value } else { -1 - value.saturating_abs() };
+                        self.style_name.clear();
+                        *def = StyleDef::default();
+                    }
+                    "sbasedon" => def.based_on = Some(value),
+                    "b" => def.bold = Some(on),
+                    "i" => def.italic = Some(on),
+                    "fs" => def.size = (value > 0).then(|| (value as f32 / 2.0).clamp(1.0, 1638.0)),
+                    "f" => def.font = Some(value),
+                    _ => {}
+                }
+                true
+            }
+            Dest::ListTable => {
+                self.list_table_word(word, value);
+                true
+            }
+            Dest::ListOverride => {
+                match word {
+                    "listid" => self.ov_list = value,
+                    "ls" => {
+                        self.ov_ls = value;
+                        if self.overrides.len() < 4096 {
+                            self.overrides.insert(value, self.ov_list);
+                        }
+                    }
+                    _ => {}
+                }
+                true
+            }
+            Dest::RevTbl if !matches!(word, "u" | "uc") => true,
+            Dest::RevTbl => false,
+            Dest::Pict => {
+                self.picture_word(word, value);
+                true
+            }
+            Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(word, "u" | "uc") => true,
+            Dest::Info(_) | Dest::FldInst | Dest::Bookmark => false,
+            Dest::OldProps(false) if matches!(word, "crauth" | "crdate") => {
+                if word == "crauth" {
+                    self.st.old_rev.0 = Some(value);
+                } else {
+                    self.st.old_rev.1 = Some(value as u32);
+                }
+                true
+            }
+            Dest::OldProps(_) if !is_format_word(word) => true,
+            Dest::OldProps(false) if word == "pard" => true,
+            Dest::OldProps(_) if self.cell_side.is_some() && word.starts_with("brdr") => true,
+            Dest::OldProps(false) => {
+                if is_char_format_word(word) && self.st.old_words.len() < MAX_OLD_WORDS {
+                    self.st.old_words.push((word.to_string(), param));
+                }
+                false
+            }
+            Dest::OldProps(true) | Dest::Body => false,
+        }
+    }
+
+    fn font_table_word(&mut self, word: &str, value: i32) {
+        match word {
+            "f" => {
+                self.font_cur = value;
+                self.font_name.clear();
+                self.font_cp_cur = None;
+            }
+            "fcharset" => self.font_cp_cur = wordcraft_doc::encoding::charset_code_page(value),
+            "cpg" => {
+                if let Some(cp) = u16::try_from(value).ok().filter(|cp| wordcraft_doc::encoding::is_text_code_page(*cp)) {
+                    self.font_cp_cur = Some(cp);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn list_table_word(&mut self, word: &str, value: i32) {
+        match word {
+            "list" => {
+                self.list_cur.clear();
+                self.list_cur_id = 0;
+            }
+            "listlevel" if self.list_cur.len() < 9 => self.list_cur.push(true),
+            "levelnfc" | "levelnfcn" => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    *level = !matches!(value, 23 | 255);
+                }
+            }
+            "listid" => {
+                self.list_cur_id = value;
+                if self.lists.len() < 4096 {
+                    self.lists.insert(value, self.list_cur.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn picture_word(&mut self, word: &str, value: i32) {
+        match word {
+            "pngblip" => self.pict_kind = 1,
+            "jpegblip" => self.pict_kind = 2,
+            // Windows and Enhanced Metafiles (#4259): drawn by the metafile renderer.
+            "wmetafile" => {
+                self.pict_kind = 3;
+                self.pict_mm = value;
+            }
+            "emfblip" => self.pict_kind = 4,
+            "picw" => self.pict_nat.0 = value,
+            "pich" => self.pict_nat.1 = value,
+            "picwgoal" => self.pict_w = Some(value.clamp(1, 31_680) as f32 / 20.0),
+            "pichgoal" => self.pict_h = Some(value.clamp(1, 31_680) as f32 / 20.0),
+            "picscalex" => self.pict_sx = value.clamp(1, 1000) as f32,
+            "picscaley" => self.pict_sy = value.clamp(1, 1000) as f32,
+            _ => {}
+        }
+    }
+
+    fn skip_destination_word(&mut self, word: &str, value: i32) -> bool {
+        let kept_info = self.in_info() && matches!(word, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim");
+        if self.st.dest != Dest::Skip || kept_info {
+            return false;
+        }
+        if self.in_creatim {
+            self.record_created_part(word, value);
+        }
+        true
+    }
+
+    fn record_created_part(&mut self, word: &str, value: i32) {
+        let value = value.clamp(0, 9999) as u32;
+        let created = self.created.get_or_insert((0, 1, 1, 0, 0));
+        match word {
+            "yr" => created.0 = value,
+            "mo" => created.1 = value,
+            "dy" => created.2 = value,
+            "hr" => created.3 = value,
+            "min" => created.4 = value,
             _ => {}
         }
     }
