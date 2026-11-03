@@ -810,6 +810,7 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 
 #[test]
 fn french_editing_region_uses_the_locale_not_extension_keys() {
+    needs_catalogs!();
     let fr = lang("fr");
     assert_eq!(fr.editing_lang(), Some("fr-FR"));
     let resolve = |locales: &[&str]| fr.editing_lang_in(&locales.iter().map(|s| s.to_string()).collect::<Vec<_>>());
