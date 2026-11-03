@@ -1,4 +1,4 @@
-use super::state::{SavedDock, labels, mirrored, move_before, open, pane_state};
+use super::state::{SavedDock, labels, move_before, open, pane_state};
 use super::{Edge, Pane, PaneHost, PaneRequest, PaneState, Place, SidePolicy, Stroke, Tokens, Ui, Value, WordApp, json};
 
 pub(super) struct Content<'a> {
@@ -87,7 +87,7 @@ pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
         PaneRequest::Resize(Pane::Styles, width) => app.ui.styles_pane_width = Some(width),
         PaneRequest::FloatRect(Pane::Styles, rect) => app.ui.styles_pane_float = Some(rect),
         PaneRequest::Place(pane, place) => {
-            let dock = match mirrored(place) {
+            let dock = match place {
                 Place::Docked(Edge::Start) => "left",
                 Place::Docked(Edge::End) => "right",
                 Place::Floating => "float",
