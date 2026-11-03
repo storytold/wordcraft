@@ -56,12 +56,12 @@ impl EditSnapshot {
 /// block.
 pub(super) type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>);
 
-/// A layout made and what it was made for: (revision, width, read height, view, read line
+/// A layout made and what it was made for: ((revision, proofing dictionaries' generation), width, read height, view, read line
 /// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body
 /// deletions in balloons), numeral display, the word being typed, (hidden text shown, field
 /// codes shown)).
 pub(super) type LayoutEntry = (
-    u64,
+    (u64, u64),
     f32,
     f32,
     ViewMode,

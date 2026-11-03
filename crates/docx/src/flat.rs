@@ -76,7 +76,7 @@ pub fn sniff_xml(bytes: &[u8]) -> XmlKind {
 
 /// Read a Flat OPC file.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
-    crate::read::read_opened(&unpack(bytes)?)
+    crate::read::read_opened(&unpack(bytes)?, None)
 }
 
 /// The data element of the part being read.
