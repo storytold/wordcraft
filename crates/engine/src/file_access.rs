@@ -499,16 +499,28 @@ mod tests {
         let mut offenders = vec![];
         for path in files {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            // `io` and this module are the checked gateway; `tests*.rs` are test-only modules.
-            if path.parent() == Some(src.as_path()) && (name == "io.rs" || name == "file_access.rs" || name.starts_with("tests"))
+            // `io` and this module are the checked gateway; `tests*.rs` files and `tests/`
+            // directories are test-only modules.
+            if path.parent() == Some(src.as_path()) && (name == "io.rs" || name == "file_access.rs")
+                || name.starts_with("tests")
+                || path.strip_prefix(&src).is_ok_and(|rel| rel.components().any(|c| c.as_os_str() == "tests"))
                 || path.starts_with(src.join("io"))
                 || path == src.join("recovery/desktop.rs")
             {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            // Test modules (which build their own fixtures) come last in each file.
-            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            // Inline test modules (which build their own fixtures) come last in each file. A
+            // `#[cfg(test)]` on a `use` line, a `mod tests;` declaration or another item doesn't end
+            // the code.
+            let end = text
+                .match_indices("#[cfg(test)]")
+                .find(|&(i, a)| {
+                    let first = text[i + a.len()..].trim_start().lines().next().unwrap_or("");
+                    first.starts_with("mod ") && first.trim_end().ends_with('{')
+                })
+                .map_or(text.len(), |(i, _)| i);
+            let code = &text[..end];
             for (n, line) in code.lines().enumerate() {
                 let line = line.trim_start();
                 let touches = ["std::fs", "File::open", "File::create", "OpenOptions"].iter().any(|w| line.contains(w));
