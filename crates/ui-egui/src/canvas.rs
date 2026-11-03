@@ -1076,10 +1076,10 @@ fn handle_primary_pointer(
     geo: &Geometry,
     middle_gesture: bool,
 ) {
-    // A press on a drop-down's list button opens the list (`content_controls::clicks`) and must
+    // A press that began on a drop-down's list button opens the list (`content_controls::clicks`) and must
     // not move the caret: the button hangs over what follows the control, and a caret placed
     // there leaves the control, which closes the list in the frame it opens (#5389).
-    if resp.interact_pointer_pos().is_some_and(|p| app.controls.on_button(p)) {
+    if ui.input(|i| i.pointer.press_origin()).is_some_and(|p| app.controls.on_button(p)) {
         return;
     }
     // Double-click the space between two pages (or the line between them) to hide or show it.
