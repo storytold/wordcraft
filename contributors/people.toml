@@ -18,6 +18,9 @@
 real_name = "Divyanshu Gupta"
 sync_github_name = true
 
+[people.abdallah-shehawey]
+sync_github_name = true
+
 [people.lokinmodar]
 sync_github_name = true
 
