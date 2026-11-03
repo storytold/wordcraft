@@ -1,6 +1,7 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
 use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
+use wordcraft_doc::props::LineSpacing;
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -409,7 +410,7 @@ impl Writer {
         out.push_str(&ctl);
         if let Some(c) = &p.fmt_change {
             // RTF 1.9.1: the paragraph formatting before the change, then who changed it and when.
-            let old = self.para_ctl(&c.old, intbl);
+            let old = self.old_para_ctl(&c.old, intbl);
             // The old list is the same list instance (only its level may differ).
             let list = match (c.old.list, &ls) {
                 (Some(li), Some((n, _))) => format!("\\ls{n}\\ilvl{}", li.level.min(8)),
@@ -447,6 +448,36 @@ impl Writer {
             out.push_str(end);
         }
         out.push('\n');
+    }
+
+    /// Previous direct layout values belong inside oldpprops, after the style defaults.
+    fn old_para_ctl(&mut self, p: &Para, intbl: bool) -> String {
+        let mut out = self.para_ctl(p, intbl);
+        for (word, value) in
+            [("sb", p.spacing.before), ("sa", p.spacing.after), ("li", p.spacing.left), ("ri", p.spacing.right), ("fi", p.spacing.first)]
+        {
+            if let Some(value) = value {
+                let twips = (f64::from(value) * 20.0).round() as i32;
+                out.push_str(&format!("\\{word}{twips}"));
+            }
+        }
+        if let Some(line) = p.spacing.line {
+            let (value, multiple) = match line {
+                LineSpacing::Multiple(value) => (f64::from(value) * 240.0, 1),
+                LineSpacing::Exactly(value) => (-f64::from(value).abs().max(0.7) * 20.0, 0),
+                LineSpacing::AtLeast(value) => (f64::from(value).abs() * 20.0, 0),
+            };
+            let value = value.round() as i32;
+            out.push_str(&format!("\\sl{value}\\slmult{multiple}"));
+        }
+        if let Some(b) = &p.borders {
+            for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
+                if let Some(border) = opt.filter(|x| x.is_visible()) {
+                    self.write_border("brdr", side, border, &mut out);
+                }
+            }
+        }
+        out
     }
 
     /// The paragraph formatting control words of `p`, from `\pard\plain` (its list left out).

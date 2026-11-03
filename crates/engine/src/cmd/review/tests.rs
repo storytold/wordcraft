@@ -1059,6 +1059,67 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
     }
 }
 
+/// Reject after repeated RTF saves restores the prior layout, while Accept keeps the current one.
+#[test]
+fn rtf_reopened_paragraph_change_restores_layout_on_reject() {
+    use wordcraft_doc::props::{Align, LineSpacing};
+    let rtf = br"{\rtf1\ansi{\colortbl;\red17\green89\blue203;}{\*\revtbl{Unknown;}{Alice;}}
+\pard\qc\prauth1\prdate-2014675576{\*\oldpprops\pard\ql\sb480\sa720\sl360\slmult1\li360\ri180\fi-80\brdrt\brdrs\brdrw20\brdrcf1}Changed\par\pard\ql Neighbor\par}";
+    let mut doc = wordcraft_formats::rtf::import(rtf).unwrap();
+    let current = doc.body[0].as_para().unwrap().props.formatting();
+    let old = doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old.formatting();
+    assert_eq!((old.space_before, old.space_after, old.line_spacing), (Some(24.0), Some(36.0), Some(LineSpacing::Multiple(1.5))));
+    assert_eq!((old.indent_left, old.indent_right, old.indent_first), (Some(18.0), Some(9.0), Some(-4.0)));
+    assert_eq!(old.borders.unwrap().top.unwrap().color, Some(wordcraft_doc::Rgb(17, 89, 203)));
+    assert_eq!(current.align, Some(Align::Center));
+    let neighbor = doc.body[1].clone();
+    for _ in 0..2 {
+        doc = wordcraft_formats::rtf::import(wordcraft_formats::rtf::export(&doc).as_bytes()).unwrap();
+        for (command, expected) in [("review.rejectAll", &old), ("review.acceptAll", &current)] {
+            let mut s = Session::new(doc.clone());
+            s.run(command, &json!({})).unwrap();
+            assert_eq!(&body_para(&s).props, expected, "{command}");
+            assert_eq!(body_para(&s).text, "Changed");
+            assert_eq!(s.doc.body[1], neighbor, "{command}: adjacent paragraph unchanged");
+            assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+        }
+    }
+}
+
+/// App-supported exact spacing and an explicit minimum of zero survive RTF saves and Reject.
+#[test]
+fn rtf_reject_restores_supported_line_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    for (params, line) in [
+        (json!({"exactly": 0.7}), LineSpacing::Exactly(0.7)),
+        (json!({"exactly": 0.95}), LineSpacing::Exactly(0.95)),
+        (json!({"exactly": 1.0}), LineSpacing::Exactly(1.0)),
+        (json!({"exactly": 18.0}), LineSpacing::Exactly(18.0)),
+        (json!({"exactly": 1584.0}), LineSpacing::Exactly(1584.0)),
+        (json!({"atLeast": 0}), LineSpacing::AtLeast(0.0)),
+    ] {
+        let mut s = Session::new(wordcraft_formats::rtf::import(br"{\rtf1\pard\ql Boundary\par\pard\ql Neighbor\par}").unwrap());
+        s.run("para.lineSpacing", &params).unwrap();
+        let old = body_para(&s).props.formatting();
+        assert_eq!(old.line_spacing, Some(line));
+        let neighbor = s.doc.body[1].clone();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("review.trackingOptions", &json!({"trackFormatting": true})).unwrap();
+        s.run("para.lineSpacing", &json!({"exactly": 2.0})).unwrap();
+        let mut doc = s.doc;
+        for _ in 0..2 {
+            doc = wordcraft_formats::rtf::import(wordcraft_formats::rtf::export(&doc).as_bytes()).unwrap();
+            assert_eq!(doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old.line_spacing, old.line_spacing);
+            let mut rejected = Session::new(doc.clone());
+            rejected.run("review.rejectAll", &json!({})).unwrap();
+            assert_eq!(body_para(&rejected).props, old);
+            assert_eq!(body_para(&rejected).text, "Boundary");
+            assert_eq!(rejected.doc.body[1], neighbor);
+            assert!(rejected.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+        }
+    }
+}
+
 #[cfg(test)]
 mod spelling_navigation_tests {
     use super::*;

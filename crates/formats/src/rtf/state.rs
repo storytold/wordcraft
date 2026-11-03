@@ -130,8 +130,10 @@ pub(super) struct St {
     pub(super) border_side: Option<char>,
     pub(super) sb: Option<i32>,
     pub(super) sa: Option<i32>,
-    pub(super) sl: i32,
-    pub(super) slmult: bool,
+    /// Keep an explicit zero distinct from an absent old paragraph spacing control.
+    pub(super) sl: Option<i32>,
+    /// Only an explicit `\slmult0` makes old `\sl0` a zero minimum.
+    pub(super) slmult: Option<bool>,
     pub(super) li: Option<i32>,
     pub(super) ri: Option<i32>,
     pub(super) fi: Option<i32>,
@@ -162,8 +164,8 @@ impl Default for St {
             border_side: None,
             sb: None,
             sa: None,
-            sl: 0,
-            slmult: false,
+            sl: None,
+            slmult: None,
             li: None,
             ri: None,
             fi: None,

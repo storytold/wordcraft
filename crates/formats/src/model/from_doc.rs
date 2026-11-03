@@ -268,7 +268,23 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         out.fmt_change = p.props.fmt_change.as_deref().map(|c| {
             let blank = out.inlines.is_empty();
             let (kind, list) = props_kind(doc, &c.old, blank);
-            let old = Para { kind, list, align: c.old.align, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
+            let old = Para {
+                kind,
+                list,
+                align: c.old.align,
+                page_break: c.old.page_break_before.unwrap_or(false),
+                spacing: Spacing {
+                    before: c.old.space_before,
+                    after: c.old.space_after,
+                    line: c.old.line_spacing,
+                    left: c.old.indent_left,
+                    right: c.old.indent_right,
+                    first: c.old.indent_first,
+                    ..Default::default()
+                },
+                borders: c.old.borders,
+                ..Default::default()
+            };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });
     }

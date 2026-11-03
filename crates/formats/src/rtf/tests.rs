@@ -107,6 +107,29 @@ fn headers_and_footers() {
     assert!(import(br"{\rtf1\ansi{\header x").is_ok());
 }
 
+/// Exact spacing uses the command's supported bounds; other spacing rules stay unchanged.
+#[test]
+fn exact_line_spacing_supports_subpoint_values() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, expected) in [
+        (r"\sl-1", Some(LineSpacing::Exactly(0.7))),
+        (r"\sl-14", Some(LineSpacing::Exactly(0.7))),
+        (r"\sl-19", Some(LineSpacing::Exactly(0.95))),
+        (r"\sl-20", Some(LineSpacing::Exactly(1.0))),
+        (r"\sl-2147483648", Some(LineSpacing::Exactly(1584.0))),
+        (r"\sl0", None),
+        (r"\sl0\slmult0", None),
+        (r"\sl0\slmult1", None),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl1\slmult0", Some(LineSpacing::AtLeast(0.05))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let rtf = format!(r"{{\rtf1\pard{words} Boundary\par}}");
+        let doc = import(rtf.as_bytes()).unwrap();
+        assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, expected, "{words}");
+    }
+}
+
 #[test]
 fn paragraph_spacing_and_indents() {
     use wordcraft_doc::props::LineSpacing;
@@ -756,6 +779,109 @@ fn paragraph_formatting_change_round_trips() {
     let change = p.props.fmt_change.as_deref().expect("paragraph formatting change read back");
     assert_eq!(rev_of(&back, Some(change.rev)), Some((RevisionKind::Format, "Bob".into(), "2025-01-02T08:05:00Z".into())));
     assert_eq!(change.old.align, Some(Align::Right));
+}
+
+/// Original RTF: only the previous paragraph properties carry spacing and borders.
+fn prior_layout_document(words: &str) -> Document {
+    let rtf = format!(
+        r"{{\rtf1\ansi{{\colortbl;\red17\green89\blue203;}}{{\*\revtbl{{Unknown;}}{{Alice;}}}}
+\pard\qc\prauth1\prdate-2014675576{{\*\oldpprops\pard\ql{words}}}Changed\par\pard\ql Neighbor\par}}"
+    );
+    import(rtf.as_bytes()).unwrap()
+}
+
+fn prior_props(doc: &Document) -> &wordcraft_doc::props::ParaProps {
+    &doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old
+}
+
+/// Every line-spacing rule, explicit zeros and a hanging indent survive repeated RTF saves.
+#[test]
+fn saving_keeps_prior_paragraph_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, line) in [
+        (r"\sb480\sa720\sl360\slmult1\li360\ri180\fi-80", LineSpacing::Multiple(1.5)),
+        (r"\sb0\sa0\sl-360\slmult0\li0\ri0\fi0", LineSpacing::Exactly(18.0)),
+        (r"\sb100\sa0\sl400\slmult0\li360\ri180\fi-80", LineSpacing::AtLeast(20.0)),
+    ] {
+        let mut doc = prior_layout_document(words);
+        let expected = prior_props(&doc).clone();
+        assert_eq!(expected.line_spacing, Some(line));
+        assert!(expected.space_before.is_some() && expected.space_after.is_some());
+        let revisions = doc.revisions.clone();
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            let old = prior_props(&doc);
+            assert_eq!((old.space_before, old.space_after, old.line_spacing), (expected.space_before, expected.space_after, expected.line_spacing));
+            assert_eq!((old.indent_left, old.indent_right, old.indent_first), (expected.indent_left, expected.indent_right, expected.indent_first));
+            assert_eq!(doc.revisions, revisions);
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.props.align, Some(Align::Center));
+            assert_eq!(p.props.space_before, None, "old properties must not become current properties");
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// An explicit old minimum of zero survives saves without leaking through resets or groups.
+#[test]
+fn prior_zero_line_spacing_is_explicit_and_scoped() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, expected) in [
+        ("", None),
+        (r"\sl0", None),
+        (r"\slmult0", None),
+        (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\slmult0\sl0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl0\slmult1", None),
+        (r"\sl0\slmult0\pard\ql\sl0", None),
+        (r"{\sl0\slmult0}\sl0", None),
+        (r"\sl0\slmult0{\slmult1}", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let mut doc = prior_layout_document(words);
+        for _ in 0..3 {
+            assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().props.line_spacing, None);
+            doc = import(export(&doc).as_bytes()).unwrap();
+        }
+    }
+}
+
+/// Imported old exact spacing below the supported minimum retains the exact rule on save.
+#[test]
+fn prior_exact_spacing_below_the_supported_minimum_keeps_its_rule() {
+    use wordcraft_doc::props::LineSpacing;
+    for value in [0.0, 0.01, 0.05, 0.65, 0.7] {
+        let mut doc = prior_layout_document("");
+        let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut doc.body[0]) else { panic!("expected paragraph") };
+        p.props.fmt_change.as_deref_mut().unwrap().old.line_spacing = Some(LineSpacing::Exactly(value));
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            assert_eq!(prior_props(&doc).line_spacing, Some(LineSpacing::Exactly(0.7)), "{value}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// Prior visible borders stay inside oldpprops and retain their colour and geometry.
+#[test]
+fn saving_keeps_prior_paragraph_borders() {
+    let mut doc = prior_layout_document(r"\brdrt\brdrs\brdrw20\brdrcf1\brdrr\brdrdb\brdrw30\brdrcf1");
+    let expected = prior_props(&doc).borders;
+    let borders = expected.unwrap();
+    assert_eq!(borders.top.unwrap().color, Some(Rgb(17, 89, 203)));
+    assert_eq!(borders.top.unwrap().width, 1.0);
+    assert_eq!(borders.top.unwrap().space, 0.0);
+    assert!(borders.right.is_some());
+    for _ in 0..2 {
+        doc = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(prior_props(&doc).borders, expected);
+        assert_eq!(doc.body[0].as_para().unwrap().props.borders, None, "old borders stay out of the current paragraph");
+        assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
+    }
 }
 
 #[test]
