@@ -4371,3 +4371,42 @@ fn vml_horizontal_rules_are_read_and_kept() {
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }
+
+/// Review PR #5317 follow-up: the `w:numFmt` pair may sit in ANY AlternateContent block of the
+/// level (other properties keep their own blocks ahead of it), a Choice declaring a standard
+/// `w:val` is the active format where the Fallback is only for pre-2010 readers, and a pattern
+/// longer than the reader's cap is dropped whole rather than truncated into a fake original.
+#[test]
+fn w14_number_format_pairs_are_read_from_whichever_block_holds_them() {
+    use wordcraft_doc::numbering::Counters;
+    use wordcraft_doc::section::NumFormat;
+    let huge = "0".repeat(1025);
+    let numbering = format!(
+        r#"<w:numbering {W_NS} xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:abstractNum w:abstractNumId="0">\
+           <w:lvl w:ilvl="0">\
+             <mc:AlternateContent><mc:Choice Requires="w14"><w:lvlText w:val="[%1]"/></mc:Choice><mc:Fallback><w:lvlText w:val="[%1]"/></mc:Fallback></mc:AlternateContent>\
+             <mc:AlternateContent><mc:Choice Requires="w14"><w:numFmt w:val="custom" w:format="0001, 0002, 0003, ..."/></mc:Choice><mc:Fallback><w:numFmt w:val="decimal"/></mc:Fallback></mc:AlternateContent>\
+             <w:lvlText w:val="[%1]"/><w:suff w:val="nothing"/></w:lvl>\
+           <w:lvl w:ilvl="1">\
+             <mc:AlternateContent><mc:Choice Requires="w14"><w:numFmt w:val="decimal"/></mc:Choice><mc:Fallback><w:numFmt w:val="upperRoman"/></mc:Fallback></mc:AlternateContent>\
+             <w:lvlText w:val="(%2)"/><w:suff w:val="nothing"/></w:lvl>\
+           <w:lvl w:ilvl="2">\
+             <mc:AlternateContent><mc:Choice Requires="w14"><w:numFmt w:val="custom" w:format="{huge}"/></mc:Choice><mc:Fallback><w:numFmt w:val="lowerLetter"/></mc:Fallback></mc:AlternateContent>\
+             <w:lvlText w:val="%3."/><w:suff w:val="nothing"/></w:lvl>\
+         </w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+    );
+    let item = |lv: u8| format!(r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{lv}"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#);
+    let body: String = [0u8, 1, 2].map(item).concat();
+    let bytes = docx(&body, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // The second block's custom pattern was read despite the unrelated first block.
+    assert_eq!(d.numbering.level(1, 0).map(|l| l.custom_format.as_deref()), Some(Some("0001, 0002, 0003, ...")));
+    // The supported standard Choice is active: Word shows 1, not the Fallback's I.
+    assert_eq!(d.numbering.level(1, 1).map(|l| l.format), Some(NumFormat::Decimal));
+    // The oversized pattern is dropped whole; the level keeps the Fallback's format.
+    assert_eq!(d.numbering.level(1, 2).map(|l| (l.custom_format.clone(), l.format)), Some((None, NumFormat::LowerLetter)));
+    let mut c = Counters::default();
+    let labels: Vec<String> =
+        paras(&d).iter().filter_map(|p| p.props.numbering).filter_map(|n| c.next_label(&d.numbering, n.num, n.level)).map(|l| l.0).collect();
+    assert_eq!(labels, ["[0001]", "(1)", "a."]);
+}

@@ -59,6 +59,7 @@ pub fn level_json(l: &Level) -> Value {
         "italic": l.chr.italic.unwrap_or(false),
         "color": color,
         "legal": l.legal,
+        "customFormat": l.custom_format,
     })
 }
 
@@ -67,6 +68,14 @@ pub fn level_from(mut l: Level, i: usize, v: &Value) -> Level {
     let pt = |k: &str| p::f32(v, k).map(|x| x.clamp(-1584.0, 1584.0));
     if let Some(f) = p::str(v, "format") {
         l.format = NumFormat::from_ooxml(f);
+        // An explicitly requested standard format supersedes the level's custom pattern; send
+        // `customFormat` alongside to keep it (level_json reports both, so a round-trip does).
+        l.custom_format = None;
+    }
+    match v.get("customFormat") {
+        Some(Value::String(s)) => l.custom_format = Some(s.chars().take(1024).collect()).filter(|s: &String| !s.is_empty()),
+        Some(Value::Null) => l.custom_format = None,
+        _ => {}
     }
     if let Some(t) = p::str(v, "text") {
         l.text = t.chars().take(64).collect();
@@ -401,6 +410,34 @@ mod tests {
         assert_eq!(l[2]["follow"], "nothing");
         // Programmatic calls without levels are an error, not a dialog.
         assert!(s.run("list.define", &json!({})).is_err());
+    }
+
+    /// Review follow-up (PR #5317): editing a list neither silently keeps a stale custom pattern
+    /// nor silently drops it.
+    #[test]
+    fn a_custom_pattern_survives_a_carried_round_trip_and_yields_to_a_chosen_format() {
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "First"})).unwrap();
+        let levels = json!([{"format": "decimal", "text": "[%1]", "customFormat": "0001, 0002, 0003, ...", "alignedAt": 0, "indentAt": 36}]);
+        let num = s.run("list.define", &json!({"levels": levels})).unwrap()["num"].as_u64().unwrap() as u32;
+        let paths = s.doc.para_paths(wordcraft_doc::StoryRef::Body);
+        s.doc.para_mut(wordcraft_doc::StoryRef::Body, &paths[0]).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        s.relayout();
+        assert_eq!(labels(&mut s), ["[0001]"]);
+        // Re-defining with the levels as list.get reports them (what the dialog sends when the
+        // user changed nothing) keeps the pattern - the dialog's round-trip must not cost data.
+        let got = s.run("list.get", &json!({"num": num})).unwrap();
+        s.run("list.define", &json!({"num": num, "levels": [&got["levels"][0]]})).unwrap();
+        s.relayout();
+        assert_eq!(labels(&mut s), ["[0001]"], "a carried pattern survives re-defining the same list");
+        // Choosing a standard format instead (the dialog clears the carried pattern then) wins.
+        let mut chosen = got["levels"][0].clone();
+        chosen["format"] = json!("upperRoman");
+        chosen["customFormat"] = json!(null);
+        s.run("list.define", &json!({"num": num, "levels": [chosen]})).unwrap();
+        s.relayout();
+        // "[I]", not "[0001]": the chosen format numbers the label, the pattern is gone.
+        assert_eq!(labels(&mut s), ["[I]"], "an explicitly chosen format replaces the pattern");
     }
 
     /// Each body paragraph's number as laid out (`None`: no number), and its style.

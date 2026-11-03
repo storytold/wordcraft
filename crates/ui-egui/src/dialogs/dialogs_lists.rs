@@ -49,6 +49,12 @@ pub struct LevelForm {
     pub bold: bool,
     pub italic: bool,
     pub legal: bool,
+    /// A Word 2010 custom number pattern (`w:format`) as read; carried back to `list.define`
+    /// unless the format combo changes, so opening the dialog and pressing OK keeps it.
+    pub custom_format: String,
+    /// The format string as read, to tell an untouched combo from a chosen standard format.
+    #[serde(skip)]
+    format0: String,
 }
 
 impl LevelForm {
@@ -74,6 +80,8 @@ impl LevelForm {
             bold: v.get("bold").and_then(Value::as_bool).unwrap_or(false),
             italic: v.get("italic").and_then(Value::as_bool).unwrap_or(false),
             legal: v.get("legal").and_then(Value::as_bool).unwrap_or(false),
+            custom_format: s("customFormat"),
+            format0: s("format"),
         }
     }
 
@@ -82,6 +90,7 @@ impl LevelForm {
         let k = crate::options::unit().pt_per_unit();
         json!({
             "format": self.format,
+            "customFormat": if self.format == self.format0 && !self.custom_format.is_empty() { json!(self.custom_format) } else { Value::Null },
             "text": self.text,
             "start": self.start,
             "restartAfter": if !self.restart { json!(0) } else if i > 0 && (self.restart_after as usize) < i { json!(self.restart_after) } else { Value::Null },

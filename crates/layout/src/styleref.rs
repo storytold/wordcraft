@@ -182,13 +182,14 @@ impl StyleIndex {
                 let vals = counters.values(&doc.numbering, n.num).unwrap_or_default();
                 for (k, v) in vals.iter().enumerate().take(usize::from(n.level.min(8)) + 1) {
                     let Some(lv) = doc.numbering.level(n.num, k as u8) else { continue };
-                    if matches!(lv.format, NumFormat::None | NumFormat::Bullet) {
+                    let pads = lv.custom_format.as_deref().is_some_and(|p| wordcraft_doc::numbering::custom_pad_width(p).is_some());
+                    if matches!(lv.format, NumFormat::None | NumFormat::Bullet) && !(pads && !def.legal) {
                         continue;
                     }
                     let v = if *v == 0 { lv.start } else { *v };
-                    let fmt = if def.legal && lv.format != NumFormat::DecimalZero { NumFormat::Decimal } else { lv.format };
+                    let fmt = if def.legal && !(lv.format == NumFormat::DecimalZero && !pads) { NumFormat::Decimal } else { lv.format };
                     levels.push((
-                        wordcraft_doc::numbering::custom_format_label(lv.custom_format.as_deref(), fmt, v),
+                        wordcraft_doc::numbering::custom_format_label(lv.custom_format.as_deref().filter(|_| !def.legal), fmt, v),
                         def.text.contains(&format!("%{}", k + 1)),
                     ));
                 }

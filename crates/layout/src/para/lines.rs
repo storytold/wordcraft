@@ -257,7 +257,7 @@ impl<'e> Breaker<'e> {
         let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
         let row_lo = if self.first { self.first_left } else { self.rp.indent_left };
         let (left, right_edge, narrowed) = self.next_span(pl);
-        let x = if self.first { self.place_label(pl, left) } else { left };
+        let x = if self.first { self.place_label(pl, left, right_edge) } else { left };
         Scan {
             left,
             right_edge,
@@ -284,7 +284,7 @@ impl<'e> Breaker<'e> {
 
     /// Place the label on the first line, `left` being the first-line indent. Returns where the
     /// text starts.
-    fn place_label(&self, pl: &mut ParaLayout, left: f32) -> f32 {
+    fn place_label(&self, pl: &mut ParaLayout, left: f32, span_right: f32) -> f32 {
         let Some(lab) = pl.label.as_mut() else { return left };
         // The number is aligned at the first-line indent: its left edge, centre or right edge.
         lab.x = match self.level.map(|l| l.align) {
@@ -299,12 +299,19 @@ impl<'e> Breaker<'e> {
                 // the destination after the label: it wins over the default stops, which Word
                 // only resumes once the label has overflowed past it. A real stop before it — an
                 // explicit paragraph tab, or the hanging-indent position when the level hangs —
-                // still catches the tab first.
+                // still catches the tab first. The destination must leave room for text inside
+                // this line's span: a tab at the right edge, or under a float narrowing the
+                // first line, yields to the ordinary stops instead of starting text in occupied
+                // or off-line space.
                 let blocked = |p: f32| {
                     self.rp.tabs.iter().any(|tb| tb.pos > end + 0.01 && tb.pos < p - 0.01)
                         || self.hanging_at.is_some_and(|h| h > end + 0.01 && h < p - 0.01)
                 };
-                match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01 && *p <= self.base_right) {
+                match self
+                    .level
+                    .and_then(|l| l.tab)
+                    .filter(|p| p.is_finite() && *p > end + 0.01 && *p >= left && *p + MIN_LINE_WIDTH <= span_right.min(self.base_right))
+                {
                     Some(p) if !blocked(p) => p,
                     _ => next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos,
                 }

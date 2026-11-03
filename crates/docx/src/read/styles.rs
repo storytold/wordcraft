@@ -314,24 +314,39 @@ impl Reader<'_> {
             }
             // MS-OI29500 17.9.17: a custom pattern may ride directly on w:numFmt without the
             // w14 AlternateContent wrapper (some generators write it that way; Word accepts it).
+            // An oversized pattern is dropped whole rather than truncated into a fake original.
             if nf.attr("w:val") == Some("custom")
-                && let Some(p) = nf.attr("w:format")
+                && let Some(p) = nf.attr("w:format").filter(|p| p.chars().count() <= MAX_CUSTOM_FORMAT)
             {
-                lv.custom_format = Some(p.chars().take(256).collect());
+                lv.custom_format = Some(p.to_string());
             }
         }
-        // A Word 2010 custom number format: `w:format` rides on the AlternateContent Choice that
-        // requires w14; the Fallback's numFmt is what pre-2010 readers show, and is what we use
-        // whenever the pattern can't be rendered (doc numbering::custom_format_label).
-        if let Some(ac) = l.child("mc:AlternateContent") {
-            if let Some(f) = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt"))
-                && f.attr("w:val") == Some("custom")
-                && let Some(p) = f.attr("w:format")
-            {
-                lv.custom_format = Some(p.chars().take(256).collect());
-            }
-            if let Some(f) = ac.child("mc:Fallback").and_then(|fb| fb.child_val("w:numFmt")) {
-                lv.format = NumFormat::from_ooxml(f);
+        // Word 2010 numbering extensions: the level's w:numFmt may live inside a markup-
+        // compatibility pair, where w:format rides on the w14 Choice's w:numFmt (MS-OI29500
+        // 17.9.17: it is ignored unless val="custom") and the Fallback's numFmt is what pre-2010
+        // readers show. The pair can sit in ANY AlternateContent block - other properties keep
+        // their own blocks ahead of it, so every block is examined. A Choice declaring a
+        // standard val is the ACTIVE format (Word honors it over the Fallback); we keep the
+        // Fallback as the degradation format for patterns we cannot render
+        // (doc numbering::custom_format_label). Saving flattens a standard-Choice pair to that
+        // active format, which still beats the pre-2010 fallback the old reader kept.
+        for ac in l.children("mc:AlternateContent") {
+            let choice = super::story::children_of_choice(ac).and_then(|b| b.child("w:numFmt"));
+            match choice.and_then(|f| f.attr("w:val")) {
+                Some("custom") => {
+                    if let Some(p) = choice.and_then(|f| f.attr("w:format")).filter(|p| p.chars().count() <= MAX_CUSTOM_FORMAT) {
+                        lv.custom_format = Some(p.to_string());
+                    }
+                    if let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt")) {
+                        lv.format = NumFormat::from_ooxml(fb);
+                    }
+                }
+                Some(val) => lv.format = NumFormat::from_ooxml(val),
+                None => {
+                    if let Some(fb) = ac.child("mc:Fallback").and_then(|x| x.child_val("w:numFmt")) {
+                        lv.format = NumFormat::from_ooxml(fb);
+                    }
+                }
             }
         }
         lv.text = l.child_val("w:lvlText").map(|t| t.chars().take(64).collect()).unwrap_or_default();
@@ -378,3 +393,7 @@ impl Reader<'_> {
 fn default_level(_i: usize) -> Level {
     Level { indent: 0.0, hanging: 0.0, text: String::new(), ..Level::default() }
 }
+
+/// Cap on a retained `w:format` pattern. Real sample lists are short; an oversized pattern is
+/// dropped whole (the level keeps its fallback) rather than truncated into a fake original.
+const MAX_CUSTOM_FORMAT: usize = 1024;
