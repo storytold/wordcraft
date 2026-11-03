@@ -204,6 +204,8 @@ impl Session {
             find: _,
             goal_x: _,
             page_hint: _,
+            visual_anchor: _,
+            visual_focus: _,
             new_header_parts: _,
             hf_return: _,
             history: _,
@@ -358,6 +360,8 @@ impl Session {
         swap(&mut self.ime_body_epoch, ime_body_epoch);
         swap(&mut self.cache, cache);
         swap(&mut self.layout, layout);
+        self.visual_anchor = None;
+        self.visual_focus = None;
         swap(&mut self.typing, typing);
         swap(&mut self.originals, originals);
         swap(&mut self.picture_looks, picture_looks);

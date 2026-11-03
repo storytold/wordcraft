@@ -36,6 +36,24 @@ struct SegmentInput<'a> {
     context: &'a [bool],
 }
 
+#[derive(Clone, Copy)]
+enum EaFallback {
+    Run,
+    Selected(Option<FaceRef>),
+}
+
+fn east_asian_face(text: &str, primary: FaceRef, rc: &ResolvedChar) -> Option<FaceRef> {
+    let ea: Vec<char> = text
+        .chars()
+        .filter(|c| crate::kinsoku::is_east_asian(*c) && !primary.covers(*c) && !c.is_whitespace() && !c.is_control() && *c != SOFT_HYPHEN)
+        .collect();
+    if ea.is_empty() {
+        None
+    } else {
+        wordcraft_fonts::FontDb::global().fallback_for_run(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
+    }
+}
+
 impl<'a> Builder<'a> {
     /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
     /// char out. `rtl` is the shaping direction; in Context mode `context` (from
@@ -157,6 +175,11 @@ impl<'a> Builder<'a> {
 
     /// `dir`: the bidi levels `text` is shaped by (see [`Dir`]).
     pub(super) fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, dir: Dir<'_>) {
+        self.shape_context(text, base, rc, kind_override, dir, EaFallback::Run);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shape_context(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, dir: Dir<'_>, fallback: EaFallback) {
         if text.is_empty() {
             return;
         }
@@ -198,16 +221,9 @@ impl<'a> Builder<'a> {
         // instead of mixing faces per character (e.g. a bundled Japanese Mincho for JIS-covered
         // ideographs beside a Simplified-Chinese sans for the rest). Whitespace and characters the
         // primary covers don't constrain the choice. `None` keeps the per-character fallback.
-        let ea_face: Option<FaceRef> = {
-            let ea: Vec<char> = text
-                .chars()
-                .filter(|c| crate::kinsoku::is_east_asian(*c) && !primary.covers(*c) && !c.is_whitespace() && !c.is_control() && *c != SOFT_HYPHEN)
-                .collect();
-            if ea.is_empty() {
-                None
-            } else {
-                wordcraft_fonts::FontDb::global().fallback_for_run(&ea, primary.id(), rc.bold, rc.italic).map(|f| FaceRef::of(&f))
-            }
+        let ea_face = match fallback {
+            EaFallback::Run => east_asian_face(text, primary, rc),
+            EaFallback::Selected(face) => face,
         };
         let segs = self.segment_keys(SegmentInput {
             text,
@@ -395,6 +411,10 @@ impl<'a> Builder<'a> {
 
     /// One cluster for a whole object with its display text (fields, note references).
     pub(super) fn shape_atomic(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>) {
+        self.shape_atomic_context(text, start, end, rc, EaFallback::Run);
+    }
+
+    fn shape_atomic_context(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, fallback: EaFallback) {
         // Right-to-left text in the result reads like ordinary text (UAX #9, #1670): the result is
         // an isolate whose direction is its first strong letter's (else the text's around the
         // field), and each level run is shaped (mirrored, joined) and placed in that direction.
@@ -402,7 +422,7 @@ impl<'a> Builder<'a> {
         let rtl_base = text.chars().find_map(strong_rtl).unwrap_or(around);
         let lv = bidi_levels(text, rtl_base);
         let before = self.clusters.len();
-        self.shape_with(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) });
+        self.shape_context(text, start, rc, None, if lv.is_empty() { Dir::Guess } else { Dir::Own(&lv) }, fallback);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false);
@@ -453,6 +473,52 @@ impl<'a> Builder<'a> {
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+    }
+
+    /// Wrap cached REF text at ordinary spaces without changing its document range or format.
+    pub(super) fn shape_ref(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, breaks: &mut Vec<(usize, bool)>) {
+        use unicode_bidi::BidiClass::{AL, AN, FSI, LRE, LRI, LRO, PDF, PDI, R, RLE, RLI, RLO};
+        // Direction-sensitive results keep the existing whole-result isolate.
+        if self.levels.get(start).is_some_and(|l| l % 2 == 1)
+            || text.chars().any(|c| matches!(unicode_bidi::bidi_class(c), R | AL | AN | LRE | RLE | LRO | RLO | PDF | LRI | RLI | FSI | PDI))
+        {
+            self.shape_atomic(text, start, end, rc);
+            return;
+        }
+        // A missing Thai font selects its substitute from the complete result, including Latin.
+        // Keep that result atomic until split pieces can share the whole-result font choice.
+        if wordcraft_fonts::word::is_thai_family(&rc.font)
+            && text.chars().any(|c| matches!(u32::from(c), 0x0E00..=0x0E7F))
+            && wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic).substituted
+        {
+            self.shape_atomic(text, start, end, rc);
+            return;
+        }
+        let primary = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic).face;
+        let fallback = EaFallback::Selected(east_asian_face(text, primary, rc));
+        let first = self.clusters.len();
+        for piece in text.split_inclusive(' ') {
+            if let Some(word) = piece.strip_suffix(' ') {
+                if !word.is_empty() {
+                    self.shape_atomic_context(word, start, end, rc, fallback);
+                }
+                self.shape_atomic_context(" ", start, end, rc, fallback);
+                if let Some(c) = self.clusters.last_mut() {
+                    c.kind = ClKind::Space;
+                }
+            } else {
+                self.shape_atomic_context(piece, start, end, rc, fallback);
+            }
+        }
+        if self.clusters.len() == first {
+            self.shape_atomic(text, start, end, rc);
+        }
+        let last = self.clusters.len().saturating_sub(1);
+        for (i, c) in self.clusters.iter().enumerate().skip(first) {
+            if i < last || c.kind == ClKind::Space {
+                breaks.push((i, c.kind == ClKind::Space));
+            }
+        }
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within

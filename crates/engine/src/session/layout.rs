@@ -76,6 +76,8 @@ impl Session {
             filepath: filepath.clone(),
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
+        self.visual_anchor = None;
+        self.visual_focus = None;
         let [newest, _] = std::mem::take(&mut self.layout);
         self.layout =
             [Some((rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)), newest];
@@ -177,6 +179,8 @@ impl Session {
 
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
+        self.visual_anchor = None;
+        self.visual_focus = None;
         self.layout = Default::default();
         self.cache.clear();
     }
