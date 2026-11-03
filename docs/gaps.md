@@ -21,7 +21,7 @@ Row table border exceptions (`w:tblPrEx/w:tblBorders`) are read, drawn and saved
 
 Floating tables count exact contact with a line's bottom edge (#3977); shapes keep strict overlap. Original synthetic regressions cover the boundary and narrow-strip word skipping in modes 11/12/14/15, based on the reporter's Word measurements. Exact-spacing table checks use the specified height even when paragraph-mark metrics differ, including when a word skips a narrow strip. This narrows gap #4.
 
-An otherwise empty section at page start retains its line before continuous content. Shared-section page totals remain open. Earlier text wraps around a later floating table on its page (below); it doesn't yet for text of an earlier section on the page, on pages aligned other than at the top, in balanced columns or more than 512 blocks back, nor around floats in table cells and text boxes.
+An otherwise empty section at page start retains its line before continuous content. Shared-section page totals remain open. Earlier text wraps around a later floating table on its page (below); it doesn't yet for text of an earlier section on the page, on pages aligned other than at the top, in balanced columns, more than 512 blocks back or once the text before 16 floats on a page has been laid out again, nor around floats in table cells and text boxes.
 
 Consistent cell widths override stale table grid proportions when their totals agree. Conflicting widths, spans and percentages still need the shared-grid algorithm.
 
@@ -165,6 +165,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-01 | trivial | Gap 8's evidence names craft-proof (storytold/craft-libs `crates/proof`) and craft-i18n `language-data/` instead of WordCraft's removed `crates/proof` (#5202). No ranked gap changed. |
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. || 2026-11-01 | trivial | Arrowheads keep their kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML `startarrow`/`endarrow` with `…arrowwidth`/`…arrowlength`), read and written back, and are drawn 2, 3 or 5 times the line's width long and wide (small, medium, large), a line under 2 points as a 2-point one, as measured in Word for Windows; every kind is still drawn as a triangle; no ranked gap changed; readiness estimates unchanged |
+| 2026-11-03 | trivial | The note on empty sections also names the per-page limit: the text before at most 16 floats on a page is laid out again |
 | 2026-10-26 | trivial | The note on empty sections no longer lists wrapping earlier text around later floating tables as open: it names the cases that still are |
 | 2026-10-31 | trivial | The .doc reader's default font is the stylesheet's standard font, not the font table's first entry (#5066); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-01 | trivial | A middle or bottom cell of a row split across pages lines up on the first page; no ranked gap changed; readiness estimates unchanged |
