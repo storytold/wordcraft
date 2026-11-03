@@ -90,11 +90,7 @@ fn direct_band_sizes_preserve_zero_and_bound_invalid_or_oversized_values() {
 
 #[test]
 fn direct_band_sizes_ignore_fractional_and_exponent_values() {
-    let input = docx(&table(
-        r#"<w:tblStyleRowBandSize w:val="1.5"/><w:tblStyleColBandSize w:val="1e2"/>"#,
-        "",
-        "",
-    ));
+    let input = docx(&table(r#"<w:tblStyleRowBandSize w:val="1.5"/><w:tblStyleColBandSize w:val="1e2"/>"#, "", ""));
     let doc = wordcraft_docx::read(&input).unwrap();
     let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!((tbl.props.band_size, tbl.props.col_band_size), (None, None));
