@@ -1,6 +1,6 @@
 # European Portuguese interface and proofing
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; this page now says what WordCraft does at its pin and what craft-proof does; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** trivial (WordCraft's craft-proof pin reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included, checked with the Natura dictionary; previously minor: proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
 
 ## Language menu and region
 
@@ -13,23 +13,24 @@ Brazil's, and another region shows by name (`pt-MZ` → *Portuguese (Mozambique)
 ## Proofing
 
 Proofing is craft-proof, in [storytold/craft-libs](https://github.com/storytold/craft-libs)
-`crates/proof` (#5202), so the spelling of `pt-PT` text is decided there:
+`crates/proof` (#5202). Text tagged `pt-PT` has its own dictionary
+([spelling-dictionaries.md](spelling-dictionaries.md)): `pt_PT` (or `pt-PT`, `pt`) in the
+dictionaries folder, the `pt-pt` Language pack (File › Options › Language), then the system's
+`pt_PT`. Grammar rules, messages and hyphenation patterns are Portuguese's. With the Natura
+dictionary, `Isto e um facto económico da equipa, nao econômico.` flags `nao` (→ *não*) and
+`econômico` (→ *económico*) and nothing else; `facto`, `equipa` and `económico` are words.
+Brazilian Portuguese, a bare `pt` and the other regions read `pt_BR`.
 
-- **At the craft-proof commit WordCraft pins now (`48ed6f8`)**, every Portuguese tag is checked
-  with the Hunspell `pt_BR` dictionary ([spelling-dictionaries.md](spelling-dictionaries.md)), so
-  `facto`, `equipa` and `económico` are flagged in European text.
-- **craft-libs main** reads `pt-PT` text against its own dictionary: `pt_PT` (or `pt-PT`, `pt`)
-  in the dictionaries folder, a `pt-pt` Language pack, then the system's `pt_PT`, with the
-  Portuguese grammar rules, messages and hyphenation patterns. WordCraft gets this when its pin
-  moves.
-
-The `pt_PT` dictionary LibreOffice ships (`dict-pt-PT`) is the Natura project's (Departamento de
-Informática, Universidade do Minho, <http://natura.di.uminho.pt/>); its README lists GPL 2,
-LGPL 2.1 and MPL 1.1. WordCraft doesn't bundle or download it.
+The `pt_PT` dictionary LibreOffice ships (`dict-pt-PT`), which the `pt-pt` pack downloads, is the
+Natura project's (Departamento de Informática, Universidade do Minho,
+<http://natura.di.uminho.pt/>); its README lists GPL 2, LGPL 2.1 and MPL 1.1. The pack is
+Download-only: WordCraft doesn't bundle it.
 
 Still to do in craft-proof: the regions that write like Portugal (`pt-AO`, `pt-MZ`, `pt-CV`,
-`pt-GW`, `pt-ST`, `pt-TL`, `pt-MO`) are read as Brazilian there, and some hyphenated prefixed
-forms and clitic combinations the dictionary doesn't derive (`fê-lo`) are flagged.
+`pt-GW`, `pt-ST`, `pt-TL`, `pt-MO`…) are read as Brazilian
+([storytold/craft-libs#523](https://github.com/storytold/craft-libs/pull/523) sends the regions
+CLDR gives `pt_PT` as parent to `pt-pt`), and some hyphenated prefixed forms and clitic
+combinations the dictionary doesn't derive (`fê-lo`) are flagged.
 
 ## Interface
 
@@ -85,6 +86,7 @@ Not covered yet: a review of the catalog by a second native speaker, which is we
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | WordCraft's craft-proof pin (`47c9f62`) reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included; checked with the Natura dictionary; the other regions wait for storytold/craft-libs#523 |
 | 2026-11-02 | minor | Proofing moved to craft-proof (#5202), which reads `pt-PT` against its own `pt_PT` dictionary on craft-libs main; WordCraft's own pt-PT proofing code is gone, and this page says what each does. The catalog has 3,050 entries |
 | 2026-11-01 | trivial | The `pt_PT` dictionary's source and licences, from its README; not bundled, not downloaded |
 | 2026-10-24 | minor | Rebased on the craft-i18n cutover: the catalog goes to storytold/craft-i18n; pt-PT proofing next to the Spanish, Italian, Croatian and Turkish ones |
