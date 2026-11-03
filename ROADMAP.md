@@ -109,7 +109,7 @@ Weights and evidence per area: [docs/target-app-parity.md](docs/target-app-parit
 | Spanish | es | partial | ~95% |
 | Hindi | hi | none | 0% |
 | Arabic | ar | partial (catalog + mirrored UI; no kashida; no proofing; native review open) | ~95% |
-| French | fr | partial (interface complete, native-speaker reviewed; no proofing) | 100% (2,615 entries) |
+| French | fr | partial (interface complete, native-speaker reviewed; spelling from the French Language pack, no grammar marks) | 100% (2,615 entries) |
 | Portuguese | pt-br (pt-PT none) | partial | ~95% |
 | Indonesian | id | none | 0% |
 | Japanese | ja | partial | ~95% |
