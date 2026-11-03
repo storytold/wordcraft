@@ -38,6 +38,7 @@ const RAW_CHUNK: usize = 4096;
 
 /// Dir record ids ([MS-OVBA] §2.3.4.2). Only the ones the audit reads are named.
 const REC_CODE_PAGE: u16 = 0x0003;
+const REC_PROJECT_VERSION: u16 = 0x0009;
 const REC_MODULES_COUNT: u16 = 0x000F;
 const REC_MODULE_NAME: u16 = 0x0019;
 const REC_MODULE_STREAM_NAME: u16 = 0x001A;
@@ -143,21 +144,32 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
     let mut modules: Vec<Module> = Vec::new();
     let mut count: Option<u32> = None;
     let mut in_module = false;
+    let mut skipping = false;
     let mut at = 0;
     while at + 6 <= dir.len() {
         let (Some(id), Some(size)) = (u16_at(dir, at), u32_at(dir, at + 2)) else { break };
         let size = size as usize;
+        // PROJECTVERSION: id, reserved size (4), then 4 + 2 bytes of version; not a sized
+        // payload ([MS-OVBA] §2.3.4.2.1.11), so the generic walk would stop on real projects.
+        if id == REC_PROJECT_VERSION {
+            at = at.checked_add(12).ok_or_else(|| bad("the dir stream is too large"))?;
+            continue;
+        }
         let Some(end) = at.checked_add(6).and_then(|a| a.checked_add(size)) else { break };
         let Some(payload) = dir.get(at + 6..end) else { break };
         at = end;
-        match (id, in_module) {
+        // A module beyond the cap is skipped whole: its records must not touch the last
+        // kept one.
+        match (id, in_module && !skipping) {
             (REC_CODE_PAGE, _) => project.code_page = u16_at(payload, 0).unwrap_or(0),
             (REC_MODULES_COUNT, false) => count = u32_at(payload, 0),
             (REC_MODULE_NAME, _) => {
                 in_module = true;
                 if modules.len() < MAX_MODULES {
+                    skipping = false;
                     modules.push(Module { name: decode(payload), ..Module::default() });
                 } else {
+                    skipping = true;
                     project.truncated = true;
                 }
             }
@@ -196,7 +208,10 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
                     module.private = true;
                 }
             }
-            (REC_MODULE_END, _) => in_module = false,
+            (REC_MODULE_END, _) => {
+                in_module = false;
+                skipping = false;
+            }
             _ => {}
         }
     }
@@ -285,20 +300,14 @@ fn decompress_chunk(chunk: &[u8], out: &mut Vec<u8>, cap: usize) -> Result<(), D
 }
 
 /// How a copy token splits into length and offset bits, per how much the chunk has already
-/// decompressed ([MS-OVBA] §2.4.1.3.19.4).
+/// decompressed ([MS-OVBA] §2.4.1.3.19.4): the offset takes `max(ceil(log2(difference)), 4)`
+/// bits, capped at 12, and the length takes the other 16.
 fn split(difference: usize) -> (u32, u32) {
-    match difference {
-        0..=15 => (4, 12),
-        16..=31 => (5, 11),
-        32..=63 => (5, 11),
-        64..=127 => (6, 10),
-        128..=255 => (7, 9),
-        256..=511 => (8, 8),
-        512..=1023 => (9, 7),
-        1024..=2047 => (10, 6),
-        2048..=4095 => (11, 5),
-        _ => (12, 4),
+    let mut offset_bits = 4u32;
+    while offset_bits < 12 && (1usize << offset_bits) < difference {
+        offset_bits += 1;
     }
+    (16 - offset_bits, offset_bits)
 }
 
 /// A root-level stream, at most `cap` bytes (the same shape the encrypted reader uses).

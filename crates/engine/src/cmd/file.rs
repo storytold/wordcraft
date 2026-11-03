@@ -651,7 +651,9 @@ fn macros(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(json!({"hasMacros": false, "modules": []}));
     };
     let with_source = p::bool(v, "source").unwrap_or(false);
-    let project = wordcraft_docx::vba::project(bytes).map_err(|e| CmdError::Params(e.to_string()))?;
+    // The project bytes are the document's own data, not the caller's parameters: an unreadable
+    // one is a failure of the document, so `Failed`, not `Params`.
+    let project = wordcraft_docx::vba::project(bytes).map_err(|e| CmdError::Failed(e.to_string()))?;
     let modules: Vec<Value> = project
         .modules
         .iter()
