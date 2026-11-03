@@ -9,13 +9,13 @@ use craft_font_store::{FontStore, Network, PackEntry, PackIndex, PackIndexPin};
 
 use super::{Cancel, Pack};
 
-/// The pack index this build trusts: craft-i18n's first Language pack release, language-packs-1
-/// (61 packs, built from craft-i18n `4504e288`), pinned by the sha256 of its `index.json`.
+/// The pack index this build trusts: craft-i18n's second Language pack release,
+/// language-packs-2 (75 packs, built from craft-i18n `20467b63`), pinned by the sha256 of its `index.json`.
 /// `CRAFT_LANGUAGE_PACK_INDEX` (read by the font store itself) points WordCraft at a local or test
 /// index instead, for trying packs before they are released.
 pub const PACK_INDEX: PackIndexPin = PackIndexPin {
-    url: "https://github.com/storytold/craft-i18n/releases/download/language-packs-1/index.json",
-    sha256: "531465b50126d0594bb89a9c4512f7ae67d581259636040a410190641ec1428c",
+    url: "https://github.com/storytold/craft-i18n/releases/download/language-packs-2/index.json",
+    sha256: "b35c7aef0591177f18233b551da16035dcd615549ff874e169ffd19f16fea74b",
 };
 
 pub(super) struct FontStoreBackend {
