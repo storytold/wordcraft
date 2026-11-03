@@ -113,7 +113,8 @@ impl PieceTable {
             }
             PrmRef::Sprm0 { isprm, val: (p.prm >> 8) as u8 }
         } else {
-            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(Vec::as_slice))
+            let index = p.prm >> 1;
+            PrmRef::Grpprl { index, grpprl: self.prc_grpprls.get(usize::from(index)).map(Vec::as_slice) }
         }
     }
 
@@ -188,6 +189,7 @@ impl PieceTable {
 }
 
 /// What a piece's `Prm` refers to.
+#[derive(Clone, Copy)]
 pub(crate) enum PrmRef<'a> {
     None,
     /// Prm0: a short sprm index into the isprm table, with a 1-byte operand.
@@ -195,6 +197,9 @@ pub(crate) enum PrmRef<'a> {
         isprm: u8,
         val: u8,
     },
-    /// Prm1: a grpprl from a Prc (absent if out of range).
-    Grpprl(Option<&'a [u8]>),
+    /// Prm1: the Prc at `index` and its grpprl (absent if out of range).
+    Grpprl {
+        index: u16,
+        grpprl: Option<&'a [u8]>,
+    },
 }

@@ -55,6 +55,25 @@ fn doc_extension_dispatches_to_docbin() {
     }
 }
 
+/// Save As Word 97-2003 writes a .doc that opens again with the same text: the built-in
+/// sample (styles, tables, lists, headers, pictures) and every template.
+#[test]
+fn documents_save_as_doc_and_reopen() {
+    for (name, doc) in [
+        ("sample", crate::sample::sample_document()),
+        ("letter", crate::sample::letter()),
+        ("resume", crate::sample::resume()),
+        ("report", crate::sample::report()),
+    ] {
+        let bytes = crate::io::save_bytes("out.doc", &doc).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]), "{name}: a compound file");
+        let back = crate::io::open_bytes("out.doc", &bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let words = |d: &wordcraft_doc::Document| d.plain_text(StoryRef::Body).split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(words(&back), words(&doc), "{name}");
+    }
+    assert!(crate::io::SAVE_EXTS.contains(&"doc"));
+}
+
 #[test]
 fn encrypted_doc_asks_for_a_password_and_rejects_a_wrong_one() {
     // #1079: a Word 97-2003 file with the encryption flag and an RC4 header whose verifier does
@@ -5317,6 +5336,62 @@ fn saving_a_text_file_over_itself_saves_the_document() {
         assert!(s.dirty, "{name}: a copy elsewhere leaves it unsaved");
         assert_eq!(s.path.as_deref(), Some(path.as_path()));
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `contract.doc` written into a new scratch folder `name`, opened and edited: the folder, the
+/// file's path, its bytes as written and the session.
+#[cfg(not(target_arch = "wasm32"))]
+fn opened_doc_with_an_edit(name: &str) -> (std::path::PathBuf, std::path::PathBuf, Vec<u8>, Session) {
+    let dir = scratch_dir(name);
+    let path = dir.join("contract.doc");
+    let bytes = crate::io::save_bytes("contract.doc", &crate::sample::letter()).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "Revised "}));
+    (dir, path, bytes, s)
+}
+
+/// #2445: an opened Word 97-2003 file is never written back over itself, now that `.doc` can be
+/// written: not by a plain `file.save` (a script's or an agent's), not by its own path, not by
+/// another spelling of that path. Save As `.doc` under another name writes a copy.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_opened_doc_is_never_saved_over_itself() {
+    let (dir, path, bytes, mut s) = opened_doc_with_an_edit("engine-own-doc");
+    let respelled = dir.join(".").join("contract.doc");
+    for params in [json!({}), json!({"path": path.to_string_lossy()}), json!({"path": respelled.to_string_lossy()})] {
+        let e = s.run("file.save", &params).unwrap_err().to_string();
+        assert!(e.contains("can't save as `.doc`"), "{params}: {e}");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the original is untouched");
+    assert!(s.dirty);
+    assert_eq!(s.path.as_deref(), Some(path.as_path()));
+
+    let copy = dir.join("copy.doc");
+    run(&mut s, "file.saveAs", json!({"path": copy.to_string_lossy()}));
+    assert!(crate::io::open_bytes("copy.doc", &std::fs::read(&copy).unwrap()).unwrap().plain_text(StoryRef::Body).contains("Revised"));
+    assert!(s.dirty, "a .doc copy leaves the document unsaved");
+    assert_eq!(s.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The opened `.doc` is recognised under another spelling also when the save runs under roots
+/// that grant writing but not reading, where its path can't be resolved for reading.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_opened_doc_is_not_saved_over_itself_under_write_only_roots() {
+    let (dir, path, bytes, mut s) = opened_doc_with_an_edit("engine-own-doc-write-only");
+    let roots = crate::file_access::AutomationRoots::new(None, Some(&dir)).unwrap();
+    // `..` stays in the path (a `.` would compare equal as is), so only resolving it tells.
+    std::fs::create_dir(dir.join("sub")).unwrap();
+    let respelled = dir.join("sub").join("..").join("contract.doc");
+    assert_ne!(respelled, path);
+    let e =
+        crate::file_access::confine(roots.as_ref(), || s.run("file.save", &json!({"path": respelled.to_string_lossy()}))).unwrap_err().to_string();
+    assert!(e.contains("can't save as `.doc`"), "{e}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the original is untouched");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

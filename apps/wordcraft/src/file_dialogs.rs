@@ -233,6 +233,7 @@ fn format_name(ext: &str) -> String {
         "docm" => "Word Macro-Enabled Document".into(),
         "dotx" => "Word Template".into(),
         "dotm" => "Word Macro-Enabled Template".into(),
+        "doc" => "Word 97-2003 Document".into(),
         "pdf" => "PDF".into(),
         "txt" => "Plain Text".into(),
         "md" => "Markdown".into(),

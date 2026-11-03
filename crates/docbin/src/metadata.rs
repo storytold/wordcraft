@@ -26,6 +26,12 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
 }
 
+/// [`parse`], for the writer's tests.
+#[cfg(test)]
+pub(crate) fn parse_for_tests(bytes: &[u8]) -> Option<CoreProps> {
+    parse(bytes)
+}
+
 fn parse(bytes: &[u8]) -> Option<CoreProps> {
     if bytes.get(..2)? != [0xfe, 0xff] || bytes.get(28..44)? != SUMMARY_FMTID || u32_at(bytes, 24)? < 1 {
         return None;

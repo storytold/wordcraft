@@ -25,6 +25,14 @@ const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
+const C_OUTLINE: u16 = 0x0838;
+const C_SHADOW: u16 = 0x0839;
+const C_IMPRINT: u16 = 0x0854;
+const C_EMBOSS: u16 = 0x0858;
+const C_DSTRIKE: u16 = 0x2A53;
+const C_ISS: u16 = 0x2A48; // superscript / subscript
+const C_DXA_SPACE: u16 = 0x8840; // character spacing, twips
+const C_CHAR_SCALE: u16 = 0x4852; // horizontal scale, percent
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
@@ -46,6 +54,10 @@ const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
 const P_OUTLVL: u16 = 0x2640;
+const P_WIDOW: u16 = 0x2431; // sprmPFWidowControl
+const P_BIDI: u16 = 0x2441;
+const P_CONTEXTUAL: u16 = 0x246D;
+const P_SHD: u16 = 0xC64D; // SHDOperand: cb, then a 10-byte Shd
 // Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
 // newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
 const P_BRC_TOP80: u16 = 0x6424;
@@ -80,15 +92,18 @@ const ICO: [Rgb; 17] = [
     Rgb(192, 192, 192),
 ];
 
-/// Highlight palette ([MS-DOC] §2.9.135 Highlight, order of Word's highlighter row).
+/// Highlight colours: `sprmCHighlight` takes an `Ico` ([MS-DOC] §2.9.119), so the highlighter
+/// colours sit at their palette places (black 1, blue 2 … light grey 16).
 const HL: [Highlight; 17] = [
     Highlight::None,
-    Highlight::Yellow,
-    Highlight::BrightGreen,
-    Highlight::Turquoise,
-    Highlight::Pink,
+    Highlight::Black,
     Highlight::Blue,
+    Highlight::Turquoise,
+    Highlight::BrightGreen,
+    Highlight::Pink,
     Highlight::Red,
+    Highlight::Yellow,
+    Highlight::White,
     Highlight::DarkBlue,
     Highlight::Teal,
     Highlight::Green,
@@ -97,8 +112,6 @@ const HL: [Highlight; 17] = [
     Highlight::DarkYellow,
     Highlight::Gray50,
     Highlight::Gray25,
-    Highlight::None,
-    Highlight::None,
 ];
 
 /// The `Ico` palette colour (0 = automatic → `None`).
@@ -158,6 +171,21 @@ fn brc(op: &[u8]) -> Option<Border> {
     Some(Border { style: brc_style(b[5]), width: brc_width(b[5], b[4]), color, space: f32::from(b[6] & 0x1F) })
 }
 
+/// The fill of a 10-byte `Shd` ([MS-DOC] §2.9.248): `cvBack` with a clear pattern, `cvFore`
+/// with a solid one; automatic colours and the nil pattern are no fill.
+fn shd_fill(b: &[u8]) -> Option<Rgb> {
+    let ipat = u16::from_le_bytes([*b.get(8)?, *b.get(9)?]);
+    let cv = match ipat {
+        0xFFFF => return None,
+        1 => b.get(0..4)?,
+        _ => b.get(4..8)?,
+    };
+    match cv {
+        [r, g, bl, flags] if *flags != 0xFF => Some(Rgb(*r, *g, *bl)),
+        _ => None,
+    }
+}
+
 /// Put a decoded border on the side its sprm names (`between` = the border between this
 /// paragraph and the next).
 fn set_border(p: &mut ParaProps, op: u16, b: Border) {
@@ -203,6 +231,28 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
+        C_OUTLINE => set(&mut p.outline, sprm::toggle(prl), base.outline.unwrap_or(false)),
+        C_SHADOW => set(&mut p.shadow, sprm::toggle(prl), base.shadow.unwrap_or(false)),
+        C_IMPRINT => set(&mut p.engrave, sprm::toggle(prl), base.engrave.unwrap_or(false)),
+        C_EMBOSS => set(&mut p.emboss, sprm::toggle(prl), base.emboss.unwrap_or(false)),
+        C_DSTRIKE => set(&mut p.double_strike, sprm::toggle(prl), base.double_strike.unwrap_or(false)),
+        C_ISS => {
+            p.vert_align = Some(match prl.operand.first() {
+                Some(1) => VertAlign::Superscript,
+                Some(2) => VertAlign::Subscript,
+                _ => VertAlign::Baseline,
+            });
+        }
+        C_DXA_SPACE => {
+            if let Some(v) = s16_of(prl) {
+                p.spacing = Some((f32::from(v) / 20.0).clamp(-1584.0, 1584.0));
+            }
+        }
+        C_CHAR_SCALE => {
+            if let Some(v) = u16_of(prl) {
+                p.scale = Some(f32::from(v).clamp(1.0, 600.0));
+            }
+        }
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
@@ -220,7 +270,9 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 0x18 => Some(Underline::Dash),
                 0x19 => Some(Underline::DotDash),
                 0x1A => Some(Underline::DotDotDash),
-                0x1B => Some(Underline::DoubleWave),
+                0x1B => Some(Underline::Wave),
+                0x27 | 0x37 => Some(Underline::Dash),
+                0x2B => Some(Underline::DoubleWave),
                 _ => Some(Underline::Single),
             };
         }
@@ -242,13 +294,10 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.size = Some((hps as f32 / 2.0).clamp(1.0, 1638.0));
             }
         }
+        // A raised or lowered position, in half-points (superscript is sprmCIss).
         C_HPS_POS => {
             if let Some(pos) = s16_of(prl) {
-                p.vert_align = Some(match pos {
-                    pos if pos > 0 => VertAlign::Superscript,
-                    pos if pos < 0 => VertAlign::Subscript,
-                    _ => VertAlign::Baseline,
-                });
+                p.position = Some((f32::from(pos) / 2.0).clamp(-1584.0, 1584.0));
             }
         }
         C_FTC0 => {
@@ -411,6 +460,14 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         P_OUTLVL => {
             if let Some(&l) = prl.operand.first() {
                 p.outline_level = Some(l.min(8));
+            }
+        }
+        P_WIDOW => p.widow_control = prl.operand.first().map(|&v| v != 0),
+        P_BIDI => p.bidi = prl.operand.first().map(|&v| v != 0),
+        P_CONTEXTUAL => p.contextual_spacing = prl.operand.first().map(|&v| v != 0),
+        P_SHD => {
+            if let Some(shd) = prl.operand.get(1..11) {
+                p.shading = shd_fill(shd);
             }
         }
         P_BRC_TOP80 | P_BRC_LEFT80 | P_BRC_BOTTOM80 | P_BRC_RIGHT80 | P_BRC_BETWEEN80 => {

@@ -30,7 +30,7 @@ pub const OPEN_EXTS: &[&str] = &[
     "json",
 ];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
+pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -126,6 +126,20 @@ pub(crate) fn canonical(path: &std::path::Path) -> Option<std::path::PathBuf> {
 /// [`canonical`]: on the web files come through the browser, never by path.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// [`canonical`] for a path that may be written here, though perhaps not read (a save under
+/// roots that grant only writing): for telling whether a save would replace a given file.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn canonical_writable(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::file_access::check_write(&path.to_string_lossy()).ok()?;
+    std::fs::canonicalize(path).ok()
+}
+
+/// [`canonical_writable`]: on the web files come through the browser, never by path.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn canonical_writable(_path: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
