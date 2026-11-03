@@ -35,9 +35,11 @@ use bookmarks::bookmark_at_caret;
 use bookmarks::bookmark_names;
 pub use chrome::show;
 pub(crate) use chrome::{buttons, cancel_key_pressed, color_menu, ok_cancel_responses};
+pub(crate) use dispatch::search_results;
+pub(crate) use find::swallow_shortcut_text;
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
-use find::{command_matches, goto_page, swallow_shortcut_text};
+use find::{command_matches, goto_page};
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
@@ -562,6 +564,10 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        // Search opens in the title bar's box when the window shows it (#5398).
+        if name == "commands" && crate::chrome::open_title_search(app) {
+            return None;
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }

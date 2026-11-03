@@ -4167,10 +4167,9 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.event(egui::Event::Text("q".into()));
     h.step();
-    let query = |h: &egui_kittest::Harness<WordApp>| match &h.state().dialog {
-        Some(dialogs::Dialog::Commands { query, .. }) => Some(query.clone()),
-        _ => None,
-    };
+    // The title bar shows the Search box, so Search opens there, in place (#5398).
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    assert!(h.state().dialog.is_none(), "no Search Commands dialog over the page");
     assert_eq!(query(&h).as_deref(), Some(""), "Search is open and empty");
     h.step();
     {
@@ -4184,7 +4183,8 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Escape closes Search");
+    assert!(query(&h).is_none(), "Escape closes Search");
+    assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.step();
@@ -4196,9 +4196,61 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Enter ran the search");
+    assert!(query(&h).is_none(), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
+}
+
+/// #5398: a click on the title bar's Search box types into that box, as in Word, with the
+/// results dropping down under it, instead of opening a second box in a dialog; a result's click
+/// runs it, and a click elsewhere closes Search.
+#[test]
+fn the_title_bar_search_box_is_typed_in_place() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let open = |h: &mut egui_kittest::Harness<WordApp>| {
+        h.get_by_label("Search commands and help").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    assert!(h.state().dialog.is_none(), "no second box in a dialog");
+    assert_eq!(query(&h).as_deref(), Some(""));
+    assert!(h.ctx.text_edit_focused(), "the box itself takes the typing");
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    assert_eq!(query(&h).as_deref(), Some("word count"));
+    let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body(&h).trim(), "", "nothing typed into the document");
+    // The result is a row of the drop-down (the ribbon's own Word Count button has no "—").
+    let row = h
+        .query_all_by_label_contains("Word Count")
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.contains('—')))
+        .expect("Word Count among the results");
+    row.click();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "running a result closes Search");
+    assert!(h.state().dialog.is_some(), "and Word Count ran (its dialog is open)");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // A click elsewhere closes it.
+    open(&mut h);
+    assert!(query(&h).is_some());
+    for pressed in [true, false] {
+        let at = egui::pos2(720.0, 600.0);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(query(&h).is_none(), "a click on the page closes Search");
 }
 
 /// #819: `tools.search` with a query lists matching commands for scripts and agents; every
