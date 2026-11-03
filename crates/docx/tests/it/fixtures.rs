@@ -1939,17 +1939,31 @@ fn office_2016_chart_with_no_fallback_keeps_its_chart() {
     }
 }
 
-#[test]
-fn model_3d_outside_an_alternate_is_kept() {
-    let mut files = unzip(&model3d_docx(true));
+/// `docx` with its `mc:AlternateContent` replaced by the `mc:Choice` drawing alone, declaring the
+/// `prefix` namespace the choice declared.
+fn outside_alternate(docx: &[u8], prefix: &str, ns: &str) -> Vec<u8> {
+    let mut files = unzip(docx);
     let doc = text(&files, "word/document.xml");
     let (head, rest) = doc.split_once("<mc:AlternateContent>").unwrap();
     let (_, rest) = rest.split_once("<w:drawing>").unwrap();
     let (drawing, rest) = rest.split_once("</mc:Choice>").unwrap();
     let (_, tail) = rest.split_once("</mc:AlternateContent>").unwrap();
-    files.insert("word/document.xml".into(), format!(r#"{head}<w:drawing xmlns:am3d="{MODEL3D_NS}">{drawing}{tail}"#).into_bytes());
+    files.insert("word/document.xml".into(), format!(r#"{head}<w:drawing xmlns:{prefix}="{ns}">{drawing}{tail}"#).into_bytes());
     let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
-    let mut d = wordcraft_docx::read(&zip(&entries)).unwrap();
+    zip(&entries)
+}
+
+/// `docx` without its part `name`.
+fn without_part(docx: &[u8], name: &str) -> Vec<u8> {
+    let mut files = unzip(docx);
+    files.remove(name);
+    let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+    zip(&entries)
+}
+
+#[test]
+fn model_3d_outside_an_alternate_is_kept() {
+    let mut d = wordcraft_docx::read(&outside_alternate(&model3d_docx(true), "am3d", MODEL3D_NS)).unwrap();
     for round in 0..2 {
         let g = graphics(&d);
         let [InlineObject::Graphic { graphic, .. }] = g.as_slice() else { panic!("round {round}: {g:?}") };
@@ -1965,6 +1979,27 @@ fn model_3d_outside_an_alternate_is_kept() {
         let doc_rels = text(&saved, "word/_rels/document.xml.rels");
         assert_eq!(saved.get(&part_at("word", &rel(&doc_rels, &model_id).1)).map(Vec::as_slice), Some(GLB));
         d = wordcraft_docx::read(&out).unwrap();
+    }
+}
+
+/// A model or Office 2016 chart outside `mc:AlternateContent` whose part is gone or unrelated
+/// opens as nothing, as one inside does: a box for it would vanish on the next save.
+#[test]
+fn kept_object_outside_an_alternate_without_its_part_opens_without_it() {
+    let chartex_ns = "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex";
+    let model = outside_alternate(&model3d_docx(true), "am3d", MODEL3D_NS);
+    let chart = outside_alternate(&chartex_docx("cx1", chartex_ns), "cx1", chartex_ns);
+    let cases = [
+        ("model part gone", without_part(&model, "word/media/model3d1.glb"), "Model"),
+        ("model unrelated", outside_alternate(&model3d_docx(false), "am3d", MODEL3D_NS), "Model"),
+        ("chart part gone", without_part(&chart, "word/charts/chartEx1.xml"), "Spread"),
+    ];
+    for (case, package, words) in cases {
+        let d = wordcraft_docx::read(&package).unwrap();
+        assert_eq!(paras(&d).iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), [words], "{case}");
+        assert!(paras(&d).iter().all(|p| p.objects.is_empty()), "{case}: {:?}", graphics(&d));
+        let body = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
+        assert!(!body.contains("w:drawing"), "{case}: {body}");
     }
 }
 

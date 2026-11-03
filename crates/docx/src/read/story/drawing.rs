@@ -69,9 +69,14 @@ impl Reader<'_> {
                 GraphicKind::Diagram => self.diagram_drawing_rel(gd, rels).into_iter().collect(),
             };
             let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
+            let kept = kept_kind(gd).is_some();
+            // A kept model or chart whose parts are gone can't be saved back: nothing to show.
+            if kept && source.is_none() {
+                return None;
+            }
             let mut graphic = self.graphic(kind, gd, rels, w, h, source);
             // A kept model or chart can't be drawn from its own part: the missing-picture box.
-            if kept_kind(gd).is_some() {
+            if kept {
                 Arc::make_mut(&mut graphic).items = vec![GraphicItem::Image { rect: [0.0, 0.0, w, h], media: String::new(), crop: [0.0; 4] }];
             }
             float.effect = float.effect.map(|e| e.max(0.0));
