@@ -4939,6 +4939,7 @@ fn dragging_a_number_moves_the_whole_level_without_the_ruler() {
     let to = page_to_screen(h.state_mut(), 0, lx + 36.0, ly).expect("on screen");
     let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
     let before = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
+    let depth = h.state().session.undo_depth();
     h.event(Event::PointerMoved(from));
     h.event(button(from, true));
     h.step();
@@ -4956,6 +4957,7 @@ fn dragging_a_number_moves_the_whole_level_without_the_ruler() {
     let after = (label_x(&mut h, 0).expect("the first number"), label_x(&mut h, 1).expect("the second number"));
     assert!((after.0 - before.0 - 36.0).abs() < 0.01 && (after.1 - before.1 - 36.0).abs() < 0.01, "{before:?} → {after:?}");
     assert!((after.0 - after.1).abs() < 0.01, "the items stay together: {after:?}");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "the drag is one undo step");
 }
 
 /// #4282: the wash that shows a drag's target covers every item at the picked level, not the
