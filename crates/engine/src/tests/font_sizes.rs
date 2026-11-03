@@ -227,3 +227,23 @@ fn relative_font_sizes_keep_paragraph_mark_link_filtering() {
         assert!(p.run_ranges().all(|(_, c)| c.link.as_deref() == Some("https://example.test/text") && c.style.as_deref() == Some("Hyperlink")));
     }
 }
+
+#[test]
+fn resizing_a_middle_paragraph_shows_each_break_in_its_own_paragraph_size() {
+    // #5400, the issue's steps: resize a middle paragraph without selecting its break, then
+    // select each break to see its size. The reporter saw Word show the altered paragraph's break
+    // in the new size; the previous paragraph's break keeps its own size.
+    let mut s = Session::new(Document::from_text("Alpha one\nBeta two\nGamma three"));
+    s.run("select.text", &json!({"text": "Beta two"})).unwrap();
+    s.run("format.size", &json!({"size": 20})).unwrap();
+    // The stored marks are right: only the altered paragraph's mark took the new size.
+    let marks: Vec<_> = (0..3).map(|i| s.doc.para_at(&Pos::body(i, 0)).unwrap().mark.size).collect();
+    assert_eq!(marks, [None, Some(20.0), None]);
+    // A selection of just a break shows that paragraph's mark, not the next paragraph's start.
+    let size = |s: &mut Session, a: Pos, b: Pos| {
+        s.run("select.range", &json!({"anchor": a, "focus": b})).unwrap();
+        s.run("format.state", &json!({})).unwrap()["size"].clone()
+    };
+    assert_eq!(size(&mut s, Pos::body(1, 8), Pos::body(2, 0)), json!(20.0), "the altered paragraph's break");
+    assert_eq!(size(&mut s, Pos::body(0, 9), Pos::body(1, 0)), json!(12.0), "the previous paragraph's break");
+}
