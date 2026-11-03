@@ -1,6 +1,10 @@
 //! What WordCraft doesn't model survives a save that doesn't change it: a paragraph nothing
 //! edited is written back as it was read, with the definitions it names (`wordcraft_doc::kept`,
 //! `odt::kept`).
+//!
+//! Every sample here (and any sample file added for the no-edit loss gate) is written by us for
+//! the purpose, with our own text: never a file or text taken from LibreOffice, a bug tracker,
+//! another application's templates or anyone else's document (CLAUDE.md, clean room).
 
 use crate::odt::tests::{NS_T, content_of, package, styles_of};
 use crate::odt::{export, import};

@@ -28,13 +28,13 @@ fn controls(bytes: &[u8]) -> Vec<(String, bool, String)> {
 #[test]
 fn placeholders_open_as_controls_showing_them() {
     let bytes = doc(
-        r#"<text:p>Dear <text:placeholder text:placeholder-type="text">&lt;Title&gt;</text:placeholder><text:placeholder text:placeholder-type="text">&lt;Name&gt;</text:placeholder>,</text:p>"#,
+        r#"<text:p>Dear <text:placeholder text:placeholder-type="text">&lt;Honorific&gt;</text:placeholder><text:placeholder text:placeholder-type="text">&lt;Name&gt;</text:placeholder>,</text:p>"#,
     );
-    assert_eq!(controls(&bytes), [("<Title>".into(), true, "<Title>".into()), ("<Name>".into(), true, "<Name>".into())]);
+    assert_eq!(controls(&bytes), [("<Honorific>".into(), true, "<Honorific>".into()), ("<Name>".into(), true, "<Name>".into())]);
     // The paragraph's own text around them.
     let d = import(&bytes).unwrap();
     let text = d.body[0].as_para().unwrap().text.replace(wordcraft_doc::para::OBJ, "");
-    assert_eq!(text, "Dear <Title><Name>,");
+    assert_eq!(text, "Dear <Honorific><Name>,");
 }
 
 #[test]
