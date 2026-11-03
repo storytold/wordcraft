@@ -4320,6 +4320,54 @@ fn zero_effects_stay_zero_rotated() {
     }
 }
 
+/// A turned picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`) is
+/// marked so its line keeps to its frame as in Word, and saves that way; one with the room keeps
+/// its rotated bounds.
+#[test]
+fn bare_turns_are_kept_through_a_save() {
+    let pic = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1524000" cy="762000"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="2700000"><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let read =
+        |body: &str| wordcraft_docx::read(&docx(body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+    let bare = |d: &Document| paras(d)[0].objects[0].frame().unwrap().2.bare_turn;
+    for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+        let d = read(&pic(effects));
+        assert!(bare(&d), "{effects:?}");
+        let out = wordcraft_docx::write(&d).unwrap();
+        let body = text(&unzip(&out), "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
+        assert!(bare(&wordcraft_docx::read(&out).unwrap()));
+    }
+    // 120 × 60 pt at 45°: Word's rotated-bounds room, 3.64 pt wider and 33.64 pt taller each side.
+    let d = read(&pic(r#"<wp:effectExtent l="46210" t="427210" r="46210" b="427210"/>"#));
+    assert!(!bare(&d));
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.set_spin(wordcraft_geom::Spin::new(30.0, false, false));
+    assert!(!f.bare_turn, "turned here: the rotated bounds again");
+    // A shadow's room added later: saved, and so laid out, with the turn's room again.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.effect = [2.0; 4];
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    // Made floating: saved with the turn's room, so it opens again as an ordinary turn.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.wrap = wordcraft_doc::para::Wrap::Square;
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    assert!(!bare(&wordcraft_docx::read(&out).unwrap()));
+    // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
+    let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
+    assert!(!bare(&read(&anchored)));
+}
+
 /// The math namespace, declared on the math element itself (the fixture root doesn't).
 const M_NS: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
 

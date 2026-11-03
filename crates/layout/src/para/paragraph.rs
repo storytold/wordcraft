@@ -367,7 +367,7 @@ impl<'a> Shaped<'a> {
             // The line makes room for effects (shadows) around the picture too, and
             // for a rotated one's bounds, as Word does.
             let [el, et, er, eb] = float.effect_extent();
-            let (px, py) = float.spin_pad(w * s, h * s);
+            let (px, py) = float.line_pad(w * s, h * s, env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT);
             let tall = h * s + et + eb + 2.0 * py;
             // Lowered further than its height, its top stays on the baseline while the line
             // reaches as far down as the lowering (Word, measured: a 6 pt picture lowered 30 pt
