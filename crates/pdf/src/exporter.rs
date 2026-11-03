@@ -8,7 +8,7 @@ use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
     HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
     NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
-    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, ground, krilla, rgb, write,
 };
 
 mod draw;
@@ -201,16 +201,24 @@ impl Exporter<'_> {
         };
         // What the items share (the authors' colours, the clipped cells) is worked out once per page.
         let shown = ItemDisplay::new(self.doc, page);
-        for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = shown.draws(it, &dopts);
-            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
-                for d in &draws {
-                    me.draw(s, d);
-                }
-            });
+        // The backgrounds drawn so far in each list (header, footer, body), for automatic text
+        // drawn over them (#3585): kept as the items go, not looked up for each.
+        for list in [&page.header, &page.footer] {
+            let mut behind = Vec::new();
+            for it in list.iter() {
+                let draws = shown.draws_over(it, &dopts, &behind);
+                behind.extend(ground(it));
+                self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                    for d in &draws {
+                        me.draw(s, d);
+                    }
+                });
+            }
         }
+        let mut behind = Vec::new();
         for it in &page.items {
-            let draws = shown.draws(it, &dopts);
+            let draws = shown.draws_over(it, &dopts, &behind);
+            behind.extend(ground(it));
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
