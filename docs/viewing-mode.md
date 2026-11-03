@@ -12,9 +12,9 @@ formatting, history changes, encryption changes, macros that write and Zotero
 writes are refused by the session, including commands sent through automation.
 The canvas does not request IME text input while Viewing is active.
 
-Editing dialogs, including Insert Table, Link, Bookmark, custom Table of Contents
-and Create Source, are refused before they open through `ui.dialog`. Word Count,
-Find, Go To, Zoom and informational dialogs remain available. The same early
+Editing dialogs, including Insert Table, Link, Bookmark, custom Table of Contents,
+Create Source, Templates and Macros, are refused before they open through
+`ui.dialog`. Word Count, Find, Go To, Zoom and informational dialogs remain available. The same early
 check applies to user actions and direct UI commands, and leaves an existing
 dialog in place when the requested editing dialog is refused.
 

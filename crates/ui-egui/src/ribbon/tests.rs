@@ -952,7 +952,8 @@ fn tracking_mode_switch_keeps_successful_and_no_change_paths() {
     }
 }
 
-/// Editing dialogs are refused before dispatch through both entrypoints, without replacing an open query dialog.
+/// Editing dialogs, including Templates and Macros, are refused through both entrypoints without replacing an open query dialog.
+/// Leaving Viewing restores these dialogs through both command paths.
 #[test]
 fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
@@ -960,7 +961,20 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
     app.run("ui.dialog", json!({"name": "wordCount"})).unwrap();
     let before = app.session.doc.clone();
     let depth = app.session.undo_depth();
-    for name in ["insertTable", "link", "bookmark", "toc", "createSource", "font", "replace", "colors", "controlProperties", "recipientList"] {
+    for name in [
+        "insertTable",
+        "link",
+        "bookmark",
+        "toc",
+        "createSource",
+        "font",
+        "replace",
+        "colors",
+        "controlProperties",
+        "recipientList",
+        "templates",
+        "macros",
+    ] {
         for execute_directly in [false, true] {
             let params = json!({"name": name});
             let result = if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) };
@@ -972,11 +986,13 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
         }
     }
     app.run("view.viewing", json!({"value": false})).unwrap();
-    for execute_directly in [false, true] {
-        let params = json!({"name": "insertTable"});
-        if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
-        assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some("insertTable"));
-        app.run("ui.closeDialog", json!({})).unwrap();
+    for name in ["insertTable", "templates", "macros"] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
+            assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some(name));
+            app.run("ui.closeDialog", json!({})).unwrap();
+        }
     }
 }
 

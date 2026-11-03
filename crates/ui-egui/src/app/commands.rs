@@ -26,6 +26,8 @@ fn editing_dialog(name: &str) -> bool {
             | "phonetic"
             | "newStyle"
             | "manageStyles"
+            | "templates"
+            | "macros"
             | "newTableStyle"
             | "modifyTableStyle"
             | "icons"
