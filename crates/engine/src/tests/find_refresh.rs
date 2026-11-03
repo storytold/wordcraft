@@ -88,3 +88,36 @@ fn rejected_replacement_refreshes_results_for_the_restored_document() {
     assert_eq!(s.find_results(), matches.as_slice(), "rollback restores both matches at the unchanged revision");
     assert_eq!((s.doc.clone(), s.sel.clone(), s.dirty, s.rev(), s.undo_depth()), before);
 }
+
+#[test]
+fn replacement_keeps_selection_limited_navigation_results() {
+    for selected_match in [true, false] {
+        let mut s = crate::Session::new(Document::from_text("cat cat cat"));
+        run(&mut s, "select.range", json!({"anchor": Pos::body(0, 4), "focus": Pos::body(0, 7)}));
+        run(&mut s, "edit.advancedFind", json!({"text": "cat", "in": "selection"}));
+        if !selected_match {
+            run(&mut s, "caret.docStart", json!({}));
+        }
+        let result = s.run("edit.replace", &json!({"with": "dog"})).unwrap();
+        assert_eq!(result["remaining"], if selected_match { 2 } else { 3 });
+        assert_eq!(s.sel.ordered(), if selected_match { (Pos::body(0, 8), Pos::body(0, 11)) } else { (Pos::body(0, 0), Pos::body(0, 3)) });
+        assert_eq!(offsets(&mut s), if selected_match { vec![] } else { vec![(4, 7)] }, "replacement must retain the original Navigation bounds");
+    }
+}
+
+#[test]
+fn replacement_keeps_cleared_navigation_results_empty() {
+    for selected_match in [true, false] {
+        let mut s = crate::Session::new(Document::from_text("cat cat cat"));
+        run(&mut s, "edit.find", json!({"text": "cat"}));
+        s.find.results.clear();
+        s.find.results_revision = None;
+        if !selected_match {
+            run(&mut s, "caret.docStart", json!({}));
+        }
+        let result = s.run("edit.replace", &json!({"with": "dog"})).unwrap();
+        assert_eq!(result["remaining"], if selected_match { 2 } else { 3 });
+        assert_eq!(s.sel.ordered(), if selected_match { (Pos::body(0, 4), Pos::body(0, 7)) } else { (Pos::body(0, 0), Pos::body(0, 3)) });
+        assert!(s.find_results().is_empty(), "replacement must not repopulate cleared Navigation results");
+    }
+}

@@ -46,6 +46,50 @@ fn navigation_results_follow_edits_without_moving_the_caret() {
     assert!(h.state().session.find.results.is_empty(), "cleared Navigation results stay cleared after edits");
 }
 
+/// Replace keeps selection-limited and explicitly cleared Navigation results (#4891).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_keeps_its_scope_and_cleared_state_after_replacement() {
+    use serde_json::json;
+    use wordcraft_doc::{Document, Pos};
+
+    for clear in [false, true] {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(Document::from_text("cat cat cat")), crate::Services::default());
+        app.run("view.navigationPane", json!({"value": true})).unwrap();
+        app.run("select.range", json!({"anchor": Pos::body(0, 4), "focus": Pos::body(0, 7)})).unwrap();
+        app.run("edit.advancedFind", json!({"text": "cat", "in": "selection"})).unwrap();
+        app.ui.nav_tab = "results".into();
+        let mut h = pane_harness(app);
+        h.run_steps(3);
+        assert_eq!(h.state().session.find.results.len(), 1);
+        if clear {
+            let qid = h.state().window_id("nav_query");
+            h.ctx.data_mut(|d| d.insert_temp(qid, "cat".to_string()));
+            h.state_mut().nav_search_focus = true;
+            h.run_steps(2);
+            press(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+            assert!(h.state().session.find.results.is_empty());
+            assert!(h.state().session.find.results_revision.is_none());
+        }
+        let result = h.state_mut().run("edit.replace", json!({"with": "dog"})).unwrap();
+        assert_eq!(result["remaining"], 2);
+        let selection = h.state().session.sel.clone();
+        let revision = h.state().session.rev();
+        let undo = h.state().session.undo_depth();
+        h.run_steps(3);
+        assert!(h.state().session.find.results.is_empty(), "Navigation must not show either out-of-scope match");
+        assert_eq!(h.state().session.sel, selection);
+        assert_eq!(h.state().session.rev(), revision);
+        assert_eq!(h.state().session.undo_depth(), undo);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!(h.state().session.find.results.len(), if clear { 0 } else { 1 });
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.state().session.find.results.is_empty());
+    }
+}
+
 /// #1902: Clipboard Delete returns focus to the document like paste does.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]

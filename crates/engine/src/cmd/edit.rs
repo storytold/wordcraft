@@ -730,6 +730,8 @@ fn need_query(s: &Session, v: &Value) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Replace the selected match and advance through the story without changing Navigation
+/// search scope. An unmatched selection only advances; the count covers the whole story.
 fn replace(s: &mut Session, v: &Value) -> CmdResult {
     need_query(s, v)?;
     read_opts(s, v);
@@ -740,7 +742,11 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(f) = results.into_iter().find(|f| f.a == a && f.b == b) {
         super::paste_text(s, &f.rep.unwrap_or_default())?;
     }
+    // Replacement moves through whole-story matches, but Navigation retains its
+    // own search scope or cleared state. Its saved revision is already stale.
+    let navigation = (std::mem::take(&mut s.find.results), s.find.results_revision.take(), s.find.results_selection.take(), s.find.current);
     let _ = step(s, 1);
+    (s.find.results, s.find.results_revision, s.find.results_selection, s.find.current) = navigation;
     Ok(json!({"remaining": search(s, story)?.len()}))
 }
 
