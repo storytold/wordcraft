@@ -1,7 +1,6 @@
 # WordCraft roadmap
 
-> **PR #4703 — Footer table fidelity (2026-11-03):** DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified.
-
+**PR #4703 — Footer table fidelity (2026-11-03):** DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
