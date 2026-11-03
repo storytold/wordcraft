@@ -618,3 +618,45 @@ fn hf_nav_preserves_page_hint_for_inherited_part() {
     s.run("hf.previous", &json!({})).unwrap();
     assert_eq!(s.page_hint, 1, "page_hint must be preserved on Section 2 when moving between inherited parts");
 }
+
+#[test]
+fn hf_nav_prefers_nearest_section_in_navigation_direction() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Sec 1"})).unwrap();
+    s.run("insert.header", &json!({"text": "Header 1"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Section 2: independent header (Header 2)
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Sec 2"})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Header 2"})).unwrap();
+    let h2_id = s.doc.last_section.headers.default.unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Section 3: inherits Header 2
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Sec 3"})).unwrap();
+    assert!(crate::cmd::page::is_hf_linked(&s));
+
+    // Section 4: independent header (Header 4)
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Sec 4"})).unwrap();
+    s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    s.run("insert.editHeader", &json!({"page": 3})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "Header 4"})).unwrap();
+
+    assert_eq!(s.page_hint, 3);
+    // Backward navigation from Section 4 lands on Header 2.
+    // Nearest page in backward direction (-1) that shows Header 2 is page 2 (Section 3), NOT page 1 (Section 2).
+    s.run("hf.previous", &json!({})).unwrap();
+    assert_eq!(s.sel.focus.story, StoryRef::Part(h2_id));
+    assert_eq!(s.page_hint, 2, "backward navigation must pick Section 3 (page 2), not Section 2 (page 1)");
+
+    // Unlinking while at this position must unlink Section 3, not Section 2
+    let res = s.run("layout.linkToPrevious", &json!({"linked": false})).unwrap();
+    assert_eq!(res["section"], 2, "unlinking must target Section 3 (index 2)");
+}

@@ -165,7 +165,18 @@ pub(super) fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
             layout.pages.iter().position(|pg| pg.section == current_section && (pg.header_story == Some(next) || pg.footer_story == Some(next)))
     {
         s.page_hint = pg_idx;
-    } else if let Some(pg_idx) = layout.pages.iter().position(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next)) {
+    } else if let Some(pg_idx) = {
+        let cur = s.page_hint;
+        let matches_next = |idx: usize| layout.pages.get(idx).is_some_and(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next));
+        let directional = if dir > 0 {
+            (cur + 1..layout.pages.len()).find(|&p| matches_next(p))
+        } else if dir < 0 {
+            (0..cur).rev().find(|&p| matches_next(p))
+        } else {
+            None
+        };
+        directional.or_else(|| layout.pages.iter().position(|pg| pg.header_story == Some(next) || pg.footer_story == Some(next)))
+    } {
         s.page_hint = pg_idx;
     } else {
         let target_sec_and_slot = s.doc.sections().iter().enumerate().find_map(|(idx, (_, sec))| {
