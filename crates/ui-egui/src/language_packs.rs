@@ -103,56 +103,50 @@ pub(crate) fn size_text(bytes: u64) -> String {
     }
 }
 
-/// English names of pack languages the Language dialog's list doesn't have.
-const MORE_LANGUAGES: [(&str, &str); 14] = [
-    ("bg", "Bulgarian"),
-    ("bs", "Bosnian"),
-    ("ca", "Catalan"),
-    ("ga", "Irish"),
-    ("hi", "Hindi"),
-    ("lt", "Lithuanian"),
-    ("lv", "Latvian"),
-    ("ro", "Romanian"),
-    ("sk", "Slovak"),
-    ("sl", "Slovenian"),
-    ("sq", "Albanian"),
-    ("sw", "Swahili"),
-    ("ta", "Tamil"),
-    ("vi", "Vietnamese"),
+/// English names of the Language pack languages the Language dialog's list doesn't have, by the
+/// tag a document stores for them ([`crate::ribbon::tag_for_pack`]): every pack in the published
+/// index has a name in the interface language (CP4.3: Belarusian showed as Беларуская).
+pub(crate) const MORE_LANGUAGES: [(&str, &str); 28] = [
+    ("af-ZA", "Afrikaans"),
+    ("be-BY", "Belarusian"),
+    ("bg-BG", "Bulgarian"),
+    ("bs-BA", "Bosnian"),
+    ("ca-ES", "Catalan"),
+    ("ca-ES-valencia", "Catalan (Valencian)"),
+    ("cy-GB", "Welsh"),
+    ("eo", "Esperanto"),
+    ("fa-IR", "Persian"),
+    ("ga-IE", "Irish"),
+    ("gl-ES", "Galician"),
+    ("hi-IN", "Hindi"),
+    ("hu-HU", "Hungarian"),
+    ("hy-AM", "Armenian"),
+    ("is-IS", "Icelandic"),
+    ("ka-GE", "Georgian"),
+    ("lt-LT", "Lithuanian"),
+    ("lv-LV", "Latvian"),
+    ("mk-MK", "Macedonian"),
+    ("nn-NO", "Norwegian (Nynorsk)"),
+    ("ro-RO", "Romanian"),
+    ("sk-SK", "Slovak"),
+    ("sl-SI", "Slovenian"),
+    ("sq-AL", "Albanian"),
+    ("sw-KE", "Swahili"),
+    ("ta-IN", "Tamil"),
+    ("th-TH", "Thai"),
+    ("vi-VN", "Vietnamese"),
 ];
 
-/// The language a pack is for, in the interface language (`Dutch`, `Serbian (Latin)`), else its
-/// own name.
+/// The language a pack is for, in the interface language (`Dutch`, `Serbian (Latin)`): the name
+/// of the tag text in it is marked with ([`crate::ribbon::tag_for_pack`]), as the status bar and
+/// the Language dialog name it; else the pack's own name; else its locale.
 pub(crate) fn language_of(pack_locale: &str, endonym: &str) -> String {
-    let langs = crate::dialogs_layout::LANGUAGES;
-    let exact = langs.iter().find(|(t, _)| t.eq_ignore_ascii_case(pack_locale)).map(|(_, n)| *n);
-    // `sr-latn` is `sr-Latn-RS` (Serbian (Latin)); a bare `nl` is the language without the region.
-    let prefixed = || {
-        langs
-            .iter()
-            .find(|(t, _)| {
-                t.len() > pack_locale.len()
-                    && t.get(..pack_locale.len()).is_some_and(|p| p.eq_ignore_ascii_case(pack_locale))
-                    && t.as_bytes().get(pack_locale.len()) == Some(&b'-')
-            })
-            .map(|(_, n)| if pack_locale.contains('-') { n } else { n.split(" (").next().unwrap_or(n) })
-    };
-    let base = pack_locale.split('-').next().unwrap_or(pack_locale);
-    let more = || MORE_LANGUAGES.iter().find(|(t, _)| *t == base).map(|(_, n)| *n);
-    if let Some(n) = exact.or_else(prefixed) {
-        return tl!(n).to_string();
-    }
-    // A language with a region the list lacks (`de-ch`: German (Switzerland)), as the status bar
-    // names it.
-    let named = crate::ribbon::language_name(Some(pack_locale));
-    if !named.eq_ignore_ascii_case(pack_locale) {
+    let tag = crate::ribbon::tag_for_pack(pack_locale);
+    let named = crate::ribbon::language_name(Some(&tag));
+    if !named.eq_ignore_ascii_case(&tag) {
         return tl!(&named).to_string();
     }
-    match more() {
-        Some(n) => tl!(n).to_string(),
-        None if !endonym.is_empty() => endonym.to_string(),
-        None => pack_locale.to_string(),
-    }
+    if endonym.is_empty() { pack_locale.to_string() } else { endonym.to_string() }
 }
 
 /// Once per frame: installs and fetches run on the engine's thread, which repaints the window as
@@ -585,6 +579,209 @@ mod tests {
 
     /// Tests that set the process-wide pack backend take turns.
     static BACKEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Every locale of the published index (`language-packs-2/index.json`), with its own name.
+    const INDEX_LOCALES: [(&str, &str); 75] = [
+        ("af", "Afrikaans"),
+        ("ar", "العربية"),
+        ("be", "Беларуская"),
+        ("bg", "Български"),
+        ("bs", "Bosanski"),
+        ("ca", "Català"),
+        ("ca-valencia", "Català (valencià)"),
+        ("cs", "Čeština"),
+        ("cy", "Cymraeg"),
+        ("da", "Dansk"),
+        ("de", "Deutsch (Deutschland)"),
+        ("de-at", "Deutsch (Österreich)"),
+        ("de-ch", "Deutsch (Schweiz)"),
+        ("el", "Ελληνικά"),
+        ("eo", "Esperanto"),
+        ("es", "Español (España)"),
+        ("es-ar", "Español (Argentina)"),
+        ("es-bo", "Español (Bolivia)"),
+        ("es-cl", "Español (Chile)"),
+        ("es-co", "Español (Colombia)"),
+        ("es-cr", "Español (Costa Rica)"),
+        ("es-cu", "Español (Cuba)"),
+        ("es-do", "Español (República Dominicana)"),
+        ("es-ec", "Español (Ecuador)"),
+        ("es-gq", "Español (Guinea Ecuatorial)"),
+        ("es-gt", "Español (Guatemala)"),
+        ("es-hn", "Español (Honduras)"),
+        ("es-mx", "Español (México)"),
+        ("es-ni", "Español (Nicaragua)"),
+        ("es-pa", "Español (Panamá)"),
+        ("es-pe", "Español (Perú)"),
+        ("es-ph", "Español (Filipinas)"),
+        ("es-pr", "Español (Puerto Rico)"),
+        ("es-py", "Español (Paraguay)"),
+        ("es-sv", "Español (El Salvador)"),
+        ("es-us", "Español (Estados Unidos)"),
+        ("es-uy", "Español (Uruguay)"),
+        ("es-ve", "Español (Venezuela)"),
+        ("et", "Eesti"),
+        ("fa", "فارسی"),
+        ("fr", "Français"),
+        ("ga", "Gaeilge"),
+        ("gl", "Galego"),
+        ("he", "עברית"),
+        ("hi", "\u{939}\u{93f}\u{928}\u{94d}\u{926}\u{940}"),
+        ("hr", "Hrvatski"),
+        ("hu", "Magyar"),
+        ("hy", "Հայերեն"),
+        ("id", "Bahasa Indonesia"),
+        ("is", "Íslenska"),
+        ("it", "Italiano"),
+        ("ka", "ქართული"),
+        ("ko", "한국어"),
+        ("lt", "Lietuvių"),
+        ("lv", "Latviešu"),
+        ("mk", "Македонски"),
+        ("nb", "Norsk bokmål"),
+        ("nl", "Nederlands"),
+        ("nn", "Norsk nynorsk"),
+        ("pl", "Polski"),
+        ("pt-br", "Português (Brasil)"),
+        ("pt-pt", "Português (Portugal)"),
+        ("ro", "Română"),
+        ("ru", "Русский"),
+        ("sk", "Slovenčina"),
+        ("sl", "Slovenščina"),
+        ("sq", "Shqip"),
+        ("sr", "Српски"),
+        ("sr-latn", "Srpski (latinica)"),
+        ("sv", "Svenska"),
+        ("sv-fi", "Svenska (Finland)"),
+        ("sw", "Kiswahili"),
+        ("ta", "\u{ba4}\u{bae}\u{bbf}\u{bb4}\u{bcd}"),
+        ("tr", "Türkçe"),
+        ("vi", "Tiếng Việt"),
+    ];
+
+    fn index_packs() -> Vec<packs::Pack> {
+        let base = FixedBackend::sample().packs.remove(0);
+        INDEX_LOCALES.iter().map(|(l, n)| packs::Pack { locale: (*l).into(), name: (*n).into(), ..base.clone() }).collect()
+    }
+
+    /// CP4.3: every pack of the published index has an English name (Belarusian showed as
+    /// Беларуская, Arabic as its own name), no two packs share one, and a pack's language is
+    /// named as the status bar names the tag text in it is marked with.
+    #[test]
+    fn every_published_pack_has_an_english_name() {
+        let mut seen = std::collections::HashSet::new();
+        for (locale, endonym) in INDEX_LOCALES {
+            let name = super::language_of(locale, endonym);
+            // In Latin letters (Norwegian (Bokmål)), never the pack's own name in its script.
+            assert!(name.chars().all(|c| (c as u32) < 0x250) && name != *locale, "{locale}: {name}");
+            assert!(seen.insert(name.clone()), "{locale}: {name} twice");
+            assert_eq!(name, crate::ribbon::language_name(Some(&crate::ribbon::tag_for_pack(locale))), "{locale}");
+        }
+        assert_eq!(super::language_of("be", "Беларуская"), "Belarusian");
+        assert_eq!(super::language_of("ar", "العربية"), "Arabic");
+        assert_eq!(super::language_of("nn", "Norsk nynorsk"), "Norwegian (Nynorsk)");
+        assert_eq!(super::language_of("es-cu", ""), "Spanish (Cuba)");
+        // A locale WordCraft has no name for keeps the pack's own name.
+        assert_eq!(super::language_of("xq", "Xq name"), "Xq name");
+    }
+
+    /// CP4.3: the tag text is marked with when a pack's language is chosen finds that pack again,
+    /// for every published pack: Bulgarian chosen from its pack is proofed by it, Serbian (Latin)
+    /// by `sr-latn` rather than the Cyrillic `sr`.
+    #[test]
+    fn a_pack_language_tag_finds_its_pack() {
+        let index = index_packs();
+        for p in &index {
+            let tag = crate::ribbon::tag_for_pack(&p.locale);
+            assert_eq!(packs::pack_for_tag(&tag, &index).map(|f| f.locale.as_str()), Some(p.locale.as_str()), "{} → {tag}", p.locale);
+            assert!(packs::proofable(&tag), "{tag}");
+        }
+        // Valencian is stored as Word writes it, and Word's tag finds the Valencian pack, not the
+        // Catalan one; Catalan of Spain stays the Catalan pack's.
+        assert_eq!(crate::ribbon::language_name(Some("ca-ES-valencia")), "Catalan (Valencian)");
+        assert_eq!(super::language_of("ca-valencia", ""), "Catalan (Valencian)");
+        assert_eq!(packs::pack_for_tag("ca-ES-valencia", &index).map(|f| f.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca-ES", &index).map(|f| f.locale.as_str()), Some("ca"));
+        for (locale, tag) in [
+            ("ca-valencia", "ca-ES-valencia"),
+            ("ca", "ca-ES"),
+            ("bg", "bg-BG"),
+            ("sr-latn", "sr-Latn-RS"),
+            ("sr", "sr-Cyrl-RS"),
+            ("nl", "nl-NL"),
+            ("de-at", "de-AT"),
+            ("pt-br", "pt-BR"),
+            ("eo", "eo"),
+            ("es", "es-ES"),
+        ] {
+            assert_eq!(crate::ribbon::tag_for_pack(locale), tag);
+        }
+    }
+
+    /// CP4.3: the Set Proofing Language dialog lists every installed and available pack's language
+    /// beside the built-in ones, each once and sorted by name; Review › Language and the status
+    /// bar's menu add the installed ones to the short list.
+    #[test]
+    fn pack_languages_are_in_the_language_lists() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                packs::set_background(None);
+                packs::set_backend(None);
+            }
+        }
+        let _reset = Reset;
+        let backend = std::sync::Arc::new(FixedBackend { packs: index_packs(), ..Default::default() });
+        backend.installed.lock().unwrap().push(packs::Installed {
+            locale: "bg".into(),
+            name: "Български".into(),
+            licence: String::new(),
+            path: std::path::PathBuf::new(),
+        });
+        packs::set_backend(Some(backend.clone() as std::sync::Arc<dyn Backend>));
+        let all = crate::ribbon::all_languages();
+        for (tag, name) in [
+            ("bg-BG", "Bulgarian"),
+            ("be-BY", "Belarusian"),
+            ("sr-Latn-RS", "Serbian (Latin)"),
+            ("es-CU", "Spanish (Cuba)"),
+            ("ar-SA", "Arabic"),
+            ("hr-HR", "Croatian"),
+            ("ja-JP", "Japanese"),
+        ] {
+            assert!(all.iter().any(|(t, n)| t == tag && n == name), "{tag} {name}: {all:?}");
+        }
+        let mut tags: Vec<String> = all.iter().map(|(t, _)| t.to_ascii_lowercase()).collect();
+        let n = tags.len();
+        tags.sort();
+        tags.dedup();
+        assert_eq!(tags.len(), n, "each language once");
+        assert!(all.windows(2).all(|w| crate::ribbon::sort_key(&w[0].1) <= crate::ribbon::sort_key(&w[1].1)), "sorted by name");
+        assert!(!all.iter().any(|(_, n)| n == "Беларуская" || n == "Български"), "every pack named in the interface language");
+        // One Catalan row and one Valencian, no stray Catalan (Spain).
+        assert_eq!(all.iter().filter(|(_, n)| n.starts_with("Catalan")).map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["ca-ES", "ca-ES-valencia"]);
+        // A bare tag is its regioned row, not a second row of the same name.
+        for (current, row) in [("nl", "nl-NL"), ("sv", "sv-SE"), ("ca-valencia", "ca-ES-valencia")] {
+            let list = crate::ribbon::language_list(current);
+            assert_eq!(list, all, "{current}");
+            assert_eq!(list.iter().filter(|(t, _)| crate::ribbon::same_language(current, t)).map(|(t, _)| t.as_str()).collect::<Vec<_>>(), [row]);
+        }
+        // The dialog shows the same list, and a tag none of them has besides.
+        assert_eq!(crate::ribbon::language_list("bg-BG"), all);
+        assert!(crate::ribbon::language_list("xx-YY").iter().any(|(t, _)| t == "xx-YY"));
+        // The short list: the built-in sixteen, then the installed Bulgarian.
+        let short = crate::ribbon::short_languages();
+        assert_eq!(short.len(), crate::ribbon::PROOFING_LANGUAGES.len() + 1);
+        assert_eq!(short.last().map(|(t, n)| (t.as_str(), n.as_str())), Some(("bg-BG", "Bulgarian")));
+        // Choosing it marks the text with the tag its pack proofs.
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("document.setText", json!({"text": "Добър ден"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("review.language", json!({"lang": "bg-BG"})).unwrap();
+        assert_eq!(crate::ribbon::caret_language(&a), "Bulgarian");
+        assert_eq!(packs::pack_for_tag("bg-BG", &packs::available()).map(|p| p.locale.as_str()), Some("bg"));
+    }
 
     /// Characters a pack index or a server's answer could use to hide, reorder or break text.
     fn hostile(c: char) -> bool {

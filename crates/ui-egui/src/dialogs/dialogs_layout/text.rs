@@ -322,21 +322,17 @@ impl LanguageForm {
 
 /// A language's name in the interface language (the tag itself when we don't know it).
 pub(super) fn language_name(tag: &str) -> String {
-    LANGUAGES.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, n)| tl!(n).to_string()).unwrap_or_else(|| tag.to_string())
+    tl!(&crate::ribbon::language_name(Some(tag))).to_string()
 }
 
 pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
     ui.label(tl!("Mark selected text as:"));
-    let mut list: Vec<(String, String)> = LANGUAGES.iter().map(|(t, _)| (t.to_string(), language_name(t))).collect();
-    if !LANGUAGES.iter().any(|(t, _)| t.eq_ignore_ascii_case(&f.lang)) {
-        list.push((f.lang.clone(), f.lang.clone()));
-    }
-    list.sort_by_key(|a| a.1.to_lowercase());
+    let list = crate::ribbon::language_list(&f.lang);
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).border_strong)).inner_margin(4.0).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(220.0).min_scrolled_height(220.0).show(ui, |ui| {
             ui.set_min_width(300.0);
             for (tag, name) in &list {
-                let on = f.lang.eq_ignore_ascii_case(tag);
+                let on = crate::ribbon::same_language(&f.lang, tag);
                 let r = ui.selectable_label(on, name.as_str());
                 if r.clicked() {
                     f.lang = tag.clone();
