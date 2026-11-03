@@ -239,16 +239,13 @@ impl Alphas {
 /// without transparency or that don't decode; [`OverBudget`] for one that would take `decoded`
 /// past [`MAX_DECODED_PIXELS`]. Pictures whose header says they're opaque cost nothing.
 fn decode_alpha(bytes: &[u8], decoded: &mut u64) -> Result<Option<Alpha>, OverBudget> {
-    use image::ImageDecoder;
     let Ok(pic) = wordcraft_geom::picture::probe(bytes) else { return Ok(None) };
     // Formats that can't be transparent aren't decoded.
     if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
         return Ok(None);
     }
     // Only the header is read here (a PNG's `tRNS` counts as transparency).
-    let has_alpha =
-        image::ImageReader::with_format(std::io::Cursor::new(bytes), pic.format).into_decoder().ok().is_some_and(|d| d.color_type().has_alpha());
-    if !has_alpha {
+    if !pic.has_alpha() {
         return Ok(None);
     }
     let pixels = u64::from(pic.width) * u64::from(pic.height);
