@@ -1,6 +1,6 @@
 # Khmer language integration
 
-Reconciled 2026-11-03 with WordCraft main `ffb155a0321bba08da495efda66495104c1c8b9a`.
+Reconciled 2026-11-03 with WordCraft main `969df57e` and craft-libs main `01315d9`.
 This draft pins the companion heads of [craft-libs #551](https://github.com/storytold/craft-libs/pull/551)
 and [craft-i18n #122](https://github.com/storytold/craft-i18n/pull/122), fetched through the upstream repositories.
 Merge the dependencies first and retain or update those pins. See [examples and evidence](khmer-evidence.md).
