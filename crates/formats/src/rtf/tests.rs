@@ -849,6 +849,23 @@ fn prior_zero_line_spacing_is_explicit_and_scoped() {
     }
 }
 
+/// Imported old exact spacing below the supported minimum retains the exact rule on save.
+#[test]
+fn prior_exact_spacing_below_the_supported_minimum_keeps_its_rule() {
+    use wordcraft_doc::props::LineSpacing;
+    for value in [0.0, 0.01, 0.05, 0.65, 0.7] {
+        let mut doc = prior_layout_document("");
+        let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut doc.body[0]) else { panic!("expected paragraph") };
+        p.props.fmt_change.as_deref_mut().unwrap().old.line_spacing = Some(LineSpacing::Exactly(value));
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            assert_eq!(prior_props(&doc).line_spacing, Some(LineSpacing::Exactly(0.7)), "{value}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
 /// Prior visible borders stay inside oldpprops and retain their colour and geometry.
 #[test]
 fn saving_keeps_prior_paragraph_borders() {

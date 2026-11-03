@@ -464,7 +464,7 @@ impl Writer {
         if let Some(line) = p.spacing.line {
             let (value, multiple) = match line {
                 LineSpacing::Multiple(value) => (f64::from(value) * 240.0, 1),
-                LineSpacing::Exactly(value) => (-f64::from(value).abs() * 20.0, 0),
+                LineSpacing::Exactly(value) => (-f64::from(value).abs().max(0.7) * 20.0, 0),
                 LineSpacing::AtLeast(value) => (f64::from(value).abs() * 20.0, 0),
             };
             let value = value.round() as i32;
