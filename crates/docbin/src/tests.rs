@@ -2733,3 +2733,99 @@ fn field_results_keep_their_text_and_runs() {
         p.objects
     );
 }
+
+/// A one-page CHPX bin table over `page`: FCs 0..`end` live in page 1 of the returned stream.
+fn one_page_bins(page: &[u8], end: u32) -> (Vec<u8>, crate::fkp::Bins) {
+    let mut word = vec![0u8; 512];
+    word.extend_from_slice(page);
+    let plc = [0u32.to_le_bytes().as_slice(), end.to_le_bytes().as_slice(), 1u32.to_le_bytes().as_slice()].concat();
+    let bins = crate::fkp::Bins::parse(&plc, 0, 12).expect("bins");
+    (word, bins)
+}
+
+/// The CHPX run a lookup reports covers exactly the FCs that give the same grpprl: the walk
+/// reuses it for the following characters without asking again.
+#[test]
+fn a_chpx_run_covers_the_fcs_with_the_same_answer() {
+    let runs = [(0u32, grpprl(&[(0x0835, &[1])])), (5, Vec::new()), (9, grpprl(&[(0x0836, &[1])])), (30, grpprl(&[(0x0835, &[1])]))];
+    let (word, bins) = one_page_bins(&chpx_fkp(&runs, 60), 0x2000);
+    for fc in (fc_of(0) - 4)..(fc_of(70)) {
+        let run = bins.chpx_run(&word, fc);
+        assert_eq!(run.grpprl, bins.chpx(&word, fc), "fc {fc}");
+        for other in (fc_of(0) - 4)..(fc_of(70)) {
+            if run.contains(other) {
+                assert_eq!(bins.chpx(&word, other), run.grpprl, "fc {fc} run reused at {other}");
+            }
+        }
+    }
+    assert!(bins.chpx_run(&word, fc_of(6)).contains(fc_of(8)) && !bins.chpx_run(&word, fc_of(6)).contains(fc_of(9)));
+}
+
+/// A page whose run starts do not ascend (a corrupt file) gives the same answers as before and
+/// a range that never claims an FC with a different answer.
+#[test]
+fn a_chpx_run_is_sound_on_a_page_whose_starts_do_not_ascend() {
+    let runs = [(10u32, grpprl(&[(0x0835, &[1])])), (3, grpprl(&[(0x0836, &[1])])), (20, Vec::new()), (7, grpprl(&[(0x0835, &[1])]))];
+    let (word, bins) = one_page_bins(&chpx_fkp(&runs, 60), 0x2000);
+    for fc in (fc_of(0) - 4)..(fc_of(70)) {
+        let run = bins.chpx_run(&word, fc);
+        assert_eq!(run.grpprl, bins.chpx(&word, fc));
+        for other in (fc_of(0) - 4)..(fc_of(70)) {
+            if run.contains(other) {
+                assert_eq!(bins.chpx(&word, other), run.grpprl, "fc {fc} run reused at {other}");
+            }
+        }
+    }
+}
+
+/// A piece span answers exactly what the per-CP lookup answers, in every piece (compressed
+/// and UTF-16) and past the last.
+#[test]
+fn a_piece_span_matches_the_per_cp_lookups() {
+    let doc = text_doc(
+        &[
+            Piece { compressed: true, text: "abc".into() },
+            Piece { compressed: false, text: "d\u{e9}fgh".into() },
+            Piece { compressed: true, text: "ij".into() },
+        ],
+        &[],
+        0,
+    );
+    let mut comp = crate::open_container(&doc).expect("container");
+    let table = crate::stream(&mut comp, "0Table").expect("table");
+    let pieces = crate::piece::PieceTable::parse(&table, CLX_AT, table.len() as u32 - CLX_AT).expect("pieces");
+    for cp in 0..14 {
+        let span = pieces.span(cp);
+        assert_eq!(span.and_then(|s| s.fc_at(cp)), pieces.fc_of_cp(cp), "cp {cp}");
+        for other in 0..14 {
+            if span.is_some_and(|s| s.contains(other)) {
+                assert_eq!(pieces.span(other).and_then(|s| s.fc_at(other)), pieces.fc_of_cp(other));
+            }
+        }
+    }
+    assert!(pieces.span(10).is_none(), "past the last piece");
+}
+
+/// Characters of one formatting share one `CharProps`: it is cloned when a run starts, and not
+/// even compared while the formatting stays the same.
+#[test]
+fn shared_props_start_one_run_per_formatting() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut pb = super::ParaBuild::default();
+    for _ in 0..100_000 {
+        pb.push_shared('a', &bold, 1);
+    }
+    pb.push_shared('b', &CharProps::default(), 2);
+    pb.push_shared('c', &bold, 3);
+    pb.push_shared('d', &bold, 4);
+    assert_eq!(pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(), [100_000, 1, 2], "equal props under a new generation join the run");
+    pb.push('e', bold.clone());
+    pb.push_shared('f', &bold, 4);
+    assert_eq!(
+        pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(),
+        [100_000, 1, 4],
+        "a plain push forgets the generation but still joins an equal run"
+    );
+    assert_eq!(pb.text.len(), 100_005);
+}
