@@ -1,4 +1,4 @@
-use super::css::{apply_style, css_len_pt, strip_important};
+use super::css::{ElementStyle, apply_style, css_len_pt, strip_important};
 use super::import::{PAGE_FONT, PAGE_HEADING_SIZES, collapse_ws};
 use super::{
     Align, Arc, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, LineSpacing, ListInfo, Meta, Para, Spacing, VAlign, data_uri, make_img, model,
@@ -50,14 +50,6 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
-}
-
-struct ElementStyle {
-    fmt: Fmt,
-    align: Option<Align>,
-    preserve: bool,
-    page_break: bool,
-    page_break_after: bool,
 }
 
 fn apply_font_attributes(attrs: &[(String, String)], fmt: &mut Fmt) {
@@ -1003,11 +995,12 @@ impl<'r> Builder<'r> {
 
     /// `css`: the element's declarations in cascade order ([`Builder::css_of`]).
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
-        let mut fmt = self.fmt();
+        let parent = self.fmt();
+        let mut fmt = parent.clone();
         let mut align = None;
-        let mut preserve = self.preserve();
-        let mut page_break = false;
-        let mut page_break_after = false;
+        let preserve = self.preserve();
+        let page_break = false;
+        let page_break_after = false;
         match name {
             // A header cell is bold, as in browsers and Word, unless its own CSS says otherwise.
             "b" | "strong" | "th" => fmt.bold = true,
@@ -1049,11 +1042,12 @@ impl<'r> Builder<'r> {
             fmt.color.get_or_insert(wordcraft_doc::Rgb(0, 0, 0));
             fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
         }
-        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+        let mut style = ElementStyle { fmt, align, preserve, page_break, page_break_after };
+        apply_style(css, &mut style, &parent);
         if kind == ElKind::Pre {
-            preserve = true;
+            style.preserve = true;
         }
-        ElementStyle { fmt, align, preserve, page_break, page_break_after }
+        style
     }
 
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
