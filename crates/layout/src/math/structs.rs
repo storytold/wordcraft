@@ -1,6 +1,6 @@
-use super::bx::{Bx, Cls, St, hcat};
+use super::bx::{Bx, Cls, FracEdges, St, hcat};
 use super::state::wide_accent;
-use super::{Arg, C, ColJc, Ctx, FracKind, MItem, MNode, glyph_bounds};
+use super::{Arg, C, ColJc, Ctx, FracKind, MItem, MNode, MathCorner, glyph_bounds};
 
 impl Ctx {
     /// Limits under and over `base` (centred), spaced as for big operators (`big`) or as
@@ -50,12 +50,45 @@ impl Ctx {
         out
     }
 
+    fn kern_at(&self, b: &Bx, corner: MathCorner, height: f32) -> f32 {
+        let Some((face, gid, _)) = b.glyph else { return 0.0 };
+        if face.id() != self.face.id() {
+            return 0.0;
+        }
+        let Some(size) = b.items.iter().find_map(|item| match item {
+            MItem::Glyphs { size, .. } => Some(*size),
+            _ => None,
+        }) else {
+            return 0.0;
+        };
+        let scale = size / face.upem.max(1.0) as f32;
+        if !scale.is_finite() || scale <= 0.0 {
+            return 0.0;
+        }
+        self.t.as_ref().map_or(0.0, |table| table.kern(gid, corner, height / scale) * scale)
+    }
+
+    fn sub_kern(&self, base: &Bx, sub: &Bx, drop: f32) -> f32 {
+        if base.glyph.is_none() {
+            return 0.0;
+        }
+        // OpenType evaluates both touching heights. A compound script contributes no corner kern.
+        let at_sub_top = self.kern_at(base, MathCorner::BottomRight, sub.a - drop) + self.kern_at(sub, MathCorner::TopLeft, sub.a);
+        let at_base_bottom = self.kern_at(base, MathCorner::BottomRight, -base.d) + self.kern_at(sub, MathCorner::TopLeft, drop - base.d);
+        at_sub_top.min(at_base_bottom)
+    }
+
     /// Sub/superscripts after `base`. `char_base`: the base is a single character (no baseline drop).
     pub(super) fn attach(&self, base: Bx, sub: Option<Bx>, sup: Option<Bx>, st: St, char_base: bool) -> Bx {
+        // Only same-size character bases use corner kerning.
+        let matched_char_base = char_base
+            && base.items.iter().find_map(|item| match item {
+                MItem::Glyphs { size, .. } => Some(*size),
+                _ => None,
+            }) == Some(self.size(st));
         let (bw, ba, bd, ic) = (base.w, base.a, base.d, base.ic);
         let (first, last) = (base.first, base.last);
         let mut out = Bx { w: bw, ..Default::default() };
-        out.put(base, 0.0, 0.0);
         let mut u = 0.0f32;
         let mut v = 0.0f32;
         if let Some(p) = &sup {
@@ -83,6 +116,8 @@ impl Ctx {
                 }
             }
         }
+        let sub_x = if matched_char_base { (bw + sub.as_ref().map_or(0.0, |b| self.sub_kern(&base, b, v))).max(0.0) } else { bw };
+        out.put(base, 0.0, 0.0);
         let space = self.k(C::SpaceAfterScript, st);
         let mut w = bw;
         if let Some(p) = sup {
@@ -91,9 +126,8 @@ impl Ctx {
             out.put(p, x, u);
         }
         if let Some(b) = sub {
-            let x = bw;
-            w = w.max(x + b.w);
-            out.put(b, x, -v);
+            w = w.max(sub_x + b.w);
+            out.put(b, sub_x, -v);
         }
         out.w = w + if w > bw { space } else { 0.0 };
         out.first = first;
@@ -105,8 +139,8 @@ impl Ctx {
         let em = self.em(st);
         match kind {
             FracKind::Linear => {
-                let n = self.sub(0, num, st, d);
-                let dn = self.sub(1, den, st, d);
+                let n = self.sub(0, num, st.at_edges(FracEdges::LeftTight), d);
+                let dn = self.sub(1, den, st.at_edges(FracEdges::RightTight), d);
                 let slash = self.glyphs(self.face, "/", self.size(st), st.level, self.color, (false, false)).cls(Cls::Ord);
                 hcat(vec![n, slash, dn])
             }
@@ -164,15 +198,23 @@ impl Ctx {
                     }
                     (su, sd)
                 };
+                // Pack only the boundary touching the radical; nested arguments stay spaced.
                 let pad = em * 0.08;
-                let w = n.w.max(dn.w) + 2.0 * pad;
+                let (left, right) = match (kind, st.frac_edges) {
+                    (FracKind::Bar, FracEdges::Tight) => (0.0, 0.0),
+                    (FracKind::Bar, FracEdges::LeftTight) => (0.0, pad),
+                    (FracKind::Bar, FracEdges::RightTight) => (pad, 0.0),
+                    _ => (pad, pad),
+                };
+                let inner = n.w.max(dn.w);
+                let w = inner + left + right;
                 let (nw, dw) = (n.w, dn.w);
                 let mut out = Bx { w, ..Default::default() };
-                out.put(n, (w - nw) / 2.0, u);
-                out.put(dn, (w - dw) / 2.0, -v);
+                out.put(n, left + (inner - nw) / 2.0, u);
+                out.put(dn, left + (inner - dw) / 2.0, -v);
                 if kind == FracKind::Bar {
                     let t = self.k(C::FractionRuleThickness, st).max(0.4);
-                    out.rect(pad * 0.5, axis - t / 2.0, w - pad, t, self.color);
+                    out.rect(left * 0.5, axis - t / 2.0, w - (left + right) * 0.5, t, self.color);
                 }
                 out
             }
@@ -180,7 +222,7 @@ impl Ctx {
     }
 
     pub(super) fn radical(&mut self, deg: &[MNode], deg_hide: bool, e: &[MNode], st: St, d: usize) -> Bx {
-        let b = self.sub(1, e, st.cramp(), d);
+        let b = self.sub(1, e, St { frac_edges: FracEdges::Tight, ..st.cramp() }, d);
         let size = self.size(st);
         let t = self.k(C::RadicalRuleThickness, st).max(0.4);
         let mut gap = if st.display { self.k(C::RadicalDisplayStyleVerticalGap, st) } else { self.k(C::RadicalVerticalGap, st) };
@@ -205,7 +247,12 @@ impl Ctx {
         let mut x0 = 0.0f32;
         let mut out = Bx::default();
         if !deg_hide {
-            let db = self.sub(0, deg, St { level: (st.level + 2).min(2), display: false, cramped: true, upright: st.upright }, d);
+            let db = self.sub(
+                0,
+                deg,
+                St { level: (st.level + 2).min(2), display: false, frac_edges: FracEdges::Spaced, cramped: true, upright: st.upright },
+                d,
+            );
             let kb = self.k(C::RadicalKernBeforeDegree, st);
             let ka = self.k(C::RadicalKernAfterDegree, st);
             let raise = self.t.as_ref().map_or(60.0, |t| t.radical_degree_bottom_raise_percent) / 100.0 * (ga + gd);
@@ -289,20 +336,68 @@ impl Ctx {
 
     pub(super) fn matrix(&mut self, rows: &[Vec<Arg>], col_jc: &[ColJc], st: St, d: usize) -> Bx {
         let em = self.em(st);
-        let mut cells: Vec<Vec<Bx>> = Vec::new();
+        let mut cells = Vec::new();
+        let ncols = rows.iter().take(1000).map(|r| r.len().min(64)).max().unwrap_or(0);
         let mut flat = 0usize;
         for r in rows.iter().take(1000) {
             let mut row = Vec::new();
             for (ci, c) in r.iter().enumerate() {
                 if ci < 64 {
-                    row.push(self.sub(flat, c, st, d));
+                    let edges = match (ci == 0, ci + 1 == ncols) {
+                        (true, true) => FracEdges::Tight,
+                        (true, false) => FracEdges::LeftTight,
+                        (false, true) => FracEdges::RightTight,
+                        (false, false) => FracEdges::Spaced,
+                    };
+                    let packed_st = st.at_edges(edges);
+                    let packed = self.sub(flat, c, packed_st, d);
+                    let aligned = match col_jc.get(ci).copied().unwrap_or_default() {
+                        ColJc::Left if ci == 0 => FracEdges::LeftTight,
+                        ColJc::Right if ci + 1 == ncols => FracEdges::RightTight,
+                        _ => FracEdges::Spaced,
+                    };
+                    let aligned_st = st.at_edges(aligned);
+                    let inset = (aligned_st.frac_edges != packed_st.frac_edges).then(|| self.sub(flat, c, aligned_st, d));
+                    row.push((packed, inset));
                 }
                 flat += 1;
             }
             cells.push(row);
         }
-        let ncols = cells.iter().map(Vec::len).max().unwrap_or(0);
         let mut col_w = vec![0.0f32; ncols];
+        for r in &cells {
+            for (i, (b, _)) in r.iter().enumerate() {
+                if let Some(c) = col_w.get_mut(i) {
+                    *c = c.max(b.w);
+                }
+            }
+        }
+        // Restore inset cells first. If that widens a column, none of its initially widest
+        // packed cells still span it. Two candidate widths avoid an iterative layout pass.
+        let mut restored_w = col_w.clone();
+        for r in &cells {
+            for (i, (packed, inset)) in r.iter().enumerate() {
+                if let (Some(inset), Some(width), Some(restored)) = (inset, col_w.get(i), restored_w.get_mut(i))
+                    && packed.w < *width
+                {
+                    *restored = restored.max(inset.w);
+                }
+            }
+        }
+        let cells: Vec<Vec<Bx>> = cells
+            .into_iter()
+            .map(|r| {
+                r.into_iter()
+                    .enumerate()
+                    .map(|(i, (packed, inset))| {
+                        let width = col_w.get(i).copied().unwrap_or(0.0);
+                        let widened = restored_w.get(i).is_some_and(|w| *w > width);
+                        if packed.w < width || widened { inset.unwrap_or(packed) } else { packed }
+                    })
+                    .collect()
+            })
+            .collect();
+        col_w.fill(0.0);
         for r in &cells {
             for (i, b) in r.iter().enumerate() {
                 if let Some(c) = col_w.get_mut(i) {
@@ -334,3 +429,6 @@ impl Ctx {
         out
     }
 }
+
+#[cfg(test)]
+mod tests;

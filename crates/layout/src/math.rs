@@ -16,7 +16,7 @@ use wordcraft_doc::math::{
 };
 use wordcraft_doc::props::{Rgb, TextColor};
 use wordcraft_doc::resolve::ResolvedChar;
-use wordcraft_fonts::math::{C, Construction, MathTable, glyph_bounds};
+use wordcraft_fonts::math::{C, Construction, MathCorner, MathTable, glyph_bounds};
 use wordcraft_fonts::{FaceRef, FontDb};
 
 mod bx;
@@ -26,7 +26,7 @@ mod rows;
 mod state;
 mod structs;
 
-use bx::St;
+use bx::{FracEdges, St};
 use state::Ctx;
 
 /// Something to draw.
@@ -231,7 +231,7 @@ pub fn layout_equation(
         path: Vec::new(),
         node_stack: Vec::new(),
     };
-    let st = St { level: 0, display, cramped: false, upright: false };
+    let st = St { level: 0, display, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
     let avail = if avail.is_finite() { avail.clamp(0.0, 1e5) } else { 0.0 };
     let b = match nodes.as_slice() {
         [] => cx.hint(st),

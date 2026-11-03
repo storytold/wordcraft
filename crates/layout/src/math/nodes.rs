@@ -1,4 +1,4 @@
-use super::bx::{Bx, Cls, RunPart, St, compose, finalize, hcat};
+use super::bx::{Bx, Cls, FracEdges, RunPart, St, compose, finalize, hcat};
 use super::glyphs::TextAtom;
 use super::state::{MAX_NODES, class_of};
 use super::{C, Ctx, FaceRef, FontDb, LimLoc, MAX_DEPTH, MItem, MNode, MRun, MScr, MSty, Rgb, ScriptKind, is_integral, math_alnum};
@@ -56,12 +56,28 @@ impl Ctx {
     /// unit offset of the row's first node (for caret slots).
     pub(super) fn row(&mut self, a: &[MNode], st: St, depth: usize, u0: usize) -> Vec<(Bx, usize)> {
         let mut out = Vec::new();
-        if depth > MAX_DEPTH {
+        if depth > MAX_DEPTH || self.nodes >= MAX_NODES {
             return out;
         }
+        // Fence runs enclose the argument just as a structured delimiter does.
+        let (first, last) = if st.frac_edges == FracEdges::Spaced {
+            (None, None)
+        } else {
+            (self.edge_index(a.iter().enumerate(), Cls::Open), self.edge_index(a.iter().enumerate().rev(), Cls::Close))
+        };
         let mut seg = 0usize;
         let mut u = u0;
         for (i, n) in a.iter().enumerate() {
+            // Only outward-facing edges inherit radical packing; inner neighbours stay spaced.
+            let left = first == Some(i) && matches!(st.frac_edges, FracEdges::Tight | FracEdges::LeftTight);
+            let right = last == Some(i) && matches!(st.frac_edges, FracEdges::Tight | FracEdges::RightTight);
+            let frac_edges = match (left, right) {
+                (true, true) => FracEdges::Tight,
+                (true, false) => FracEdges::LeftTight,
+                (false, true) => FracEdges::RightTight,
+                (false, false) => FracEdges::Spaced,
+            };
+            let st = St { frac_edges, ..st };
             self.nodes += 1;
             if self.nodes > MAX_NODES {
                 break;
@@ -113,6 +129,36 @@ impl Ctx {
             }
         }
         out
+    }
+
+    // Charge each inspected node and character to the shared layout budget, including retries.
+    fn edge_index<'a>(&mut self, nodes: impl Iterator<Item = (usize, &'a MNode)>, cls: Cls) -> Option<usize> {
+        for (i, node) in nodes {
+            if !self.inspect_step() {
+                return None;
+            }
+            let MNode::Run(run) = node else { return Some(i) };
+            if run.lit || run.text.is_empty() {
+                return Some(i);
+            }
+            for c in run.text.chars() {
+                if !self.inspect_step() {
+                    return None;
+                }
+                if class_of(c) != cls {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    fn inspect_step(&mut self) -> bool {
+        if self.nodes >= MAX_NODES {
+            return false;
+        }
+        self.nodes += 1;
+        true
     }
 
     pub(super) fn run_atoms(&self, r: &MRun, st: St, u0: usize, path: &[(usize, usize)]) -> Vec<RunPart> {
@@ -230,7 +276,7 @@ impl Ctx {
     fn op_atoms(&mut self, n: &MNode, st: St, depth: usize) -> Vec<Bx> {
         match n {
             MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
-                let e = self.sub(2, e, st, depth);
+                let e = self.sub(2, e, st.at_edges(FracEdges::RightTight), depth);
                 let loc = lim_loc.unwrap_or(if is_integral(*chr) { LimLoc::SubSup } else { LimLoc::UndOvr });
                 let loc = if st.display { loc } else { LimLoc::SubSup };
                 let size = self.size(st);
@@ -285,8 +331,8 @@ impl Ctx {
                 vec![opb.cls(Cls::Op), e]
             }
             MNode::Func { name, e } => {
-                let name = self.sub(0, name, St { upright: true, ..st }, depth);
-                let e = self.sub(1, e, St { upright: false, ..st }, depth);
+                let name = self.sub(0, name, St { upright: true, ..st.at_edges(FracEdges::LeftTight) }, depth);
+                let e = self.sub(1, e, St { upright: false, ..st.at_edges(FracEdges::RightTight) }, depth);
                 vec![name.cls(Cls::Op), e]
             }
             _ => Vec::new(),
@@ -312,7 +358,8 @@ impl Ctx {
             }
             MNode::Frac { kind, num, den } => self.frac(*kind, num, den, st, d),
             MNode::Script { kind, base, sub, sup } => {
-                let b = self.sub(0, base, st, d);
+                let edges = if *kind == ScriptKind::Pre { FracEdges::RightTight } else { FracEdges::LeftTight };
+                let b = self.sub(0, base, st.at_edges(edges), d);
                 let char_base = b.glyph.is_some();
                 let sub_b = if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup | ScriptKind::Pre) {
                     Some(self.sub(1, sub, st.script().cramp(), d))
@@ -344,7 +391,19 @@ impl Ctx {
                 compose(atoms, st, em)
             }
             MNode::Delim { beg, end, sep, grow, shp_match, elems } => {
-                let parts: Vec<Bx> = elems.iter().enumerate().map(|(k, e)| self.sub(k, e, st, d)).collect();
+                let parts: Vec<Bx> = elems
+                    .iter()
+                    .enumerate()
+                    .map(|(k, e)| {
+                        let edges = match (k == 0, k + 1 == elems.len()) {
+                            (true, true) => FracEdges::Tight,
+                            (true, false) => FracEdges::LeftTight,
+                            (false, true) => FracEdges::RightTight,
+                            (false, false) => FracEdges::Spaced,
+                        };
+                        self.sub(k, e, st.at_edges(edges), d)
+                    })
+                    .collect();
                 let a = parts.iter().map(|b| b.a).fold(0.0f32, f32::max);
                 let dd = parts.iter().map(|b| b.d).fold(0.0f32, f32::max);
                 let mut row: Vec<Bx> = Vec::new();
@@ -463,7 +522,8 @@ impl Ctx {
                 }
                 out
             }
-            MNode::EqArr { rows } => self.eq_arr(rows, st, d),
+            // Alignment follows row layout, so exposed fraction edges are not yet known.
+            MNode::EqArr { rows } => self.eq_arr(rows, st.at_edges(FracEdges::Spaced), d),
             MNode::Matrix { rows, col_jc } => self.matrix(rows, col_jc, st, d),
             MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => {
                 let mut b = self.sub(0, e, st, d);
@@ -485,3 +545,6 @@ impl Ctx {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

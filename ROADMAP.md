@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Math update:** 2026-11-02 · #2838 preserves corner kerning and radical edge controls. Edge inspection shares the layout budget. Native widths, exact font revisions and ARM acceptance remain unverified.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -40,6 +42,7 @@ discounts and the user evidence (120 issues from outside users, 4 praise, 0 "swi
 
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
+| 2026-10-18 | Same-size character subscripts use font corner kerning. Bar fractions inside radicals lose their outer margin; nested arguments and scripts keep their spacing. Kern coverage above 4,096 glyphs or 256 heights is neutral. |
 | Full target (ready for real work) | **~60%** | **~650–1,100 h** (70–80% parallelizes) | Breadth: charts/SmartArt/Draw, localization and proofing languages, East Asian and RTL typography, `.doc` writing, PDF Reflow, ecosystem; plus everything below |
 | Mainstream practitioner | **~55%** | **~300–500 h** (~65% parallelizes) | DOCX real-world fidelity and preserving charts/SmartArt, pagination fidelity, formatting revisions, dialog depth, objects, stability |
 | Essentials user | **~63%** | **~90–140 h** (~50% parallelizes) | Install/launch stability, opening files people send (corpus subset, chart fallbacks), native printing, picture handling, English spelling depth |
@@ -706,6 +709,9 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-11-02 | minor | Bound repeated fence inspection with the shared layout budget (#2838). No new native comparison. |
+| 2026-10-18 | trivial | Bound math corner kerning coverage and pack bar fractions inside radicals to their rule edges. Script glyph alternates remain incomplete. |
+| 2026-10-25 | minor | Radical edge packing follows only exposed matrix, operator, function, script and linear-fraction child edges. Matrix alignment retains interior margins; delimiter elements pass packing only to the first leading and last trailing edge. Existing nested fraction, bracket and barless controls remain. Synthetic geometry regressions; no new native comparison. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |

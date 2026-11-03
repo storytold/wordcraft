@@ -1,11 +1,20 @@
 use super::{FaceRef, MItem, Rgb, Slot};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FracEdges {
+    Spaced,
+    Tight,
+    LeftTight,
+    RightTight,
+}
+
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
 /// cramped (superscripts lowered: inside radicals, denominators, subscripts).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct St {
     pub(super) level: u8,
     pub(super) display: bool,
+    pub(super) frac_edges: FracEdges,
     pub(super) cramped: bool,
     /// Letters default to upright (function names).
     pub(super) upright: bool,
@@ -13,14 +22,26 @@ pub(super) struct St {
 
 impl St {
     pub(super) fn script(self) -> St {
-        St { level: (self.level + 1).min(2), display: false, ..self }
+        St { level: (self.level + 1).min(2), display: false, frac_edges: FracEdges::Spaced, ..self }
     }
     pub(super) fn cramp(self) -> St {
         St { cramped: true, ..self }
     }
+    // Keep packing only on the sides exposed by this container child.
+    pub(super) fn at_edges(self, edges: FracEdges) -> St {
+        use FracEdges::*;
+        let frac_edges = match (self.frac_edges, edges) {
+            (Spaced, _) | (_, Spaced) => Spaced,
+            (Tight, edge) | (edge, Tight) => edge,
+            (LeftTight, LeftTight) => LeftTight,
+            (RightTight, RightTight) => RightTight,
+            _ => Spaced,
+        };
+        St { frac_edges, ..self }
+    }
     /// Numerator / denominator style.
     pub(super) fn frac(self) -> St {
-        if self.display { St { display: false, ..self } } else { self.script() }
+        if self.display { St { display: false, frac_edges: FracEdges::Spaced, ..self } } else { self.script() }
     }
 }
 
