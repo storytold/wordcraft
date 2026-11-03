@@ -216,6 +216,26 @@ fn with_active_id(b: &mut dyn Backend, r: Result<Value, String>) -> Result<Value
     Ok(v)
 }
 
+/// Most bytes of results one `batch` (or one legacy JSON-RPC batch) keeps for its reply.
+pub const MAX_BATCH_OUTPUT: usize = 64 << 20;
+
+/// Length of `v` written as JSON, counted without keeping the text.
+pub(crate) fn json_len(v: &Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(b.len());
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut n = Count(0);
+    let _ = serde_json::to_writer(&mut n, v);
+    n.0
+}
+
 fn wrap(r: Result<Value, String>) -> ToolResult {
     match r {
         Ok(v) => ToolResult::json(&v),
@@ -267,15 +287,25 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "batch" => {
             let keep = a.get("keepGoing").and_then(Value::as_bool).unwrap_or(false);
             let mut out = Vec::new();
+            // What the results hold so far: past MAX_BATCH_OUTPUT the batch stops, rather than
+            // keeping copies of a document command after command until the reply is written.
+            let mut size = 0usize;
             for c in a.get("commands").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let id = c.get("command").and_then(Value::as_str).unwrap_or("");
                 let r = exec(b, id, c.get("params").cloned().unwrap_or(json!({})), doc);
-                let failed = r.is_err();
-                out.push(match r {
+                let mut failed = r.is_err();
+                let entry = match r {
                     Ok(v) => json!({"command": id, "ok": true, "result": v}),
                     Err(e) => json!({"command": id, "ok": false, "error": e}),
-                });
-                if failed && !keep {
+                };
+                size = size.saturating_add(json_len(&entry));
+                if size > MAX_BATCH_OUTPUT {
+                    out.push(json!({"command": id, "ok": false, "error": format!("the batch's results passed {MAX_BATCH_OUTPUT} bytes; this command's result and the commands after it are left out")}));
+                    failed = true;
+                } else {
+                    out.push(entry);
+                }
+                if failed && (!keep || size > MAX_BATCH_OUTPUT) {
                     return ToolResult { content: vec![json!({"type": "text", "text": Value::Array(out).to_string()})], is_error: true };
                 }
             }
@@ -408,6 +438,40 @@ mod tests {
         assert_eq!(b.seen.take().expect("called").1["doc"], json!(7));
         call_tool(&mut b, "execute", &json!({"command": "text.insert", "params": {"text": "x"}}));
         assert!(b.seen.take().expect("called").1.get("doc").is_none());
+    }
+
+    /// A backend whose every result is 1 MiB of text (a whole document, say).
+    struct Big {
+        calls: usize,
+    }
+
+    impl Backend for Big {
+        fn call(&mut self, _: &str, _: Value) -> Result<Value, String> {
+            self.calls += 1;
+            Ok(json!("x".repeat(1 << 20)))
+        }
+        fn has_ui(&self) -> bool {
+            false
+        }
+        fn describe(&self) -> String {
+            "big".into()
+        }
+    }
+
+    #[test]
+    fn a_batch_stops_once_its_results_pass_the_output_budget() {
+        // 200 commands of 1 MiB results each kept 200 MiB until the reply; it stops at 64 MiB.
+        let commands: Vec<Value> = (0..200).map(|_| json!({"command": "edit.copy"})).collect();
+        let mut b = Big { calls: 0 };
+        let r = call_tool(&mut b, "batch", &json!({"commands": commands, "keepGoing": true}));
+        assert!(r.is_error);
+        assert!(b.calls <= (MAX_BATCH_OUTPUT >> 20) + 1, "{} commands ran", b.calls);
+        let text = r.content[0]["text"].as_str().unwrap_or_default();
+        assert!(text.len() <= MAX_BATCH_OUTPUT + 1024, "{}", text.len());
+        assert!(text.contains("left out"));
+        // A small batch is untouched.
+        let r = call_tool(&mut b, "batch", &json!({"commands": [{"command": "edit.copy"}]}));
+        assert!(!r.is_error);
     }
 
     /// The password has to be in the schema, or a client has no way to know it can be sent.

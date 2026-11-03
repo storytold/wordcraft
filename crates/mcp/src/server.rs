@@ -136,7 +136,23 @@ impl Server {
                 if batch.is_empty() {
                     Some(error(Value::Null, INVALID_REQUEST, "empty batch"))
                 } else {
-                    let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
+                    // Held to the same output budget as the `batch` tool: the rest of the batch is
+                    // refused once the replies pass it.
+                    let mut replies: Vec<Value> = Vec::new();
+                    let mut size = 0usize;
+                    for m in batch {
+                        if size > crate::tools::MAX_BATCH_OUTPUT {
+                            // Notifications get no reply, run or not.
+                            if let Some(id) = m.get("id").cloned() {
+                                replies.push(error(id, INTERNAL_ERROR, "the batch's replies passed the output limit; not run"));
+                            }
+                            continue;
+                        }
+                        if let Some(r) = self.handle(m) {
+                            size = size.saturating_add(crate::tools::json_len(&r));
+                            replies.push(r);
+                        }
+                    }
                     (!replies.is_empty()).then_some(Value::Array(replies))
                 }
             }
