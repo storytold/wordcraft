@@ -109,7 +109,8 @@ fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
     let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '<'..='>')).collect();
     let mut quoted = rest.split('"').skip(1).step_by(2);
     let cmp = quoted.next().unwrap_or("");
-    let v = value(s, row, &field);
+    let tested = t.split_once('{').and_then(|(_, r)| r.split('}').next()).unwrap_or("");
+    let v = wordcraft_layout::fields::apply_case_switch(tested, value(s, row, &field));
     // Numbers compare as numbers (Word: "7" = "7.0"), everything else as text.
     let ord = match (v.trim().parse::<f64>(), cmp.trim().parse::<f64>()) {
         (Ok(a), Ok(b)) => a.partial_cmp(&b),

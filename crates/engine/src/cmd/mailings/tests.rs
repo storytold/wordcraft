@@ -92,6 +92,18 @@ fn merge_fields_apply_their_capitalization_switch() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "NEW YORK ada lovelace");
 }
 
+/// An IF, NEXTIF or SKIPIF compares the tested merge field after its capitalization switch.
+#[test]
+fn rule_conditions_apply_the_tested_fields_capitalization_switch() {
+    let mut s = Session::new(Document::new());
+    s.run("mailings.recipients", &json!({"rows": [{"City": "new york"}, {"City": "paris"}]})).unwrap();
+    s.run("insert.field", &json!({"instr": r#"IF { MERGEFIELD City \* Upper } = "NEW YORK" "match" "other""#, "result": ""})).unwrap();
+    s.run("mailings.preview", &json!({"value": true})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "match");
+    s.run("mailings.next", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "other");
+}
+
 /// An IF is a merge rule only when the field it tests is a MERGEFIELD: the word in a quoted
 /// value doesn't make `IF { PAGE } = "mergefield" …` one.
 #[test]
