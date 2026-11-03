@@ -47,6 +47,7 @@ pub fn check_box(frame: Rect, checked: bool, color: Rgb, alpha: f32, out: &mut V
         |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| Draw::Line { x0, y0, x1, y1, width, color, stroke: Stroke::Solid, alpha, text_bg: None };
     let (l, t, r, b) = (sq.x, sq.y, sq.x + sq.w, sq.y + sq.h);
     out.push(Draw::Shape {
+        pattern: None,
         rect: sq,
         kind: ShapeKind::Rectangle,
         fill: None,

@@ -54,7 +54,7 @@ pub enum Placed {
         object: Option<wordcraft_doc::Pos>,
         /// The description it is tagged with as a figure in tagged PDF (see
         /// [`shape_figure_alt`]); empty for a shape that is an artifact.
-        alt: String,
+        alt: Box<str>,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).

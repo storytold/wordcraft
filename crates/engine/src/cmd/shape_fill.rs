@@ -45,7 +45,10 @@ fn shape_fill(s: &mut Session, v: &Value) -> CmdResult {
     for pos in &targets {
         let o = edit_obj(s, pos, |o| {
             let slot = match o {
-                InlineObject::Shape { fill, .. } => fill,
+                InlineObject::Shape { fill, extra, .. } => {
+                    extra.pattern = None;
+                    fill
+                }
                 o => match super::canvas::style_mut(o) {
                     Some(style) => &mut style.fill,
                     None => return,

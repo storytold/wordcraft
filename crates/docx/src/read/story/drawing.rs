@@ -301,7 +301,7 @@ impl Reader<'_> {
         };
         let ln = c.child("wpc:whole").and_then(|e| e.child("a:ln"));
         let style = wordcraft_doc::para::CanvasStyle {
-            fill: own_fill(c.child("wpc:bg"), &self.doc.settings.theme_colors, None).flatten(),
+            fill: own_fill(c.child("wpc:bg"), &self.doc.settings.theme_colors, None).flatten().map(|paint| paint.fill),
             stroke: solid(ln),
             stroke_width: ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0),
         };
@@ -489,6 +489,7 @@ impl Reader<'_> {
             dash: crate::read::shape_style::line_dash(ln),
             cap: wordcraft_doc::connector::LineCap::from_ooxml(ln.and_then(|e| e.attr("cap")).unwrap_or("flat")),
             outline_fill: paint.outline_fill,
+            pattern: paint.pattern.map(Box::new),
             ..ShapeExtra::default()
         };
         // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as

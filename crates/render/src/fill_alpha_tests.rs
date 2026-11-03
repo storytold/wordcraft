@@ -22,6 +22,7 @@ fn close(pixel: [u8; 4], alpha: f32) {
 
 fn soft_shape(kind: ShapeKind, alpha: f32, radius: f32, effects: ShapeEffects) -> Draw {
     Draw::Shape {
+        pattern: None,
         rect: Rect::new(4.0, 4.0, 24.0, 24.0),
         kind,
         fill: Some(wordcraft_layout::display::Paint::Solid(RED, alpha)),
@@ -119,5 +120,24 @@ fn caret_samples_soft_edge_bands() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn soft_edge_precedes_pattern() {
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+    let mut shape = soft_shape(ShapeKind::Rectangle, 0.5, 6.0, ShapeEffects::default());
+    if let Draw::Shape { pattern, .. } = &mut shape {
+        *pattern = Some(PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: GREEN, alpha: 100_000 },
+            background: PatternColor { color: GREEN, alpha: 100_000 },
+        });
+    }
+    let rendered = image(shape.clone());
+    let mut bg = [0.0, 0.0, 255.0];
+    blend_backgrounds(&[shape], wordcraft_geom::Point::new(16.125, 16.125), &RenderOptions::default(), &mut bg, 0);
+    for (sample, channel) in bg.into_iter().zip(rendered.pixel(64, 64)) {
+        assert!((sample - channel as f32).abs() <= PIXEL_TOLERANCE as f32, "{bg:?}");
     }
 }
