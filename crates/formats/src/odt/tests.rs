@@ -1135,3 +1135,20 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn repeated_spaces_stop_growing_past_the_document_budget() {
+    // 20,000 `text:s` of 1,000 spaces each (20 million from 600 kB) are held to the budget;
+    // each one past it still adds a space.
+    let n = 20_000;
+    let spaces = r#"<text:s text:c="1000"/>"#.repeat(n);
+    let content = format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>a{spaces}b</text:p></office:text></office:body></office:document-content>"#);
+    let doc = import(&package(&content, None)).unwrap();
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    let got = text.chars().filter(|c| *c == ' ').count();
+    let full = body::MAX_EXPANDED_SPACES / 1000;
+    assert_eq!(got, body::MAX_EXPANDED_SPACES + (n - full - 1));
+    // A few spaces are kept as asked.
+    let content = format!(r#"<office:document-content {NS_T}><office:body><office:text><text:p>a<text:s text:c="3"/>b</text:p></office:text></office:body></office:document-content>"#);
+    assert!(import(&package(&content, None)).unwrap().plain_text(wordcraft_doc::StoryRef::Body).contains("a   b"));
+}

@@ -157,7 +157,14 @@ pub(super) struct Body<'a> {
     del: Option<DelState>,
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
+    /// Spaces `text:s` may still add ([`MAX_EXPANDED_SPACES`]).
+    spaces_left: usize,
 }
+
+/// Most spaces the document's `text:s` elements add in all: each may ask for 1,000 in 20
+/// bytes, so without a total a content.xml within its size limit could add 50 times its size.
+/// Past it, a `text:s` adds one space.
+pub(super) const MAX_EXPANDED_SPACES: usize = 16 << 20;
 
 impl<'a> Body<'a> {
     pub(super) fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
@@ -195,6 +202,7 @@ impl<'a> Body<'a> {
             info_field: None,
             del: None,
             active_ins: Vec::new(),
+            spaces_left: MAX_EXPANDED_SPACES,
         }
     }
 
@@ -822,7 +830,12 @@ impl Body<'_> {
                 self.fmt.push(fmt);
             }
             "s" => {
-                let count = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                let asked = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                let count = asked.min(self.spaces_left).max(1);
+                if count < asked && self.spaces_left > 0 {
+                    log::warn!("odt: the document's spaces pass {MAX_EXPANDED_SPACES}; each further text:s adds one");
+                }
+                self.spaces_left = self.spaces_left.saturating_sub(count);
                 self.push_text(&" ".repeat(count));
             }
             "tab" => self.push_text("\t"),
