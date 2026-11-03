@@ -167,6 +167,7 @@ impl WordApp {
             mac_titlebar: _,
             control_rx: _,
             updates_rt: _,
+            packs_rt: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,
@@ -182,7 +183,9 @@ impl WordApp {
             fonts_korean: _,
             fonts_hant: _,
             fonts_system_cjk: _,
+            fonts_system_arabic: _,
             want_system_cjk: _,
+            want_system_arabic: _,
             recent_fonts_for: _,
             // File › Recover lists the copies of every window's documents.
             recover_fonts_for: _,

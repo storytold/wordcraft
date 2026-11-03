@@ -1,6 +1,6 @@
 # Focus (distraction-free / "Zen") mode: integration test report
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (25 tests); a review follow-up widened fix 2 to four more commands that read `value` without the shared pattern, and fixed the tab badges beside Full Screen View's Search badge (25 tests). Issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** issues 1–5 fixed and their tests flipped to the fixed behaviour (27 tests); a review follow-up widened fix 2 to four more commands that read `value` without the shared pattern, and fixed the tab badges beside Full Screen View's Search badge (27 tests). Issue 6 stands as notes. First version the same day: integration testing of View › Immersive › Focus (`view.focus`, #1678) across the engine, the egui front end, the control channel, the CLI and MCP; six issues found (one severe), all pinned by new tests.
 
 Focus is WordCraft's distraction-free mode: the document alone on a black canvas, with a slim bar
 whose `…` drops the ribbon over the page. It shares the "screen state" code with Full Screen View
@@ -18,7 +18,7 @@ New test files (the fixes themselves are in `crates/engine/src`, `crates/ui-egui
 | File | Tests | What it covers |
 |---|---|---|
 | `crates/engine/src/tests/focus_mode.rs` | 8 | The command's contract: `view.state` reporting, toggle vs. `value`, a non-boolean `value` refused (every view switch), no undo/dirty/document change, the three full-screen states, Read Mode, per-document view state, not saved in the file |
-| `crates/ui-egui/src/tests/focus_mode.rs` | 17 | The whole frame loop: chrome/panes/ruler/status bar hidden and restored, both entry buttons, the ribbon button by keytip, Escape ordering (dialog, selection, File page), keytips on the slim bar and the ribbon they drop, OS full-screen exit, closing the last document, Read Mode, typing/formatting/undo, F6, the keyboard handover, the Search palette, collapsed ribbon, accessible names, preferences, Full Screen View's dropped ribbon |
+| `crates/ui-egui/src/tests/focus_mode.rs` | 19 | The whole frame loop: chrome/panes/ruler/status bar hidden and restored, both entry buttons, the ribbon button by keytip, Escape ordering (dialog, selection, File page), keytips on the slim bar and the ribbon they drop, OS full-screen exit, closing the last document, Read Mode, typing/formatting/undo, F6, the keyboard handover, the Search palette, collapsed ribbon, accessible names, preferences, Full Screen View's dropped ribbon |
 
 Run them with:
 
@@ -261,7 +261,7 @@ xtask assets` (57 files attributed), `cargo test -p wordcraft-engine --lib` (107
 > strip shows (a new `ribbon::visible_tabs`, shared with the strip itself), so a tab hidden in
 > Customize Ribbon gets no badge in Focus or Full Screen View and cannot be picked from the slim
 > bar; the report scopes its `cargo xtask ci` claim to the engine and ui-egui gates, which run
-> green while the pre-existing Thai font-fallback failure stays red on this machine. 26 tests.
+> green while the pre-existing Thai font-fallback failure stays red on this machine. 27 tests.
 
 > 2026-10-31 · Review follow-up: fix 2 widened to six command families that read `value` without
 > the shared pattern — `draw.inkToShape` (which converted the lasso's strokes), `layout.hyphenation`,
