@@ -271,6 +271,16 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return true;
     }
     let front = grab_at(app, layout, pages, scale, at);
+    // Ctrl/⌘+click inside a linked text box follows the text box's link (its text is not grabbed
+    // as the object, so the object branch below can't see it).
+    if pressed
+        && front.is_none()
+        && ui.input(|i| i.modifiers.command && !i.modifiers.shift)
+        && let Some(link) = text_box_at(layout, pages, scale, at).and_then(|object| object_link(app, &object))
+    {
+        crate::canvas::follow_link(app, link);
+        return true;
+    }
     // A Behind Text object reached only for dragging lies under the text: text over it keeps its click.
     let hit = front.is_some();
     let grabbed = front.or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
@@ -471,10 +481,20 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
 /// or a link read from the file), not of a frame handle: what hovering shows and Ctrl/⌘+click
 /// follows, as for linked text (#5267).
 pub fn link_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<String> {
-    match grab_at(app, layout, pages, scale, at)? {
-        (object, Grab::Move) => object_link(app, &object),
-        _ => None,
+    match grab_at(app, layout, pages, scale, at) {
+        Some((object, Grab::Move)) => object_link(app, &object),
+        Some(_) => None,
+        // Inside a text box its text is what a click reaches, but a linked text box's link
+        // comes before its text's own, as for a picture or shape.
+        None => text_box_at(layout, pages, scale, at).and_then(|object| object_link(app, &object)),
     }
+}
+
+/// The text box whose text is under `at`, if any.
+fn text_box_at(layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<ObjectHit> {
+    let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+    let StoryRef::Part(id) = layout.story_at(page, x, y)? else { return None };
+    layout.text_box(id, page)
 }
 
 /// The hyperlink on `object`'s character, if it has one.

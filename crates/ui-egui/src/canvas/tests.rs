@@ -4874,3 +4874,51 @@ fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
         assert!(h.state().canvas.obj_drag.is_none(), "floating {floating}: no copy-drag started");
     }
 }
+
+/// #5267: inside a linked text box, hovering shows the box's link and Ctrl/⌘+click follows it,
+/// although a click there reaches the box's text rather than the box.
+#[test]
+fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Text before the box "})).unwrap();
+    a.run("select.text", json!({"text": "before"})).unwrap();
+    a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("insert.textBox", json!({"text": "Boxed words"})).unwrap();
+    let link_box = |a: &mut WordApp, link: serde_json::Value| {
+        let bx = a.session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box");
+        let end = Pos { off: bx.off + wordcraft_doc::para::OBJ.len_utf8(), ..bx.pos() };
+        a.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+        a.run("insert.link", link).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        bx.pos()
+    };
+    let pos = link_box(&mut a, json!({"url": "https://example.com/box"}));
+    let link = a.session.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+    assert_eq!(link, Some(Some("https://example.com/box".to_string())), "the link is on the text box");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let rect = h.state_mut().session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box is laid out").rect;
+    let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+    h.event(egui::Event::PointerMoved(at));
+    steps(&mut h, 3);
+    assert!(h.query_by_label_contains("https://example.com/box").is_some(), "the hover tip names the box's link");
+    // Ctrl/⌘+click inside the box follows it: here a place in the document, which moves the caret.
+    link_box(h.state_mut(), json!({"bookmark": "Spot"}));
+    steps(&mut h, 2);
+    let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+    h.event_modifiers(press, egui::Modifiers::COMMAND);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    steps(&mut h, 3);
+    let s = &h.state().session;
+    let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+    assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
+}
