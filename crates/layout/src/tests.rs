@@ -5899,6 +5899,71 @@ fn a_paragraph_border_beside_a_floating_table_stops_at_the_table() {
     assert_eq!(short.len(), 2, "paragraph rules end at {ends:?}, table starts at {table_left}");
 }
 
+/// The horizontal rules of page 0 as (x0, x1, y).
+fn horizontal_rules(l: &DocLayout) -> Vec<(f32, f32, f32)> {
+    l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Rule { x0, x1, y0, y1, .. } = i { (y0 == y1).then_some((*x0, *x1, *y0)) } else { None })
+        .collect()
+}
+
+/// A one-cell table floated against the margin at `align`, `dist` from the text.
+fn side_table(width: f32, align: wordcraft_doc::para::FloatAlign, dist: [f32; 4]) -> wordcraft_doc::Block {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let mut t = Table::new(1, 1, width);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("S", Default::default()))];
+    t.props.float =
+        Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Margin, h_align: Some(align), dist, overlap: false, ..Default::default() });
+    wordcraft_doc::Block::Table(t)
+}
+
+/// A hanging indent starts the first line left of the others; a float that pushes the first
+/// line in, though not as far as the other lines' indent, still shortens the top border.
+#[test]
+fn a_hanging_paragraph_border_beside_a_left_float_stops_at_it() {
+    use wordcraft_doc::para::FloatAlign;
+    let mut d = Document::from_text(&"Hanging text beside a small table. ".repeat(4));
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.indent_left = Some(72.0);
+    p.props.indent_first = Some(-72.0);
+    p.props.borders = Some(Borders { top: Some(Border::single(1.0)), ..Borders::default() });
+    d.insert_block(StoryRef::Body, &Path::top(0), side_table(20.0, FloatAlign::Start, [0.0, 0.0, 10.0, 0.0])).unwrap();
+    let l = lay(&d);
+    let starts: Vec<f32> = horizontal_rules(&l).iter().map(|r| r.0).filter(|x| *x < 200.0).collect();
+    // The table's own rules start at the margin (72); the paragraph's starts beside the table.
+    assert!(starts.iter().any(|x| *x >= 72.0 + 20.0), "rules start at {starts:?}");
+}
+
+/// A drop cap shortens the lines beside it, not the paragraph's border box.
+#[test]
+fn a_drop_cap_keeps_the_full_top_border() {
+    let mut p =
+        wordcraft_doc::Paragraph::with_text(&"Every line of this paragraph wraps around a large first letter. ".repeat(6), Default::default());
+    p.props.drop_cap = Some(3);
+    p.props.borders = Some(Borders { top: Some(Border::single(1.0)), ..Borders::default() });
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let rules = horizontal_rules(&l);
+    assert!(rules.iter().any(|r| (r.0 - 72.0).abs() < 0.5 && (r.1 - 540.0).abs() < 0.5), "rules {rules:?}");
+}
+
+/// A right border's room never carries the top border past the text's edge under the float.
+#[test]
+fn a_side_bordered_paragraph_border_stays_off_a_float_with_no_distance() {
+    use wordcraft_doc::para::FloatAlign;
+    let mut d = Document::from_text("Ruled paragraph");
+    let b = Some(Border { space: 4.0, ..Border::single(2.0) });
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: b, right: b, ..Borders::default() });
+    d.insert_block(StoryRef::Body, &Path::top(0), side_table(150.0, FloatAlign::End, [0.0; 4])).unwrap();
+    let l = lay(&d);
+    let table_left = 72.0 + 468.0 - 150.0;
+    let ends: Vec<f32> = horizontal_rules(&l).iter().map(|r| r.1).collect();
+    assert!(ends.iter().any(|x| *x <= table_left + 0.01), "rules end at {ends:?}, table starts at {table_left}");
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.

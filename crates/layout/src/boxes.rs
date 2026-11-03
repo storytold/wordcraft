@@ -633,13 +633,20 @@ pub(crate) fn push_para(
     let sides = pl.rp.borders.unwrap_or_default();
     let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
     // A line narrowed by a floating object beside it: Word stops the top or bottom border drawn
-    // along that line at the line's edges, so the rule does not run under the object. Indents
-    // alone never narrow it (a first-line indent keeps the full box).
-    let deepest = pl.rp.indent_left.max(pl.rp.indent_left + pl.rp.indent_first);
-    let (lmax, rmax) = if pl.rp.bidi { (x + pl.rp.indent_right, x + width - deepest) } else { (x + deepest, x + width - pl.rp.indent_right) };
-    let along = |line: &para::Line| {
-        let l = if x + line.left > lmax + 0.01 { lx.max(x + line.left - border_room(sides.left)) } else { lx };
-        let r = if x + line.right < rmax - 0.01 { rx.min(x + line.right + border_room(sides.right)) } else { rx };
+    // along that line at the line's edges, so the rule does not run under the object. Each line
+    // is compared with the edges it has without floats (its indent, or the room beside a drop
+    // cap, as the line breaker sets them), so indents and drop caps keep the full box. On a
+    // narrowed side the rule ends at the text's edge, never past it toward the object.
+    let first_left = pl.rp.indent_left + pl.rp.indent_first;
+    let start_of = |k: usize| match pl.drop_cap {
+        Some((_, dl, dw)) if dw > 0.0 && k < usize::from(dl) => first_left.max(pl.rp.indent_left) + dw,
+        _ if k == 0 => first_left,
+        _ => pl.rp.indent_left,
+    };
+    let along = |k: usize, line: &para::Line| {
+        let (lmin, rmax) = if pl.rp.bidi { (pl.rp.indent_right, width - start_of(k)) } else { (start_of(k), width - pl.rp.indent_right) };
+        let l = if line.left > lmin + 0.01 { lx.max(x + line.left) } else { lx };
+        let r = if line.right < rmax - 0.01 { rx.min(x + line.right) } else { rx };
         if r > l { (l, r) } else { (lx, rx) }
     };
     if let Some(c) = pl.rp.shading {
@@ -652,12 +659,12 @@ pub(crate) fn push_para(
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
-            let (x0, x1) = along(first);
+            let (x0, x1) = along(l0, first);
             items.push(Placed::Rule { x0, y0: ty, x1, y1: ty, border: t });
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
             let by = y + h + t.space + t.width / 2.0;
-            let (x0, x1) = along(last);
+            let (x0, x1) = along(l1.saturating_sub(1), last);
             items.push(Placed::Rule { x0, y0: by, x1, y1: by, border: t });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
