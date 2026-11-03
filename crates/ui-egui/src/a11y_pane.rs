@@ -28,9 +28,11 @@ pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
                 |ui| {
                     for (k, i) in group.into_iter().enumerate() {
                         ui.push_id(k, |ui| {
-                            let text = i["issue"].as_str().unwrap_or("");
+                            let text = crate::i18n::accessibility_issue(i["rule"].as_str().unwrap_or(""), i["issue"].as_str().unwrap_or(""));
                             let r = ui.add(egui::Button::new(egui::RichText::new(text).font(regular(12.5))).frame(false).wrap());
                             if let Some(fix) = i["fix"].as_str() {
+                                // This command example remains literal; it is not interface wording.
+                                let fix = if fix == "file.properties {title}" { fix } else { tl!(fix) };
                                 ui.label(egui::RichText::new(fix).small().weak());
                             }
                             if r.clicked() {

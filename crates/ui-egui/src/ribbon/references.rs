@@ -86,7 +86,7 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::ButtonAction::new("references.sources", json!({}), false),
             );
             let current = app.session.bib_style.clone();
-            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &current)]);
+            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", tl!(&current))]);
             menu_button(
                 ui,
                 app,

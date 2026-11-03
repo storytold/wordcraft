@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (checker findings use translated presentation templates while engine reports stay unchanged); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -50,6 +50,15 @@ native-speaker review (human).
   as English. Detail in [Proofing per language](#proofing-per-language).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
   shaping tested (#207); IME on all desktop platforms (winit fixes pending, #155–#164).
+
+## Checker message presentation
+
+The interface translates proofing's repeated-word explanation and accessibility findings while
+keeping the engine report, CLI/MCP output, quoted document words and numeric values unchanged.
+Unknown or changed message forms retain their original text. Regression tests use inline catalogs
+so a missing translation in an optional build input never fails a test. The remaining catalog
+additions from #1588 live in a separate craft-i18n follow-up; they appear in builds only after
+`craft-i18n.rev` reaches that upstream catalog commit. The shared-catalog cutover is preserved.
 
 ## The twelve key languages
 

@@ -68,7 +68,8 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
         // English rules' messages are catalog keys; Polish rules already explain in Polish.
-        ui.label(egui::RichText::new(tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))).small().weak());
+        let message = crate::i18n::proof_message(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""));
+        ui.label(egui::RichText::new(message).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
