@@ -490,11 +490,13 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            // Language packs from the suite's font store; an Install click is the person's own.
+            wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
                 let doc = app.session.blank_document();
-                app.session.set_document(doc);
+                app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
             if prefs_enabled()
