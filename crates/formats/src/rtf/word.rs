@@ -206,15 +206,24 @@ impl Reader {
             "clbrdrb" => self.cell_side = Some('b'),
             "clbrdrr" => self.cell_side = Some('r'),
             "brdrs" | "brdrth" | "brdrsh" | "brdrdb" | "brdrdot" | "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" | "brdrhair"
-            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil"
-            | "brdrtbl"
+            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrtnthtnsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrtnthtnmg" | "brdrthtnlg"
+            | "brdrtnthlg" | "brdrtnthtnlg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil" | "brdrtbl"
                 if self.cell_side.is_some() || self.st.border_side.is_some() =>
             {
                 use wordcraft_doc::props::{Border, BorderStyle};
                 let style = match w {
                     "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
                     "brdrth" => BorderStyle::Thick,
-                    "brdrdb" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
+                    "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
+                    "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,
+                    "brdrtnthmg" => BorderStyle::ThinThickMediumGap,
+                    "brdrthtnmg" => BorderStyle::ThickThinMediumGap,
+                    "brdrtnthtnmg" => BorderStyle::ThinThickThinMediumGap,
+                    "brdrtnthlg" => BorderStyle::ThinThickLargeGap,
+                    "brdrthtnlg" => BorderStyle::ThickThinLargeGap,
+                    "brdrtnthtnlg" => BorderStyle::ThinThickThinLargeGap,
                     "brdrdot" => BorderStyle::Dotted,
                     "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
                     "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
