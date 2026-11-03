@@ -601,13 +601,6 @@ fn recent_documents_are_listed_in_one_table() {
 }
 
 #[test]
-fn recent_location_shortens_common_folders_across_path_styles() {
-    assert_eq!(super::recent_location("/Users/alice/Downloads/report.docx"), "Downloads");
-    assert_eq!(super::recent_location(r"C:\Users\Alice\Documents\report.docx"), "Documents");
-    assert_eq!(super::recent_location("/home/alice/projects/report.docx"), "projects");
-}
-
-#[test]
 fn empty_recent_list_explains_how_to_open_a_document() {
     let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
     app.ui.backstage = true;

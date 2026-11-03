@@ -1,4 +1,5 @@
 use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
+use crate::RecentMetadata;
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
@@ -12,6 +13,11 @@ impl WordApp {
     /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
+        ui.recent_metadata = ui
+            .recent
+            .iter()
+            .map(|entry| (entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() }))
+            .collect();
         ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();

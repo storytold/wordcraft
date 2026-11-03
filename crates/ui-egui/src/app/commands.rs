@@ -3,7 +3,7 @@ use super::{
     file_dialogs, i18n, json, keeps_everything, keytips, now_ms, options, panes, paste_picture, printing, push_recent_font, system_clipboard,
     table_pen, theme, widgets, zotero,
 };
-use crate::RecentDocument;
+use crate::{RecentDocument, RecentMetadata};
 
 impl WordApp {
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -259,20 +259,7 @@ impl WordApp {
             && id == "file.rename"
             && let Some(old) = old_path.filter(|old| self.session.path.as_ref() != Some(old))
         {
-            if self.autosave_path.as_ref() == Some(&old) {
-                self.autosave_path = self.session.path.clone();
-            }
-            let old = old.to_string_lossy();
-            let new = self.session.path.as_ref().map(|path| path.to_string_lossy().to_string());
-            if let Some(new) = new
-                && let Some(entry) = self.ui.recent.iter_mut().find(|entry| entry.path == old)
-            {
-                // Renaming does not constitute a new open: retain the existing record and its
-                // timestamps while changing only the persisted path.
-                entry.path = new;
-            } else {
-                self.ui.recent.retain(|entry| entry.path != old);
-            }
+            self.update_recent_rename(&old);
         }
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
@@ -282,6 +269,29 @@ impl WordApp {
             self.status(e.clone());
         }
         r
+    }
+
+    fn update_recent_rename(&mut self, old_path: &std::path::Path) {
+        if self.autosave_path.as_deref() == Some(old_path) {
+            self.autosave_path = self.session.path.clone();
+        }
+        let old = old_path.to_string_lossy();
+        let Some(new) = self.session.path.as_ref().map(|path| path.to_string_lossy().to_string()) else {
+            self.ui.recent.retain(|entry| entry.path != old);
+            self.ui.recent_metadata.remove(old.as_ref());
+            return;
+        };
+        let metadata = self.ui.recent_metadata.remove(old.as_ref());
+        if let Some(entry) = self.ui.recent.iter_mut().find(|entry| entry.path == old) {
+            // Renaming does not constitute a new open: retain the existing record and its
+            // timestamps while changing only the persisted path.
+            entry.path = new;
+            if let Some(metadata) = metadata {
+                self.ui.recent_metadata.insert(entry.path.clone(), metadata);
+            }
+        } else {
+            self.ui.recent.retain(|entry| entry.path != old);
+        }
     }
 
     /// Web: store a font added from bytes, or forget the removed ones ([`Services::store_font`]).
@@ -433,7 +443,13 @@ impl WordApp {
                     modified,
                 },
             );
+            if let Some(entry) = self.ui.recent.first() {
+                self.ui
+                    .recent_metadata
+                    .insert(entry.path.clone(), RecentMetadata { last_opened: entry.last_opened.clone(), modified: entry.modified.clone() });
+            }
             self.ui.recent.truncate(MAX_RECENT);
+            self.ui.recent_metadata.retain(|path, _| self.ui.recent.iter().any(|entry| &entry.path == path));
         }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
@@ -605,6 +621,7 @@ impl WordApp {
             }
             "ui.recentClear" => {
                 self.ui.recent.clear();
+                self.ui.recent_metadata.clear();
                 json!({"cleared": true})
             }
             "ui.recentRemove" => {
@@ -613,6 +630,7 @@ impl WordApp {
                 };
                 let before = self.ui.recent.len();
                 self.ui.recent.retain(|entry| entry.path != path);
+                self.ui.recent_metadata.remove(path);
                 json!({"removed": before != self.ui.recent.len()})
             }
             "ui.recentShowInFolder" => {

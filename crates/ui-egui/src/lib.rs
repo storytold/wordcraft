@@ -81,7 +81,7 @@ mod windows;
 pub mod wordart_menus;
 pub mod zotero;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
@@ -137,10 +137,26 @@ struct AwaitingSave {
 
 /// A document in File's Recent list. `last_opened` and `modified` are ISO-8601 UTC timestamps;
 /// empty values are legacy or unavailable metadata and are never looked up while the list draws.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecentDocument {
     pub path: String,
+    pub last_opened: String,
+    pub modified: String,
+}
+
+/// Keep `recent` compatible with older WordCraft builds, which expect an array of paths.
+impl Serialize for RecentDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.path)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentMetadata {
     pub last_opened: String,
     pub modified: String,
 }
@@ -164,6 +180,8 @@ pub struct UiState {
     pub quick_access_toolbar: bool,
     #[serde(deserialize_with = "lenient_recent_documents")]
     pub recent: Vec<RecentDocument>,
+    /// Timestamps for `recent`, stored separately so older builds keep reading the path list.
+    pub recent_metadata: std::collections::BTreeMap<String, RecentMetadata>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
@@ -319,6 +337,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
+            recent_metadata: Default::default(),
             recent_symbols: Vec::new(),
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
@@ -380,7 +399,14 @@ impl UiState {
             return None;
         }
         migrate_units(&mut v);
-        Some(options::lenient(&v))
+        let mut ui: UiState = options::lenient(&v);
+        for entry in &mut ui.recent {
+            if let Some(metadata) = ui.recent_metadata.get(&entry.path) {
+                entry.last_opened = metadata.last_opened.clone();
+                entry.modified = metadata.modified.clone();
+            }
+        }
+        Some(ui)
     }
 
     /// How many recent documents to list.

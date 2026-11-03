@@ -413,6 +413,18 @@ fn old_path_only_recent_entries_are_migrated() {
     assert_eq!(ui.recent.len(), 2);
 }
 
+#[test]
+fn recent_metadata_is_saved_separately_from_legacy_paths() {
+    let ui = UiState::from_json(
+        br#"{"recent":["/tmp/legacy.docx"],"recentMetadata":{"/tmp/legacy.docx":{"lastOpened":"2026-10-30T12:00:00Z","modified":"2026-10-29T09:00:00Z"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(ui.recent[0].last_opened, "2026-10-30T12:00:00Z");
+    let saved = serde_json::to_value(&ui).unwrap();
+    assert_eq!(saved["recent"], serde_json::json!(["/tmp/legacy.docx"]));
+    assert_eq!(saved["recentMetadata"]["/tmp/legacy.docx"]["modified"], "2026-10-29T09:00:00Z");
+}
+
 /// #3248: the Find box and the Navigation pane's Results list draw the typed query and
 /// document excerpts with the interface faces, which have no Georgian (or Armenian, Thai,
 /// …), so a Georgian search was all boxes. Running a search that finds Georgian text borrows

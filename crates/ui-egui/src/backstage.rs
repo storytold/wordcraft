@@ -577,21 +577,6 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Keep common user folders readable in Recent while retaining the full path for actions and
-/// accessibility. Split both separators because persisted paths can come from another platform.
-fn recent_location(path: &str) -> String {
-    const KNOWN_FOLDERS: &[&str] =
-        &["documents", "document", "downloads", "download", "desktop", "pictures", "picture", "photos", "music", "movies", "videos", "public"];
-    let components = path.split(['/', '\\']).filter(|component| !component.is_empty()).collect::<Vec<_>>();
-    components
-        .iter()
-        .rev()
-        .find(|component| KNOWN_FOLDERS.iter().any(|folder| component.eq_ignore_ascii_case(folder)))
-        .map(|component| (*component).to_string())
-        .or_else(|| components.get(components.len().saturating_sub(2)).map(|component| (*component).to_string()))
-        .unwrap_or_else(|| path.to_string())
-}
-
 /// The Recent table's responsive column widths: a narrow icon column, a flexible name column,
 /// and two fixed date columns. The same geometry is used by the header and every row.
 fn recent_columns(width: f32) -> (f32, f32, f32, f32) {
@@ -658,12 +643,17 @@ fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str
     let name_rect = Rect::from_min_size(pos2(name_x, r.min.y), vec2(name_width, r.height()));
     let name_painter = ui.painter().with_clip_rect(name_rect);
     let name_shown = fit_text(&name_painter, name, &medium(13.0), 0.0, t.text, name_width);
-    let location = recent_location(&path);
-    let location_shown = fit_text(&name_painter, &location, &regular(11.0), 0.0, t.text_dim, name_width);
+    let location_shown = fit_text(&name_painter, &path, &regular(11.0), 0.0, t.text_dim, name_width);
     name_painter.text(pos2(name_x, name_y), Align2::LEFT_CENTER, name_shown, medium(13.0), t.text);
     name_painter.text(pos2(name_x, path_y), Align2::LEFT_CENTER, location_shown, regular(11.0), t.text_dim);
-    ui.painter().text(pos2(opened_x, r.center().y), Align2::LEFT_CENTER, opened, regular(11.0), t.text_dim);
-    ui.painter().text(pos2(edited_x, r.center().y), Align2::LEFT_CENTER, edited, regular(11.0), t.text_dim);
+    let opened_rect = Rect::from_min_size(pos2(opened_x, r.min.y), vec2(date, r.height()));
+    let edited_rect = Rect::from_min_size(pos2(edited_x, r.min.y), vec2(date, r.height()));
+    let opened_painter = ui.painter().with_clip_rect(opened_rect);
+    let edited_painter = ui.painter().with_clip_rect(edited_rect);
+    let opened_shown = fit_text(&opened_painter, &opened, &regular(11.0), 0.0, t.text_dim, date);
+    let edited_shown = fit_text(&edited_painter, &edited, &regular(11.0), 0.0, t.text_dim, date);
+    opened_painter.text(opened_rect.left_center(), Align2::LEFT_CENTER, opened_shown, regular(11.0), t.text_dim);
+    edited_painter.text(edited_rect.left_center(), Align2::LEFT_CENTER, edited_shown, regular(11.0), t.text_dim);
     if resp.clicked() {
         let failed = open_recent(app, &path).err();
         ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
