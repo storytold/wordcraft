@@ -952,7 +952,7 @@ fn tracking_mode_switch_keeps_successful_and_no_change_paths() {
     }
 }
 
-/// Editing dialogs, including Templates and Macros, are refused through both entrypoints without replacing an open query dialog.
+/// Editing dialogs, including Templates, Macros, Compare and Combine, are refused without replacing an open query dialog.
 /// Leaving Viewing restores these dialogs through both command paths.
 #[test]
 fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
@@ -974,6 +974,8 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
         "recipientList",
         "templates",
         "macros",
+        "compare",
+        "combine",
     ] {
         for execute_directly in [false, true] {
             let params = json!({"name": name});
@@ -986,7 +988,7 @@ fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
         }
     }
     app.run("view.viewing", json!({"value": false})).unwrap();
-    for name in ["insertTable", "templates", "macros"] {
+    for name in ["insertTable", "templates", "macros", "compare", "combine"] {
         for execute_directly in [false, true] {
             let params = json!({"name": name});
             if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();

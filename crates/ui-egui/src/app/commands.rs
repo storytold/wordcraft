@@ -38,6 +38,8 @@ fn editing_dialog(name: &str) -> bool {
             | "renameDocument"
             | "recipientList"
             | "newRecipientList"
+            | "compare"
+            | "combine"
             | "insertMergeField"
             | "fieldCode"
             | "editFieldCode"
