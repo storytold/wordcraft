@@ -83,11 +83,20 @@ impl StyleRun {
     /// or subscript's line at the full font size and leaves out its raise or drop; only a
     /// `w:position` raise or lowering counts (Word for Mac: an 11pt subscript beside 11pt text
     /// keeps the 12.675pt line, and a line of 24pt subscript is as tall as plain 24pt text).
+    /// The shift moves both edges: a wholly lowered line is no taller than plain text, and only
+    /// unshifted text beside it keeps the room the shift leaves (docxide-pdf `shifted-text-position`).
+    /// shortcut: on a `w:textAlignment="top"` line Word grows by the drop less the font's external
+    /// leading (docxide-pdf `czech_municipal_grant_form`); add that once text alignment is read (#4864).
     pub fn line_extent(&self) -> (f32, f32) {
         let draw = self.rc.draw_size();
         let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
+        self.shifted(self.ascent * k, self.descent * k)
+    }
+
+    /// `asc` and `desc` moved by the run's `w:position` raise (negative: lowering).
+    pub fn shifted(&self, asc: f32, desc: f32) -> (f32, f32) {
         let raise = self.rc.position;
-        (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0))
+        ((asc + raise).max(0.0), (desc - raise).max(0.0))
     }
 }
 

@@ -440,8 +440,8 @@ impl<'e> Breaker<'e> {
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
         {
-            ex.asc = st.ascent;
-            ex.desc = st.descent;
+            // A raised or lowered mark moves its line's box like raised text.
+            (ex.asc, ex.desc) = st.shifted(st.ascent, st.descent);
         }
         ex
     }
@@ -556,7 +556,7 @@ impl<'e> Breaker<'e> {
     fn empty_last_line(&mut self, pl: &ParaLayout) {
         let rp = &self.rp;
         let grid = self.grid.as_ref();
-        let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
+        let (asc, desc) = pl.styles.get(self.mark_style as usize).map(|s| s.shifted(s.ascent, s.descent)).unwrap_or((10.0, 3.0));
         let natural = asc + desc;
         let h = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
