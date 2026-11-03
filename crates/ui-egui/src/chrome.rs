@@ -649,6 +649,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if app.session.doc.settings.track_changes {
                         st(ui, tl!("Track Changes: On"));
                     }
+                    // The document carries a VBA project; macros never run.
+                    if wordcraft_engine::io::has_macros(&app.session.doc) {
+                        st(ui, tl!("Macros")).on_hover_text(tl!("This document carries a VBA project; macros never run in WordCraft"));
+                    }
                     if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                         let _ = app.run("text.overtype", json!({"value": false}));
                     }
