@@ -758,6 +758,11 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // The engine logs this, but the command line installs no logger, and it is where a
+    // reproducible build runs.
+    if let Some(problem) = wordcraft_engine::cmd::source_date_epoch_problem() {
+        eprintln!("wordcraft-cli: warning: {problem}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {

@@ -555,14 +555,43 @@ pub fn now_iso() -> String {
 ///
 /// The clock stays in [`now_iso`]: an editing event's time is not the file's, and pinning it would
 /// misdate comments and tracked changes.
+///
+/// A value that is set but not one of those is ignored with a warning, so a build that meant to
+/// pin its dates hears that it did not.
 pub fn saved_iso() -> String {
-    iso_from_unix_secs(pinned_or(|name| std::env::var(name).ok(), now_unix))
+    let raw = std::env::var("SOURCE_DATE_EPOCH").ok();
+    if let Some(problem) = epoch_problem(raw.as_deref()) {
+        log::warn!("{problem}");
+    }
+    iso_from_unix_secs(pinned_or(|_| raw.clone(), now_unix))
+}
+
+/// Why `SOURCE_DATE_EPOCH` is set and still not used, for a caller with no logger to say so (the
+/// command line). `None` when it is unset, empty, or a value [`saved_iso`] takes.
+pub fn source_date_epoch_problem() -> Option<String> {
+    epoch_problem(std::env::var("SOURCE_DATE_EPOCH").ok().as_deref())
+}
+
+/// An empty value counts as unset, as a CI file's `SOURCE_DATE_EPOCH=` with nothing after it
+/// means; anything else that does not pin a date is worth a warning.
+fn epoch_problem(value: Option<&str>) -> Option<String> {
+    let v = value?;
+    if v.trim().is_empty() || pinned(v).is_some() {
+        return None;
+    }
+    Some(format!(
+        "SOURCE_DATE_EPOCH={v:?} is not a whole number of seconds from 1970 to 9999-12-31, so saved and exported files take the clock's date"
+    ))
+}
+
+/// The seconds a `SOURCE_DATE_EPOCH` value pins, if it pins any.
+fn pinned(v: &str) -> Option<u64> {
+    v.trim().parse::<u64>().ok().filter(|secs| *secs <= LAST_DATE)
 }
 
 /// [`saved_iso`]'s choice, with the environment and the clock given so a test can show which wins.
 pub(crate) fn pinned_or(get: impl Fn(&str) -> Option<String>, clock: impl Fn() -> u64) -> u64 {
-    let pinned = get("SOURCE_DATE_EPOCH").and_then(|v| v.trim().parse::<u64>().ok()).filter(|secs| *secs <= LAST_DATE);
-    pinned.unwrap_or_else(clock)
+    get("SOURCE_DATE_EPOCH").as_deref().and_then(pinned).unwrap_or_else(clock)
 }
 
 /// The last date a document can record, as Unix seconds: 9999-12-31T23:59:59Z. A year runs to
@@ -657,7 +686,7 @@ mod iso_tests {
 
 #[cfg(test)]
 mod saved_time_tests {
-    use super::{iso_from_unix_secs, pinned_or};
+    use super::{epoch_problem, iso_from_unix_secs, pinned_or};
 
     /// What a saved or exported file records: `SOURCE_DATE_EPOCH` when it holds a non-negative
     /// whole number of seconds, the clock whenever it does not. The environment and the clock are
@@ -691,5 +720,19 @@ mod saved_time_tests {
         assert_eq!(pinned_or(|name: &str| (name == "TZ").then(|| "1791208980".to_owned()), clock), 1_000_000);
         // And it reaches the stamp as that instant, not as something near it.
         assert_eq!(iso_from_unix_secs(pinned_or(env(Some("1791208980")), clock)), "2026-10-05T14:03:00Z");
+    }
+
+    /// A value that is set and still ignored is reported, so a build that meant to pin its dates
+    /// hears that it did not (noted in review). Unset and empty say nothing: an empty value is
+    /// how a CI file leaves the variable off.
+    #[test]
+    fn a_set_but_unusable_epoch_is_reported_and_nothing_else_is() {
+        for quiet in [None, Some(""), Some("   "), Some("0"), Some("1791208980"), Some(" 1791208980 "), Some("253402300799")] {
+            assert_eq!(epoch_problem(quiet), None, "{quiet:?}");
+        }
+        for loud in ["later", "-1", "1791208980.5", "1e9", "253402300800", "99999999999999999999"] {
+            let problem = epoch_problem(Some(loud)).unwrap_or_else(|| panic!("{loud:?} should be reported"));
+            assert!(problem.contains(&format!("{loud:?}")) && problem.contains("clock"), "{problem}");
+        }
     }
 }
