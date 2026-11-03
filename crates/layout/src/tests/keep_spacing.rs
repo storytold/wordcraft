@@ -209,3 +209,39 @@ fn kept_lookahead_with_a_footnote_keeps_the_whole_line_height() {
         }
     }
 }
+
+/// A footnote in the kept paragraph itself puts the note area under the next paragraph's line,
+/// so that line needs its whole height too: no leading allowance for the bottom margin.
+#[test]
+fn kept_paragraph_with_its_own_footnote_keeps_the_next_line_height() {
+    use wordcraft_doc::para::NoteKind;
+    use wordcraft_doc::{Paragraph, PartKind, para_block};
+    let mut doc = heading_at_edge(120.0);
+    let body = doc.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+    body.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+    body.props.widow_control = Some(false);
+    let mut note = Paragraph::with_text("SYNTHETIC NOTE", Default::default());
+    note.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(14.0)), space_after: Some(0.0), ..Default::default() };
+    let id = doc.add_part(PartKind::Footnote, vec![para_block(note)]);
+    doc.insert_object(&Pos::body(1, 0), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default()).unwrap();
+    let probe = lay(&doc);
+    let first_height = probe
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .find_map(|item| match item {
+            Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [2] => para.lines.first().map(|line| line.height),
+            _ => None,
+        })
+        .unwrap();
+    // Short of the heading, its gap and the whole first body line (even before the note area).
+    let room = 16.0 + 6.0 + first_height - 0.5;
+    doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(doc.last_section.text_height() - room));
+    let layout = lay(&doc);
+    let page = |block| layout.caret(&Pos::body(block, 0)).unwrap().page;
+    assert_eq!((page(1), page(2)), (1, 1), "the heading goes over with the body line instead of being left alone with its note");
+    assert!(
+        layout.pages[1].items.iter().any(|item| matches!(item, Placed::Lines { story: StoryRef::Part(part), .. } if *part == id)),
+        "the note goes with its reference"
+    );
+}

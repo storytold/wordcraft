@@ -323,8 +323,11 @@ impl<'a> Flow<'a> {
         let height = self.pl.height + rooms.top + if break_mark { 0.0 } else { rooms.bottom };
         // The last line on the page may leave its leading in the bottom margin, as `fit_height`
         // lets it when that line is placed: this paragraph's own, or that of the last line kept
-        // with it.
-        let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01 && pb.notes.is_empty();
+        // with it. Not when this paragraph brings a footnote: placed, it puts the note area
+        // under the lines that follow, which then need their whole height.
+        let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01
+            && pb.notes.is_empty()
+            && (pb.web || !has_lookahead_footnote(ctx.doc, self.p, &self.pl, self.pl.lines.len().saturating_sub(1)));
         let own_leading = match (rp.line_spacing, self.pl.lines.last()) {
             (wordcraft_doc::props::LineSpacing::Multiple(m), Some(l)) if m > 1.0 && at_margin && rooms.bottom == 0.0 => leading_below(l),
             _ => 0.0,
