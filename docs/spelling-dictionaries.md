@@ -205,7 +205,7 @@ Ignore All opts out. Broad `nici un` and comma-before-`ci`/`dar` guesses are dis
 This is not full Romanian grammar or semantic/legal checking.
 
 The shared base is storytold/craft-libs#550; the contextual extension is
-vioreltus/craft-libs#1. This PR temporarily pins the exact tested fork revision
+storytold/craft-libs#554. The exclusion-only helper is vioreltus/craft-libs#1. This PR temporarily pins the exact tested fork revision
 and must switch to the accepted upstream shared revision before merging.
 The original work is @Moogabe's #2565, with @VladMcj's helper adaptation in
 ro-legal-docx/wordcraft#1 and @vioreltus's shared port.
