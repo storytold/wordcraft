@@ -2488,3 +2488,14 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
+
+#[test]
+fn the_author_is_left_out_when_personal_information_is_removed() {
+    let mut d = Document::from_text("Private");
+    d.core.creator = "Ada Writer".into();
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).to_string();
+    assert!(raw(&d).contains("Ada Writer"));
+    d.settings.remove_personal_info = true;
+    assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
+}
