@@ -1019,6 +1019,32 @@ fn two_sections_box_the_first() {
 }
 
 #[test]
+fn sections_ending_off_a_paragraph_mark_attach_nowhere() {
+    // Hostile section ends that miss every paragraph mark are skipped; the one that ends a
+    // paragraph still boxes it. Paragraphs are found by their end, not scanned per section.
+    let mut sections: Vec<(u32, Vec<u8>)> = (1..6).map(|cp| (cp, Vec::new())).collect();
+    sections.push((6, grpprl(&[(0x300A, &[0x01])])));
+    sections.push((12, Vec::new()));
+    let spec = StructSpec {
+        text: "first\rsecond\r",
+        header_stories: vec![],
+        sections,
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert!(paras.first().and_then(|p| p.section.as_ref()).expect("first paragraph boxed").title_page);
+    assert_eq!(paras.iter().filter(|p| p.section.is_some()).count(), 1, "the missing ends attach nowhere");
+}
+
+#[test]
 fn header_story_becomes_part() {
     let spec = StructSpec {
         text: "body\r",
@@ -2373,6 +2399,23 @@ fn second_table_gets_its_own_grid() {
     assert_eq!(tables[1].props.borders, None, "borders reset");
     assert_eq!(tables[1].props.align, None, "alignment reset");
     assert_eq!(tables[1].props.indent, None, "indent reset");
+}
+
+#[test]
+fn repeated_cell_sprms_keep_one_override_per_cell() {
+    // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
+    // slot per cell, the last value winning, instead of a copy per repetition.
+    let mut sprms = Vec::new();
+    for w in 0..200u16 {
+        let [w0, w1] = (w * 20).to_le_bytes();
+        sprms.push(sprm_cb(0xD635, &[0, 63, 3, w0, w1]));
+        sprms.push(sprm_cb(0xD62C, &[0, 255, 1]));
+        sprms.push([0x24, 0x56, 0, 2].to_vec());
+    }
+    let row = crate::table::decode(&sprms.concat());
+    assert_eq!(row.width_of(0), Some(199.0), "the last width wins");
+    assert_eq!(row.width_of(62), Some(199.0));
+    assert!(row.overrides() <= 63 + 255 + 63, "{}", row.overrides());
 }
 
 #[test]
