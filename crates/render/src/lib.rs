@@ -845,7 +845,7 @@ const MAX_PATH_PIXELS: f64 = 1_048_576.0;
 /// Whether `path` under `view` is small enough to draw ([`MAX_PATH_PIXELS`]) and finite.
 fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
     let b = view.transform_rect_bbox(path.bounding_box());
-    [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+    path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
 }
 
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
