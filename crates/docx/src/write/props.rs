@@ -502,6 +502,12 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if t.bidi_visual {
         w.empty("w:bidiVisual", &[]);
     }
+    if let Some(n) = t.band_size {
+        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+    }
+    if let Some(n) = t.col_band_size {
+        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+    }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
     } else if let Some(v) = t.width {
@@ -526,12 +532,6 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
-    }
-    if let Some(n) = t.band_size {
-        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
-    }
-    if let Some(n) = t.col_band_size {
-        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
     }
     let look = look_attrs(&t.look);
     let refs: Vec<(&str, &str)> = look.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -587,12 +587,6 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
-    }
-    if let Some(n) = t.band_size {
-        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
-    }
-    if let Some(n) = t.col_band_size {
-        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
     }
     w.close("w:tblPrEx");
 }
