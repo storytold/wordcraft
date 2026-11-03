@@ -36,7 +36,11 @@ built in; every other language is a pack.
   **Install**.
 - When a document has text in a language whose pack isn't installed, a bar under the ribbon says
   *Dutch proofing isn't installed.* with an **Install** button showing the download size. ✕ hides
-  it for that document. It never shows for a language that has no pack.
+  it for that document. It never shows for a language that has no pack. Before the list of
+  packs has been fetched (a fresh install, or the list of an older WordCraft), it shows for a
+  language that has no dictionary, with **Install** alone: clicking it gets the list, then the
+  pack if there is one (if not, the bar goes). With downloading on, WordCraft fetches a missing
+  or out-of-date list by itself once. Choosing a language with nothing selected counts too.
 - Installing needs **downloading** on: the same single setting as WordCraft's font downloads
   (the font store). Clicking Add a language…, Install or Refresh turns it on; nothing is
   downloaded before. Each pack is checked against the sha256 in WordCraft's pinned list before it
@@ -188,6 +192,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the dictionaries folder is in Options › Language, not Proofing |
+| 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
