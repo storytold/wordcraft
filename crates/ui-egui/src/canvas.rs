@@ -1546,6 +1546,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         ui.ctx(),
                         app.fonts_hans,
                         app.fonts_korean,
+                        app.fonts_hant,
                         app.fonts_system_cjk,
                         &app.canvas.ime_faces,
                     );
