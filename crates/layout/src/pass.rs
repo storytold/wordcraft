@@ -175,6 +175,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         orig_bottom: 0.0,
         prev: None,
         after_break_mark: false,
+        prev_at_top: false,
         next_starts_page: false,
         restart_at: None,
         excl: Vec::new(),
@@ -294,6 +295,9 @@ fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
     pb.close_column_lines();
     pb.cols = sect.column_boxes();
     pb.col = 0;
+    // Its lines' bottom, without its space after: a space after reaching a taller column's bottom
+    // doesn't put it there.
+    pb.prev_at_top = pb.y - pb.prev.as_ref().map_or(0.0, |p| p.2.max(0.0)) + 0.01 >= pb.max_y;
     pb.top = pb.text_bottom();
     pb.y = pb.top;
     pb.max_y = pb.top;

@@ -38,6 +38,16 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         place_para_in_flow(ctx, pb, p, block, body_top);
         pb.bottom = bottom;
         if (pb.pages.len(), pb.col) == at {
+            // It is still the paragraph above for the next one's spacing: a mark of another style
+            // keeps a same-style paragraph's space before after it (Word). The space after left
+            // above it drops only as it would before the mark itself.
+            // (Only a section's closing mark: a hidden empty paragraph is no paragraph at all.)
+            let (style, labelled) = (ctx.doc.styles.resolve_para(&p.props).style, ctx.has_label(p));
+            let prev = if p.section.is_some() {
+                prev.map(|(above, ctxl, after, after_auto, listed)| (style.clone(), ctxl && above == style, after, after_auto, listed && labelled))
+            } else {
+                prev
+            };
             (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
             if let Some(page) = pb.page() {
                 strip_mark(page, drawn, true);
@@ -242,9 +252,13 @@ impl<'a> Flow<'a> {
         // ended with a page break, nor (from Word 2013's layout, compatibility mode 15) for a page
         // break before; a section break or, in older modes, a page break before keeps it.
         let after_break_mark = std::mem::take(&mut pb.after_break_mark);
+        // The top of a continuous section mid-page right under the paragraph above: the gap between
+        // them is settled as anywhere else (Word: same-style contextual spacing drops it).
+        let under_prev = pb.at_top() && !pb.fresh() && pb.col == 0 && pb.prev_at_top;
         if pb.at_top() && (after_break_mark || (broke_before && ctx.doc.settings.compat_mode >= 15)) {
             before = 0.0;
         } else if pb.at_top()
+            && !under_prev
             && !ctx.doc.settings.sum_paragraph_spacing
             && let Some((_, _, after, _, _)) = &prev_para
         {
@@ -254,9 +268,23 @@ impl<'a> Flow<'a> {
             before = (before - after.max(0.0)).max(0.0);
         }
         if let Some(prev) = pb.prev.take()
-            && !pb.at_top()
+            && (!pb.at_top() || under_prev)
         {
             before = self.merge_gap(ctx, pb, before, prev);
+            // The space after above came off: the section, and its lines between columns, start
+            // that much higher, every column of it.
+            if under_prev && pb.y < pb.top {
+                // Balanced columns end as far below the new top, or at the page bottom if nearer
+                // (a mark being placed with no bottom stays as it is).
+                if let Some((page, h)) = pb.balance
+                    && page + 1 == pb.pages.len()
+                    && pb.bottom <= pb.top + h + 0.01
+                {
+                    pb.bottom = pb.bottom.min(pb.y + h);
+                }
+                (pb.top, pb.max_y) = (pb.y, pb.y);
+                pb.open_column_lines(self.block);
+            }
         }
         // Automatic spacing: none at the top of the document.
         if self.pl.rp.before_auto && self.block == 0 {
