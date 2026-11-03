@@ -157,9 +157,9 @@ fn general_switches(instr: &str) -> Vec<String> {
 fn number_format(word: &str) -> Option<NumFormat> {
     Some(match word {
         "roman" => NumFormat::LowerRoman,
-        "ROMAN" | "Roman" => NumFormat::UpperRoman,
+        w if w.eq_ignore_ascii_case("roman") => NumFormat::UpperRoman,
         "alphabetic" => NumFormat::LowerLetter,
-        "ALPHABETIC" | "Alphabetic" => NumFormat::UpperLetter,
+        w if w.eq_ignore_ascii_case("alphabetic") => NumFormat::UpperLetter,
         w if w.eq_ignore_ascii_case("CardText") => NumFormat::CardinalText,
         w if w.eq_ignore_ascii_case("OrdText") => NumFormat::OrdinalText,
         w if w.eq_ignore_ascii_case("Ordinal") => NumFormat::Ordinal,
@@ -610,8 +610,8 @@ mod tests {
         assert_eq!(text(r"PAGE \* roman \* MERGEFORMAT", 4), "iv", "a switch that is no format doesn't count");
         assert_eq!(text(r"PAGE \* ROMAN \* roman", 5), "v");
         assert_eq!(text(r#"PAGE \* roman "\* CardText""#, 5), "v", "quoted text is not a switch");
-        // Word reads the names without regard to case, except that roman and alphabetic are
-        // lowercase only for lowercase.
+        // Word reads the names without regard to case, except that lowercase roman and
+        // alphabetic select lowercase output.
         for (instr, shown) in [
             (r"PAGE \* CARDTEXT", "five"),
             (r"PAGE \* cardtext", "five"),
@@ -619,8 +619,10 @@ mod tests {
             (r"PAGE \* ORDTEXT", "fifth"),
             (r"PAGE \* Roman", "V"),
             (r"PAGE \* ROMAN", "V"),
+            (r"PAGE \* rOmAn", "V"),
             (r"PAGE \* Alphabetic", "E"),
             (r"PAGE \* alphabetic", "e"),
+            (r"PAGE \* aLpHaBeTiC", "E"),
             (r"PAGE \* ordinal", "5th"),
             (r"PAGE \* ARABIC", "5"),
         ] {
