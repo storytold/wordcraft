@@ -145,7 +145,7 @@ pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: 
 /// rows only, so AutoFit stays quick.
 const MEASURE_BUDGET: usize = 4000;
 /// The line length paragraphs are measured at: wide enough that nothing real wraps.
-const MEASURE_WIDE: f32 = 15_840.0;
+pub(crate) const MEASURE_WIDE: f32 = 15_840.0;
 /// What an empty cell's text needs (about a paragraph mark), points.
 const EMPTY_TEXT: f32 = 12.0;
 

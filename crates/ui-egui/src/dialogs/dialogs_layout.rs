@@ -143,7 +143,7 @@ fn buttons(ui: &mut Ui, ok: &str, ok_enabled: bool) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (okb, cancelb) =
                 crate::dialogs::ok_cancel_responses(ui, |ui| ui.add_enabled(ok_enabled, crate::widgets::primary_button(ui, tl!(ok))), tl!("Cancel"));
             if cancelb.clicked() || crate::dialogs::cancel_key_pressed(ui) {
