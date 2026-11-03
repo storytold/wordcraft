@@ -68,8 +68,9 @@ pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, pa
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
     let resp = big_button(ui, app, icon, label, id, Value::Object(Default::default()), BigState { menu: false, checked });
+    let selected = if resp.clicked() { !checked } else { checked };
     let (on, name) = (enabled(app, id), tl!(label).replace('\n', " "));
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, &name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, selected, &name));
     resp
 }
 
