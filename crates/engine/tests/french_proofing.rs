@@ -53,7 +53,7 @@ fn spelling_in_layout(s: &mut Session) -> usize {
         .flat_map(|p| &p.items)
         .filter_map(|item| if let wordcraft_engine::layout::Placed::Lines { para, .. } = item { Some(para) } else { None })
         .flat_map(|para| &para.issues)
-        .filter(|issue| issue.kind == proof::IssueKind::Spelling)
+        .filter(|issue| !issue.2)
         .count()
 }
 
