@@ -60,6 +60,31 @@ impl Pictures {
     }
 }
 
+/// What `meta.xml` says of the document's changes: who changed it last (`dc:creator`), when
+/// (`dc:date`, kept as written, with `Z` when it gives no zone) and how often it was saved
+/// (`meta:editing-cycles`).
+pub(super) fn read_changes(xml: &[u8]) -> (String, String, u32) {
+    let mut cur: Option<String> = None;
+    let (mut by, mut date, mut cycles) = (String::new(), String::new(), String::new());
+    events(xml, |ev| match ev {
+        Ev::Start(q, _) => cur = Some(q),
+        Ev::End(_) => cur = None,
+        Ev::Text(t) => match cur.as_deref() {
+            Some("dc:creator") if by.len() < 256 => by.push_str(&t),
+            Some("dc:date") if date.len() < 64 => date.push_str(&t),
+            Some("meta:editing-cycles") if cycles.len() < 16 => cycles.push_str(&t),
+            _ => {}
+        },
+    });
+    let date = date.trim();
+    let date = if date.is_empty() || date.ends_with(['Z', 'z']) || date.contains('+') {
+        date.to_string()
+    } else {
+        format!("{}Z", date.split('.').next().unwrap_or(""))
+    };
+    (by.trim().to_string(), date, cycles.trim().parse::<u32>().unwrap_or(0))
+}
+
 pub(super) fn read_meta(xml: &[u8]) -> Meta {
     let mut m = Meta::default();
     let mut cur: Option<String> = None;
@@ -404,6 +429,8 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 /// What [`parse_tracked`] reads besides the flow.
 struct Parsed {
     flow: Flow,
+    /// Who changed it last, when, and how often it was saved (`meta.xml`).
+    changes: (String, String, u32),
     /// The space between paragraphs is their spacings' sum (else the larger).
     sum_spacing: bool,
     /// The last section's properties.
@@ -529,6 +556,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let sum_spacing = settings.as_deref().and_then(|s| setting(s, "AddParaTableSpacing")).unwrap_or(profile.sum_paragraph_spacing);
     let meta_xml = read_entry(&mut z, "meta.xml");
     let meta = meta_xml.as_deref().map(read_meta).unwrap_or_default();
+    let changes = meta_xml.as_deref().map(read_changes).unwrap_or_default();
     // Custom document properties, then the user fields not among them.
     let mut custom = meta_xml.as_deref().map(super::fields::meta_props).unwrap_or_default();
     for f in super::fields::user_fields(&content) {
@@ -609,6 +637,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         hidden_controls,
         page_image,
         sum_spacing,
+        changes,
     })
 }
 
@@ -654,6 +683,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         hidden_controls,
         page_image,
         sum_spacing,
+        changes,
     } = parse_tracked(bytes, (page.page_w, page.page_h), profile)?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
@@ -662,6 +692,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         doc.passthrough.insert(super::forms::HIDDEN_PART.into(), std::sync::Arc::new(hidden_controls.join("\0").into_bytes()));
     }
     doc.custom_props = custom;
+    (doc.core.last_modified_by, doc.core.modified, doc.core.revision) = changes;
     doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {

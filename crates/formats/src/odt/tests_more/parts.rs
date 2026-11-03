@@ -102,3 +102,22 @@ fn parts_with_hostile_names_are_not_written() {
     let fs = files(&export(&import(&odt(&own)).unwrap()).unwrap());
     assert!(file(&fs, "Pictures/stale.png").is_none() && file(&fs, "ObjectReplacements/Object 9").is_none());
 }
+
+#[test]
+fn who_changed_the_document_last_and_when_round_trip() {
+    // meta.xml: the author (`meta:initial-creator`), who changed it last (`dc:creator`), when
+    // (`dc:date`) and how often it was saved (`meta:editing-cycles`).
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+    d.core.creator = "Ada".into();
+    d.core.last_modified_by = "Grace".into();
+    d.core.created = "2026-01-02T03:04:05Z".into();
+    d.core.modified = "2026-11-03T10:20:30Z".into();
+    d.core.revision = 7;
+    let saved = crate::odt::export(&d).unwrap();
+    let meta = crate::odt::tests::entry(&saved, "meta.xml");
+    assert!(meta.contains("<meta:initial-creator>Ada</meta:initial-creator>") && meta.contains("<dc:creator>Grace</dc:creator>"), "{meta}");
+    assert!(meta.contains("<dc:date>2026-11-03T10:20:30</dc:date>") && meta.contains("<meta:editing-cycles>7</meta:editing-cycles>"), "{meta}");
+    let back = crate::odt::import(&saved).unwrap();
+    assert_eq!((back.core.last_modified_by.as_str(), back.core.modified.as_str(), back.core.revision), ("Grace", "2026-11-03T10:20:30Z", 7));
+}

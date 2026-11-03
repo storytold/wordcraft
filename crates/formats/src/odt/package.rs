@@ -612,7 +612,7 @@ fn with_setting(own: &str, name: &str, on: bool, item: &str) -> Option<String> {
     Some(format!("{}{item}{}", own.get(..at).unwrap_or(""), own.get(at..).unwrap_or("")))
 }
 
-fn meta_xml(m: &Meta, props: &[wordcraft_doc::CustomProp]) -> String {
+fn meta_xml(m: &Meta, core: &wordcraft_doc::CoreProps, props: &[wordcraft_doc::CustomProp]) -> String {
     let mut s =
         format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta {NS}><office:meta><meta:generator>WordCraft</meta:generator>");
     if !m.title.is_empty() {
@@ -624,8 +624,22 @@ fn meta_xml(m: &Meta, props: &[wordcraft_doc::CustomProp]) -> String {
     if !m.description.is_empty() {
         s.push_str(&format!("<dc:description>{}</dc:description>", x(&m.description)));
     }
+    // Who made it, and who changed it last (§4.3.2.6 `dc:creator`, §4.3.2.10 `meta:initial-creator`).
+    let last_by = if core.last_modified_by.trim().is_empty() { m.author.as_str() } else { core.last_modified_by.as_str() };
     if !m.author.is_empty() {
-        s.push_str(&format!("<meta:initial-creator>{}</meta:initial-creator><dc:creator>{}</dc:creator>", x(&m.author), x(&m.author)));
+        s.push_str(&format!("<meta:initial-creator>{}</meta:initial-creator>", x(&m.author)));
+    }
+    if !last_by.is_empty() {
+        s.push_str(&format!("<dc:creator>{}</dc:creator>", x(last_by)));
+    }
+    // When it was last changed (§4.3.2.7 `dc:date`), and how often it was saved (§4.3.2.12
+    // `meta:editing-cycles`).
+    let modified = core.modified.trim().trim_end_matches(['Z', 'z']);
+    if !modified.is_empty() && modified.len() < 64 {
+        s.push_str(&format!("<dc:date>{}</dc:date>", x(modified)));
+    }
+    if core.revision > 0 {
+        s.push_str(&format!("<meta:editing-cycles>{}</meta:editing-cycles>", core.revision));
     }
     for k in m.keywords.split([',', ';']).map(str::trim).filter(|k| !k.is_empty()) {
         s.push_str(&format!("<meta:keyword>{}</meta:keyword>", x(k)));
@@ -831,7 +845,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     w.pictures.append(&mut hw.pictures);
     w.objects.append(&mut hw.objects);
     w.object_dirs.append(&mut hw.object_dirs);
-    let meta = meta_xml(&flow.meta, &doc.custom_props);
+    let meta = meta_xml(&flow.meta, &doc.core, &doc.custom_props);
     let mut manifest = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"{mime}\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
@@ -871,6 +885,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     z.start_file("mimetype", stored).map_err(err)?;
     z.write_all(mime.as_bytes()).map_err(ioerr)?;
+    // Each font declared, for readers without it (§16.21).
+    let (content, styles) = (with_font_faces(&content), with_font_faces(&styles));
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),
         ("content.xml", content.as_bytes()),
@@ -1043,4 +1059,91 @@ fn page_background(doc: &Document, w: &mut Writer, styles: String) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// `xml` (content.xml or styles.xml) with each font family it uses declared once (§16.21
+/// `style:font-face`: its family, generic family and pitch) and named where it is used
+/// (`style:font-name` beside `fo:font-family`, and the Asian and complex ones): a reader without
+/// the font picks a like one.
+fn with_font_faces(xml: &str) -> String {
+    const ATTRS: [(&str, &str); 3] = [
+        ("fo:font-family=\"", "style:font-name"),
+        ("style:font-family-asian=\"", "style:font-name-asian"),
+        ("style:font-family-complex=\"", "style:font-name-complex"),
+    ];
+    let mut families: Vec<String> = Vec::new();
+    let mut out = String::with_capacity(xml.len() + 1024);
+    let mut rest = xml;
+    loop {
+        // The next font family attribute.
+        let next = ATTRS.iter().filter_map(|(a, n)| rest.find(a).map(|at| (at, *a, *n))).min_by_key(|(at, ..)| *at);
+        let Some((at, attr, name_attr)) = next else { break };
+        let value_at = at + attr.len();
+        let Some(end) = rest.get(value_at..).and_then(|r| r.find('"')).map(|e| value_at + e) else { break };
+        let value = rest.get(value_at..end).unwrap_or("");
+        let family = value.replace("&apos;", "'").trim().trim_matches(['\'', '"']).trim().to_string();
+        out.push_str(rest.get(..at).unwrap_or(""));
+        if !family.is_empty() && family.len() <= 200 && !family.contains(',') {
+            if !families.contains(&family) && families.len() < 1000 {
+                families.push(family.clone());
+            }
+            out.push_str(&format!("{name_attr}=\"{}\" ", super::writer::x(&family)));
+        }
+        out.push_str(rest.get(at..=end).unwrap_or(""));
+        rest = rest.get(end + 1..).unwrap_or("");
+    }
+    out.push_str(rest);
+    if families.is_empty() {
+        return out;
+    }
+    let decls: String = families
+        .iter()
+        .map(|f| {
+            let (generic, pitch) = font_kind(f);
+            format!(
+                "<style:font-face style:name=\"{0}\" svg:font-family=\"'{0}'\" style:font-family-generic=\"{generic}\" style:font-pitch=\"{pitch}\"/>",
+                super::writer::x(f)
+            )
+        })
+        .collect();
+    let decls = format!("<office:font-face-decls>{decls}</office:font-face-decls>");
+    // Before the styles: first in office:document-styles, after the scripts in the content.
+    for before in ["<office:styles>", "<office:automatic-styles>", "<office:automatic-styles/>", "<office:master-styles>", "<office:body>"] {
+        if let Some(at) = out.find(before) {
+            out.insert_str(at, &decls);
+            return out;
+        }
+    }
+    out
+}
+
+/// A font family's generic family and pitch (§20.270, §20.271), from its name: monospaced
+/// families are `modern` and fixed, serif ones `roman`, the rest `swiss`.
+fn font_kind(family: &str) -> (&'static str, &'static str) {
+    let f = family.to_ascii_lowercase();
+    if model::is_mono(family) {
+        return ("modern", "fixed");
+    }
+    const SERIF: [&str; 16] = [
+        "serif",
+        "times",
+        "georgia",
+        "cambria",
+        "caladea",
+        "garamond",
+        "palatino",
+        "book",
+        "roman",
+        "libertine",
+        "minion",
+        "baskerville",
+        "bodoni",
+        "didot",
+        "charter",
+        "constantia",
+    ];
+    if SERIF.iter().any(|s| f.contains(s)) && !f.contains("sans") {
+        return ("roman", "variable");
+    }
+    ("swiss", "variable")
 }
