@@ -173,6 +173,11 @@ pub(super) struct Writer {
     /// paragraphs written so far need: automatic, common, font faces.
     pub(super) kept_defs: std::sync::Arc<std::collections::BTreeMap<String, std::sync::Arc<str>>>,
     pub(super) kept_used: super::kept::Needed,
+    /// The file's own master pages are written (its page setup is as read): kept markup may
+    /// start one.
+    pub(super) kept_pages: bool,
+    /// Sections kept as read that are open (see `Para::wrap`).
+    pub(super) sections_open: usize,
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<String>,
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
@@ -555,22 +560,50 @@ impl Writer {
 
     /// Paragraph `p`, or with `chain` the paragraphs joined at deleted paragraph marks (`p`
     /// is the first).
+    /// Close the sections kept as read that are still open (at the end of what holds them).
+    pub(super) fn close_sections(&mut self, out: &mut String) {
+        if self.sections_open > 0 {
+            self.close_ins(out);
+        }
+        while self.sections_open > 0 {
+            out.push_str("</text:section>");
+            self.sections_open -= 1;
+        }
+    }
+
     /// Paragraph `p` as it was read, when it still is and what it refers to was kept too (see
     /// `super::kept`); false when it is written from the model.
     fn kept_para(&mut self, p: &Para, out: &mut String) -> bool {
         let Some(xml) = &p.kept else { return false };
-        let Some((auto, common, fonts)) = super::kept::needed(&self.kept_defs, super::kept::names(xml)) else { return false };
+        self.kept_markup(xml, out)
+    }
+
+    /// Markup kept as read (a paragraph's or a table's), with the definitions it names; false
+    /// when one of them can't be written as read (see `super::kept::needed`).
+    pub(in crate::odt) fn kept_markup(&mut self, xml: &str, out: &mut String) -> bool {
+        if !self.kept_defs_of(xml) {
+            return false;
+        }
         self.close_ins(out);
-        self.kept_used.0.extend(auto);
-        self.kept_used.1.extend(common);
-        self.kept_used.2.extend(fonts);
-        self.sequences.extend(super::kept::sequences(xml));
         out.push_str(xml);
         true
     }
 
+    /// The definitions markup kept as read names, added to those written; false when one of
+    /// them can't be written as read.
+    fn kept_defs_of(&mut self, xml: &str) -> bool {
+        let Some((auto, common, fonts)) = super::kept::needed(&self.kept_defs, super::kept::names(xml), self.kept_pages) else { return false };
+        self.kept_used.0.extend(auto);
+        self.kept_used.1.extend(common);
+        self.kept_used.2.extend(fonts);
+        self.sequences.extend(super::kept::sequences(xml));
+        true
+    }
+
     fn para_in(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String) {
-        if chain.is_none() && self.master.is_none() && self.kept_para(p, out) {
+        if chain.is_none() && (self.master.is_none() || self.kept_pages) && self.kept_para(p, out) {
+            // Its own page start, if any, is in its markup.
+            self.master = None;
             return;
         }
         let paras: &[Para] = chain.map(Vec::as_slice).unwrap_or(std::slice::from_ref(p));
@@ -613,6 +646,27 @@ impl Writer {
         }
         out.push_str(tag);
         self.chain.clear();
+    }
+
+    /// Paragraph `p` (`chain`: the paragraphs a tracked deletion joins it to) with the sections
+    /// kept as read that open before it and close after it, at the top only.
+    fn wrapped_para(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String, depth: usize) {
+        let wrap = p.wrap.as_deref().filter(|_| depth == 0);
+        for tag in wrap.map(|w| w.0.as_slice()).unwrap_or(&[]) {
+            self.close_ins(out);
+            // With the section style it names.
+            self.kept_defs_of(tag);
+            out.push_str(tag);
+            self.sections_open += 1;
+        }
+        self.para_in(p, chain, out);
+        for _ in 0..wrap.map_or(0, |w| w.1) {
+            if self.sections_open > 0 {
+                self.close_ins(out);
+                out.push_str("</text:section>");
+                self.sections_open -= 1;
+            }
+        }
     }
 
     pub(super) fn blocks(&mut self, blocks: &[FBlock], out: &mut String, depth: usize) {
@@ -732,7 +786,7 @@ impl Writer {
                     out.push('\n');
                 }
                 FBlock::Para(p) => {
-                    self.para_in(p, chain(i), out);
+                    self.wrapped_para(p, chain(i), out, depth);
                     out.push('\n');
                     i += 1;
                 }
@@ -943,8 +997,11 @@ impl Writer {
             } else {
                 ("", props.as_str())
             };
+            // Laid out where WordCraft places it, not held in the text's area: said, as the
+            // standard gives no default (§20.267) and a file's default style may say otherwise.
+            let flow = if props.contains("style:flow-with-text") { "" } else { " style:flow-with-text=\"false\"" };
             s.push_str(&format!(
-                "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"{parent}><style:graphic-properties{props}/></style:style>",
+                "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"{parent}><style:graphic-properties{props}{flow}/></style:style>",
                 self.prefix,
                 i + 1
             ));

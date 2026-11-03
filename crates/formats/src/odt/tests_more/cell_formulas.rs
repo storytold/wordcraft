@@ -4,8 +4,8 @@
 //! fields in cells are written back as cell formulas.
 
 use crate::odt::cell_formula::{odf_of, word_of};
+use crate::odt::import;
 use crate::odt::tests::{NS_T, content_of, package};
-use crate::odt::{export, import};
 use wordcraft_doc::InlineObject;
 
 #[test]
@@ -96,22 +96,22 @@ fn a_cell_formula_opens_as_a_formula_field_showing_its_value() {
 #[test]
 fn formula_fields_in_cells_are_written_as_cell_formulas() {
     let d = open();
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"table:formula="ooow:(sum &lt;A1:A2&gt;)" office:value-type="float" office:value="4""#), "{c}");
     // Read back, the same field.
-    let again = import(&export(&d).unwrap()).unwrap();
+    let again = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
     assert_eq!(fields(&again), fields(&d));
 }
 
 #[test]
 fn cells_holding_numbers_are_written_as_numbers() {
-    let c = content_of(&export(&open()).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&open()).unwrap());
     assert!(c.contains(r#"office:value-type="float" office:value="2.5"><text:p"#), "{c}");
     // Text, numbers with more than a number in them and empty cells are text.
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell><table:table-cell><text:p>1,5</text:p></table:table-cell><table:table-cell><text:p>-</text:p></table:table-cell><table:table-cell><text:p>1.2.3</text:p></table:table-cell><table:table-cell><text:p/></table:table-cell><table:table-cell><text:p> -7 </text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#
     );
-    let c = content_of(&export(&import(&package(&content, None)).unwrap()).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&import(&package(&content, None)).unwrap()).unwrap());
     assert_eq!(c.matches(r#"office:value-type="float""#).count(), 1, "{c}");
     assert!(c.contains(r#"office:value="-7""#), "{c}");
 }

@@ -62,6 +62,7 @@ mod tests {
             widths: Vec::new(),
             borderless: false,
             extra: None,
+            kept: None,
         };
         t.insert_covered();
         assert!(t.rows.iter().all(|r| r.len() <= 64), "a row grew past the column cap");
@@ -113,6 +114,7 @@ mod tests {
             widths: vec![],
             borderless: false,
             extra: None,
+            kept: None,
         };
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);

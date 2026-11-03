@@ -210,6 +210,8 @@ struct Builder<'a> {
     /// boxes), linked once all are made ([`Builder::link_boxes`]).
     boxes: std::collections::HashMap<String, u32>,
     chains: Vec<(u32, String)>,
+    /// Tables made at the top of the flow so far (see `wordcraft_doc::kept`).
+    top_tables: usize,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -241,6 +243,7 @@ impl<'a> Builder<'a> {
             ended: Default::default(),
             boxes: Default::default(),
             chains: Vec::new(),
+            top_tables: 0,
         }
     }
 
@@ -622,12 +625,17 @@ impl<'a> Builder<'a> {
         out.touch();
         // Its markup kept for the writer, as long as nothing changes the paragraph from here on
         // (see `wordcraft_doc::kept`: the reader seals it once the document is done).
-        if let Some(xml) = &p.kept {
+        if p.kept.is_some() || p.wrap.is_some() {
             if self.doc.kept.get().is_none() {
                 self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
             }
             if let Some(k) = self.doc.kept.get_mut() {
-                k.keep_pending(out.rev, xml.clone());
+                if let Some(xml) = &p.kept {
+                    k.keep_pending(out.rev, xml.clone());
+                }
+                if let Some(w) = &p.wrap {
+                    k.keep_pending_wrap(out.rev, (**w).clone());
+                }
             }
         }
         out
@@ -849,6 +857,18 @@ impl<'a> Builder<'a> {
                 row.cells.push(wordcraft_doc::Cell::empty());
             }
             tb.rows.push(row);
+        }
+        // Its markup kept for the writer, by its place among the top's tables.
+        if depth == 0 {
+            if let Some(xml) = &t.kept {
+                if self.doc.kept.get().is_none() {
+                    self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
+                }
+                if let Some(k) = self.doc.kept.get_mut() {
+                    k.keep_pending_table(self.top_tables, xml.clone());
+                }
+            }
+            self.top_tables += 1;
         }
         Some(tb)
     }

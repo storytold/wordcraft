@@ -27,6 +27,16 @@ pub struct KeptXml {
     /// Paragraph [`fingerprint`] → the paragraph's markup, in the order read (identical
     /// paragraphs keep the first's).
     pub paras: HashMap<u64, Arc<str>>,
+    /// The same for the body's tables ([`table_fingerprint`]).
+    pub tables: HashMap<u64, Arc<str>>,
+    /// While reading: the markup of the body's `n`th table, until [`Kept::seal`].
+    pub pending_tables: Vec<(usize, Arc<str>)>,
+    /// Wrappers kept as read around paragraphs (sections): for a paragraph's fingerprint, the
+    /// start tags opening before it and how many close after it. Only paragraphs that were the
+    /// only one of their kind have them (a copy can't open a section twice).
+    pub wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
+    /// While reading: the same by paragraph `rev`, until [`Kept::seal`].
+    pub pending_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
     /// Named definitions the kept markup refers to (styles, font faces…), by a key the format
     /// chooses (`"auto:P12"`, `"style:Heading_20_1"`), as read.
     pub defs: BTreeMap<String, Arc<str>>,
@@ -42,6 +52,12 @@ pub struct KeptXml {
     /// The document's style definitions' [`styles_fingerprint`] when read: while it is the
     /// same, the file's own style definitions can be written as they were.
     pub styles_fp: Option<u64>,
+    /// The document's page setup's [`pages_fingerprint`] when read: while it is the same, the
+    /// file's own page layouts and master pages can be written as they were.
+    pub pages_fp: Option<u64>,
+    /// Each section's master page, as the file named it where its section starts (`None`: the
+    /// file's default), for a writer naming the file's own master pages.
+    pub section_masters: Vec<Option<String>>,
 }
 
 impl PartialEq for Kept {
@@ -92,6 +108,35 @@ impl KeptXml {
         }
         self.paras.get(&fingerprint(p))
     }
+    /// The markup kept for table `t`, while it still is what was read.
+    pub fn table(&self, t: &crate::Table) -> Option<&Arc<str>> {
+        if self.tables.is_empty() {
+            return None;
+        }
+        self.tables.get(&table_fingerprint(t))
+    }
+    /// The wrappers kept around paragraph `p`, while it still is what was read.
+    pub fn wrap(&self, p: &Paragraph) -> Option<&(Vec<Arc<str>>, u32)> {
+        if self.wraps.is_empty() {
+            return None;
+        }
+        self.wraps.get(&fingerprint(p))
+    }
+    /// Keep wrapper markup for the paragraph whose `rev` is `rev`, within the budget.
+    pub fn keep_pending_wrap(&mut self, rev: u64, wrap: (Vec<Arc<str>>, u32)) {
+        let n: usize = wrap.0.iter().map(|t| t.len()).sum();
+        if self.bytes.saturating_add(n) <= MAX_KEPT_BYTES {
+            self.bytes += n;
+            self.pending_wraps.insert(rev, wrap);
+        }
+    }
+    /// Keep `xml` for the body's `n`th table, within the budget.
+    pub fn keep_pending_table(&mut self, n: usize, xml: Arc<str>) {
+        if self.bytes.saturating_add(xml.len()) <= MAX_KEPT_BYTES {
+            self.bytes += xml.len();
+            self.pending_tables.push((n, xml));
+        }
+    }
     /// Keep `xml` for the paragraph whose `rev` is `rev`, within the budget.
     pub fn keep_pending(&mut self, rev: u64, xml: Arc<str>) {
         if self.bytes.saturating_add(xml.len()) <= MAX_KEPT_BYTES {
@@ -114,6 +159,10 @@ impl KeptXml {
             self.files.insert(path, Arc::new(bytes));
         }
     }
+    /// Whether `doc`'s page setup is still as it was read.
+    pub fn pages_as_read(&self, doc: &crate::Document) -> bool {
+        self.pages_fp.is_some_and(|fp| fp == pages_fingerprint(doc))
+    }
     /// Whether `doc`'s style definitions are still as they were read.
     pub fn styles_as_read(&self, doc: &crate::Document) -> bool {
         self.styles_fp.is_some_and(|fp| fp == styles_fingerprint(doc))
@@ -124,6 +173,40 @@ impl KeptXml {
 pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
+        Ok(v) => v.hash(&mut h),
+        Err(_) => u64::MAX.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// What `doc`'s page setup is: each section's setup (where it starts, its size, margins,
+/// columns, headers and footers), the headers' and footers' content, the page colour and
+/// picture, and the notes' numbering.
+pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
+    let mut sections: Vec<&crate::SectionProps> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref()).collect();
+    sections.push(&doc.last_section);
+    let parts: Vec<(&u32, &crate::Part)> =
+        doc.parts.iter().filter(|(_, p)| matches!(p.kind, crate::PartKind::Header | crate::PartKind::Footer)).collect();
+    let s = &doc.settings;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::to_vec(&(
+        sections,
+        parts,
+        &s.page_color,
+        &s.page_picture,
+        (&s.footnote_format, &s.endnote_format, &s.footnote_pr, &s.endnote_pr),
+        (&doc.footnote_separators, &doc.endnote_separators),
+    )) {
+        Ok(v) => v.hash(&mut h),
+        Err(_) => u64::MAX.hash(&mut h),
+    }
+    h.finish()
+}
+
+/// What table `t` is in the model.
+pub fn table_fingerprint(t: &crate::Table) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match serde_json::to_vec(t) {
         Ok(v) => v.hash(&mut h),
         Err(_) => u64::MAX.hash(&mut h),
     }
@@ -165,7 +248,17 @@ impl crate::Document {
     /// After reading: the markup kept for paragraphs still as the reader made them is filed
     /// under their fingerprints (see [`Kept::seal`]); the rest is dropped.
     pub fn seal_kept(&mut self) {
-        if self.kept.get().is_none_or(|k| k.pending.is_empty()) {
+        // The body's tables kept, by their place among its tables.
+        if let Some(k) = self.kept.get_mut() {
+            let pending = std::mem::take(&mut k.pending_tables);
+            let tables: Vec<&crate::Table> = self.body.iter().filter_map(|b| b.as_table()).collect();
+            for (n, xml) in pending {
+                if let Some(t) = tables.get(n) {
+                    k.tables.entry(table_fingerprint(t)).or_insert(xml);
+                }
+            }
+        }
+        if self.kept.get().is_none_or(|k| k.pending.is_empty() && k.pending_wraps.is_empty()) {
             return;
         }
         let mut all = Vec::new();
@@ -174,6 +267,24 @@ impl crate::Document {
             paras(&p.blocks, 0, &mut all);
         }
         let mut kept = std::mem::take(&mut self.kept);
+        // Wrappers, for paragraphs that are the only one of their kind.
+        if let Some(k) = kept.get_mut()
+            && !k.pending_wraps.is_empty()
+        {
+            let mut count: HashMap<u64, usize> = HashMap::new();
+            let fps: Vec<(u64, u64)> = all.iter().map(|p| (p.rev, fingerprint(p))).collect();
+            for (_, fp) in &fps {
+                *count.entry(*fp).or_default() += 1;
+            }
+            for (rev, fp) in fps {
+                if let Some(w) = k.pending_wraps.remove(&rev)
+                    && count.get(&fp) == Some(&1)
+                {
+                    k.wraps.insert(fp, w);
+                }
+            }
+            k.pending_wraps.clear();
+        }
         kept.seal(&mut all.into_iter());
         self.kept = kept;
     }

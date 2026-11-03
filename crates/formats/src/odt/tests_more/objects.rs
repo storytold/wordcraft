@@ -148,7 +148,16 @@ fn an_object_in_a_header_is_kept_too() {
         ("Object 1/content.xml", SHEET.as_bytes()),
         ("ObjectReplacements/Object 1", METAFILE),
     ]);
-    let saved = export(&import(&pkg).unwrap()).unwrap();
+    // Unedited: the header as read, and the object's files it names with it.
+    let d = import(&pkg).unwrap();
+    let saved = export(&d).unwrap();
+    let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let names: Vec<&str> = z.file_names().collect();
+    assert!(names.contains(&"Object 1/content.xml") && names.contains(&"ObjectReplacements/Object 1"), "{names:?}");
+    assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object 1\""));
+    assert!(entry(&saved, "META-INF/manifest.xml").contains(r#"manifest:full-path="Object 1/""#));
+    // Written from the model: WordCraft's own object, named its way.
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
     assert!(z.file_names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.file_names().collect::<Vec<_>>());
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));

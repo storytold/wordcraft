@@ -244,7 +244,7 @@ fn a_first_page_master_followed_by_another_is_a_different_first_page() {
     // The first page's own size and margins.
     assert_eq!(sec.margin_top, 144.0);
     // Written back: an empty first-page header.
-    let saved = export(&d).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let s = crate::odt::tests::entry(&saved, "styles.xml");
     let first = s.split("<style:header-first>").nth(1).and_then(|r| r.split("</style:header-first>").next()).unwrap_or("missing");
     assert!(first.trim().starts_with("<text:p") && !first.contains("Running head") && s.contains("Running head"), "{s}");

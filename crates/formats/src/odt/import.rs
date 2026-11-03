@@ -435,6 +435,8 @@ struct Parsed {
     kept_defs: Vec<(String, std::sync::Arc<str>)>,
     /// The package files those definitions refer to.
     kept_files: Vec<(String, Vec<u8>)>,
+    /// Each section's master page as the file named it.
+    section_masters: Vec<Option<String>>,
     /// The space between paragraphs is their spacings' sum (else the larger).
     sum_spacing: bool,
     /// The last section's properties.
@@ -593,6 +595,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     // The file's own definitions: what kept paragraphs refer to, and the style definitions
     // written as read while they stay unchanged.
     let mut kept_defs = super::kept::defs(&content, true);
+    kept_defs.extend(meta_xml.as_deref().map(super::kept::meta_defs).unwrap_or_default());
     kept_defs.extend(styles_xml.as_deref().map(|x| super::kept::defs(x, false)).unwrap_or_default());
     let hidden_controls = body.take_hidden_controls();
     let (mut named_odt, mut named) = custom_styles(&mut blocks, &styles, Vec::new());
@@ -623,7 +626,17 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
     let sources = std::mem::take(&mut body.sources);
-    let kept_files = super::kept::files(&kept_defs, &mut fetch);
+    let section_masters = std::mem::take(&mut body.section_masters);
+    let kept_files = super::kept::files(&kept_defs, &entries, &mut fetch);
+    // Their manifest entries, and their folders' (an object's says what it is).
+    for (path, _) in &kept_files {
+        let dir = path.rsplit_once('/').map(|(d, _)| format!("{d}/"));
+        for p in std::iter::once(path.clone()).chain(dir) {
+            if let Some(mime) = manifest.get(&p).or_else(|| manifest.get(p.trim_end_matches('/'))) {
+                kept_defs.push((format!("manifest:{p}"), std::sync::Arc::from(mime.as_str())));
+            }
+        }
+    }
     Ok(Parsed {
         flow: Flow { blocks, meta },
         last,
@@ -656,6 +669,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
         changes,
         kept_defs,
         kept_files,
+        section_masters,
     })
 }
 
@@ -706,6 +720,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         changes,
         kept_defs,
         kept_files,
+        section_masters,
     } = parse_tracked(bytes, (page.page_w, page.page_h), profile)?;
     let mut doc = model::to_doc(&flow);
     kept.store(&mut doc);
@@ -781,11 +796,12 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
         for (path, bytes) in kept_files {
             k.keep_file(path, bytes);
         }
+        k.section_masters = section_masters;
     }
     doc.seal_kept();
-    let fp = wordcraft_doc::kept::styles_fingerprint(&doc);
+    let (fp, pages) = (wordcraft_doc::kept::styles_fingerprint(&doc), wordcraft_doc::kept::pages_fingerprint(&doc));
     if let Some(k) = doc.kept.get_mut() {
-        k.styles_fp = Some(fp);
+        (k.styles_fp, k.pages_fp) = (Some(fp), Some(pages));
     }
     Ok(doc)
 }

@@ -90,6 +90,15 @@ pub(super) struct Body<'a> {
     pub(super) raw: &'a [u8],
     /// The paragraph whose markup is being kept (see [`KeptOpen`]).
     kept_open: Option<KeptOpen>,
+    /// The body table whose markup is being kept (its `done`: the container's length before it).
+    kept_table: Option<KeptOpen>,
+    /// Body sections whose wrapper is kept as read: start tag, depth, the body's length before
+    /// it; `None` for one read as a columned section (kept as a section break).
+    kept_sections: Vec<Option<(std::sync::Arc<str>, usize, usize)>>,
+    /// Each section's master page, as the paragraph or table starting it named it (`None`: as
+    /// the file's default, or a columned section), in order; and the one just named.
+    pub(super) section_masters: Vec<Option<String>>,
+    pending_master: Option<String>,
     /// Paragraphs finished so far (a kept paragraph must come out of its element whole).
     paras_done: usize,
     /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
@@ -210,6 +219,10 @@ impl<'a> Body<'a> {
             depth: 0,
             raw: &[],
             kept_open: None,
+            kept_table: None,
+            kept_sections: Vec::new(),
+            section_masters: vec![None],
+            pending_master: None,
             paras_done: 0,
             frame: None,
             in_desc: false,
@@ -287,6 +300,86 @@ impl<'a> Body<'a> {
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        // A body section: its start tag kept, put around its paragraphs at its end.
+        match &ev {
+            Ev::Start(q, _) if q == "text:section" && self.kept_sections.len() < 64 => {
+                let body = !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.containers.len() == 1
+                    && self.tables.is_empty()
+                    && self.frame.is_none()
+                    && self.note.is_none()
+                    && self.del.is_none()
+                    && self.lists.is_empty();
+                let tag = self.raw.get(at.0..at.1).and_then(|b| std::str::from_utf8(b).ok()).filter(|t| !t.ends_with("/>")).map(std::sync::Arc::from);
+                let depth = self.depth + 1;
+                let cols = self.cols_at;
+                self.feed(ev);
+                // Read as a columned section (a section break): no wrapper besides.
+                let columned = self.cols_at != cols;
+                let len = self.container().len();
+                self.kept_sections.push(tag.filter(|_| body && !columned).map(|t| (t, depth, len)));
+                return;
+            }
+            Ev::End(q) if q == "text:section" && !self.kept_sections.is_empty() => {
+                let depth = self.depth;
+                self.feed(ev);
+                if let Some(Some((tag, _, from))) = self.kept_sections.pop().filter(|s| s.as_ref().is_none_or(|s| s.1 == depth))
+                    && self.containers.len() == 1
+                {
+                    let blocks = self.container();
+                    let plain = |b: Option<&FBlock>| matches!(b, Some(FBlock::Para(p)) if p.list.is_none());
+                    if blocks.len() > from && plain(blocks.get(from)) && plain(blocks.last()) {
+                        if let Some(FBlock::Para(p)) = blocks.get_mut(from) {
+                            p.wrap.get_or_insert_with(Default::default).0.insert(0, tag);
+                        }
+                        if let Some(FBlock::Para(p)) = blocks.last_mut() {
+                            let w = p.wrap.get_or_insert_with(Default::default);
+                            w.1 = w.1.saturating_add(1);
+                        }
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        // A body table, kept whole as the paragraphs are.
+        match &ev {
+            Ev::Start(q, _) => match &mut self.kept_table {
+                Some(k) => k.clean &= keepable(q),
+                None if q == "table:table"
+                    && self.tables.is_empty()
+                    && !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.note.is_none()
+                    && self.frame.is_none()
+                    && self.del.is_none()
+                    && self.field.is_none()
+                    && self.loose.is_empty() =>
+                {
+                    // Before it starts: what ends the paragraph open before it.
+                    self.end_para();
+                    self.kept_table = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean: true, done: self.container().len() });
+                }
+                None => {}
+            },
+            Ev::End(q) if q == "table:table" && self.kept_table.as_ref().is_some_and(|k| k.depth == self.depth) => {
+                let k = self.kept_table.take();
+                self.feed(ev);
+                if let Some(k) = k
+                    && k.clean
+                    && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
+                    && self.container().len() == k.done + 1
+                    && let Some(FBlock::Table(t)) = self.container().last_mut()
+                {
+                    t.kept = Some(std::sync::Arc::from(xml));
+                }
+                return;
+            }
+            _ => {}
+        }
         match &ev {
             Ev::Start(q, _) => match &mut self.kept_open {
                 Some(k) => k.clean &= keepable(q),
@@ -474,6 +567,12 @@ impl Body<'_> {
         }
         let Some(body) = self.containers.first_mut() else { return false };
         if body.len() <= self.sec_from {
+            // The open section, empty, takes its place: its master page too.
+            if let Some(m) = self.pending_master.take()
+                && let Some(last) = self.section_masters.last_mut()
+            {
+                *last = Some(m);
+            }
             let restart = self.sec.page_num_start;
             self.sec = next;
             self.sec.page_num_start = self.sec.page_num_start.or(restart);
@@ -491,6 +590,7 @@ impl Body<'_> {
         }
         self.sec_from = body.len();
         self.sections += 1;
+        self.section_masters.push(self.pending_master.take());
         true
     }
 
@@ -507,6 +607,7 @@ impl Body<'_> {
         }
         let (master, number) = self.styles.page_start(name);
         let restart = number.flatten();
+        self.pending_master = master.map(str::to_string);
         let page = master.and_then(|m| self.pages.masters.get(m))?.clone();
         self.page = page.clone();
         Some(SectionProps { start: SectionStart::NextPage, page_num_start: restart, ..page })

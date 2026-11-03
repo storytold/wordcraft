@@ -670,6 +670,9 @@ pub struct Para {
     /// The paragraph's markup in the file it came from, while it still is what was read
     /// ([`wordcraft_doc::kept`]): a format that keeps it (ODT) writes it as it was.
     pub kept: Option<std::sync::Arc<str>>,
+    /// Sections kept as read around paragraphs ([`wordcraft_doc::kept`]): the start tags of
+    /// those opening before this paragraph (outermost first), and how many close after it.
+    pub wrap: Option<Box<(Vec<std::sync::Arc<str>>, u32)>>,
 }
 
 impl Para {
@@ -870,6 +873,9 @@ pub struct FTable {
     pub borderless: bool,
     /// Its alignment, width and row heights, for formats that keep them (ODT).
     pub extra: Option<Box<TableExtra>>,
+    /// The table's markup in the file it came from, while it still is what was read
+    /// ([`wordcraft_doc::kept`]): a format that keeps it (ODT) writes it as it was.
+    pub kept: Option<std::sync::Arc<str>>,
 }
 
 /// A table's placement and row heights ([`FTable::extra`]).

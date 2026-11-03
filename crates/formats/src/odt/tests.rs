@@ -688,14 +688,14 @@ fn export_keeps_a_page_number_restart_on_the_first_section() {
 #[test]
 fn export_of_a_one_section_document_stays_simple() {
     let doc = import(&sections_package()).unwrap();
-    let one = import(&export(&doc).unwrap()).unwrap();
+    let one = import(&crate::odt::tests::export_model(&doc).unwrap()).unwrap();
     let mut single = one.clone();
     for b in single.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
             p.section = None;
         }
     }
-    let bytes = export(&single).unwrap();
+    let bytes = crate::odt::tests::export_model(&single).unwrap();
     let mut z = archive(&bytes);
     let styles = String::from_utf8(read_entry(&mut z, "styles.xml").unwrap()).unwrap();
     let content = String::from_utf8(read_entry(&mut z, "content.xml").unwrap()).unwrap();

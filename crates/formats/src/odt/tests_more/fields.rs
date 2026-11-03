@@ -329,7 +329,7 @@ fn user_fields_stay_user_fields() {
     );
     let d = import(&package(&content, None)).unwrap();
     assert!(d.custom_props.iter().all(|p| p.odf_user_field), "{:?}", d.custom_props);
-    let saved = export(&d).unwrap();
+    let saved = crate::odt::tests::export_model(&d).unwrap();
     let c = crate::odt::tests::content_of(&saved);
     assert!(c.contains(r#"<text:user-field-decl text:name="GroupField1" office:value-type="string" office:string-value="Group one"/>"#), "{c}");
     assert!(c.contains(r#"office:value-type="float" office:value="3""#), "{c}");

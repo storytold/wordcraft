@@ -462,6 +462,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         extra: None,
         mark: None,
         kept: None,
+        wrap: None,
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -501,6 +502,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         extra: None,
                         mark: None,
                         kept: None,
+                        wrap: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -619,6 +621,10 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     // it), and only the model says which is written where.
     if opts.paras && done.is_empty() && p.props.page_break_before != Some(true) {
         out.kept = doc.kept.of("odt").and_then(|k| k.para(p)).cloned();
+    }
+    // The sections kept as read that it opens or closes.
+    if opts.paras {
+        out.wrap = doc.kept.of("odt").and_then(|k| k.wrap(p)).map(|w| Box::new(w.clone()));
     }
     done.push(out);
     done
@@ -1057,7 +1063,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     });
     // Kept whole for formats that ask for it: its header rows count even without the rest.
     let extra = extra.map(Box::new);
-    FTable { rows, widths: t.grid.clone(), borderless, extra }
+    let kept = (tracked.paras && depth == 0).then(|| doc.kept.of("odt").and_then(|k| k.table(t)).cloned()).flatten();
+    FTable { rows, widths: t.grid.clone(), borderless, extra, kept }
 }
 
 /// The document body as a flow.

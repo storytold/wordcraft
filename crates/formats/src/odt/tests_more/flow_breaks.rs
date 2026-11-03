@@ -78,7 +78,7 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     assert_eq!((t.props.align, t.props.width_pct), (Some(Align::Center), Some(50.0)));
     let heights: Vec<(Option<f32>, HeightRule)> = t.rows.iter().map(|r| (r.props.height, r.props.height_rule)).collect();
     assert_eq!(heights, [(Some(36.0), HeightRule::Exact), (Some(18.0), HeightRule::AtLeast), (None, HeightRule::Auto)]);
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     for want in [r#"style:rel-width="50%" table:align="center""#, r#"style:row-height="36pt""#, r#"style:min-row-height="18pt""#] {
         assert!(c.contains(want), "{want} in {c}");
     }
@@ -86,7 +86,7 @@ fn a_tables_alignment_width_and_row_heights_are_kept() {
     let plain = doc("", r#"<table:table><table:table-row><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row></table:table>"#);
     let pt = plain.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!((pt.props.align, pt.props.width_pct), (None, Some(100.0)));
-    assert!(content_of(&export(&plain).unwrap()).contains(r#"table:align="margins""#));
+    assert!(content_of(&crate::odt::tests::export_model(&plain).unwrap()).contains(r#"table:align="margins""#));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn columns_are_written_with_their_share_of_the_table() {
         styles,
         r#"<table:table><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
     );
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"style:column-width="72pt" style:rel-column-width="7200*""#) && c.contains(r#"style:rel-column-width="21600*""#), "{c}");
     // An aligned table keeps its widths: LibreOffice lays one out oddly with shares.
     let left = r#"<style:style style:name="T" style:family="table"><style:table-properties style:width="4in" table:align="left"/></style:style>"#;
@@ -106,7 +106,7 @@ fn columns_are_written_with_their_share_of_the_table() {
         &format!("{styles}{left}"),
         r#"<table:table table:style-name="T"><table:table-column table:style-name="A"/><table:table-column table:style-name="B"/><table:table-row><table:table-cell><text:p>a</text:p></table:table-cell><table:table-cell><text:p>b</text:p></table:table-cell></table:table-row></table:table>"#,
     );
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"table:align="left""#) && !c.contains("rel-column-width"), "{c}");
 }
 
@@ -138,9 +138,9 @@ fn a_tables_own_space_above_and_below_is_kept() {
         (t.props.space_before.map(|v| (v * 100.0).round() / 100.0), t.props.space_after.map(|v| (v * 100.0).round() / 100.0))
     };
     assert_eq!(space(&d), (Some(7.2), Some(8.5)));
-    let out = content_of(&export(&d).unwrap());
+    let out = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(out.contains(r#"fo:margin-top="7.2pt" fo:margin-bottom="8.5"#), "{out}");
-    assert_eq!(space(&import(&export(&d).unwrap()).unwrap()), (Some(7.2), Some(8.5)));
+    assert_eq!(space(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()), (Some(7.2), Some(8.5)));
 }
 
 #[test]
@@ -156,6 +156,6 @@ fn a_table_starting_a_page_starts_it() {
     assert_eq!(first.props.page_break_before, Some(true));
     // Nothing else starts a page.
     assert!(paras(&d).iter().all(|p| p.page_break_before != Some(true)));
-    let c = content_of(&export(&d).unwrap());
+    let c = content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches(r#"fo:break-before="page""#).count(), 2, "{c}");
 }

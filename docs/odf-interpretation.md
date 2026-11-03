@@ -80,12 +80,24 @@ These are documented so they aren't mistaken for law:
 
 ## How WordCraft writes ODF
 
-What nobody edited is written back as it was read: a paragraph WordCraft hasn't changed keeps
-its own markup (with what it names: its automatic styles, common styles, font faces and package
-files), and while no style or list definition changed, the file's own style definitions are
-written. So something WordCraft doesn't model survives a save that doesn't touch it. Paragraphs
-holding drawings, comments, tracked changes or ranged marks, or starting a page, are written
-from the model, as is everything edited.
+What nobody edited is written back as it was read, so something WordCraft doesn't model survives
+a save that doesn't touch it:
+
+- a paragraph or table WordCraft hasn't changed keeps its own markup, with what it names (its
+  automatic styles, common styles, font faces, and the package files and folders they refer to);
+- while no style or list definition changed, the file's own style definitions are written;
+- while the page setup didn't change, its page layouts and master pages, and each section starts
+  with the master page it started with;
+- named sections around unedited paragraphs, the document properties WordCraft doesn't model,
+  the declarations opening the text and the document's scripts.
+
+Paragraphs and tables holding drawings, comments, tracked changes or ranged marks are written from
+the model, as is everything edited. `odt::tests_more::lossless` saves samples without edits and
+fails on anything lost.
+
+Files are saved as ODF 1.3, whatever version they were read as (as LibreOffice does). Markup kept
+from an older file is brought to 1.3's meaning where it changed: a gradient's, transparency
+gradient's or hatch's angle without a unit was tenths of a degree before 1.3 (§19.112, §19.209).
 
 What WordCraft writes from its model, it writes so that every reader takes it the same way. It
 states what the standard leaves open instead of relying on any application's default:
@@ -93,6 +105,7 @@ states what the standard leaves open instead of relying on any application's def
 - header and footer heights, with `style:dynamic-spacing="false"` when there is spacing;
 - a frame's placement as an explicit position against the page or paragraph;
 - in-line pictures standing on the baseline;
+- drawings not held in the text's area (`style:flow-with-text="false"`, §20.267 gives no default);
 - tab stops measured as the file it was opened from measured them (`TabsRelativeToIndent` in
   `settings.xml`), from the margin for WordCraft's own documents;
 - widow and orphan control, on or off, in the default paragraph style.
@@ -144,6 +157,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | More written as read (tables, pages, sections, properties, declarations); files saved as ODF 1.3 with older markup brought to 1.3's meaning; drawings state `style:flow-with-text`. |
 | 2026-11-03 | Unedited content written as read (see How WordCraft writes ODF). |
 | 2026-11-03 | Tabs measured from the indent: default stops count from the indent too (measured in LibreOffice), in WordCraft's layout, and a file measuring tabs so is written back so (it was written from the margin, moving LibreOffice's default stops). |
 | 2026-11-03 | Widow and orphan control a file doesn't state (`widowControl`): WordCraft as XSL's initial value, LibreOffice off. WordCraft writes it on its default style either way. |

@@ -96,6 +96,11 @@ fn hostile_kept_markup_does_not_panic() {
         r#"<text:p text:style-name="P1">a<text:span text:style-name="P1">b</text:span></text:p>"#,
         r#"<text:p text:style-name="">x</text:p><text:p text:style-name="&amp;&lt;">y</text:p>"#,
         r#"<text:p><text:sequence text:name="">1</text:sequence><text:sequence>2</text:sequence></text:p>"#,
+        // Sections left open, closed twice, inside a list, empty.
+        r#"<text:section text:name="a"><text:p>x</text:p>"#,
+        r#"<text:p>y</text:p></text:section></text:section><text:p>z</text:p>"#,
+        r#"<text:list><text:list-item><text:section text:name="b"><text:p>w</text:p></text:section></text:list-item></text:list>"#,
+        r#"<text:section text:name="c"/><text:section text:name="d"></text:section><text:p>v</text:p>"#,
     ] {
         let content = format!(
             r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="P1" style:list-style-name="P1"/></office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#

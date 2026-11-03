@@ -323,6 +323,8 @@ fn styles_xml(
     part_styles: &str,
     named: &std::collections::BTreeSet<String>,
 ) -> String {
+    // WordCraft's page layouts take another prefix next to the file's own (see `super::kept`).
+    let pm = if doc.kept.of("odt").is_some() { "wcpm" } else { "pm" };
     // The document defaults: Normal's font, spacing and indents, pair kerning and tab interval.
     let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
     let normal = doc.styles.resolve_para(&Default::default());
@@ -411,7 +413,7 @@ fn styles_xml(
             String::new()
         };
         s.push_str(&format!(
-            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
+            "<style:page-layout style:name=\"{pm}{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
             i + 1,
             pt(sec.page_w),
             pt(sec.page_h),
@@ -426,7 +428,7 @@ fn styles_xml(
     s.push_str("</office:automatic-styles><office:master-styles>");
     for (i, (name, _)) in pages.iter().enumerate() {
         let xml = parts.get(i).map(|p| p.xml.as_str()).unwrap_or("");
-        s.push_str(&format!("<style:master-page style:name=\"{}\" style:page-layout-name=\"pm{}\">{xml}</style:master-page>", x(name), i + 1));
+        s.push_str(&format!("<style:master-page style:name=\"{}\" style:page-layout-name=\"{pm}{}\">{xml}</style:master-page>", x(name), i + 1));
     }
     s.push_str("</office:master-styles></office:document-styles>\n");
     s
@@ -777,14 +779,23 @@ fn with_kept_files(
     manifest: &mut String,
 ) {
     let Some(k) = kept else { return };
+    let entry = |manifest: &mut String, path: &str, mime: &str| {
+        let e = format!("manifest:full-path=\"{}\"", x(path));
+        if !manifest.contains(&e) {
+            manifest.push_str(&format!("<manifest:file-entry {e} manifest:media-type=\"{}\"/>\n", x(mime)));
+        }
+    };
     for (path, bytes) in &k.files {
         if !taken(path) && !files.iter().any(|(p, _)| p == path) {
+            // As the file's manifest had it (the folder too), else by its extension.
+            if let Some((dir, _)) = path.rsplit_once('/')
+                && let Some(mime) = k.defs.get(&format!("manifest:{dir}/"))
+            {
+                entry(manifest, &format!("{dir}/"), mime);
+            }
             let ext = path.rsplit('.').next().unwrap_or("");
-            manifest.push_str(&format!(
-                "<manifest:file-entry manifest:full-path=\"{}\" manifest:media-type=\"{}\"/>\n",
-                x(path),
-                x(model::mime_of(ext))
-            ));
+            let mime = k.defs.get(&format!("manifest:{path}")).map_or_else(|| model::mime_of(ext).to_string(), |m| m.to_string());
+            entry(manifest, path, &mime);
             files.push((path.clone(), bytes.clone()));
         }
     }
@@ -872,6 +883,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
+    // The file's master pages are written as read: what was kept may start them.
+    w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
     w.accents.clone_from(&accents);
     w.conn_kinds = conn_kinds(&flow.blocks);
     w.sources = doc.sources.iter().map(|s| (s.tag.clone(), s.clone())).collect();
@@ -889,11 +902,20 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     for (k, (sec, range)) in sections.iter().enumerate() {
         let new_page = k == 0 || sec.start != SectionStart::Continuous;
         if new_page {
-            let name = if k == 0 { "Standard".to_string() } else { format!("Page{}", pages.len() + 1) };
+            // The file's own master page while its pages are as read.
+            let own = kept
+                .filter(|kx| kx.pages_as_read(doc) && kx.section_masters.len() == sections.len())
+                .and_then(|kx| kx.section_masters.get(k).cloned().flatten());
+            let name = match &own {
+                Some(m) => m.clone(),
+                None if k == 0 => "Standard".to_string(),
+                None => format!("{}Page{}", w.prefix, pages.len() + 1),
+            };
             pages.push((name.clone(), sec.clone()));
             page_cols = sec.columns.clone();
-            // The first section needs its paragraph to name the page only to restart numbering.
-            if k > 0 || sec.page_num_start.is_some() {
+            // The first section needs its paragraph to name the page only to restart numbering
+            // (or when it is the file's own other than Standard).
+            if k > 0 || sec.page_num_start.is_some() || own.as_deref().is_some_and(|m| m != "Standard") {
                 w.pending_start = Some((name, sec.page_num_start));
             }
         }
@@ -908,7 +930,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         w.continue_list = k > 0 && list_at(flow.blocks.get(range.start)) && list_at(range.start.checked_sub(1).and_then(|i| flow.blocks.get(i)));
         if wrapped {
             w.close_ins(&mut body);
-            let n = w.section_styles.len() + 1;
+            let n = format!("{}{}", w.prefix, w.section_styles.len() + 1);
             // Whether its columns end balanced, said so every reader does the same: as WordCraft
             // lays it out (balanced when text follows on the page, or when the section says).
             let next_continuous = sections.get(k + 1).is_some_and(|(s, _)| s.start == SectionStart::Continuous);
@@ -924,6 +946,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
             body.push_str(&format!("<text:section text:style-name=\"Sect{n}\" text:name=\"Section{n}\">"));
         }
         w.blocks(flow.blocks.get(range.clone()).unwrap_or(&[]), &mut body, 0);
+        // A kept section doesn't cross a page or column section's edge.
+        w.close_sections(&mut body);
         w.pending_start = None;
         w.continue_list = false;
         if wrapped {
@@ -953,12 +977,29 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         format!("<text:sequence-decls>{d}</text:sequence-decls>")
     };
     let user_decls = user_field_decls(&doc.custom_props);
+    // The file's own declarations, with WordCraft's added to them; its scripts.
+    let kept_decl = |el: &str, ours: String| super::kept::merge_decls(kept.and_then(|k| k.defs.get(&format!("decls:{el}"))).map(|d| &**d), ours);
+    let var_decls = kept_decl("text:variable-decls", var_decls);
+    let user_decls = kept_decl("text:user-field-decls", user_decls);
+    let decls = kept_decl("text:sequence-decls", decls);
+    let other_decls: String = kept
+        .map(|k| {
+            k.defs
+                .iter()
+                .filter(|(key, _)| {
+                    key.starts_with("decls:") && !["variable", "user-field", "sequence"].iter().any(|d| key.contains(&format!("text:{d}-decls")))
+                })
+                .map(|(_, d)| &**d)
+                .collect()
+        })
+        .unwrap_or_default();
+    let scripts = kept.and_then(|k| k.defs.get("top:office:scripts")).map(|d| d.to_string()).unwrap_or_default();
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{}<office:body><office:text>\n{}{tracked}{var_decls}{user_decls}{decls}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text>\n{}{tracked}{var_decls}{user_decls}{decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
         super::forms::forms_xml(&w.forms, &hidden_controls(doc))
     );
-    let mut hw = Writer::with_prefix("M");
+    let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -996,6 +1037,11 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     w.objects.append(&mut hw.objects);
     w.object_dirs.append(&mut hw.object_dirs);
     let meta = meta_xml(&flow.meta, &doc.core, &doc.custom_props);
+    // With the file's properties WordCraft doesn't model.
+    let meta = match kept {
+        Some(k) => super::kept::with_kept_meta(meta, &k.defs, &k.order),
+        None => meta,
+    };
     let mut manifest = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"{mime}\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>\n",
     );
@@ -1041,6 +1087,11 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // What the paragraphs written as read need, as read (see `super::kept`).
     // Style definitions as read while nobody changed them: the file's own `office:styles`.
     let styles = styles_as_read(doc, kept, styles, &mut w.kept_used);
+    // Page setup as read while nobody changed it: the file's own page layouts and master pages.
+    let styles = match kept.filter(|k| k.pages_as_read(doc)) {
+        Some(k) => super::kept::with_pages_as_read(&styles, &k.defs, &k.order),
+        None => styles,
+    };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
     for (name, data) in [
         ("META-INF/manifest.xml", manifest.as_bytes()),

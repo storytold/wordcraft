@@ -23,6 +23,7 @@ mod headers;
 mod indexes;
 mod kept;
 mod lists;
+mod lossless;
 mod named_styles;
 mod notes;
 mod numbering_fields;

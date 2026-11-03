@@ -123,6 +123,15 @@ impl Writer {
     }
 
     pub(in crate::odt) fn table(&mut self, t: &FTable, out: &mut String, depth: usize) {
+        // As read, while it is what was read.
+        if let Some(xml) = &t.kept
+            && (self.master.is_none() || self.kept_pages)
+            && self.kept_markup(xml, out)
+        {
+            self.master = None;
+            out.push('\n');
+            return;
+        }
         self.close_ins(out);
         let cols = t.cols().max(1);
         let widths: Vec<f32> = if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 0.0) {
