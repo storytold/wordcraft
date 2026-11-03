@@ -4,8 +4,8 @@
 //!
 //! The policy: at exit, re-read `ui.json` and write it with only what this process changed since
 //! it loaded its preferences. Every other setting keeps what the file holds now. Recent lists
-//! (documents, symbols, colours, fonts) are merged instead: this process's new entries first, then
-//! the file's, without duplicates and without the entries this process removed.
+//! (documents, symbols, colours, fonts) are merged instead: the entries this process added or used
+//! again first, then the file's, without duplicates and without the entries this process removed.
 
 use serde_json::Value;
 use wordcraft_ui_egui::{MAX_RECENT, MAX_RECENT_FONTS, colors, dialogs_insert};
@@ -66,13 +66,14 @@ fn merge_value(base: Option<&Value>, ours: Value, disk: Option<&Value>, recent_c
     }
 }
 
-/// `ours`'s entries that `base` didn't have, then `disk`'s, leaving out what this process removed
-/// (in `base` but no longer in `ours`), without duplicates and at most `cap` entries.
+/// The entries this process put at the front of `ours` ([`touched_len`]), then `disk`'s, leaving
+/// out what this process removed (in `base` but no longer in `ours`), without duplicates and at
+/// most `cap` entries.
 fn merge_recent(base: &[Value], ours: Vec<Value>, disk: &[Value], cap: usize) -> Vec<Value> {
     let removed = |v: &Value| base.contains(v) && !ours.contains(v);
-    let added: Vec<Value> = ours.iter().filter(|v| !base.contains(v)).cloned().collect();
+    let touched = &ours[..touched_len(base, &ours)];
     let mut merged: Vec<Value> = Vec::new();
-    for v in added.into_iter().chain(disk.iter().filter(|v| !removed(v)).cloned()) {
+    for v in touched.iter().cloned().chain(disk.iter().filter(|v| !removed(v)).cloned()) {
         if merged.len() == cap {
             break;
         }
@@ -81,6 +82,22 @@ fn merge_recent(base: &[Value], ours: Vec<Value>, disk: &[Value], cap: usize) ->
         }
     }
     merged
+}
+
+/// How many of `ours`'s first entries this process added or used again. Each use moves an entry
+/// to the front of a recent list, so what it left alone is a tail of `ours` in `base`'s order: the
+/// longest such tail is untouched, and everything before it (new entries, and entries that moved
+/// ahead of one loaded before them) was touched. A use that leaves the order as it was loaded
+/// (the first entry used again) can't be told from no use, and merges as none.
+fn touched_len(base: &[Value], ours: &[Value]) -> usize {
+    let mut end = base.len();
+    for (i, v) in ours.iter().enumerate().rev() {
+        match base[..end].iter().rposition(|b| b == v) {
+            Some(at) => end = at,
+            None => return i + 1,
+        }
+    }
+    0
 }
 
 #[cfg(test)]
@@ -127,6 +144,23 @@ mod tests {
         assert_eq!(merge(&loaded, ours, &disk), json!({"recent": ["c.docx", "b.docx"]}));
         // Clear Recent clears what the other process had added too only if it was loaded here.
         assert_eq!(merge(&loaded, json!({"recent": []}), &json!({"recent": ["c.docx", "a.docx", "b.docx"]})), json!({"recent": ["c.docx"]}));
+    }
+
+    #[test]
+    fn a_recent_entry_used_again_here_moves_to_the_front() {
+        // Applying a font already in Recently Used Fonts moves it to the front without adding one.
+        let loaded = json!({"recentFonts": ["A", "B"]});
+        assert_eq!(merge(&loaded, json!({"recentFonts": ["B", "A"]}), &loaded), json!({"recentFonts": ["B", "A"]}));
+        // Here C was used again, D opened and A removed; the other process used B again and added E.
+        let loaded = json!({"recent": ["a.docx", "b.docx", "c.docx"]});
+        let ours = json!({"recent": ["d.docx", "c.docx", "b.docx"]});
+        let disk = json!({"recent": ["e.docx", "b.docx", "a.docx", "c.docx"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recent": ["d.docx", "c.docx", "e.docx", "b.docx"]}));
+        // Entries this process only kept, in the order it loaded them, don't override the file's order.
+        let loaded = json!({"recentSymbols": ["x", "y", "z"]});
+        let ours = json!({"recentSymbols": ["w", "x", "z"]});
+        let disk = json!({"recentSymbols": ["z", "x", "y"]});
+        assert_eq!(merge(&loaded, ours, &disk), json!({"recentSymbols": ["w", "z", "x"]}));
     }
 
     #[test]

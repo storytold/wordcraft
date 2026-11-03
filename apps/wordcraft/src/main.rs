@@ -196,6 +196,7 @@ fn prefs_enabled() -> bool {
 /// what this process changed (#3773, see `prefs_merge`).
 static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
+/// Apply the saved preferences (`ui.json`) to `app`, and remember the result for `save_prefs`.
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
@@ -234,6 +235,8 @@ fn saved_window() -> Option<WindowGeometry> {
     UiState::from_json(&bytes)?.window?.sanitized()
 }
 
+/// Write `app`'s preferences to `ui.json`, merged with what other processes saved since this one
+/// loaded it (`merged_prefs`).
 fn save_prefs(app: &WordApp) {
     if !prefs_enabled() {
         return;
