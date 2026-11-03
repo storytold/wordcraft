@@ -307,20 +307,34 @@ pub fn models_ui(ui: &mut egui::Ui) {
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
+    // A box that scrolls both ways stays left to right; its columns are listed from the right when
+    // the interface is mirrored, so the first one (Company) still starts at the reading edge.
+    let mirrored = crate::rtl::on();
+    let row = move |mut cells: [String; 6]| {
+        if mirrored {
+            cells.reverse();
+        }
+        cells
+    };
     crate::rtl::island(ui, |ui| {
         egui::ScrollArea::both().auto_shrink([false, true]).max_height(360.0).show(ui, |ui| {
             crate::rtl::grid(ui, egui::Grid::new("credits_models").striped(true).num_columns(6), |ui| {
-                for h in ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"] {
-                    ui.label(RichText::new(tl!(h)).strong());
+                for h in row(["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"].map(|h| tl!(h).to_string())) {
+                    ui.label(RichText::new(h).strong());
                 }
                 ui.end_row();
                 for m in MODELS {
-                    ui.label(m.company);
-                    ui.label(m.model);
-                    ui.label(m.version);
-                    ui.label(group(m.commits));
-                    ui.label(format!("{:.0}%", 100.0 * m.commits as f64 / TOTAL_COMMITS.max(assisted) as f64));
-                    ui.label(format!("+{} / −{}", group(m.lines_added), group(m.lines_deleted)));
+                    let cells = [
+                        m.company.to_string(),
+                        m.model.to_string(),
+                        m.version.to_string(),
+                        group(m.commits),
+                        format!("{:.0}%", 100.0 * m.commits as f64 / TOTAL_COMMITS.max(assisted) as f64),
+                        format!("+{} / −{}", group(m.lines_added), group(m.lines_deleted)),
+                    ];
+                    for c in row(cells) {
+                        ui.label(c);
+                    }
                     ui.end_row();
                 }
             });

@@ -393,31 +393,38 @@ pub(super) fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) ->
         crate::rtl::vertical(ui, |ui| {
             let mut changed = None;
             egui::ScrollArea::vertical().id_salt("columns_widths").max_height(130.0).show(ui, |ui| {
-                crate::rtl::grid(ui, egui::Grid::new("columns_grid").num_columns(3).spacing(vec2(12.0, 4.0)), |ui| {
-                    ui.label(tl!("Col #:"));
-                    ui.label(tl!("Width:"));
-                    ui.label(tl!("Spacing:"));
-                    ui.end_row();
+                crate::rtl::Table::new("columns_grid").columns(3).spacing(vec2(12.0, 4.0)).show(ui, |t| {
+                    t.row(|r| {
+                        r.cell(|ui| ui.label(tl!("Col #:")));
+                        r.cell(|ui| ui.label(tl!("Width:")));
+                        r.cell(|ui| ui.label(tl!("Spacing:")));
+                    });
                     let n = f.cols.len();
                     let max = f.text_width.max(0.1);
                     for i in 0..n {
                         let editable = i == 0 || !f.equal;
-                        ui.label(format!("{}:", i + 1));
-                        if let Some(c) = f.cols.get_mut(i) {
-                            let w = egui::DragValue::new(&mut c.0).speed(0.01).range(ColumnsForm::min_w()..=max).measure(unit).max_decimals(2);
-                            if ui.add_enabled(editable, w).changed() {
-                                changed = Some(i);
+                        t.row(|r| {
+                            r.cell(|ui| ui.label(format!("{}:", i + 1)));
+                            if let Some(c) = f.cols.get_mut(i) {
+                                r.cell(|ui| {
+                                    let w =
+                                        egui::DragValue::new(&mut c.0).speed(0.01).range(ColumnsForm::min_w()..=max).measure(unit).max_decimals(2);
+                                    if ui.add_enabled(editable, w).changed() {
+                                        changed = Some(i);
+                                    }
+                                });
+                                r.cell(|ui| {
+                                    if i + 1 < n {
+                                        let s = egui::DragValue::new(&mut c.1).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2);
+                                        if ui.add_enabled(editable, s).changed() {
+                                            changed = Some(i);
+                                        }
+                                    } else {
+                                        ui.label("");
+                                    }
+                                });
                             }
-                            if i + 1 < n {
-                                let s = egui::DragValue::new(&mut c.1).speed(0.01).range(0.0..=max).measure(unit).max_decimals(2);
-                                if ui.add_enabled(editable, s).changed() {
-                                    changed = Some(i);
-                                }
-                            } else {
-                                ui.label("");
-                            }
-                        }
-                        ui.end_row();
+                        });
                     }
                 });
             });

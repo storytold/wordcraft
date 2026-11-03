@@ -194,15 +194,30 @@ pub struct Table {
     columns: usize,
     spacing: Option<egui::Vec2>,
     striped: bool,
+    top: bool,
+    min_row_height: Option<f32>,
 }
 
 impl Table {
     pub fn new(id: &'static str) -> Self {
-        Self { id, columns: 2, spacing: None, striped: false }
+        Self { id, columns: 2, spacing: None, striped: false, top: false, min_row_height: None }
     }
 
+    /// The number of columns; 0 leaves an `egui::Grid` without a fixed count.
     pub fn columns(mut self, columns: usize) -> Self {
         self.columns = columns;
+        self
+    }
+
+    /// Cells align to the top of their row (they are centred in it otherwise, as a mirrored form
+    /// wants for a label and its field; tall cells such as a column of widgets want the top).
+    pub fn top(mut self) -> Self {
+        self.top = true;
+        self
+    }
+
+    pub fn min_row_height(mut self, height: f32) -> Self {
+        self.min_row_height = Some(height);
         self
     }
 
@@ -219,8 +234,13 @@ impl Table {
 
     pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Rows) -> R) -> R {
         if !flows(ui) {
-            let spec = egui::Grid::new(self.id).num_columns(self.columns);
+            let spec = egui::Grid::new(self.id);
+            let spec = if self.columns > 0 { spec.num_columns(self.columns) } else { spec };
             let spec = if self.striped { spec.striped(true) } else { spec };
+            let spec = match self.min_row_height {
+                Some(height) => spec.min_row_height(height),
+                None => spec,
+            };
             let spec = match self.spacing {
                 Some(spacing) => spec.spacing(spacing),
                 None => spec,
@@ -233,7 +253,8 @@ impl Table {
         let gap = spacing.x;
         let shown = ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = spacing.y;
-            let mut rows = Rows { ui, mirror: Some(Mirror { prev: prev.clone(), cur: Vec::new(), gap }) };
+            let mirror = Mirror { prev: prev.clone(), cur: Vec::new(), gap, top: self.top, min_row: self.min_row_height };
+            let mut rows = Rows { ui, mirror: Some(mirror) };
             let out = add(&mut rows);
             (out, rows.mirror.map(|m| m.cur).unwrap_or_default())
         });
@@ -253,6 +274,8 @@ struct Mirror {
     /// The width each column has now (the widest of its cells).
     cur: Vec<f32>,
     gap: f32,
+    top: bool,
+    min_row: Option<f32>,
 }
 
 /// The rows of a [`Table`].
@@ -271,12 +294,15 @@ impl Rows<'_> {
                 out
             }
             Some(mirror) => {
-                self.ui
-                    .horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        add(&mut Cells { ui, mirror: Some(mirror), col: 0, pending: 0.0 })
-                    })
-                    .inner
+                let (top, min_row) = (mirror.top, mirror.min_row);
+                let body = |ui: &mut Ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if let Some(height) = min_row {
+                        ui.set_min_height(height);
+                    }
+                    add(&mut Cells { ui, mirror: Some(mirror), col: 0, pending: 0.0 })
+                };
+                if top { self.ui.horizontal_top(body).inner } else { self.ui.horizontal(body).inner }
             }
         }
     }
