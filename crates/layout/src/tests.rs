@@ -5869,6 +5869,36 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// A paragraph beside a floating table: Word stops its top and bottom borders where its text
+/// stops, at the table's wrap distance, instead of running them under the table.
+#[test]
+fn a_paragraph_border_beside_a_floating_table_stops_at_the_table() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("Ruled paragraph\nPlain paragraph");
+    let rule = Some(Border::single(3.0));
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders { top: rule, bottom: rule, ..Borders::default() });
+    let mut t = Table::new(1, 1, 150.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Side", Default::default()))];
+    t.props.float = Some(TableFloat {
+        h_rel: Anchor::Margin,
+        v_rel: Anchor::Margin,
+        h_align: Some(FloatAlign::End),
+        dist: [14.0, 0.0, 0.0, 0.0],
+        overlap: false,
+        ..Default::default()
+    });
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let ends: Vec<f32> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Rule { x1, y0, y1, .. } = i { (y0 == y1).then_some(*x1) } else { None }).collect();
+    let table_left = 72.0 + 468.0 - 150.0;
+    assert!(ends.len() >= 2, "rules {ends:?}");
+    // The table's own borders end at the right margin; the paragraph's two stop before the table.
+    let short: Vec<_> = ends.iter().filter(|x| **x <= table_left - 13.0).collect();
+    assert_eq!(short.len(), 2, "paragraph rules end at {ends:?}, table starts at {table_left}");
+}
+
 /// A margin-anchored floating table is placed from the anchor page's margin even when a body
 /// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
 /// table row is drawn exactly once there.

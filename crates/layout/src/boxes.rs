@@ -632,6 +632,16 @@ pub(crate) fn push_para(
     // The outer edges of the side borders.
     let sides = pl.rp.borders.unwrap_or_default();
     let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
+    // A line narrowed by a floating object beside it: Word stops the top or bottom border drawn
+    // along that line at the line's edges, so the rule does not run under the object. Indents
+    // alone never narrow it (a first-line indent keeps the full box).
+    let deepest = pl.rp.indent_left.max(pl.rp.indent_left + pl.rp.indent_first);
+    let (lmax, rmax) = if pl.rp.bidi { (x + pl.rp.indent_right, x + width - deepest) } else { (x + deepest, x + width - pl.rp.indent_right) };
+    let along = |line: &para::Line| {
+        let l = if x + line.left > lmax + 0.01 { lx.max(x + line.left - border_room(sides.left)) } else { lx };
+        let r = if x + line.right < rmax - 0.01 { rx.min(x + line.right + border_room(sides.right)) } else { rx };
+        if r > l { (l, r) } else { (lx, rx) }
+    };
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         let (sl, sr) = (lx.min(left - pad), rx.max(right + pad));
@@ -642,11 +652,13 @@ pub(crate) fn push_para(
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
+            let (x0, x1) = along(first);
+            items.push(Placed::Rule { x0, y0: ty, x1, y1: ty, border: t });
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
             let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
+            let (x0, x1) = along(last);
+            items.push(Placed::Rule { x0, y0: by, x1, y1: by, border: t });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
             let bx = lx + t.width / 2.0;
