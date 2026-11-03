@@ -2,7 +2,7 @@
 //! bar over the page and About › Language data. The engine does the work
 //! ([`wordcraft_engine::packs`]): in the app installs and fetches of the list run on its thread,
 //! whoever asks (these buttons, or `proof.installPack` from MCP and the control channel), so the
-//! window keeps drawing. A click of the person's own on Install, Show available languages or
+//! window keeps drawing. A click of the person's own on Install, Add a language… or
 //! Refresh is their consent: it turns on the font store's downloading (there is no second
 //! prompt, R6.3). A click the control channel made never does.
 
@@ -75,8 +75,11 @@ pub(crate) struct Runtime {
     /// Failures the window had itself (turning downloading on, starting, removing), by locale
     /// ("" for the list), shown until the next try. The engine keeps the installs' own.
     errors: HashMap<String, String>,
-    /// (document, locale) pairs whose bar was closed.
+    /// (document, pack locale) pairs whose bar was closed.
     dismissed: HashSet<(u64, String)>,
+    /// (document, language tag) pairs whose bar was closed before the list was known: the pack
+    /// the list then has for the tag stays closed.
+    dismissed_tags: HashSet<(u64, String)>,
     /// What the bar offers for the shown document, what it was worked out from, and when.
     missing: Option<(MissingKey, f64, Offers)>,
     /// [`packs::finished`] when last looked at.
@@ -213,7 +216,7 @@ fn error_of(app: &WordApp, locale: &str) -> Option<String> {
     })
 }
 
-/// Downloading on for a click on Install, Show available languages or Refresh: the person's
+/// Downloading on for a click on Install, Add a language… or Refresh: the person's
 /// consent. A click the control channel made (an agent's `click`) leaves it off and says why.
 fn consent(app: &mut WordApp, ctx: &egui::Context, key: &str) -> bool {
     let Some(backend) = packs::backend() else { return false };
@@ -244,7 +247,7 @@ fn start_install(app: &mut WordApp, ctx: &egui::Context, pack: &Pack) {
     app.packs_rt.missing = None;
 }
 
-/// Fetch the list again (on the engine's thread): the person clicked Show available languages
+/// Fetch the list again (on the engine's thread): the person clicked Add a language…
 /// or Refresh.
 fn start_fetch(app: &mut WordApp, ctx: &egui::Context) {
     app.packs_rt.errors.remove("");
@@ -320,7 +323,7 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
     let now = ui.input(|i| i.time);
     let offers = missing(app, now);
     let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p)) else {
-        if let Some(tag) = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed.contains(&(document, t.clone()))) {
+        if let Some(tag) = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed_tags.contains(&(document, t.clone()))) {
             unlisted_bar(app, ui, &tag);
         }
         return;
@@ -364,10 +367,10 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
 /// Whether the bar for `pack` was closed in `document`: for the pack itself, or for a language
 /// tag it serves, closed before the list was known (`kl-GL` for `kl`).
 fn dismissed(app: &WordApp, document: u64, pack: &Pack) -> bool {
-    app.packs_rt
-        .dismissed
-        .iter()
-        .any(|(d, key)| *d == document && (*key == pack.locale || packs::pack_for_tag(key, std::slice::from_ref(pack)).is_some()))
+    // A closed pack is that pack alone (closing `de-ch` leaves `de`); a closed tag is the pack
+    // it would find.
+    app.packs_rt.dismissed.contains(&(document, pack.locale.clone()))
+        || app.packs_rt.dismissed_tags.iter().any(|(d, tag)| *d == document && packs::pack_for_tag(tag, std::slice::from_ref(pack)).is_some())
 }
 
 /// The bar for a language the document asks for while there is no list of packs yet (a fresh
@@ -411,7 +414,7 @@ fn unlisted_bar(app: &mut WordApp, ui: &mut Ui, tag: &str) {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
-                        app.packs_rt.dismissed.insert((document, tag.to_string()));
+                        app.packs_rt.dismissed_tags.insert((document, tag.to_string()));
                     }
                 });
             });
@@ -1570,10 +1573,16 @@ mod tests {
         let kl = packs::Pack { locale: "kl".into(), ..FixedBackend::sample().packs[0].clone() };
         let pt_pt = packs::Pack { locale: "pt-pt".into(), ..kl.clone() };
         assert!(!super::dismissed(&a, doc, &kl));
-        a.packs_rt.dismissed.insert((doc, "kl-GL".into()));
+        a.packs_rt.dismissed_tags.insert((doc, "kl-GL".into()));
         assert!(super::dismissed(&a, doc, &kl), "closed as kl-GL: kl stays closed");
         assert!(!super::dismissed(&a, doc, &pt_pt), "other languages aren't");
         assert!(!super::dismissed(&a, doc.wrapping_add(1), &kl), "nor other documents");
+        // Closing a regional pack's bar leaves the base language's (Swiss German, then German).
+        let de = packs::Pack { locale: "de".into(), ..kl.clone() };
+        let de_ch = packs::Pack { locale: "de-ch".into(), ..kl.clone() };
+        a.packs_rt.dismissed.insert((doc, "de-ch".into()));
+        assert!(super::dismissed(&a, doc, &de_ch));
+        assert!(!super::dismissed(&a, doc, &de), "German's bar still shows");
     }
 
     /// Martin's test: a spelling issue's context menu heading is in the interface language, not

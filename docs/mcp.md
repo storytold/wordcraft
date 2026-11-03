@@ -124,8 +124,8 @@ the suite's font store (see [installing languages](spelling-dictionaries.md#lang
 | `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
 
 None opens anything. Downloading is the font store's single consent setting: an agent can install
-only while the person has turned it on in the app (File › Options › Language: Install or Show
-available languages), and can never turn it on itself; otherwise `proof.installPack` fails with
+only while the person has turned it on in the app (File › Options › Language: Install or Add a
+language…), and can never turn it on itself; otherwise `proof.installPack` fails with
 *downloading is turned off*. `refresh` likewise needs it on. Every archive is checked against the
 sha256 in the pinned index before it is unpacked. With `--connect` the commands act on the running
 app's packs, and an install or a `refresh` runs in the background so the window keeps working: the
