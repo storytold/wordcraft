@@ -392,6 +392,16 @@ impl WordApp {
         if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
+            // A file newly listed here may be one moved outside WordCraft: an entry with its
+            // name whose path is gone is that file's old place (#5434).
+            #[cfg(not(target_arch = "wasm32"))]
+            if !self.ui.recent.contains(&p) {
+                let name = std::path::Path::new(&p).file_name().map(std::ffi::OsStr::to_os_string);
+                self.ui.recent.retain(|r| {
+                    let r = std::path::Path::new(r);
+                    name.is_none() || r.file_name() != name.as_deref() || r.exists()
+                });
+            }
             self.ui.recent.retain(|r| *r != p);
             self.ui.recent.insert(0, p);
             self.ui.recent.truncate(MAX_RECENT);
