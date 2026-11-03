@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Equation update:** 2026-11-02 · Display operators honor the font minimum (#2662), including grow-off. Tall-operand growth and native integral sizing remain unverified; readiness estimates unchanged.
+
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -236,6 +238,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | Date | What landed |
 | 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
 | 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
+| 2026-11-02 | Display n-ary operators honor the font minimum, including when operand growth is disabled (#2662). Controlled no-MATH, absent-construction and empty-construction fallback retains the base glyph and font size. Tall-operand growth and native integral sizing remain unverified. |
 | 2026-10-28 | **Arabic diacritic editing (#4757):** Backspace removes the last stored Arabic combining mark, so its base letter can stay while the mark is replaced. Caret movement and forward Delete keep their cluster rules. Synthetic command, history, protection and native/DOCX fresh-reopen checks; no native Word comparison or readiness change. |
 | 2026-10-29 | Insert › Shapes shows the basic shapes as a grid of code-drawn icon tiles, each with an accessible name and tooltip, instead of a text list (#4349) |
 | 2026-11-03 | A password-protected file named on the command line (double-clicked in the file manager) asks for its password when the first blank document was replaced because File › Options chose a region; the window now follows that replacement at once, so the first frame no longer takes it for a document switch and drops the Password box (#5299) |
@@ -706,6 +709,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
+| 2026-11-02 | trivial | Record display-operator font minimum and controlled fallback scope (#2662); native integral sizing remains unverified. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |

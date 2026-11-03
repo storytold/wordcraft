@@ -249,22 +249,9 @@ impl Ctx {
                     // The math font lacks the operator: a fallback font's glyph, display-sized.
                     let s = if st.display { size * 1.4 } else { size };
                     self.char_glyphs(*chr, s, 0)
-                } else if *grow && target > 0.0 && self.t.is_some() {
-                    self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.glyph_id(base_gid, size, self.color))
                 } else if target > 0.0 && self.t.is_some() {
-                    // Word sets display operators about 1.2 em tall: the size variant nearest that.
-                    let want = target.min(size * 1.2) * self.upem / size;
-                    let (g, adv) = self
-                        .t
-                        .as_ref()
-                        .and_then(|t| t.vert.get(&base_gid))
-                        .and_then(|c| c.variants.iter().min_by(|a, b| (a.1 - want).abs().total_cmp(&(b.1 - want).abs())))
-                        .copied()
-                        .unwrap_or((base_gid, want));
-                    // A font without a variant near that size: scale the nearest one.
-                    let f = if adv > 0.0 { (want / adv).clamp(0.6, 1.5) } else { 1.0 };
-                    let f = if (0.9..=1.1).contains(&f) { 1.0 } else { f };
-                    self.glyph_id(g, size * f, self.color)
+                    // The display minimum applies even when growth to the operand is disabled.
+                    self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.glyph_id(base_gid, size, self.color))
                 } else {
                     self.glyph_id(base_gid, size, self.color)
                 };
@@ -485,3 +472,6 @@ impl Ctx {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
