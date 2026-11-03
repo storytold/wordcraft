@@ -276,3 +276,8 @@ the distance from the text). Missing fields are `none`, 0, no colour and 0, so a
 "right"?: pt}`: the alignment and indents as seen on the page, which each selected paragraph turns
 into its own start and end once `props` (a `bidi` in it, say) is applied. The Paragraph dialog sends
 only the fields that changed this way, as one command and so one undo step.
+
+## Rewriting a paragraph without rewriting all of it: `text.rewrite`
+
+`text.rewrite {"text": "<the new text>", "paragraph": n}` replaces the text of body paragraph `n` (or the selection, or the caret's paragraph) with `text` by editing **only what differs**: words, or single characters for Chinese and Japanese text (`"level": "character"` for every character). With Track Changes on, `The quiet harbour opens at dawn, and the boats leave at six.` → `… at sunrise, … at seven.` is two small reviewable changes (`dawn`→`sunrise`, `six`→`seven`), not the whole sentence struck through and written again. Text that did not change keeps its formatting, comments and earlier revisions. It is one undo step; the same text is no change and no undo step; texts that are over 70 % different are replaced whole (`"whole": true`). It refuses, changing nothing, a target that holds objects (pictures, fields, equations), existing tracked deletions or several paragraphs, and a `text` with a line break.
+
