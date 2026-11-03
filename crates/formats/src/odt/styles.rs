@@ -1,6 +1,9 @@
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Align, Arc, Columns, Fmt, HashMap, Kind, Rgb, VAlign, model};
 
+/// Longest style name looked at for a paragraph kind ("Heading 1", "Preformatted Text"…).
+const MAX_KIND_NAME: usize = 256;
+
 // ---------------------------------------------------------------------------------------------
 // Import
 
@@ -346,8 +349,11 @@ impl Styles {
         let mut kind_at = chain.len();
         for (i, (n, s)) in chain.iter().enumerate() {
             kind_at = i;
-            let dn = s.display.as_deref().unwrap_or(n).to_ascii_lowercase().replace("_20_", " ");
-            let nn = n.to_ascii_lowercase().replace("_20_", " ");
+            // The names that give a kind are short: a longer one isn't normalised, so a huge
+            // display name isn't copied again for every paragraph that uses the style.
+            let norm = |v: &str| if v.len() <= MAX_KIND_NAME { v.to_ascii_lowercase().replace("_20_", " ") } else { String::new() };
+            let dn = norm(s.display.as_deref().unwrap_or(n));
+            let nn = norm(n);
             for cand in [dn.as_str(), nn.as_str()] {
                 if let Some(d) = cand.strip_prefix("heading ").and_then(|r| r.trim().parse::<u8>().ok()) {
                     kind = Kind::Heading(d.clamp(1, 6));

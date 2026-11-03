@@ -1135,3 +1135,18 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.created, "2024-03-05T13:45:00Z");
     assert_eq!(m2.author, "Solo Creator");
 }
+
+#[test]
+fn style_kinds_come_from_short_names_only() {
+    let mut s = styles::Styles::default();
+    let long = "x".repeat(1 << 20);
+    let xml = format!(
+        r#"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"><office:styles><style:style style:name="Heading_20_2" style:display-name="Heading 2" style:family="paragraph"/><style:style style:name="Big" style:display-name="{long}" style:family="paragraph"/></office:styles></office:document-styles>"#
+    );
+    s.read(xml.as_bytes(), false);
+    assert_eq!(s.para("Heading_20_2").0, Kind::Heading(2));
+    // A huge display name isn't normalised (again) for every paragraph that names it.
+    for _ in 0..10_000 {
+        assert_eq!(s.para("Big").0, Kind::Normal);
+    }
+}
