@@ -29,9 +29,9 @@ built in; every other language is a pack.
 
 - **File › Options › Language › Your languages** lists English, the languages of the open
   document and every installed pack, each with where its proofing comes from (*Built in*,
-  *Installed*, *Your own dictionary*, *Not available yet*). **Install** gets a document language's
-  pack; **Remove** takes an installed one out; **Set as default** makes it the language new text is
-  written in. **Add a language…** opens a list of the other packs: type *dutch*, *nederlands* or
+  *Installed*, *Your own dictionary*, *System dictionary*, *Grammar built in*, *Not available yet*).
+  **Install** gets a document language's pack; **Remove** takes an installed one out; **Set as
+  default** makes it the language of new blank documents (the open document is left as it is). **Add a language…** opens a list of the other packs: type *dutch*, *nederlands* or
   *nl* to search, see each pack's size, licence and a link to where it comes from, and click
   **Install**.
 - When a document has text in a language whose pack isn't installed, a bar under the ribbon says

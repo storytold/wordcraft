@@ -119,7 +119,7 @@ the suite's font store (see [installing languages](spelling-dictionaries.md#lang
 
 | Command | Params | Returns |
 |---|---|---|
-| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "languages": [{"tags", "pack", "installed", "size", "proofing" (`built_in`, `installed`, `own_dictionary`, `system_dictionary`, `install`, `grammar_built_in`, `not_available`), "default"}] (Options › Language › Your languages), "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
+| `proof.packs` | `{"refresh"?: bool}` (fetch the pinned index again) | `{"packs": [{"locale", "name", "size", "licence", "class", "source" (upstream), "archive", "spelling", "hyphenation", "installed"}], "languages": [{"tags", "pack", "installed", "size", "proofing" (built_in, installed, own_dictionary, system_dictionary, install, grammar_built_in, not_available), "default"}] (Options › Language › Your languages), "installed": [...], "installing": [{"locale", "done", "total"}], "refreshing", "errors": {locale: message}, "network", "available"}` |
 | `proof.installPack` | `{"locale": "nl"}` | `{"locale", "name", "licence", "installed": true}` (`"already": true` when it was); with `--connect`, `{"locale", "started": true}` |
 | `proof.removePack` | `{"locale": "nl"}` | `{"locale", "installed": false}` |
 
