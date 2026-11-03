@@ -22,9 +22,10 @@ editor. Resource IDs are opaque identities, never filesystem paths or arbitrary 
 The backend must enforce ownership on every list/read/write; browser namespaces do not replace
 server authorization.
 
-`registerProvider(id, label, namespace)` returns a fresh connection ID. Re-registering the exact
-identity is idempotent. Changing account requires `unregisterProvider()` first, which refuses
-while a chooser, serialization, upload acknowledgement or read is unresolved. Unregistering
+`registerProvider(id, label, namespace)` returns a new connection ID on first registration.
+Re-registering the exact identity is idempotent and returns the existing connection ID. Changing
+account requires `unregisterProvider()` first, which refuses while a chooser, serialization,
+upload acknowledgement or read is unresolved. Unregistering
 clears resources and bindings without closing documents. `setEnabled(false)` stops new
 provider choices and hides provider Recents while allowing outstanding operations to settle;
 `setEnabled(true)` restores availability. There is no editor preference or end-user cloud switch.
@@ -55,11 +56,12 @@ Never reuse an account namespace for a different account.
    `download` is a terminal fallback result that does not acknowledge provider persistence.
    These outcomes keep unsaved work open. A serialization/filename rejection emits `saveFailed`.
 
-Choosing Save in a Save Changes prompt starts this provider choice and cancels the held-back
-Close, Open or New action. A localized status asks the user to complete the provider save and
-try the action again. The dirty document stays open; even a later durable acknowledgement does
-not automatically resume that cancelled action. A refused chooser keeps its specific error
-instead of the informational status. Cancellation or failure still leaves unsaved work open.
+Choosing Save in a Save Changes prompt for Close starts this provider choice and cancels the
+held-back Close action. A localized status asks the user to complete the provider save and
+try Close again. New and Open keep their normal multi-document behavior, preserving the existing
+document rather than being held back by this prompt. The dirty document stays open; even a later
+durable acknowledgement does not automatically resume that cancelled action. A refused chooser
+keeps its specific error instead of the informational status. Cancellation or failure still leaves unsaved work open.
 
 A device choice uses the browser's local download service. A device copy of a provider-bound
 project does not acknowledge provider persistence or replace that binding. As with the normal

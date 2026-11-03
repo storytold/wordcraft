@@ -504,3 +504,145 @@ fn failed_dialog_terminal_survives_reentrant_full_event_queue_without_unbounded_
     assert_eq!(delivered, 1);
     assert!(!host.busy());
 }
+
+// Drive the real Recent buttons and following egui frames: a transport-only assertion would
+// miss a refusal that was painted only in the click frame or bypassed the language lookup.
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_harness(host: Host) -> egui_kittest::Harness<'static, Host> {
+    egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, host: &mut Host| host.recent_ui(ui), host)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_resource(host: &Host, connection: &str) {
+    host.set_resources(connection, vec![Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }]).unwrap();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_refusal(reason: &str) -> String {
+    crate::i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", "Example.docx"), ("error", crate::tl!(reason))])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct RecentFixtureLanguage {
+    previous_lang: crate::i18n::Lang,
+    previous_pseudo: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RecentFixtureLanguage {
+    fn install() -> Self {
+        let language = crate::i18n::fixture_lang(
+            "x-fixture",
+            concat!(
+                "\tCouldn't open {path}: {error}\tFIXTURE open {path}: {error}\n",
+                "\ttoo many pending provider reads\tFIXTURE pending read limit\n",
+                "\tfile provider event queue is full; consume events before retrying\tFIXTURE event queue limit\n",
+            ),
+        );
+        let previous = Self { previous_lang: crate::i18n::current(), previous_pseudo: crate::i18n::pseudo::on() };
+        crate::i18n::pseudo::set(false);
+        crate::i18n::set_current(language);
+        previous
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RecentFixtureLanguage {
+    fn drop(&mut self) {
+        crate::i18n::set_current(self.previous_lang);
+        crate::i18n::pseudo::set(self.previous_pseudo);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn provider_recent_refusal_persists_localized_across_frames_and_successful_retry_clears_it() {
+    use egui_kittest::kittest::Queryable;
+    let _language = RecentFixtureLanguage::install();
+    for saturated_reads in [true, false] {
+        let (host, connection) = connected();
+        recent_resource(&host, &connection);
+        let mut reads = Vec::new();
+        if saturated_reads {
+            for _ in 0..super::MAX_PENDING {
+                reads.push(host.request_open("one").unwrap());
+            }
+            host.take_events();
+        } else {
+            fill_event_queue(&host);
+        }
+        let reason =
+            if saturated_reads { "too many pending provider reads" } else { "file provider event queue is full; consume events before retrying" };
+        let message = recent_refusal(reason);
+        assert!(
+            message.starts_with("FIXTURE open Example.docx: FIXTURE "),
+            "both the containing format and queue error must use the fixture catalog"
+        );
+        let mut h = recent_harness(host.clone());
+        h.run_steps(2);
+        h.get_by_label("Example.docx").click();
+        h.run_steps(3);
+        h.get_by_label(message.as_str());
+        h.run_steps(2);
+        h.get_by_label(message.as_str());
+        if saturated_reads {
+            host.cancel_open(reads.remove(0), String::new()).unwrap();
+        }
+        host.take_events();
+        h.get_by_label("Example.docx").click();
+        h.run_steps(3);
+        assert!(h.query_by_label(message.as_str()).is_none(), "an admitted retry removes the previous refusal");
+        assert!(host.take_events().iter().any(|event| event.metadata["type"] == "openRequest"), "the retry must really enter the provider transport");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn provider_recent_refusal_does_not_cross_disable_or_account_lifecycles() {
+    use egui_kittest::kittest::Queryable;
+    let (host, connection) = connected();
+    recent_resource(&host, &connection);
+    fill_event_queue(&host);
+    let mut h = recent_harness(host.clone());
+    h.run_steps(2);
+    h.get_by_label("Example.docx").click();
+    h.run_steps(3);
+    let message = recent_refusal("file provider event queue is full; consume events before retrying");
+    h.get_by_label(message.as_str());
+    assert_eq!(host.connect("test".into(), "Test files".into(), "account-one".into()).unwrap(), connection);
+    h.run_steps(2);
+    h.get_by_label(message.as_str());
+
+    // No frame occurs between the disable and enable: hiding the UI alone cannot pass this.
+    host.set_enabled(false).unwrap();
+    host.set_enabled(true).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label(message.as_str()).is_none());
+    h.get_by_label("Example.docx").click();
+    h.run_steps(3);
+    h.get_by_label(message.as_str());
+    host.take_events();
+    host.disconnect().unwrap();
+    let next = host.connect("test".into(), "Test files".into(), "account-two".into()).unwrap();
+    assert_ne!(connection, next);
+    recent_resource(&host, &next);
+    h.run_steps(2);
+    assert!(h.query_by_label(message.as_str()).is_none(), "the next account cannot inherit a private refusal");
+    h.get_by_label("Example.docx");
+    assert!(host.take_events().is_empty(), "reconnecting does not silently replay the refused read");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn default_off_provider_has_no_recent_ui_or_transport_side_effects() {
+    use egui_kittest::kittest::Queryable;
+    let host = Host::default();
+    let mut h = recent_harness(host.clone());
+    h.run_steps(3);
+    assert!(h.query_by_label("Recent on this device").is_none());
+    assert!(h.query_by_label("No recent provider files.").is_none());
+    assert!(!host.connected());
+    assert!(!host.enabled());
+    assert!(!host.busy());
+    assert!(host.take_events().is_empty());
+}

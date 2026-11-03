@@ -75,6 +75,13 @@ pub(crate) enum Command {
     Open { request: String, name: String, bytes: Vec<u8> },
 }
 
+#[derive(Clone)]
+struct RecentOpenError {
+    connection: String,
+    name: String,
+    message: String,
+}
+
 #[derive(Default)]
 struct State {
     identity: Option<Identity>,
@@ -89,6 +96,7 @@ struct State {
     working: HashMap<String, u64>,
     bindings: HashMap<u64, Binding>,
     resources: Vec<Resource>,
+    recent_open_error: Option<RecentOpenError>,
     commands: Vec<Command>,
     // A failed delivery transfers an already admitted capture here, even if commands is full.
     // Together with captures this is bounded by MAX_PENDING; it never admits new work.
@@ -218,6 +226,7 @@ impl Host {
         let connection = s.next("connection")?;
         s.connection = connection.clone();
         s.identity = Some(next);
+        s.recent_open_error = None;
         s.enabled = true;
         Ok(connection)
     }
@@ -233,6 +242,7 @@ impl Host {
         s.connection.clear();
         s.enabled = false;
         s.resources.clear();
+        s.recent_open_error = None;
         s.bindings.clear();
         s.events.clear();
         s.documents = Value::Null;
@@ -257,6 +267,9 @@ impl Host {
             return Err("file provider is not connected".into());
         }
         s.enabled = enabled;
+        if !enabled {
+            s.recent_open_error = None;
+        }
         Ok(())
     }
 
@@ -621,23 +634,39 @@ impl Host {
             "resources":s.resources, "documents":s.documents, "pending":s.busy()})
     }
 
+    /// A provider Recent refusal is news only until File closes or the provider lifecycle changes.
+    pub(crate) fn clear_recent_open_error(&self) {
+        self.state().recent_open_error = None;
+    }
+
     /// Native Home/Open view, separate from paths belonging to this device.
     /// Only enabled provider entries issue correlated reads; resource names never enter device Recents.
     pub(crate) fn recent_ui(&self, ui: &mut egui::Ui) {
-        let (label, resources) = {
+        let (label, resources, connection, error) = {
             let s = self.state();
             let Some(identity) = s.identity.as_ref().filter(|_| s.enabled) else { return };
-            (identity.label.clone(), s.resources.clone())
+            (identity.label.clone(), s.resources.clone(), s.connection.clone(), s.recent_open_error.clone())
         };
         ui.heading(crate::i18n::fmt(crate::tl!("Recent — {label}"), &[("label", &label)]));
+        if let Some(error) = error.filter(|error| error.connection == connection) {
+            let message = crate::i18n::fmt(
+                crate::tl!("Couldn't open {path}: {error}"),
+                &[("path", &error.name), ("error", crate::tl!(error.message.as_str()))],
+            );
+            ui.colored_label(ui.visuals().error_fg_color, message);
+        }
         if resources.is_empty() {
             ui.weak(crate::tl!("No recent provider files."));
         }
         for resource in resources {
-            if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked()
-                && let Err(error) = self.request_open(&resource.id)
-            {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+            if ui.button(&resource.name).on_hover_text(&resource.updated_at).clicked() {
+                let error = self.request_open(&resource.id).err();
+                let mut s = self.state();
+                // A late frame from the previous account cannot publish its error into the next one.
+                if s.connection == connection && s.enabled {
+                    s.recent_open_error = error.map(|message| RecentOpenError { connection: connection.clone(), name: resource.name, message });
+                }
+                ui.ctx().request_repaint();
             }
         }
         ui.separator();

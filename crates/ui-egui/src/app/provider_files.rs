@@ -155,7 +155,7 @@ impl WordApp {
                 if session.rev() == capture.revision && !drafts {
                     session.dirty = false;
                     if session.path.is_none() {
-                        session.file_name = Some(capture.name.clone());
+                        session.file_name = Some(provider_name_stem(&capture.name));
                     }
                 }
             });
@@ -178,7 +178,7 @@ impl WordApp {
         match result {
             Ok(_) => {
                 self.session.path = None;
-                self.session.file_name = Some(name.clone());
+                self.session.file_name = Some(provider_name_stem(&name));
                 self.no_document = None;
                 self.autosave_path = None;
                 self.ui.backstage = false;
@@ -194,6 +194,15 @@ impl WordApp {
             }
         }
     }
+}
+
+/// Session fallback names follow the native stem convention; provider captures keep their complete names.
+fn provider_name_stem(name: &str) -> String {
+    std::path::Path::new(name)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -289,6 +298,116 @@ mod tests {
         host.resolve_dialog(request, "cancel", "").unwrap();
         assert_eq!(host.filename(doc).as_deref(), Some(name));
         assert!(app.session.dirty);
+    }
+
+    fn assert_provider_local_names(app: &WordApp, extension: &str, name: &str) {
+        assert_eq!(app.session.file_name.as_deref(), Some("Résumé.v2"));
+        assert_eq!(app.title_stem(), "Résumé.v2");
+        assert_eq!(app.web_save_name("file.exportPdf"), "Résumé.v2.pdf");
+        if extension == "docx" {
+            assert_eq!(app.default_save_name(), name, "local Save must not append a second .docx");
+        }
+    }
+
+    fn assert_provider_native_package_name_roundtrip(extension: &str) {
+        let (mut app, host) = app();
+        let name = format!("Résumé.v2.{extension}");
+        let vba = std::sync::Arc::new(vec![0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+        let macros = matches!(extension, "docm" | "dotm");
+        if macros {
+            app.session.doc.passthrough.insert("word/vbaProject.bin".into(), vba.clone());
+        }
+        let document = app.session.document_id();
+        assert!(app.choose_provider_save(true));
+        let request = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_string();
+        host.resolve_dialog(&request, "provider", &name).unwrap();
+        app.provider_tick();
+        let event = host.take_events().into_iter().find(|e| e.metadata["type"] == "save").unwrap();
+        assert_eq!(event.metadata["name"], name);
+        let bytes = event.bytes.unwrap();
+        let decoded = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+        assert!(decoded.plain_text(wordcraft_doc::StoryRef::Body).contains("Documento con ñ"));
+        if macros {
+            assert_eq!(decoded.passthrough.get("word/vbaProject.bin"), Some(&vba));
+        }
+        let captured_revision = app.session.rev();
+        assert!(app.session.dirty);
+        host.result(request, "saved".into(), "resource-one".into()).unwrap();
+        app.provider_tick();
+        assert_eq!(app.session.document_id(), document);
+        assert_eq!(app.session.rev(), captured_revision);
+        assert!(!app.session.dirty);
+        assert_provider_local_names(&app, extension, &name);
+        assert_eq!(host.filename(document).as_deref(), Some(name.as_str()));
+        assert!(app.choose_provider_save(false));
+        let next = host.take_events().remove(0).metadata;
+        assert_eq!(next["name"], name, "provider Save retains the complete native package suffix");
+        host.resolve_dialog(next["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+
+        let device_recents = vec!["/device/Existing.docx".to_string()];
+        app.ui.recent = device_recents.clone();
+        let read = host.request_open("resource-one").unwrap();
+        host.open(read, name.clone(), bytes).unwrap();
+        app.provider_tick();
+        let opened = app.session.document_id();
+        assert_ne!(opened, document);
+        assert_provider_local_names(&app, extension, &name);
+        assert_eq!(host.filename(opened).as_deref(), Some(name.as_str()));
+        assert_eq!(app.ui.recent, device_recents, "a provider name never becomes a device path");
+        assert!(!app.session.dirty, "normal native import keeps its initial checkpoint");
+        if macros {
+            assert_eq!(app.session.doc.passthrough.get("word/vbaProject.bin"), Some(&vba));
+        }
+    }
+
+    /// Provider names stay native and complete while local pickers and exports use a name stem.
+    #[test]
+    fn provider_ack_and_open_keep_local_stems_and_complete_native_package_names() {
+        for extension in ["docx", "docm", "dotx", "dotm"] {
+            assert_provider_native_package_name_roundtrip(extension);
+        }
+    }
+
+    /// Closing File clears a provider refusal through the real WordApp frame without releasing reads.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn closing_file_clears_provider_recent_error_without_discarding_pending_work() {
+        use egui_kittest::kittest::Queryable;
+        let (mut app, host) = app();
+        let connection = host.snapshot()["connectionId"].as_str().unwrap().to_string();
+        host.set_resources(
+            &connection,
+            vec![crate::file_providers::Resource { id: "one".into(), name: "Example.docx".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+        for _ in 0..16 {
+            host.request_open("one").unwrap();
+        }
+        host.take_events();
+        let before = (app.session.document_id(), app.session.rev(), app.session.dirty);
+        app.run("ui.backstage", json!({"value":true,"page":"home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h.get_by_label("Example.docx").click();
+        h.run_steps(3);
+        let message = crate::i18n::fmt(
+            crate::tl!("Couldn't open {path}: {error}"),
+            &[("path", "Example.docx"), ("error", crate::tl!("too many pending provider reads"))],
+        );
+        h.get_by_label(message.as_str());
+        h.state_mut().run("ui.backstage", json!({"value":false})).unwrap();
+        h.run_steps(3);
+        h.state_mut().run("ui.backstage", json!({"value":true,"page":"home"})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label(message.as_str()).is_none(), "the old refusal must not return when File reopens");
+        assert_eq!((h.state().session.document_id(), h.state().session.rev(), h.state().session.dirty), before);
+        assert!(host.busy(), "clearing presentation never completes the sixteen outstanding reads");
     }
 
     /// Build a dirty native document and one explicit account for app-level provider scenarios.

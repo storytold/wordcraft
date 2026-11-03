@@ -434,6 +434,9 @@ impl WordApp {
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
+            if let Some(host) = &self.services.file_providers {
+                host.clear_recent_open_error();
+            }
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
