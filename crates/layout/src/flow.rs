@@ -262,6 +262,17 @@ impl<'a> Flow<'a> {
         if self.pl.rp.before_auto && self.block == 0 {
             before = 0.0;
         }
+        // An empty paragraph after a document's leading table, placed floating on this page, has no
+        // space before (Word's PDFs: 0 pt and 12 pt before put the text after it at the same place).
+        // Only that shape is observed: later pages and columns keep theirs.
+        if self.block == 1
+            && pb.fresh()
+            && !pb.web
+            && pb.pages.last().is_some_and(|pg| pg.float_tables.contains(&Path::top(0)))
+            && only_markers(self.p, 0..self.p.text.len())
+        {
+            before = 0.0;
+        }
         before
     }
 

@@ -8,6 +8,7 @@ mod autospace;
 mod bidi;
 mod budget;
 mod complex;
+mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
