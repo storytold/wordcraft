@@ -337,6 +337,8 @@ fn licence_hover(pack: &Pack) -> String {
 /// File › Options › Language › Language packs: every available and installed pack with its
 /// name, size, licence and source, and Install or Remove.
 pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
+    // Pack names include Arabic and other scripts; ask for a system Arabic face when none is embedded.
+    app.want_system_arabic = true;
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Language packs")).font(semibold(15.0)));
     ui.add_space(2.0);
@@ -407,7 +409,7 @@ pub(crate) fn options_section(app: &mut WordApp, ui: &mut Ui) {
     let mut install = None;
     let mut removal = None;
     egui::ScrollArea::vertical().id_salt("options_language_packs").max_height(260.0).show(ui, |ui| {
-        egui::Grid::new("options_language_packs_grid").num_columns(5).spacing(vec2(14.0, 6.0)).striped(true).show(ui, |ui| {
+        crate::rtl::grid(ui, egui::Grid::new("options_language_packs_grid").num_columns(5).spacing(vec2(14.0, 6.0)).striped(true), |ui| {
             for h in ["Language", "Size", "Licence", "Source", ""] {
                 ui.label(RichText::new(if h.is_empty() { "" } else { tl!(h) }).small().color(t.text_dim));
             }
@@ -658,12 +660,23 @@ mod tests {
         // Turning downloading on fails: the window's own failure.
         assert!(!super::consent(&mut a, &ctx, "nl"));
         clean(&super::error_of(&a, "nl").expect("a failure is shown"));
-        // An install and the list fail in the engine.
+        // An install and the list fail in the engine. Another test's window, drawn meanwhile,
+        // can move them onto the engine's thread (`tick`): the call then starts the job, and its
+        // failure is recorded when the job ends.
+        let failed = |r: Result<bool, String>| {
+            if r == Ok(true) {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while super::busy() && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+            r != Ok(false)
+        };
         a.packs_rt.errors.clear();
         backend.inner.network.store(true, Ordering::Relaxed);
-        assert!(packs::start_install("nl").is_err());
+        assert!(failed(packs::start_install("nl")));
         clean(&super::error_of(&a, "nl").expect("the install's failure is shown"));
-        assert!(packs::start_refresh().is_err());
+        assert!(failed(packs::start_refresh()));
         clean(&super::error_of(&a, "").expect("the list's failure is shown"));
     }
 
