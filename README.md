@@ -299,6 +299,8 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
+AppImages include the X11 keyboard bridge and its XCB keyboard dependency (#5363). Other display/GPU libraries and a compatible glibc are still required. To build an AppImage on Ubuntu, install `libxkbcommon-x11-0` and `libxcb-xkb1` on the target build runner. Packaging copies their libraries and copyright notices and refuses to produce an incomplete AppImage.
+
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
