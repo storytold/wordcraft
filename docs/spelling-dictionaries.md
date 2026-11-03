@@ -1,6 +1,6 @@
 # Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-02 · **Change:** trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -21,9 +21,10 @@ The easiest way to proof another language is its **Language pack**: the language
 dictionary, hyphenation patterns and licence texts, installed and removed together. English is
 built in; every other language is a pack.
 
-> The first set of Language packs (language-packs-1) has 61 languages. Dutch, German, Danish,
-> Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian, Mongolian, Esperanto and Thai aren't
-> packs yet: their dictionaries need spell-checker features that aren't built yet. Basque,
+> The current set of Language packs (language-packs-2) has 75 languages, among them Dutch,
+> German, Danish, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto.
+> Mongolian isn't a pack yet (its suggestions are too slow), nor is Thai (WordCraft can't yet
+> split Thai text, which has no spaces, into words). Basque,
 > Ukrainian and Uyghur aren't packs: their data's licence doesn't allow it, or isn't clear.
 
 - **File › Options › Language › Language packs** lists the packs, each with its size, its licence
@@ -182,6 +183,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
 | 2026-11-01 | minor | Language packs (CP4.3): installing a language from File › Options › Language or the missing-pack bar, the download consent, About › Language data, the commands; an installed pack is searched after the dictionaries folders and before the system's |
