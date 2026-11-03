@@ -238,6 +238,21 @@ mod tests {
         }
 
         #[test]
+        fn valencian_text_is_on_the_valencian_packs_row() {
+            let mut b = FixedBackend::sample();
+            let mut v = b.packs.first().cloned().unwrap();
+            v.locale = "ca-valencia".into();
+            v.size = 1_500_000;
+            b.packs.push(v);
+            with_backend(b, |s, _| {
+                s.run("document.setText", &json!({"text": "Bon dia"})).unwrap();
+                mark(s, 0, "ca-ES-valencia");
+                let rows = packs::your_languages_with(s, None, &none);
+                assert_eq!(row(&rows, "ca-ES-valencia").pack.as_deref(), Some("ca-valencia"), "as the bar offers it");
+            });
+        }
+
+        #[test]
         fn the_own_folder_and_the_default_language() {
             with_backend(FixedBackend::sample(), |s, _| {
                 s.run("document.setText", &json!({"text": "Cześć\nMerhaba"})).unwrap();

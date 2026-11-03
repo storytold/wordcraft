@@ -798,21 +798,9 @@ impl LanguageRow {
     }
 }
 
-/// The first locale `has` accepts for `tag`: the whole tag, then each shorter prefix of it (as
-/// [`pack_for_tag`]). `None` for English and junk.
+/// The first locale `has` accepts for `tag`, in [`pack_for_tag`]'s order. `None` for English and junk.
 fn locale_for_tag(tag: &str, has: &dyn Fn(&str) -> bool) -> Option<String> {
-    let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
-    let base = tag.split('-').next().unwrap_or("");
-    if base.is_empty() || base == "en" {
-        return None;
-    }
-    let mut prefix = tag.as_str();
-    loop {
-        if has(prefix) {
-            return Some(prefix.to_string());
-        }
-        prefix = prefix.rsplit_once('-')?.0;
-    }
+    pack_candidates(tag).into_iter().find(|c| has(c))
 }
 
 /// [`your_languages_with`] against the dictionaries on this computer.
