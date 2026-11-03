@@ -5,7 +5,7 @@ use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_H
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 
-use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, type_text, type_text_effect};
+use super::{delete_selection, delete_selection_effect, sel_result, split_para, type_text, type_text_effect};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod autoformat;
