@@ -848,7 +848,7 @@ impl DocLayout {
     pub fn line_toward(&self, pos: &Pos, page_hint: usize, x: f32, y: f32, dir: i32) -> Option<Pos> {
         let c = self.caret_on(pos, page_hint)?;
         let page = self.pages.get(c.page)?;
-        let lines = page_lines(page, pos.story);
+        let lines = goal_lines(page, pos.story, x);
         let dy = |l: &LineHit| band_dist(y, l.top, l.bottom - l.top);
         let dx = |l: &LineHit| (l.left - x).max(x - l.right).max(0.0);
         let l = lines.iter().filter(|l| beyond(l, &c, dir)).min_by(|a, b| dy(a).total_cmp(&dy(b)).then(dx(a).total_cmp(&dx(b))))?;
@@ -1254,5 +1254,45 @@ mod clip_navigation_tests {
         assert_eq!(next.path, Path::top(2));
         assert_eq!(goal, anchor.x);
         assert!(lay.caret_on(&next, 1).is_some(), "navigation lands on a visible caret");
+    }
+
+    #[test]
+    fn paging_skips_clipped_carets() {
+        let mut doc = Document::from_text("MMMMMMMMMMMM\nMMMMMMMMMMMM\nMMMMMMMMMMMM");
+        for index in 0..3 {
+            doc.para_mut(StoryRef::Body, &Path::top(index)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(24.0));
+        }
+        let mut lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        let path = Path(vec![1, 0, 0, 0]);
+        let index = lay.pages[0].items.iter().position(|item| matches!(item, Placed::Lines { path, .. } if *path == Path::top(1))).unwrap();
+        if let Placed::Lines { path: actual, .. } = &mut lay.pages[0].items[index] {
+            *actual = path.clone();
+        }
+        lay.index.remove(&(StoryRef::Body, Path::top(1)));
+        lay.index.insert((StoryRef::Body, path.clone()), vec![(0, index)]);
+        let target = Pos { story: StoryRef::Body, path: path.clone(), off: 6 };
+        let caret = lay.caret_on(&target, 0).unwrap();
+        let left = lay.caret_on(&Pos { off: 0, ..target.clone() }, 0).unwrap().x;
+        let y = caret.top + caret.height / 2.0;
+        assert!(caret.x > left, "the shaped target lies after visible text");
+        for (from, dir) in [(0, 1), (2, -1)] {
+            assert_eq!(lay.line_toward(&Pos::body(from, 6), 0, caret.x, y, dir), Some(target.clone()), "unclipped nearest line");
+        }
+
+        // Retain the shaped line and visible ink, but hide the selected offset horizontally.
+        let line = page_lines(&lay.pages[0], StoryRef::Body).into_iter().find(|line| line.path == &path).unwrap();
+        let rect = Rect::new(left, line.top, (caret.x - left) / 2.0, line.bottom - line.top);
+        lay.pages[0].items.push(Placed::Cell { rect, covered: false, table: Path::top(1), row: 0, cell: 0, story: StoryRef::Body, clip: true });
+        assert!(
+            page_lines(&lay.pages[0], StoryRef::Body).iter().any(|line| line.path == &path),
+            "visible ink keeps the line eligible before the goal check"
+        );
+        assert!(lay.caret_on(&target, 0).is_none(), "the selected caret is fully outside the physical clip");
+        assert!(lay.caret_on(&Pos { off: 0, ..target.clone() }, 0).is_some(), "the same line retains a visible caret");
+        for (from, alternative, dir) in [(0, 2, 1), (2, 0, -1)] {
+            let next = lay.line_toward(&Pos::body(from, 6), 0, caret.x, y, dir).unwrap();
+            assert_eq!(next, Pos::body(alternative, 6), "direction {dir}: choose the visible alternative");
+            assert!(lay.caret_on(&next, 0).is_some(), "paging must land on a visible caret");
+        }
     }
 }
