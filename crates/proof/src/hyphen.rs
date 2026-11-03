@@ -917,6 +917,45 @@ mod tests {
         assert_eq!(hyphen_points_in("presupuesto", &Limits { before_last: 3, ..Limits::default() }, ProofLang::Es), [3, 5]);
     }
 
+    /// Diphthongs, hiatus, `ñ` and short words, the cases a reviewer asked about.
+    #[test]
+    fn spanish_vowels_enye_and_short_words() {
+        let raw = |w: &str| word_breaks_in(w, ProofLang::Es).0;
+        // A diphthong is one syllable: `ai-re`, `ciu-dad`.
+        assert_eq!(raw("aire"), [2]);
+        assert_eq!(raw("ciudad"), [3]);
+        // Two vowels in hiatus are never split at a line end (the RAE advises against it): `país`,
+        // `baúl` and `leer` stay whole, `caí-do` breaks only at the consonant.
+        for w in ["país", "baúl", "leer", "reír"] {
+            assert!(raw(w).is_empty(), "{w}: {:?}", raw(w));
+        }
+        assert_eq!(raw("caído"), [3]);
+        // `ñ` starts a syllable like any consonant.
+        assert_eq!(raw("señora"), [2, 4]);
+        assert_eq!(raw("compañía"), [3, 5]);
+        // Short words: the patterns or the paragraph's limits keep them whole.
+        for w in ["año", "ala", "oso", "ira", "aún", "mesa", "aire", "niño"] {
+            assert!(hyphen_points_in(w, &Limits::default(), ProofLang::Es).is_empty(), "{w}");
+        }
+    }
+
+    /// Every token of the bundled file's `\patterns{…}` block becomes a pattern: none is dropped
+    /// as malformed (too long, or a letter the alphabet can't hold), and the file has no exception
+    /// words. The file is bundled at build time, so its size is fixed; patterns longer than
+    /// `MAX_PATTERN_LEN` letters are refused by [`Patterns::insert`].
+    #[test]
+    fn every_spanish_pattern_line_is_used() {
+        let tokens = ES_PAT
+            .lines()
+            .map(|l| l.split('%').next().unwrap_or(""))
+            .flat_map(str::split_whitespace)
+            .filter(|t| *t != "\\patterns{" && *t != "}")
+            .collect::<std::collections::HashSet<_>>();
+        assert!(tokens.iter().all(|t| !t.contains('\\') && !t.contains('{') && !t.contains('}') && !t.contains('-')), "only one plain block");
+        assert_eq!(Patterns::es().len(), tokens.len());
+        assert_eq!(Patterns::es().exception_count(), 0);
+    }
+
     #[test]
     fn languages_without_patterns_keep_the_english_ones() {
         for w in ["hyphenation", "typography", "internationalization"] {
