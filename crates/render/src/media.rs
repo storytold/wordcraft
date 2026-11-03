@@ -158,20 +158,22 @@ pub(crate) struct Vector {
 
 impl Vector {
     /// Approximate memory held: pixels and path segments.
-    fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         let px: usize = self.pixmaps.iter().flatten().map(|p| p.width() as usize * p.height() as usize * 4).sum();
-        let segs: usize = self
-            .pic
-            .items
-            .iter()
-            .map(|it| match it {
-                Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-                Item::Bitmap { .. } => 0,
-                Item::Text(t) => t.text.len() + t.dx.len() * 4,
-            })
-            .sum();
-        px + segs
+        px.saturating_add(geometry_bytes(&self.pic))
     }
+}
+
+/// Approximate memory held by a picture's path segments and text.
+fn geometry_bytes(pic: &Picture) -> usize {
+    pic.items
+        .iter()
+        .map(|it| match it {
+            Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
+            Item::Bitmap { .. } => 0,
+            Item::Text(t) => t.text.len() + t.dx.len() * 4,
+        })
+        .sum()
 }
 
 /// The metafile picture for a media key. None when the bytes are not a metafile or do not parse, so
@@ -200,8 +202,33 @@ fn build_vector(bytes: &[u8]) -> Option<Vector> {
         return None;
     }
     // The pixels move into the pixmaps; the picture keeps only the geometry.
-    let pixmaps = pic.items.iter_mut().map(|it| it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px)).map(Arc::new)).collect();
+    let pixmaps: Vec<Option<Pixmap>> = pic.items.iter_mut().map(|it| it.take_pixels().and_then(|(w, h, px)| premul_pixmap(w, h, &px))).collect();
+    let pixmaps = fit_cache(pixmaps, geometry_bytes(&pic)).into_iter().map(|p| p.map(Arc::new)).collect();
     Some(Vector { pic, pixmaps })
+}
+
+/// The bitmaps of a metafile at a size its whole picture is kept in the cache. When geometry and
+/// bitmaps together are past the cache budget (a metafile with a 6000 x 6000 bitmap is 144 MB), the
+/// cache would refuse the picture and every repaint would parse and decode the file again, so the
+/// bitmaps are box-averaged down to half the budget between them, in proportion to their size, as
+/// large raster pictures are (#3665). Pictures within the budget keep their full resolution.
+pub(crate) fn fit_cache(mut pixmaps: Vec<Option<Pixmap>>, geometry: usize) -> Vec<Option<Pixmap>> {
+    let bytes = |p: &Pixmap| usize::from(p.width()) * usize::from(p.height()) * 4;
+    let total: usize = pixmaps.iter().flatten().map(bytes).sum();
+    if total.saturating_add(geometry) <= CACHE_BYTES {
+        return pixmaps;
+    }
+    // With no room (the geometry alone is half the budget) nothing shrinks and the picture stays
+    // uncached, as before.
+    let room = (CACHE_BYTES / 2).saturating_sub(geometry) / 4;
+    for pm in pixmaps.iter_mut().flatten() {
+        // This bitmap's share of the pixels that fit.
+        let share = (room as u128 * bytes(pm) as u128 / total.max(1) as u128) as u64;
+        if let Some(small) = shrink(pm, share) {
+            *pm = small;
+        }
+    }
+    pixmaps
 }
 
 fn rgba_color(c: [u8; 4]) -> peniko::Color {
