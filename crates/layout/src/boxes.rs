@@ -635,9 +635,11 @@ pub(crate) fn push_para(
     // Beside a float, top and bottom borders stop at the line's edges (Word); `start_of` mirrors
     // the line breaker's edges without floats.
     let first_left = pl.rp.indent_left + pl.rp.indent_first;
+    let beside = |k: usize| pl.lines.get(k).is_some_and(|l| l.beside);
+    let row0_end = (1..pl.lines.len()).find(|&k| !beside(k)).unwrap_or(pl.lines.len());
     let start_of = |k: usize| match pl.drop_cap {
         Some((_, dl, dw)) if dw > 0.0 && k < usize::from(dl) => first_left.max(pl.rp.indent_left) + dw,
-        _ if k == 0 => first_left,
+        _ if k < row0_end => first_left,
         _ => pl.rp.indent_left,
     };
     let along = |k: usize, line: &para::Line| {
@@ -655,7 +657,6 @@ pub(crate) fn push_para(
     if let Some(b) = &pl.rp.borders {
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         // A row split by a float is several lines; the rule runs along each.
-        let beside = |k: usize| pl.lines.get(k).is_some_and(|l| l.beside);
         let first_row = l0..(l0 + 1..l1).find(|&k| !beside(k)).unwrap_or(l1);
         let last_row = (l0..l1).rev().find(|&k| !beside(k)).unwrap_or(l0)..l1;
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {

@@ -264,7 +264,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 ## Revision history
 
-> 2026-11-03 · A paragraph's top and bottom borders beside a floating table stop where its text stops, at the table's distance from text, instead of running under the table, as checked in Word; indents and drop caps alone never shorten them, and a side border's room never carries them past the text's edge (`layout::tests::a_paragraph_border_beside_a_floating_table_stops_at_the_table`).
+> 2026-11-03 · A paragraph's top and bottom borders beside a floating table stop where its text stops, at the table's distance from text, instead of running under the table, as checked in Word; indents and drop caps alone never shorten them, and a side border's room never carries them past the text's edge, and every piece of a hanging first row split by a float keeps the gap, #5366 (`layout::tests::a_paragraph_border_beside_a_floating_table_stops_at_the_table`, `a_hanging_first_row_split_by_a_float_keeps_the_gap`).
 
 > 2026-11-01 · Paragraph side borders lie beyond their distance from the text, as the top and bottom ones do; top and bottom reach the corners and the shading fills out to the outer edges (#5036) (`layout::tests::side_borders_lie_beyond_their_distance_from_the_text`).
 

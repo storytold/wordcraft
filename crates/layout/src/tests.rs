@@ -5932,6 +5932,46 @@ fn a_hanging_paragraph_border_beside_a_left_float_stops_at_it() {
     assert!(starts.iter().any(|x| *x >= 72.0 + 20.0), "rules start at {starts:?}");
 }
 
+/// Every piece of a hanging paragraph's first row keeps the float's gap, even where it starts
+/// inside the hanging indent (#5366; scenario from OPUZZLES).
+#[test]
+fn a_hanging_first_row_split_by_a_float_keeps_the_gap() {
+    use wordcraft_doc::para::FloatAlign;
+    for words in [15, 140] {
+        let mut d = Document::from_text(&"a ".repeat(words));
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.indent_left = Some(144.0);
+        p.props.indent_first = Some(-144.0);
+        let rule = Some(Border::single(1.0));
+        p.props.borders = Some(Borders { top: rule, bottom: rule, ..Borders::default() });
+        let mut t = side_table(30.0, FloatAlign::Start, [10.0, 0.0, 10.0, 0.0]);
+        t.rows[0].cells[0].blocks =
+            (0..10).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("S", Default::default()))).collect();
+        if let Some(f) = t.props.float.as_mut() {
+            f.h_align = None;
+            f.x = 40.0;
+        }
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let (table_left, table_right) = (72.0 + 40.0, 72.0 + 70.0);
+        // The table's own borders lie within it.
+        let rules: Vec<_> = horizontal_rules(&l).into_iter().filter(|r| r.0 < table_left - 1.0 || r.1 > table_right + 1.0).collect();
+        let top = rules.iter().map(|r| r.2).fold(f32::INFINITY, f32::min);
+        let bottom = rules.iter().map(|r| r.2).fold(f32::NEG_INFINITY, f32::max);
+        for r in &rules {
+            let checked = (r.2 - top).abs() < 0.01 || words == 15;
+            assert!(
+                !checked || r.1 <= table_left + 0.01 || r.0 >= table_right - 0.01,
+                "words {words}: rule {r:?} crosses the table; rules {rules:?}"
+            );
+        }
+        if words == 140 {
+            let last: Vec<_> = rules.iter().filter(|r| (r.2 - bottom).abs() < 0.01).map(|r| (r.0, r.1)).collect();
+            assert_eq!(last, vec![(72.0, 540.0)], "later rows keep the full bottom border");
+        }
+    }
+}
+
 /// A row split by a centred float gets its top and bottom borders on both sides.
 #[test]
 fn a_paragraph_border_runs_on_both_sides_of_a_centred_float() {
