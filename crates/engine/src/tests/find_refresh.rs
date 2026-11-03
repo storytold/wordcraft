@@ -67,3 +67,24 @@ fn result_refresh_keeps_regex_wildcards_and_each_documents_search() {
     assert!(s.run("edit.find", &json!({"text": "(", "regex": true, "wildcards": false})).is_err());
     assert!(s.find_results().is_empty(), "an invalid changed query cannot leave stale results visible");
 }
+
+#[test]
+fn rejected_replacement_refreshes_results_for_the_restored_document() {
+    let mut s = crate::Session::new(Document::from_text("Locked cat.\nEditable cat."));
+    run(&mut s, "select.text", json!({"text": "Editable cat."}));
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "edit.find", json!({"text": "cat"}));
+    let matches = s.find_results().to_vec();
+    assert_eq!(matches.len(), 2);
+    for (a, b) in &matches {
+        assert_eq!(s.doc.para_at(a).unwrap().text.get(a.off..b.off), Some("cat"));
+    }
+    let before = (s.doc.clone(), s.sel.clone(), s.dirty, s.rev(), s.undo_depth());
+    let error = s.run("edit.replace", &json!({"with": "dog"})).unwrap_err();
+    assert!(error.to_string().contains("only the editable regions"), "{error}");
+    assert_eq!((s.doc.clone(), s.sel.clone(), s.dirty, s.rev(), s.undo_depth()), before);
+    assert_eq!(s.find_results(), matches.as_slice(), "rollback restores both matches at the unchanged revision");
+    assert_eq!((s.doc.clone(), s.sel.clone(), s.dirty, s.rev(), s.undo_depth()), before);
+}

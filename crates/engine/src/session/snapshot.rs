@@ -253,6 +253,11 @@ impl Session {
     /// command cached at the revision it touched to is dropped: that number comes round again
     /// with the next edit, for a different document.
     pub(super) fn restore_rev(&mut self, rev: u64) {
+        // A rejected handler can cache matches before its edit commits a new revision.
+        // Restoring the document must invalidate those matches even when `rev` is unchanged.
+        if let Some((r, _)) = &mut self.find.results_revision {
+            *r = rev.wrapping_sub(1);
+        }
         if self.rev == rev {
             return;
         }
@@ -264,11 +269,6 @@ impl Session {
         }
         if self.find.highlights.as_ref().is_some_and(|(r, _)| *r != rev) {
             self.find.highlights = None;
-        }
-        if let Some((r, _)) = &mut self.find.results_revision
-            && *r != rev
-        {
-            *r = rev.wrapping_sub(1);
         }
         let facts = self.protect_facts.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
         if facts.as_ref().is_some_and(|((_, r, _), _)| *r != rev) {
