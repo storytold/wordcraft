@@ -80,12 +80,12 @@ impl Utterance {
 pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: bool) -> Vec<Utterance> {
     let story = from.story;
     // Spans to leave out: whole range fields, both markers included.
-    let skipped: Vec<(Pos, Pos)> = if skip_citations {
+    let skipped = Spans::new(if skip_citations {
         doc.field_ranges(story).into_iter().filter(|r| is_citation_code(&r.instr)).map(|r| (r.start, r.end)).collect()
     } else {
         Vec::new()
-    };
-    let in_skipped = |p: &Pos| skipped.iter().any(|(a, b)| a <= p && p <= b);
+    });
+    let in_skipped = |p: &Pos| skipped.contains(p);
     let mut out = Vec::new();
     for path in doc.para_paths(story) {
         if path < from.path {
@@ -154,6 +154,36 @@ pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: b
         }
     }
     out
+}
+
+/// Spans of the document (both ends included), sorted and merged so a position is looked up by
+/// binary search: checking every character against every citation was quadratic in a document
+/// with many of them.
+struct Spans(Vec<(Pos, Pos)>);
+
+impl Spans {
+    fn new(mut spans: Vec<(Pos, Pos)>) -> Self {
+        spans.retain(|(a, b)| a <= b);
+        spans.sort();
+        let mut merged: Vec<(Pos, Pos)> = Vec::with_capacity(spans.len());
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => {
+                    if b > last.1 {
+                        last.1 = b;
+                    }
+                }
+                _ => merged.push((a, b)),
+            }
+        }
+        Spans(merged)
+    }
+
+    /// Is `p` inside one of the spans?
+    fn contains(&self, p: &Pos) -> bool {
+        let after = self.0.partition_point(|(a, _)| a <= p);
+        after.checked_sub(1).and_then(|i| self.0.get(i)).is_some_and(|(_, b)| p <= b)
+    }
 }
 
 /// The language of `text` from its script, as a BCP 47 primary tag: Cyrillic is Russian (Ukrainian
