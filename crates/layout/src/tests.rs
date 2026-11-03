@@ -12,6 +12,7 @@ mod grid;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;
+mod nested_table;
 mod numeral;
 mod pages;
 mod styleref;
