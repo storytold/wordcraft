@@ -282,7 +282,10 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
-        s.doc.section_mut(block).page_borders = borders;
+        // The distances set here are from the page edge, as the layout draws them.
+        let sect = s.doc.section_mut(block);
+        sect.page_borders = borders;
+        sect.page_borders_from_text = false;
     }
     sel_result(s)
 }

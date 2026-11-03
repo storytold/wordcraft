@@ -88,7 +88,7 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             ],
         );
         if let Some(b) = &s.page_borders {
-            borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", "text")]);
+            borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", if s.page_borders_from_text { "text" } else { "page" })]);
         }
         if let Some(l) = &s.line_numbers {
             let restart = match l.restart {

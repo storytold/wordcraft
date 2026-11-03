@@ -780,7 +780,10 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                     _ => PageVAlign::Top,
                 }
             }
-            "w:pgBorders" => s.page_borders = Some(borders(k)),
+            "w:pgBorders" => {
+                s.page_borders = Some(borders(k));
+                s.page_borders_from_text = k.attr("w:offsetFrom") != Some("page");
+            }
             "w:docGrid" => {
                 let mut g = DocGrid::default();
                 if let Some(t) = k.attr("w:type").and_then(DocGridType::from_ooxml) {
