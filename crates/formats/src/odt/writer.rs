@@ -599,8 +599,11 @@ impl Writer {
         }
         self.close_ins(out);
         out.push_str(xml);
-        // With the pictures it shows.
+        // With the pictures it shows. Its bookmarks' names are taken: the model's don't repeat them.
         super::kept::hrefs(xml, &mut self.kept_files_used);
+        let (starts, ends) = super::kept::bookmarks(xml);
+        self.bookmarks.extend(starts);
+        self.bookmark_ends.extend(ends);
         true
     }
 

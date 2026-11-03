@@ -177,13 +177,17 @@ fn citations_are_numbered_as_the_document_numbers_its_notes() {
     // §6.3.3: the citation is the text shown. Footnotes in A, B, C from the third (ODF counts the
     // first number from 0), endnotes as configured; without a configuration 1, 2, 3 and i, ii.
     let mut d = import(&body(r#"<text:p>One<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>a</text:p></text:note-body></text:note> two<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>b</text:p></text:note-body></text:note> three<text:note text:note-class="endnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>c</text:p></text:note-body></text:note></text:p>"#)).unwrap();
-    let citations = |d: &Document| {
-        let c = crate::odt::tests::entry(&export(d).unwrap(), "content.xml");
+    let citations = |d: &Document, model: bool| {
+        let saved = if model { crate::odt::tests::export_model(d) } else { export(d) };
+        let c = crate::odt::tests::entry(&saved.unwrap(), "content.xml");
         c.split("<text:note-citation>").skip(1).filter_map(|s| s.split('<').next()).map(str::to_string).collect::<Vec<_>>()
     };
-    assert_eq!(citations(&d), ["1", "2", "i"]);
+    assert_eq!(citations(&d, true), ["1", "2", "i"]);
+    // Unedited, the file's own (as read).
+    assert_eq!(citations(&d, false), ["x", "x", "x"]);
     d.settings.footnote_format = wordcraft_doc::section::NumFormat::UpperLetter;
     d.settings.footnote_pr.num_start = Some(3);
     d.settings.endnote_format = wordcraft_doc::section::NumFormat::Decimal;
-    assert_eq!(citations(&d), ["C", "D", "1"]);
+    // The numbering changed: its notes' paragraph written from the model, numbered anew.
+    assert_eq!(citations(&d, false), ["C", "D", "1"]);
 }

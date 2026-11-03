@@ -37,11 +37,24 @@ fn package(s: &Sample) -> Vec<u8> {
         z.start_file(name, o).unwrap();
         std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
     }
-    // The picture a sample may show.
-    z.start_file("Pictures/dot.png", o).unwrap();
-    std::io::Write::write_all(&mut z, DOT).unwrap();
+    // The picture a sample may show, and a formula object with its preview.
+    for (name, data) in [
+        ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+        ("Pictures/dot.png", DOT),
+        ("Object 9/content.xml", FORMULA.as_bytes()),
+        ("ObjectReplacements/Object 9", DOT),
+    ] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data).unwrap();
+    }
     z.finish().unwrap().into_inner()
 }
+
+/// The samples' manifest (ODF 1.3 Part 2 §4): the formula object is one.
+const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="Pictures/dot.png" manifest:media-type="image/png"/><manifest:file-entry manifest:full-path="Object 9/" manifest:media-type="application/vnd.oasis.opendocument.formula"/><manifest:file-entry manifest:full-path="Object 9/content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="ObjectReplacements/Object 9" manifest:media-type="image/png"/></manifest:manifest>"#;
+
+/// A formula object's content (MathML, ODF 1.3 §10.4.3): x².
+const FORMULA: &str = r#"<?xml version="1.0" encoding="UTF-8"?><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><msup><mi>x</mi><mn>2</mn></msup><annotation encoding="StarMath 5.0">x^2</annotation></semantics></math>"#;
 
 /// A one-pixel picture of our own.
 const DOT: &[u8] = &[
@@ -137,7 +150,7 @@ fn check(s: &Sample) {
 /// Paragraphs and text WordCraft partly models: unknown elements, attributes and namespaces.
 const TEXT: Sample = Sample {
     name: "text",
-    content: r##"<office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-left="0.4in" wcx:spring="tight"/><style:text-properties fo:color="#336699" wcx:hue="warm"/></style:style><style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" style:text-blinking="true"/></style:style></office:automatic-styles><office:body><office:text><text:h text:outline-level="1">Orchard notes</text:h><text:p text:style-name="P1" wcx:mood="calm">Pears ripen <text:span text:style-name="T1">late</text:span> in the year<text:hidden-text text:condition="ooow:1" text:string-value="quiet"/>, and <wcx:marker wcx:kind="star">apples</wcx:marker> early.</text:p><text:p>Second paragraph with a <text:note text:id="n1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>Footnote words.</text:p></text:note-body></text:note> note.</text:p></office:text></office:body>"##,
+    content: r##"<office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-left="0.4in" wcx:spring="tight"/><style:text-properties fo:color="#336699" wcx:hue="warm"/></style:style><style:style style:name="T1" style:family="text"><style:text-properties fo:font-weight="bold" style:text-blinking="true"/></style:style></office:automatic-styles><office:body><office:text text:use-soft-page-breaks="true"><text:h text:outline-level="1">Orchard notes</text:h><text:p text:style-name="P1" wcx:mood="calm"><text:soft-page-break/>Pears ripen <text:span text:style-name="T1">late</text:span> in the year<text:hidden-text text:condition="ooow:1" text:string-value="quiet"/>, and <wcx:marker wcx:kind="star">apples</wcx:marker> early.</text:p><text:p>Second paragraph with a <text:note text:id="n1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>Footnote words.</text:p></text:note-body></text:note> note.</text:p></office:text></office:body>"##,
     styles: r##"<office:styles><style:style style:name="Standard" style:family="paragraph" style:class="text"/></office:styles>"##,
     meta: "",
 };
@@ -147,7 +160,7 @@ const TEXT: Sample = Sample {
 const STYLES: Sample = Sample {
     name: "styles",
     content: r##"<office:body><office:text><text:p text:style-name="Standard">Only text.</text:p></office:text></office:body>"##,
-    styles: r##"<office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="0.5in" wcx:grid="on"/><style:text-properties fo:font-size="11pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text" wcx:origin="sample"><style:paragraph-properties fo:text-align="justify"/></style:style><style:style style:name="Marginal" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-style="italic"/></style:style><text:list-style style:name="Marginal"><text:list-level-style-number text:level="1" style:num-format="i" style:num-suffix=")"/></text:list-style><text:list-style style:name="Ticks"><text:list-level-style-bullet text:level="1" text:bullet-char="✓"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:margin-left="0.25in"/></style:list-level-properties></text:list-level-style-bullet></text:list-style><text:notes-configuration text:note-class="footnote" style:num-format="a" text:start-value="0" text:footnotes-position="page" text:start-numbering-at="document"/><text:linenumbering-configuration text:number-lines="false" text:offset="0.2in" style:num-format="1" text:number-position="left" text:increment="5"/></office:styles>"##,
+    styles: r##"<office:styles><style:default-style style:family="paragraph"><style:paragraph-properties style:tab-stop-distance="0.5in" wcx:grid="on"/><style:text-properties fo:font-size="11pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text" wcx:origin="sample"><style:paragraph-properties fo:text-align="justify"/></style:style><style:style style:name="Marginal" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-style="italic"/></style:style><style:style style:name="Marginal" style:family="graphic"><style:graphic-properties svg:width="1.4in" fo:min-height="0.2in" style:horizontal-pos="left"/></style:style><text:list-style style:name="Marginal"><text:list-level-style-number text:level="1" style:num-format="i" style:num-suffix=")"/></text:list-style><text:list-style style:name="Ticks"><text:list-level-style-bullet text:level="1" text:bullet-char="✓"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" fo:margin-left="0.25in"/></style:list-level-properties></text:list-level-style-bullet></text:list-style><text:notes-configuration text:note-class="footnote" style:num-format="a" text:start-value="0" text:footnotes-position="page" text:start-numbering-at="document"/><text:linenumbering-configuration text:number-lines="false" text:offset="0.2in" style:num-format="1" text:number-position="left" text:increment="5"/></office:styles>"##,
     meta: "",
 };
 
@@ -261,13 +274,31 @@ const CHANGES: Sample = Sample {
 /// WordCraft doesn't model.
 const TEXT_BOXES: Sample = Sample {
     name: "text boxes",
-    content: r##"<office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Frame"><style:graphic-properties style:wrap="parallel" fo:padding="0.05in" fo:border="0.5pt solid #000000" style:shadow="none" draw:shadow-opacity="100%" wcx:box="kept"/></style:style><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:text-align="center" wcx:para="kept"/></style:style><style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill-color="#ffcc00" draw:textarea-vertical-align="middle"/></style:style></office:automatic-styles><office:body><office:text><text:p>A box <draw:frame draw:style-name="fr1" draw:name="Aside" text:anchor-type="paragraph" svg:width="2in" draw:z-index="0"><draw:text-box fo:min-height="0.5in"><text:p text:style-name="P1">Inside the box.</text:p><text:p>A second line.</text:p></draw:text-box></draw:frame>beside the text.</text:p><text:p>A shape <draw:custom-shape draw:style-name="gr1" draw:name="Sign" text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="1"><text:p>Stop</text:p><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="octagon" draw:modifiers="5000" draw:enhanced-path="M ?f7 0 X 0 ?f8 L 0 ?f9 Y ?f7 21600 L ?f10 21600 X 21600 ?f9 L 21600 ?f8 Y ?f10 0 Z N"/></draw:custom-shape>with words.</text:p></office:text></office:body>"##,
+    content: r##"<office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Frame"><style:graphic-properties style:wrap="parallel" fo:padding="0.05in" fo:border="0.5pt solid #000000" style:shadow="none" draw:shadow-opacity="100%" wcx:box="kept"/></style:style><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:text-align="center" wcx:para="kept"/></style:style><style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill-color="#ffcc00" draw:textarea-vertical-align="middle"/></style:style></office:automatic-styles><office:body><office:text><draw:frame draw:style-name="fr1" draw:name="Sender" text:anchor-type="page" text:anchor-page-number="1" svg:x="1in" svg:y="1in" svg:width="3in" draw:z-index="2"><draw:text-box fo:min-height="0.5in"><text:p>Our address</text:p></draw:text-box></draw:frame><text:p>A box <draw:frame draw:style-name="fr1" draw:name="Aside" text:anchor-type="paragraph" svg:width="2in" draw:z-index="0"><draw:text-box fo:min-height="0.5in"><text:p text:style-name="P1">Inside the box.</text:p><text:p>A second line.</text:p></draw:text-box></draw:frame>beside the text.</text:p><text:p>A shape <draw:custom-shape draw:style-name="gr1" draw:name="Sign" text:anchor-type="paragraph" svg:width="1in" svg:height="1in" draw:z-index="1"><text:p>Stop</text:p><draw:enhanced-geometry svg:viewBox="0 0 21600 21600" draw:type="octagon" draw:modifiers="5000" draw:enhanced-path="M ?f7 0 X 0 ?f8 L 0 ?f9 Y ?f7 21600 L ?f10 21600 X 21600 ?f9 L 21600 ?f8 Y ?f10 0 Z N"/></draw:custom-shape>with words.</text:p></office:text></office:body>"##,
     styles: r##"<office:styles><style:style style:name="Frame" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph" svg:x="0in" svg:y="0in" style:wrap="parallel" style:number-wrapped-paragraphs="no-limit" style:vertical-pos="top" style:vertical-rel="paragraph-content" style:horizontal-pos="center" style:horizontal-rel="paragraph-content"/></style:style></office:styles>"##,
     meta: "",
 };
 
+/// Bookmarks: at a point in a table's cell (with LibreOffice's relative column widths), and over
+/// text from one paragraph into the next.
+const BOOKMARKS: Sample = Sample {
+    name: "bookmarks",
+    content: r##"<office:automatic-styles><style:style style:name="Tab2" style:family="table"><style:table-properties style:width="6in" table:align="margins"/></style:style><style:style style:name="Tab2.A" style:family="table-column"><style:table-column-properties style:column-width="2in" style:rel-column-width="21845*"/></style:style><style:style style:name="Tab2.B" style:family="table-column"><style:table-column-properties style:column-width="4in" style:rel-column-width="43690*"/></style:style></office:automatic-styles><office:body><office:text><table:table table:name="Agenda" table:style-name="Tab2"><table:table-column table:style-name="Tab2.A"/><table:table-column table:style-name="Tab2.B"/><table:table-row><table:table-cell office:value-type="string"><text:p><text:bookmark text:name="Item"/>Item</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>Who</text:p></table:table-cell></table:table-row></table:table><text:p>From <text:bookmark-start text:name="Span"/>here</text:p><text:p>to there<text:bookmark-end text:name="Span"/>.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
+/// A footnote with styled text, and a formula object with its preview picture.
+const NOTES_AND_FORMULAS: Sample = Sample {
+    name: "notes and formulas",
+    content: r##"<office:automatic-styles><style:style style:name="T9" style:family="text"><style:text-properties fo:font-style="italic" wcx:note="kept"/></style:style><style:style style:name="fr9" style:family="graphic"><style:graphic-properties style:vertical-pos="middle" style:vertical-rel="text" draw:ole-draw-aspect="1"/></style:style></office:automatic-styles><office:body><office:text><text:p>A claim<text:note text:id="ftn0" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>A <text:span text:style-name="T9">source</text:span> for it.</text:p></text:note-body></text:note> and a formula <draw:frame draw:style-name="fr9" draw:name="Formula 9" text:anchor-type="as-char" svg:width="0.3in" svg:height="0.2in" draw:z-index="0"><draw:object xlink:href="./Object 9" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/><draw:image xlink:href="./ObjectReplacements/Object 9" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame> in it.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 13] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES, TEXT_BOXES];
+const SAMPLES: [Sample; 15] =
+    [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES, TEXT_BOXES, BOOKMARKS, NOTES_AND_FORMULAS];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -533,4 +564,65 @@ fn linked_text_boxes_keep_their_link() {
     let c = content_of(&export(&d).unwrap());
     let next = c.split("draw:chain-next-name=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default().to_string();
     assert!(!next.is_empty() && c.contains(&format!("draw:name=\"{next}\"")), "{c}");
+}
+
+#[test]
+fn a_bookmark_kept_at_one_end_is_written_once() {
+    // Either paragraph a bookmark spans edited: one start and one end, each once.
+    let d = import(&package(&BOOKMARKS)).unwrap();
+    for start in ["From", "to there"] {
+        let mut e = d.clone();
+        let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with(start))).unwrap();
+        if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+            p.props.style = Some("Edited".into());
+            p.touch();
+        }
+        let c = content_of(&export(&e).unwrap());
+        assert_eq!(c.matches(r#"<text:bookmark-start text:name="Span"/>"#).count(), 1, "{c}");
+        assert_eq!(c.matches(r#"<text:bookmark-end text:name="Span"/>"#).count(), 1, "{c}");
+        assert!(c.find("bookmark-start").unwrap_or(0) < c.find("bookmark-end").unwrap_or(0), "{c}");
+    }
+}
+
+#[test]
+fn a_note_or_formula_edited_is_written_from_the_model() {
+    let d = import(&package(&NOTES_AND_FORMULAS)).unwrap();
+    let saved = export(&d).unwrap();
+    assert!(content_of(&saved).contains(r#"wcx:note="kept""#));
+    let names = |b: &[u8]| zip::ZipArchive::new(std::io::Cursor::new(b.to_vec())).unwrap().file_names().map(String::from).collect::<Vec<_>>();
+    assert!(names(&saved).iter().any(|n| n == "Object 9/content.xml"), "{:?}", names(&saved));
+    let manifest = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
+    assert!(
+        manifest.contains(r#"manifest:full-path="Object 9/" manifest:media-type="application/vnd.oasis.opendocument.formula""#)
+            && manifest.contains(r#"manifest:full-path="ObjectReplacements/Object 9""#),
+        "{manifest}"
+    );
+    // The note's text edited.
+    let mut e = d.clone();
+    let id = e.parts.iter().find(|(_, p)| p.kind == wordcraft_doc::PartKind::Footnote).map(|(id, _)| *id).unwrap();
+    let mut blocks = e.parts.get(&id).unwrap().blocks.clone();
+    if let Some(wordcraft_doc::Block::Para(p)) = blocks.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
+    if let Some(part) = e.parts.get_mut(&id) {
+        part.blocks = blocks;
+    }
+    let c = content_of(&export(&e).unwrap());
+    assert!(!c.contains(r#"wcx:note="kept""#) && c.contains("for it."), "{c}");
+    // The formula edited: written anew, and the old one's files aren't.
+    let mut e = d.clone();
+    for b in e.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            for o in &mut p.objects {
+                if let wordcraft_doc::para::InlineObject::Equation { linear, .. } = o {
+                    *linear = "y^3".into();
+                }
+            }
+            p.touch();
+        }
+    }
+    let saved = export(&e).unwrap();
+    assert!(!names(&saved).iter().any(|n| n.starts_with("Object 9")), "{:?}", names(&saved));
+    assert!(parts_well_formed(&saved).is_ok());
 }

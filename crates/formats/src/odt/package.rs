@@ -809,6 +809,17 @@ fn with_kept_files(
     }
 }
 
+/// `office:text`'s statement that the text holds the file's soft page breaks (§19.857
+/// `text:use-soft-page-breaks`), when the file said so and markup kept as read in `body` holds
+/// them.
+fn soft_page_breaks(kept: Option<&wordcraft_doc::kept::KeptXml>, body: &str) -> &'static str {
+    if kept.is_some_and(|k| k.defs.contains_key("soft-page-breaks")) && body.contains("<text:soft-page-break") {
+        " text:use-soft-page-breaks=\"true\""
+    } else {
+        ""
+    }
+}
+
 /// The prefix of WordCraft's own automatic style names in a document with paragraphs kept as
 /// read (theirs keep the names they were read with).
 const KEPT_PREFIX: &str = "wc";
@@ -1006,8 +1017,9 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         })
         .unwrap_or_default();
     let scripts = kept.and_then(|k| k.defs.get("top:office:scripts")).map(|d| d.to_string()).unwrap_or_default();
+    let soft = soft_page_breaks(kept, &body);
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text>\n{}{tracked}{var_decls}{user_decls}{decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text{soft}>\n{}{tracked}{var_decls}{user_decls}{decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
         // The file's forms as read, with the document's controls.
         super::kept::merge_forms(kept.and_then(|k| k.defs.get("forms")).map(|d| &**d), super::forms::forms_xml(&w.forms, &hidden_controls(doc)))
@@ -1018,7 +1030,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
     // A custom style kept paragraphs name is written from the model (as edited), not as read.
     for st in &doc.styles.styles {
-        if w.kept_used.1.contains_key(&super::writer::odf_name(&st.id)) {
+        let name = super::writer::odf_name(&st.id);
+        if w.kept_used.1.contains_key(&name) || w.kept_used.1.contains_key(&format!("{name}|text")) {
             if model::is_custom_style(doc, &st.id) {
                 w.named.insert(st.id.clone());
             } else if model::is_custom_char_style(doc, &st.id) {

@@ -219,8 +219,10 @@ fn a_picture_in_a_section_in_a_page_anchored_text_box_is_kept() {
         .count();
     assert_eq!(pictures, 1, "the logo in its box");
     assert_eq!(boxes_of(&d), 2);
-    // And saved in it.
+    // And saved in it: as read, and from the model.
     let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert_eq!(c.matches("<draw:image ").count(), 1, "{c}");
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert_eq!(c.matches("<draw:image ").count(), 1, "{c}");
     // Its frame's style derives from Graphics: LibreOffice shows a floating picture in a text box
     // only so.

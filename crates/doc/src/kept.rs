@@ -48,8 +48,8 @@ pub struct KeptXml {
     pub indexes: HashMap<u64, (usize, u64, Arc<str>)>,
     /// While reading: by the first paragraph's `rev`, how many paragraphs, and the markup.
     pub pending_indexes: HashMap<u64, (usize, Arc<str>)>,
-    /// Each text box's or shape's story's [`story_fingerprint`] when read: a paragraph showing
-    /// one is written as read only while it is as read.
+    /// Each text box's, shape's or note's story's [`story_fingerprint`] when read: a paragraph
+    /// showing one is written as read only while it is as read.
     pub story_fps: HashMap<u32, u64>,
     /// Each top-level comment's [`comments_fingerprint`] when read (it and its replies): a
     /// paragraph holding comments is written as read only while they are as read.
@@ -149,9 +149,21 @@ impl KeptXml {
         }
         count == in_markup
     }
-    /// Whether the stories paragraph `p` shows (its text boxes' and shapes' text) are as read.
+    /// Whether the stories paragraph `p` shows (its text boxes' and shapes' text, its notes') are
+    /// as read.
     pub fn stories_as_read(&self, doc: &crate::Document, p: &Paragraph) -> bool {
-        p.objects.iter().flat_map(|o| o.text_boxes()).all(|id| self.story_fps.get(&id).is_some_and(|fp| *fp == story_fingerprint(doc, id)))
+        // A note's citation is its number in the document's numbering, which is the page setup's.
+        let notes = p.objects.iter().any(|o| matches!(o, crate::para::InlineObject::NoteRef { .. }));
+        if notes && !self.pages_as_read(doc) {
+            return false;
+        }
+        p.objects
+            .iter()
+            .flat_map(|o| match o {
+                crate::para::InlineObject::NoteRef { id, .. } => vec![*id],
+                o => o.text_boxes(),
+            })
+            .all(|id| self.story_fps.get(&id).is_some_and(|fp| *fp == story_fingerprint(doc, id)))
     }
     /// The wrappers kept around table `t`, while it still is what was read.
     pub fn table_wrap(&self, t: &crate::Table) -> Option<&(Vec<Arc<str>>, u32)> {
@@ -442,8 +454,12 @@ impl crate::Document {
         }
         // The text boxes' and shapes' stories as read, for paragraphs showing them.
         if self.kept.get().is_some_and(|k| !k.pending.is_empty()) {
-            let fps: HashMap<u32, u64> =
-                self.parts.iter().filter(|(_, p)| p.kind == crate::PartKind::TextBox).map(|(id, _)| (*id, story_fingerprint(self, *id))).collect();
+            let fps: HashMap<u32, u64> = self
+                .parts
+                .iter()
+                .filter(|(_, p)| matches!(p.kind, crate::PartKind::TextBox | crate::PartKind::Footnote | crate::PartKind::Endnote))
+                .map(|(id, _)| (*id, story_fingerprint(self, *id)))
+                .collect();
             if let Some(k) = self.kept.get_mut() {
                 k.story_fps = fps;
             }

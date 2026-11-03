@@ -72,6 +72,13 @@ pub(super) struct Body<'a> {
     /// frames before the first one): the next paragraph's, so they don't make a paragraph of
     /// their own (which would start the document on another page style).
     loose: Vec<Inline>,
+    /// The markup of each drawing in `loose`, as read, while each one's is (`loose_whole`): the
+    /// paragraph they join keeps it before its own (see `feed_at`).
+    loose_raw: Vec<std::sync::Arc<str>>,
+    loose_whole: bool,
+    /// The drawing outside a paragraph being read: where it starts, its depth, and how many
+    /// drawings were waiting before it.
+    loose_open: Option<(usize, usize, usize)>,
     fmt: Vec<Fmt>,
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
@@ -211,6 +218,9 @@ impl<'a> Body<'a> {
             manifest: None,
             containers: vec![Vec::new()],
             loose: Vec::new(),
+            loose_raw: Vec::new(),
+            loose_whole: true,
+            loose_open: None,
             fmt: Vec::new(),
             para: None,
             xml_space_end: false,
@@ -304,6 +314,39 @@ impl<'a> Body<'a> {
         self.item_start = None;
     }
 
+    /// [`Body::feed_at`] for a drawing outside a paragraph (a page-anchored frame in the text):
+    /// its markup kept, for the paragraph it joins. `None` when it took the event.
+    fn loose_drawing(&mut self, ev: Ev, at: (usize, usize)) -> Option<Ev> {
+        match &ev {
+            Ev::Start(q, _)
+                if self.loose_open.is_none()
+                    && q.starts_with("draw:")
+                    && is_drawing(q)
+                    && self.para.is_none()
+                    && self.kept_open.is_none()
+                    && !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.at_body_level() =>
+            {
+                self.loose_open = Some((at.0, self.depth + 1, self.loose.len()));
+            }
+            Ev::End(_) if self.loose_open.is_some_and(|(_, d, _)| d == self.depth) => {
+                self.feed(ev);
+                if let Some((from, _, before)) = self.loose_open.take() {
+                    match self.raw.get(from..at.1).and_then(|b| std::str::from_utf8(b).ok()) {
+                        Some(xml) if self.loose.len() == before + 1 => self.loose_raw.push(std::sync::Arc::from(xml)),
+                        _ if self.loose.len() == before => {}
+                        _ => self.loose_whole = false,
+                    }
+                }
+                return None;
+            }
+            _ => {}
+        }
+        Some(ev)
+    }
+
     /// [`Body::feed`], `at` the event's markup in [`Body::raw`]: a body paragraph that comes out
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
@@ -330,6 +373,7 @@ impl<'a> Body<'a> {
                         clean: true,
                         done: self.container().len(),
                         comments: KeptComments::default(),
+                        prefix: String::new(),
                     });
                 }
                 None => {}
@@ -424,6 +468,7 @@ impl<'a> Body<'a> {
                         clean: true,
                         done: self.container().len(),
                         comments: KeptComments::default(),
+                        prefix: String::new(),
                     });
                 }
                 None => {}
@@ -443,6 +488,7 @@ impl<'a> Body<'a> {
             }
             _ => {}
         }
+        let Some(ev) = self.loose_drawing(ev, at) else { return };
         match &ev {
             Ev::Start(q, a) => match &mut self.kept_open {
                 Some(k) => {
@@ -461,10 +507,12 @@ impl<'a> Body<'a> {
                     && self.field.is_none()
                     && !self.in_desc =>
                 {
-                    // Drawings read before it that join it aren't in its markup.
-                    let clean = self.loose.is_empty();
+                    // Drawings read before it that join it: their markup before its own, when
+                    // each one's was kept.
+                    let clean = self.loose.is_empty() || (self.loose_whole && self.loose_raw.len() == self.loose.len());
+                    let prefix = if self.loose.is_empty() { String::new() } else { self.loose_raw.concat() };
                     self.kept_open =
-                        Some(KeptOpen { from: at.0, depth: self.depth + 1, clean, done: self.paras_done, comments: KeptComments::default() });
+                        Some(KeptOpen { from: at.0, depth: self.depth + 1, clean, done: self.paras_done, comments: KeptComments::default(), prefix });
                 }
                 None => {}
             },
@@ -485,7 +533,7 @@ impl<'a> Body<'a> {
                     && let Some(p) = &mut self.para
                     && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
                 {
-                    p.kept = Some(std::sync::Arc::from(xml));
+                    p.kept = Some(std::sync::Arc::from(format!("{}{xml}", k.prefix)));
                 }
             }
             _ => {}
@@ -804,6 +852,8 @@ impl Body<'_> {
             let mut loose = std::mem::take(&mut self.loose);
             loose.append(&mut p.inlines);
             p.inlines = loose;
+            self.loose_raw.clear();
+            self.loose_whole = true;
         }
         self.para = Some(p);
     }
@@ -1701,6 +1751,8 @@ struct KeptOpen {
     done: usize,
     /// The comments in a paragraph being kept (see [`KeptComments`]).
     comments: KeptComments,
+    /// The markup of drawings read before it that join it, kept before its own.
+    prefix: String,
 }
 
 /// The comments (§14.1 `office:annotation`) and tracked changes (§5.5.7) in a paragraph being
@@ -1756,8 +1808,9 @@ impl KeptComments {
             "text:change" => get(a, "text:change-id").is_some(),
             // A text box continuing in another box, or continued from one: their names tie them.
             "draw:text-box" if get(a, "draw:chain-next-name").is_some() => false,
-            // A drawing: the paragraphs of its text (a text box's, a shape's) are its story's.
-            q if self.open.is_none() && q.starts_with("draw:") && is_drawing(q) => {
+            // A drawing or a note: the paragraphs of its text (a text box's, a shape's, the
+            // note's) are its story's.
+            q if self.open.is_none() && (q == "text:note" || q.starts_with("draw:") && is_drawing(q)) => {
                 self.open = Some((depth, done));
                 true
             }
@@ -1785,17 +1838,18 @@ impl KeptComments {
 }
 
 /// Whether markup holding element `q` can be kept as read. Pictures, shapes and text boxes can
-/// (their text is a story of its own, kept while it is as read: see `KeptComments`); embedded
-/// objects (charts and formulas, written on their own), form controls and plugins can't, nor
-/// marks that pair up with others elsewhere (comments and tracked changes are paired apart).
+/// (their text is a story of its own, kept while it is as read: see `KeptComments`), and
+/// embedded objects (a formula's text and a chart's data are the paragraph's, an object's files
+/// are kept with it); form controls (named afresh in the forms) and plugins can't, nor
+/// marks that pair up with others elsewhere by ids the writer gives (comments and tracked
+/// changes are paired apart). Bookmarks can: their names are kept, so either end may be
+/// written as read and the other from the model.
 fn keepable(q: &str) -> bool {
-    !(matches!(q, "draw:object" | "draw:object-ole" | "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame")
+    !(matches!(q, "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame")
         || q.starts_with("office:annotation")
         || q.starts_with("text:change")
         || q.starts_with("form:")
-        || q.ends_with("-start")
-        || q.ends_with("-end")
-        || q == "text:bookmark")
+        || (q.ends_with("-start") || q.ends_with("-end")) && !q.starts_with("text:bookmark-"))
 }
 
 /// Whether `q` is a drawing that can hold text: a frame, a group or a shape.

@@ -50,6 +50,16 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
             let parent = path.get(depth.wrapping_sub(2)).map(String::as_str).unwrap_or("");
             let key = match (depth, parent) {
                 (2, _) if content && q == "office:scripts" => Some("top:office:scripts".to_string()),
+                // Whether the text holds soft page breaks (§19.857), which markup kept may.
+                (3, "office:body")
+                    if content
+                        && q == "office:text"
+                        && get(&a, "text:use-soft-page-breaks").is_some_and(|v| v.trim() == "true")
+                        && out.len() < MAX_DEFS =>
+                {
+                    out.push(("soft-page-breaks".to_string(), Arc::from("true")));
+                    None
+                }
                 (3, "office:automatic-styles") => child_key(if content { "auto" } else { "sauto" }, &q, &a),
                 (3, "office:styles") => child_key("common", &q, &a),
                 (3, "office:font-face-decls") => child_key("font", &q, &a),
@@ -134,7 +144,7 @@ fn to_1_3(xml: &str) -> String {
 fn child_key(g: &str, q: &str, a: &super::xml::Attrs) -> Option<String> {
     // Drawing definitions (dashes, gradients, arrowheads…) are named by `draw:name`.
     match get(a, "style:name").or_else(|| get(a, "draw:name")).filter(|n| !n.is_empty()) {
-        Some(name) => Some(format!("{g}:{name}{}", space(q))),
+        Some(name) => Some(format!("{g}:{name}{}", space(q, get(a, "style:family").unwrap_or("")))),
         None => {
             let which = get(a, "style:family").or_else(|| get(a, "text:note-class")).unwrap_or("");
             Some(format!("{g}~{q}~{which}"))
@@ -142,13 +152,17 @@ fn child_key(g: &str, q: &str, a: &super::xml::Attrs) -> Option<String> {
     }
 }
 
-/// The name space a definition (element `q`) belongs to, as a key's suffix: names are unique
-/// only within one (§16.2: a style's within its family; a list style, a data style, a gradient
-/// may share a paragraph style's name). Styles (`style:style`), font faces and master pages
-/// have none; a list style is `|list`, a data style `|data`, another definition `|<element>`.
-fn space(q: &str) -> String {
+/// The name space a definition (element `q`, of style family `family`) belongs to, as a key's
+/// suffix: names are unique only within one (§16.2: a style's within its family; a list style,
+/// a data style, a gradient may share a paragraph style's name, as a graphic style may:
+/// LibreOffice's "Marginalia" is both). Paragraph styles, font faces and master pages have none;
+/// another family's style is `|<family>`, a list style `|list`, a data style `|data`, another
+/// definition `|<element>`.
+fn space(q: &str, family: &str) -> String {
     match q {
-        "style:style" | "style:font-face" | "style:master-page" => String::new(),
+        "style:style" if family.trim() == "paragraph" || family.is_empty() => String::new(),
+        "style:style" => format!("|{}", family.trim()),
+        "style:font-face" | "style:master-page" => String::new(),
         "text:list-style" => "|list".to_string(),
         q if q.starts_with("number:") => "|data".to_string(),
         q => format!("|{}", q.split_once(':').map_or(q, |(_, l)| l)),
@@ -608,6 +622,34 @@ pub(super) fn changes(xml: &str) -> BTreeSet<String> {
         });
     }
     out
+}
+
+/// The names of the bookmarks (§6.2.1) `xml` begins (at a point too) and ends.
+pub(super) fn bookmarks(xml: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    let (mut starts, mut ends) = (BTreeSet::new(), BTreeSet::new());
+    if xml.contains("<text:bookmark") {
+        super::xml::events(xml.as_bytes(), |ev| {
+            if let Ev::Start(q, a) = ev
+                && let Some(n) = get(&a, "text:name")
+                && starts.len() + ends.len() < MAX_DEFS
+            {
+                match q.as_str() {
+                    "text:bookmark" => {
+                        starts.insert(n.to_string());
+                        ends.insert(n.to_string());
+                    }
+                    "text:bookmark-start" => {
+                        starts.insert(n.to_string());
+                    }
+                    "text:bookmark-end" => {
+                        ends.insert(n.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    (starts, ends)
 }
 
 /// The sequences (§7.4.13 `text:sequence`) `xml` counts, which the document declares.

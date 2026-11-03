@@ -128,9 +128,14 @@ fn a_flat_document_holds_its_objects_and_their_pictures_inline() {
     let saved = export(&again).unwrap();
     let z = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
     let names: Vec<&str> = z.file_names().collect();
-    assert!(names.iter().filter(|n| n.starts_with("ObjectReplacements/")).count() == 2, "{names:?}");
     let ole = crate::odt::tests::entry(&saved, "content.xml");
     assert!(ole.contains("<draw:object-ole"), "{ole}");
+    // Both objects with their pictures, each link to a file (or folder) the package has.
+    assert_eq!(ole.matches("<draw:image ").count(), 2, "{ole}");
+    for link in ole.split("xlink:href=\"").skip(1).filter_map(|r| r.split('"').next()) {
+        let path = link.trim_start_matches("./");
+        assert!(names.iter().any(|n| *n == path || n.starts_with(&format!("{path}/"))), "{link}: {names:?}");
+    }
 }
 
 #[test]
