@@ -22,8 +22,9 @@ pub struct SpellingForm {
     epoch: u64,
     #[serde(skip)]
     selection: Selection,
+    /// Font database generation and replacement text the pane's fonts were last prepared for.
     #[serde(skip)]
-    pub(crate) font_generation: Option<u64>,
+    fonts_prepared: Option<(u64, String)>,
 }
 
 impl SpellingForm {
@@ -45,7 +46,7 @@ impl SpellingForm {
             document: app.session.document_id(),
             epoch: app.session.ime_body_epoch(),
             selection: app.session.sel.clone(),
-            font_generation: None,
+            fonts_prepared: None,
         }
     }
 
@@ -54,9 +55,19 @@ impl SpellingForm {
     }
 
     /// Dynamic text that needs document fallback fonts in the proofing pane.
+    /// Whether fonts need preparing again: new faces loaded, or typing changed the replacement.
+    pub(crate) fn fonts_stale(&self, generation: u64) -> bool {
+        self.fonts_prepared.as_ref().is_none_or(|(prepared, text)| *prepared != generation || *text != self.replacement)
+    }
+
+    pub(crate) fn fonts_ready(&mut self, generation: u64) {
+        self.fonts_prepared = Some((generation, self.replacement.clone()));
+    }
+
     pub(crate) fn content_text(&self) -> Vec<String> {
         let mut text: Vec<String> =
             self.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        text.push(self.replacement.clone());
         text.push(format!("{}{}{}", self.context_before, self.issue.get("text").and_then(Value::as_str).unwrap_or(""), self.context_after));
         text
     }
@@ -398,5 +409,19 @@ mod tests {
         assert_eq!(form(&a).issue["text"], "brwn");
         a.run("file.new", json!({})).unwrap();
         assert!(a.spelling_review.is_none());
+    }
+
+    /// Typing a replacement in another script must reach font preparation in the same frame.
+    #[test]
+    fn typing_a_replacement_prepares_its_fonts_again() {
+        let app = app("");
+        let mut form = SpellingForm::new(&app, json!({"text": "wrod", "suggestions": []}));
+        assert!(form.fonts_stale(1));
+        form.fonts_ready(1);
+        assert!(!form.fonts_stale(1), "prepared once for this text and these faces");
+        assert!(form.fonts_stale(2), "newly loaded faces count");
+        form.replacement = "\u{1781}".into();
+        assert!(form.fonts_stale(1), "so does the replacement");
+        assert!(form.content_text().iter().any(|text| text == "\u{1781}"));
     }
 }

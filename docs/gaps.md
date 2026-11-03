@@ -146,7 +146,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 ## Revision history
 
 > 2026-11-03 · KM8 release audit: preserve shaping in styled complex-script fallback; keep logical navigation lazy in other scripts; honor repeated-story page hints; preserve wrap affinity on empty and failed edits; include shared English/Vietnamese/Khmer proofing fixes. Readiness unchanged.
-
+>
 > 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
 >
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.

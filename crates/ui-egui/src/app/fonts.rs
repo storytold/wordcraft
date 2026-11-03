@@ -193,7 +193,7 @@ impl WordApp {
         // Borrow faces only while that text is shown; ordinary Latin windows stay lazy.
         let db = wordcraft_fonts::FontDb::global();
         if let Some(form) = self.spelling_review.as_mut()
-            && form.font_generation != Some(db.generation())
+            && form.fonts_stale(db.generation())
         {
             let text = form.content_text().concat();
             if text.chars().any(wordcraft_fonts::is_cjk) {
@@ -206,7 +206,7 @@ impl WordApp {
                 self.canvas.ime_faces.extend(new);
                 self.styled = false;
             }
-            form.font_generation = Some(db.generation());
+            form.fonts_ready(db.generation());
         }
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
         // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in

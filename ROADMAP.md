@@ -697,7 +697,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 ## Revision history
 
 > 2026-11-03 · KM8 release audit: preserve shaping in styled complex-script fallback; keep logical navigation lazy in other scripts; honor repeated-story page hints; preserve wrap affinity on empty and failed edits; include shared English/Vietnamese/Khmer proofing fixes. Readiness unchanged.
-
+>
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
 >
 > 2026-10-28 · Markdown import bounds reference-label scans and normalization within the existing link-work allowance. Nested undefined labels preserve literal text instead of causing quadratic work (#4658).

@@ -277,7 +277,9 @@ fn page_movement_and_reporting_use_the_visible_side_of_a_wrap() {
             .env(ISOLATED, "1")
             .output()
             .unwrap();
-        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        assert!(stdout.contains("1 passed"), "the isolated child ran no test:\n{stdout}");
         return;
     }
     let _dictionaries = dictionaries_turn();
