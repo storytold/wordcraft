@@ -739,83 +739,86 @@ pub(crate) fn add_language_window(app: &mut WordApp, ctx: &egui::Context) {
         .auto_sized()
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -80.0))
         .show(ctx, |ui| {
-            let index = packs::available();
-            let installed = packs::installed();
-            ui.horizontal(|ui| {
-                let search_label = ui.label(tl!("Search:"));
-                let mut search = std::mem::take(&mut app.packs_rt.search);
-                let r = ui
-                    .add(egui::TextEdit::singleline(&mut search).desired_width(280.0).hint_text(tl!("Dutch, Nederlands or nl")))
-                    .labelled_by(search_label.id);
-                if !r.has_focus() && app.packs_rt.search.is_empty() && search.is_empty() && !app.packs_rt.focused {
-                    r.request_focus();
-                }
-                app.packs_rt.focused = true;
-                app.packs_rt.search = search;
-                if packs::fetching() {
-                    ui.spinner();
-                    ui.label(RichText::new(tl!("Getting the list of languages…")).small());
-                } else if ui.button(tl!("Refresh")).on_hover_text(tl!("Get the list of languages again")).clicked() {
-                    start_fetch(app, &ui.ctx().clone());
-                }
-            });
-            if let Some(e) = error_of(app, "") {
-                ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
-            }
-            ui.add_space(4.0);
-            let list = picker_packs(&index, &installed, &app.packs_rt.search);
-            if list.is_empty() {
-                let text = if index.is_empty() { tl!("No languages to show yet.") } else { tl!("No language matches your search.") };
-                ui.label(RichText::new(text).weak());
-            }
-            let mut install = None;
-            egui::ScrollArea::both().id_salt("add_language_list").max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
-                crate::rtl::grid(ui, egui::Grid::new("add_language_grid").num_columns(4).spacing(vec2(14.0, 8.0)).striped(true), |ui| {
-                    for (name, pack) in &list {
-                        ui.vertical(|ui| {
-                            ui.set_width(180.0);
-                            ui.label(name.as_str());
-                            let endonym = shown(&pack.name, MAX_BAR_NAME);
-                            let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
-                            ui.label(RichText::new(tl!(&detail)).small().weak());
-                        });
-                        ui.label(if pack.size > 0 { size_text(pack.size) } else { String::new() });
-                        ui.vertical(|ui| {
-                            ui.set_width(150.0);
-                            let licence = shown(&pack.licence, 300);
-                            ui.add(egui::Label::new(RichText::new(licence.as_str()).small()).truncate()).on_hover_text(licence_hover(pack));
-                            let source = pack.source_link();
-                            if !source.is_empty() {
-                                ui.hyperlink_to(tl!("Source"), source).on_hover_text(shown(source, 300));
-                            }
-                        });
-                        ui.horizontal(|ui| match progress(&pack.locale) {
-                            Some((done, total)) => {
-                                ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(80.0).show_percentage());
-                                if ui.small_button(tl!("Cancel")).clicked() {
-                                    packs::cancel(&pack.locale);
-                                }
-                            }
-                            None => {
-                                if ui.button(tl!("Install")).clicked() {
-                                    install = Some(pack.clone());
-                                }
-                            }
-                        });
-                        ui.end_row();
-                        if let Some(e) = error_of(app, &pack.locale) {
-                            ui.label("");
-                            ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
-                            ui.label("");
-                            ui.label("");
-                            ui.end_row();
-                        }
+            // Right to left the search row and the list mirror, as the other windows.
+            crate::rtl::root(ui, |ui| {
+                let index = packs::available();
+                let installed = packs::installed();
+                ui.horizontal(|ui| {
+                    let search_label = ui.label(tl!("Search:"));
+                    let mut search = std::mem::take(&mut app.packs_rt.search);
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut search).desired_width(280.0).hint_text(tl!("Dutch, Nederlands or nl")))
+                        .labelled_by(search_label.id);
+                    if !r.has_focus() && app.packs_rt.search.is_empty() && search.is_empty() && !app.packs_rt.focused {
+                        r.request_focus();
+                    }
+                    app.packs_rt.focused = true;
+                    app.packs_rt.search = search;
+                    if packs::fetching() {
+                        ui.spinner();
+                        ui.label(RichText::new(tl!("Getting the list of languages…")).small());
+                    } else if ui.button(tl!("Refresh")).on_hover_text(tl!("Get the list of languages again")).clicked() {
+                        start_fetch(app, &ui.ctx().clone());
                     }
                 });
-            });
-            if let Some(p) = install {
-                start_install(app, &ui.ctx().clone(), &p);
-            }
+                if let Some(e) = error_of(app, "") {
+                    ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
+                }
+                ui.add_space(4.0);
+                let list = picker_packs(&index, &installed, &app.packs_rt.search);
+                if list.is_empty() {
+                    let text = if index.is_empty() { tl!("No languages to show yet.") } else { tl!("No language matches your search.") };
+                    ui.label(RichText::new(text).weak());
+                }
+                let mut install = None;
+                egui::ScrollArea::both().id_salt("add_language_list").max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
+                    crate::rtl::grid(ui, egui::Grid::new("add_language_grid").num_columns(4).spacing(vec2(14.0, 8.0)).striped(true), |ui| {
+                        for (name, pack) in &list {
+                            ui.vertical(|ui| {
+                                ui.set_width(180.0);
+                                ui.label(name.as_str());
+                                let endonym = shown(&pack.name, MAX_BAR_NAME);
+                                let detail = if endonym == *name { pack.locale.clone() } else { format!("{endonym} · {}", pack.locale) };
+                                ui.label(RichText::new(tl!(&detail)).small().weak());
+                            });
+                            ui.label(if pack.size > 0 { size_text(pack.size) } else { String::new() });
+                            ui.vertical(|ui| {
+                                ui.set_width(150.0);
+                                let licence = shown(&pack.licence, 300);
+                                ui.add(egui::Label::new(RichText::new(licence.as_str()).small()).truncate()).on_hover_text(licence_hover(pack));
+                                let source = pack.source_link();
+                                if !source.is_empty() {
+                                    ui.hyperlink_to(tl!("Source"), source).on_hover_text(shown(source, 300));
+                                }
+                            });
+                            ui.horizontal(|ui| match progress(&pack.locale) {
+                                Some((done, total)) => {
+                                    ui.add(egui::ProgressBar::new(done.min(total) as f32 / total as f32).desired_width(80.0).show_percentage());
+                                    if ui.small_button(tl!("Cancel")).clicked() {
+                                        packs::cancel(&pack.locale);
+                                    }
+                                }
+                                None => {
+                                    if ui.button(tl!("Install")).clicked() {
+                                        install = Some(pack.clone());
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                            if let Some(e) = error_of(app, &pack.locale) {
+                                ui.label("");
+                                ui.add(egui::Label::new(RichText::new(e).small().color(t.red)).wrap());
+                                ui.label("");
+                                ui.label("");
+                                ui.end_row();
+                            }
+                        }
+                    });
+                });
+                if let Some(p) = install {
+                    start_install(app, &ui.ctx().clone(), &p);
+                }
+            })
         });
     if !open {
         app.packs_rt.picker = false;
