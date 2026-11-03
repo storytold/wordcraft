@@ -74,7 +74,10 @@ fn macros_and_other_parts_survive_a_save() {
     ] {
         assert!(manifest.contains(want), "{want} in {manifest}");
     }
-    assert!(!manifest.contains("other-app") && !manifest.contains("Configurations2"), "{manifest}");
+    // A file the manifest didn't list is listed now, without a media type (ODF 1.3 Part 2 §4.3:
+    // every file is); a folder with no file in it isn't.
+    assert!(manifest.contains(r#"manifest:full-path="other-app/data.bin" manifest:media-type="""#), "{manifest}");
+    assert!(!manifest.contains("Configurations2"), "{manifest}");
     // The old thumbnail and the signatures (of the package as it was) are gone.
     assert!(file(&fs, "Thumbnails/thumbnail.png").is_none() && file(&fs, "META-INF/documentsignatures.xml").is_none());
     // And again after a second save.
@@ -120,4 +123,20 @@ fn who_changed_the_document_last_and_when_round_trip() {
     assert!(meta.contains("<dc:date>2026-11-03T10:20:30</dc:date>") && meta.contains("<meta:editing-cycles>7</meta:editing-cycles>"), "{meta}");
     let back = crate::odt::import(&saved).unwrap();
     assert_eq!((back.core.last_modified_by.as_str(), back.core.modified.as_str(), back.core.revision), ("Grace", "2026-11-03T10:20:30Z", 7));
+}
+
+#[test]
+fn every_file_written_has_its_manifest_entry() {
+    // ODF 1.3 Part 2 §4.3: every file but `mimetype` and `META-INF/`'s is listed, a kept part
+    // with no media type (LibreOffice's empty accelerator configuration) too: LibreOffice won't
+    // open a package that lists one less.
+    let saved = export(&import(&odt(&[("Configurations2/accelerator/current.xml", b"")])).unwrap()).unwrap();
+    let manifest = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
+    for (name, _) in files(&saved) {
+        if name == "mimetype" || name.starts_with("META-INF/") || name.ends_with('/') {
+            continue;
+        }
+        assert!(manifest.contains(&format!("manifest:full-path=\"{name}\"")), "{name}: {manifest}");
+    }
+    assert!(manifest.contains(r#"manifest:full-path="Configurations2/accelerator/current.xml" manifest:media-type="""#), "{manifest}");
 }

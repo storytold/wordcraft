@@ -139,10 +139,10 @@ pub(super) fn kept(doc: &Document) -> (Vec<(String, Arc<Vec<u8>>)>, Vec<(String,
         if dir {
             entries.push((path.to_owned(), mime.to_owned()));
         } else if let Some(b) = doc.passthrough.get(&format!("{PREFIX}{path}")) {
+            // Every file has its entry (ODF 1.3 Part 2 §4.3; LibreOffice refuses a package with a
+            // file its manifest doesn't list), its media type empty when the file's was.
             files.push((path.to_owned(), b.clone()));
-            if !mime.is_empty() {
-                entries.push((path.to_owned(), mime.to_owned()));
-            }
+            entries.push((path.to_owned(), mime.to_owned()));
         }
     }
     (files, entries)
