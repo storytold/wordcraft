@@ -758,6 +758,65 @@ fn paragraph_formatting_change_round_trips() {
     assert_eq!(change.old.align, Some(Align::Right));
 }
 
+/// Original RTF: only the previous paragraph properties carry spacing and borders.
+fn prior_layout_document(words: &str) -> Document {
+    let rtf = format!(
+        r"{{\rtf1\ansi{{\colortbl;\red17\green89\blue203;}}{{\*\revtbl{{Unknown;}}{{Alice;}}}}
+\pard\qc\prauth1\prdate-2014675576{{\*\oldpprops\pard\ql{words}}}Changed\par\pard\ql Neighbor\par}}"
+    );
+    import(rtf.as_bytes()).unwrap()
+}
+
+fn prior_props(doc: &Document) -> &wordcraft_doc::props::ParaProps {
+    &doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old
+}
+
+/// Every line-spacing rule, explicit zeros and a hanging indent survive repeated RTF saves.
+#[test]
+fn saving_keeps_prior_paragraph_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    for (words, line) in [
+        (r"\sb480\sa720\sl360\slmult1\li360\ri180\fi-80", LineSpacing::Multiple(1.5)),
+        (r"\sb0\sa0\sl-360\slmult0\li0\ri0\fi0", LineSpacing::Exactly(18.0)),
+        (r"\sb100\sa0\sl400\slmult0\li360\ri180\fi-80", LineSpacing::AtLeast(20.0)),
+    ] {
+        let mut doc = prior_layout_document(words);
+        let expected = prior_props(&doc).clone();
+        assert_eq!(expected.line_spacing, Some(line));
+        assert!(expected.space_before.is_some() && expected.space_after.is_some());
+        let revisions = doc.revisions.clone();
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            let old = prior_props(&doc);
+            assert_eq!((old.space_before, old.space_after, old.line_spacing), (expected.space_before, expected.space_after, expected.line_spacing));
+            assert_eq!((old.indent_left, old.indent_right, old.indent_first), (expected.indent_left, expected.indent_right, expected.indent_first));
+            assert_eq!(doc.revisions, revisions);
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.props.align, Some(Align::Center));
+            assert_eq!(p.props.space_before, None, "old properties must not become current properties");
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// Prior visible borders stay inside oldpprops and retain their colour and geometry.
+#[test]
+fn saving_keeps_prior_paragraph_borders() {
+    let mut doc = prior_layout_document(r"\brdrt\brdrs\brdrw20\brdrcf1\brdrr\brdrdb\brdrw30\brdrcf1");
+    let expected = prior_props(&doc).borders;
+    let borders = expected.unwrap();
+    assert_eq!(borders.top.unwrap().color, Some(Rgb(17, 89, 203)));
+    assert_eq!(borders.top.unwrap().width, 1.0);
+    assert_eq!(borders.top.unwrap().space, 0.0);
+    assert!(borders.right.is_some());
+    for _ in 0..2 {
+        doc = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(prior_props(&doc).borders, expected);
+        assert_eq!(doc.body[0].as_para().unwrap().props.borders, None, "old borders stay out of the current paragraph");
+        assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
+    }
+}
+
 #[test]
 fn paragraph_mark_revisions_round_trip() {
     use wordcraft_doc::props::CharProps;
