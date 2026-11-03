@@ -89,10 +89,7 @@ fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
     for r in rels.iter().filter(|r| r.kind.ends_with("/worksheet")) {
         worksheets.entry(r.id.as_str()).or_insert(r.target.as_str());
     }
-    let sheets = listed
-        .into_iter()
-        .filter_map(|(name, id)| Some(SheetRef { name, path: worksheets.get(id.as_str())?.to_string() }))
-        .collect();
+    let sheets = listed.into_iter().filter_map(|(name, id)| Some(SheetRef { name, path: worksheets.get(id.as_str())?.to_string() })).collect();
     let part = |suffix: &str| rels.iter().find(|r| r.kind.ends_with(suffix)).map(|r| r.target.clone());
     Ok(Workbook { sheets, date1904, shared: part("/sharedStrings"), styles: part("/styles") })
 }
