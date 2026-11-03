@@ -29,6 +29,9 @@ const PART_COST: u64 = 4096;
 /// Where the stories' parts live: every story this writer makes is a part in `word/`.
 const STORY_PART: &str = "word/document.xml";
 
+/// The content type of a VBA project part.
+const VBA_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
+
 /// The embedded-object parts of a package being written.
 pub(crate) struct EmbedWriter<'d> {
     manifest: EmbeddedManifest,
@@ -51,6 +54,12 @@ pub(crate) struct EmbedWriter<'d> {
     scrubbed: HashMap<String, Vec<u8>>,
     /// A chart past the chart limits has been written (and the loss logged, once per save).
     chart_cut: bool,
+    /// Leave out every VBA project a kept part relates to, and every kept part with a VBA
+    /// project's content type, as the main document's own project is left out of a package
+    /// that can't hold macros (#3629).
+    pub drop_macros: bool,
+    /// A VBA project has been left out of a kept part tree (and the loss logged, once per save).
+    macros_dropped: bool,
 }
 
 impl<'d> EmbedWriter<'d> {
@@ -98,6 +107,8 @@ impl<'d> EmbedWriter<'d> {
             drop_glossary: false,
             scrubbed: HashMap::new(),
             chart_cut: false,
+            drop_macros: false,
+            macros_dropped: false,
         }
     }
 
@@ -186,6 +197,24 @@ impl<'d> EmbedWriter<'d> {
     /// Can part `name` be written (bytes and manifest entry both kept)?
     fn available(&self, name: &str) -> bool {
         self.manifest.parts.contains_key(name) && self.passthrough.contains_key(name)
+    }
+
+    /// Does [`Self::drop_macros`] leave out a kept part's relationship of type `kind` to `target`:
+    /// one to a VBA project, or to a kept part with a VBA project's content type?
+    fn dropped_macro(&self, kind: &str, target: &str, external: bool) -> bool {
+        self.drop_macros && (rel_is(kind, rt::VBA_PROJECT) || (!external && self.vba_part(target)))
+    }
+
+    /// Does kept part `name` have a VBA project's content type?
+    fn vba_part(&self, name: &str) -> bool {
+        self.manifest.parts.get(name).is_some_and(|p| p.content_type.trim().eq_ignore_ascii_case(VBA_CONTENT_TYPE))
+    }
+
+    /// Log, once per save, that a VBA project kept with `part` is left out.
+    fn note_macros_dropped(&mut self, part: &str) {
+        if !std::mem::replace(&mut self.macros_dropped, true) {
+            log::warn!("docx: this package can't hold macros; a VBA project kept with {part} is left out");
+        }
     }
 
     /// Reattach implicit custom XML roots, sharing their kept parts across both owners.
@@ -301,6 +330,10 @@ impl<'d> EmbedWriter<'d> {
         if !self.available(root) {
             return None;
         }
+        if self.drop_macros && self.vba_part(root) {
+            self.note_macros_dropped(root);
+            return None;
+        }
         let name = self.alloc(root);
         memo.insert(root.to_string(), name.clone());
         let mut todo = vec![root.to_string()];
@@ -309,6 +342,10 @@ impl<'d> EmbedWriter<'d> {
             let Some(new) = memo.get(&orig).cloned() else { continue };
             let mut rels = PartRels::default();
             for r in &info.rels {
+                if self.dropped_macro(&r.kind, &r.target, r.external) {
+                    self.note_macros_dropped(&orig);
+                    continue;
+                }
                 if r.external {
                     rels.add_with_id(&r.id, &r.kind, &r.target, true);
                     continue;
