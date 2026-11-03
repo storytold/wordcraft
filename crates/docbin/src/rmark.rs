@@ -31,6 +31,10 @@ pub(crate) struct Revisions {
     authors: Vec<String>,
     list: RefCell<Vec<Revision>>,
     index: RefCell<HashMap<(bool, u16, u32), u32>>,
+    /// The marks of each Prc a piece's Prm1 names, by its index (at most 32,768 of them): a Prc
+    /// grpprl of up to 64 KB is scanned once, not at every run, paragraph mark and object anchor
+    /// of its pieces.
+    prcs: RefCell<HashMap<u16, Marks>>,
 }
 
 impl Revisions {
@@ -40,34 +44,30 @@ impl Revisions {
             .filter(|(_, lcb)| *lcb > 0)
             .and_then(|(fc, lcb)| crate::notes::sttb_strings_max(table, fc, lcb, MAX_AUTHOR))
             .unwrap_or_default();
-        Revisions { authors, list: RefCell::new(Vec::new()), index: RefCell::new(HashMap::new()) }
+        Revisions { authors, list: RefCell::new(Vec::new()), index: RefCell::new(HashMap::new()), prcs: RefCell::new(HashMap::new()) }
     }
 
     /// Set `props.ins` / `props.del` from the revision marks of a run: those in its CHPX
     /// `grpprl`, then those of its piece's `prm`, which apply after the CHPX's.
     pub(crate) fn mark(&self, props: &mut CharProps, grpprl: &[u8], prm: PrmRef<'_>) {
-        let mut m = Marks::default();
-        for prl in sprm::iter(grpprl) {
-            m.apply(prl.op, prl.operand);
-        }
+        let mut m = Marks::of(grpprl);
         match prm {
             PrmRef::Sprm0 { isprm, val } => {
                 if let Some(op) = sprm::from_prm0(isprm) {
                     m.apply(op, &[val]);
                 }
             }
-            PrmRef::Grpprl(Some(g)) => {
-                for prl in sprm::iter(g) {
-                    m.apply(prl.op, prl.operand);
-                }
+            PrmRef::Grpprl { index, grpprl: Some(g) } => {
+                let prc = *self.prcs.borrow_mut().entry(index).or_insert_with(|| Marks::of(g));
+                m = m.then(prc);
             }
-            PrmRef::Grpprl(None) | PrmRef::None => {}
+            PrmRef::Grpprl { grpprl: None, .. } | PrmRef::None => {}
         }
-        if m.ins {
-            props.ins = self.id(true, m.ibst_ins, m.dttm_ins);
+        if m.ins == Some(true) {
+            props.ins = self.id(true, m.ibst_ins.unwrap_or(0), m.dttm_ins.unwrap_or(0));
         }
-        if m.del {
-            props.del = self.id(false, m.ibst_del, m.dttm_del);
+        if m.del == Some(true) {
+            props.del = self.id(false, m.ibst_del.unwrap_or(0), m.dttm_del.unwrap_or(0));
         }
     }
 
@@ -94,28 +94,50 @@ impl Revisions {
     }
 }
 
-/// The revision-mark sprms seen so far for one run, a later one replacing an earlier one.
-#[derive(Default)]
+/// The revision-mark sprms seen so far for one run, a later one replacing an earlier one; each
+/// is `None` until one is seen.
+#[derive(Clone, Copy, Default)]
 struct Marks {
-    ins: bool,
-    del: bool,
-    ibst_ins: u16,
-    dttm_ins: u32,
-    ibst_del: u16,
-    dttm_del: u32,
+    ins: Option<bool>,
+    del: Option<bool>,
+    ibst_ins: Option<u16>,
+    dttm_ins: Option<u32>,
+    ibst_del: Option<u16>,
+    dttm_del: Option<u32>,
 }
 
 impl Marks {
+    /// The marks of one grpprl.
+    fn of(grpprl: &[u8]) -> Self {
+        let mut m = Marks::default();
+        for prl in sprm::iter(grpprl) {
+            m.apply(prl.op, prl.operand);
+        }
+        m
+    }
+
+    /// These marks with `later`'s applied after them, as if its sprms came next.
+    fn then(self, later: Marks) -> Self {
+        Marks {
+            ins: later.ins.or(self.ins),
+            del: later.del.or(self.del),
+            ibst_ins: later.ibst_ins.or(self.ibst_ins),
+            dttm_ins: later.dttm_ins.or(self.dttm_ins),
+            ibst_del: later.ibst_del.or(self.ibst_del),
+            dttm_del: later.dttm_del.or(self.dttm_del),
+        }
+    }
+
     fn apply(&mut self, op: u16, operand: &[u8]) {
         let u16v = || operand.get(..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
         let u32v = || operand.get(..4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
         match op {
-            C_RMARK_INS => self.ins = operand.first().is_some_and(|&v| v == 1 || v == 0x81),
-            C_RMARK_DEL => self.del = operand.first().is_some_and(|&v| v == 1 || v == 0x81),
-            C_IBST_RMARK => self.ibst_ins = u16v(),
-            C_DTTM_RMARK => self.dttm_ins = u32v(),
-            C_IBST_RMARK_DEL => self.ibst_del = u16v(),
-            C_DTTM_RMARK_DEL => self.dttm_del = u32v(),
+            C_RMARK_INS => self.ins = Some(operand.first().is_some_and(|&v| v == 1 || v == 0x81)),
+            C_RMARK_DEL => self.del = Some(operand.first().is_some_and(|&v| v == 1 || v == 0x81)),
+            C_IBST_RMARK => self.ibst_ins = Some(u16v()),
+            C_DTTM_RMARK => self.dttm_ins = Some(u32v()),
+            C_IBST_RMARK_DEL => self.ibst_del = Some(u16v()),
+            C_DTTM_RMARK_DEL => self.dttm_del = Some(u32v()),
             _ => {}
         }
     }
@@ -142,7 +164,12 @@ mod tests {
     use super::*;
 
     fn revisions() -> Revisions {
-        Revisions { authors: vec!["Ada".into(), "Grace".into()], list: RefCell::new(Vec::new()), index: RefCell::new(HashMap::new()) }
+        Revisions {
+            authors: vec!["Ada".into(), "Grace".into()],
+            list: RefCell::new(Vec::new()),
+            index: RefCell::new(HashMap::new()),
+            prcs: RefCell::new(HashMap::new()),
+        }
     }
 
     fn marked(chpx: &[u8], prm: PrmRef<'_>) -> (CharProps, Vec<Revision>) {
@@ -160,7 +187,7 @@ mod tests {
     #[test]
     fn a_piece_prm_marks_a_run() {
         // Prm1: a grpprl from the piece table's Prc.
-        let (p, revs) = marked(&[], PrmRef::Grpprl(Some(&DEL_BY_GRACE)));
+        let (p, revs) = marked(&[], PrmRef::Grpprl { index: 0, grpprl: Some(&DEL_BY_GRACE) });
         assert_eq!(p.del, Some(0));
         assert_eq!((revs[0].kind, revs[0].author.as_str()), (RevisionKind::Delete, "Grace"));
         // Prm0: sprmCFRMarkIns by its isprm.
@@ -171,11 +198,29 @@ mod tests {
 
     #[test]
     fn the_piece_prm_applies_after_the_chpx() {
-        let (p, _) = marked(&INS, PrmRef::Grpprl(Some(&NOT_INS)));
+        let (p, _) = marked(&INS, PrmRef::Grpprl { index: 0, grpprl: Some(&NOT_INS) });
         assert_eq!(p.ins, None, "the Prm turns the CHPX's insertion off");
         let (p, _) = marked(&NOT_INS, PrmRef::Sprm0 { isprm: 0x42, val: 1 });
         assert_eq!(p.ins, Some(0));
         let (p, _) = marked(&INS, PrmRef::None);
         assert_eq!(p.ins, Some(0));
+    }
+
+    #[test]
+    fn a_prcs_marks_apply_after_the_chpx_one_by_one_and_are_scanned_once() {
+        let r = revisions();
+        // The CHPX inserts, by Grace; the Prc only sets the time, so the author stays Grace's.
+        let chpx = [INS.as_slice(), &[0x04, 0x48, 1, 0]].concat();
+        let prc = [0x05u8, 0x68, 0x21, 0x2B, 0xC3, 0x07];
+        let mut p = CharProps::default();
+        r.mark(&mut p, &chpx, PrmRef::Grpprl { index: 3, grpprl: Some(&prc) });
+        assert_eq!(p.ins, Some(0));
+        // The marks of Prc 3 are kept: the same index finds them without its grpprl's bytes.
+        let mut again = CharProps::default();
+        r.mark(&mut again, &INS, PrmRef::Grpprl { index: 3, grpprl: Some(&[]) });
+        assert_eq!(again.ins, Some(1), "Ada's insertion at the Prc's time");
+        let revs = r.take();
+        assert_eq!((revs[0].author.as_str(), revs[0].date.as_str()), ("Grace", "2024-03-05T12:33:00Z"));
+        assert_eq!((revs[1].author.as_str(), revs[1].date.as_str()), ("Ada", "2024-03-05T12:33:00Z"));
     }
 }

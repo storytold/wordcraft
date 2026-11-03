@@ -943,7 +943,7 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
                 }
             }
         }
-        PrmRef::Grpprl(Some(g)) => {
+        PrmRef::Grpprl { grpprl: Some(g), .. } => {
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return;
             }
@@ -953,7 +953,7 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
                 }
             }
         }
-        PrmRef::Grpprl(None) => {}
+        PrmRef::Grpprl { grpprl: None, .. } => {}
     }
 }
 

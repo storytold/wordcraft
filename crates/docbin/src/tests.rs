@@ -2680,11 +2680,42 @@ fn prm_grpprls_past_the_work_budget_are_skipped() {
     let work = super::Work::new(g.len() as u64 + 1);
     let base = CharProps::default();
     let mut first = CharProps::default();
-    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    super::apply_prm(&mut first, crate::piece::PrmRef::Grpprl { index: 0, grpprl: Some(&g) }, &[], &base, &work);
     assert_eq!(first.bold, Some(true));
     let mut second = CharProps::default();
-    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl(Some(&g)), &[], &base, &work);
+    super::apply_prm(&mut second, crate::piece::PrmRef::Grpprl { index: 0, grpprl: Some(&g) }, &[], &base, &work);
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
+}
+
+/// A piece's Prm grpprl (a Prc of up to 64 KB) was scanned for revision marks again at every
+/// paragraph mark and object anchor, which the per-formatting-change memo (#3692) doesn't
+/// cover. Each Prc's marks are now found once.
+#[test]
+fn a_large_prc_is_scanned_for_revision_marks_once() {
+    // 21,844 bold sprms, then sprmCFRMarkIns: the Prc's marks are only known at its end.
+    let mut prls = vec![(0x0835u16, &[0x01u8][..]); 21_844];
+    prls.push((0x0801, &[0x01]));
+    let prc = grpprl(&prls);
+    // A field and a paragraph mark per paragraph, all in the piece with that Prc.
+    let text: &'static str = Box::leak("\u{13}\u{15}\r".repeat(100_000).into_boxed_str());
+    let spec = RichSpec {
+        text,
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let bytes = rich_doc_with(&spec, &RichExtra { prcs: vec![prc], prm: 0x0001, ..Default::default() });
+    let t = std::time::Instant::now();
+    let doc = read(&bytes).expect("opens");
+    // Well under a second; scanning the Prc at every mark and anchor took 17 s.
+    assert!(t.elapsed().as_secs() < 10, "opened in {:?}", t.elapsed());
+    assert_eq!(doc.body.len(), 100_000);
+    assert_eq!(doc.revisions.len(), 1);
+    for p in doc.body.iter().filter_map(|b| b.as_para()) {
+        assert_eq!(p.mark.ins, Some(0), "the paragraph mark is a tracked insertion");
+        assert_eq!(p.runs.first().and_then(|r| r.props.ins), Some(0), "so is the field");
+    }
 }
