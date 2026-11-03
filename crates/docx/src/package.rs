@@ -47,6 +47,7 @@ pub mod rt {
     pub const DIAGRAM_COLORS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
     pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
     pub const GLOSSARY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument";
+    pub const AF_CHUNK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk";
 }
 
 /// Content type of a glossary document part (ECMA-376 Part 1 §11.3.8).
@@ -212,6 +213,8 @@ impl Package {
     }
 
     pub fn open_limited(bytes: &[u8], max_part: u64, max_total: u64) -> Result<Package, DocxError> {
+        // Before `zip` parses every entry the end record declares (#3660).
+        wordcraft_doc::zip_guard::check(bytes, MAX_ENTRIES as u64).map_err(DocxError::Limit)?;
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| DocxError::Zip(e.to_string()))?;
         if zip.len() > MAX_ENTRIES {
             return Err(DocxError::Limit(format!("{} zip entries", zip.len())));
@@ -250,6 +253,11 @@ impl Package {
             files.insert(name, Arc::new(buf));
         }
         Ok(Package::new(files))
+    }
+
+    /// The bytes of all its parts.
+    pub fn size(&self) -> u64 {
+        self.files.values().map(|f| f.len() as u64).sum()
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
@@ -525,6 +533,21 @@ mod tests {
     }
 
     #[test]
+    fn a_package_declaring_too_many_entries_is_refused_before_zip_reads_them() {
+        // #3660: a ZIP64 end record declaring more than MAX_ENTRIES.
+        let bomb = wordcraft_doc::zip_guard::zip64_entry_count_sample(MAX_ENTRIES as u64 + 1);
+        assert!(matches!(Package::open(&bomb), Err(DocxError::Limit(e)) if e.contains("declares")));
+        assert_eq!(crate::package_title(std::io::Cursor::new(bomb), 1 << 20), None);
+        // A real package still opens, and its title still reads.
+        let z = zip_of(&[(
+            "docProps/core.xml",
+            br#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Plan</dc:title></cp:coreProperties>"#.to_vec(),
+        )]);
+        assert!(Package::open(&z).is_ok());
+        assert_eq!(crate::package_title(std::io::Cursor::new(z), 1 << 20).as_deref(), Some("Plan"));
+    }
+
+    #[test]
     fn decompression_bomb_is_rejected() {
         let z = zip_of(&[("word/document.xml", vec![b' '; 2_000_000])]);
         assert!(z.len() < 100_000);
@@ -587,7 +610,7 @@ mod tests {
             ("word/media/pic.png", b"\x89PNG picture bytes".to_vec()),
         ]);
         let pkg = Package::open(&z).unwrap();
-        let doc = crate::read::read_opened(&pkg).unwrap();
+        let doc = crate::read::read_opened(&pkg, None).unwrap();
         let held = doc.media.values().next().expect("the picture is read");
         assert!(Arc::ptr_eq(held, pkg.get_shared("word/media/pic.png").unwrap()), "the same bytes, not a copy");
         assert_eq!(pkg.get("/WORD/media/PIC.png"), Some(&b"\x89PNG picture bytes"[..]), "lookups are unchanged");
