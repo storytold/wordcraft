@@ -529,6 +529,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let mut g = row.first_grid();
         let mut cells = Vec::with_capacity(row.cells.len());
         let mut rh = 0.0f32;
+        let mut row_top_band = 0.0f32;
+        let mut mark_height: Option<f32> = None;
         // The tallest cell margins plus border bands in the row.
         let mut row_insets = 0.0f32;
         let mut row_below = 0.0f32;
@@ -670,6 +672,18 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if cell.props.vmerge != VMerge::Restart {
                 rh = rh.max(h);
             }
+            if cell.props.vmerge == VMerge::None
+                && !cell.props.hide_mark
+                && !turn.is_turned()
+                && cell.blocks.len() == 1
+                && let Some(Placed::Lines { para, .. }) = items.first()
+                && items.iter().all(|it| matches!(it, Placed::Lines { para, .. } if para.text_len == 0 && para.label.is_none()))
+            {
+                // Paragraph spacing already contributes to the cell's own height.
+                let strut = para.height + margins[0] + margins[2] + band_b;
+                mark_height = Some(mark_height.unwrap_or(0.0).max(strut));
+            }
+            row_top_band = row_top_band.max(band_t);
             row_insets = row_insets.max(insets);
             row_below = row_below.max(margins[2] + band_b);
             if ri + 1 < nrows {
@@ -698,6 +712,9 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         // a 30pt row with 5pt margins and 0.5pt borders is 40.5pt tall even when its text needs less.
         // An exact height gains only the bottom margin: it runs from the top border to the bottom
         // of the text area (a 35pt row with 4pt margins steps 39pt).
+        // An empty cell strut clears the row's largest top border band. Nonempty
+        // content keeps its own border inset, even beside a thicker border.
+        let rh = mark_height.map_or(rh, |h| rh.max(h + row_top_band));
         let rh = match (row.props.height, row.props.height_rule) {
             (Some(h), HeightRule::Exact) if h > 0.0 => h + row_bottom,
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
@@ -914,6 +931,27 @@ pub fn split_row_keeping_cells(row: &RowLayout, cut: f32) -> Option<(RowLayout, 
     split_row_with(row, cut, true)
 }
 
+fn empty_cell_mark(item: &Placed, start: usize, para_count: usize) -> bool {
+    let Placed::Lines { para, l1, .. } = item else { return false };
+    if para_count > 1 || para.text_len != 0 || para.label.is_some() && (start..*l1).contains(&para.label_line()) {
+        return false;
+    }
+    if para.lines.get(start..*l1).is_some_and(|lines| {
+        lines.iter().any(|line| {
+            para.clusters
+                .get(line.c0..line.c1)
+                .is_some_and(|clusters| clusters.iter().any(|c| matches!(c.kind, crate::para::ClKind::Object(_)) && (c.adv > 0.0 || c.obj_h > 0.0)))
+        })
+    }) {
+        return false;
+    }
+    para.rp.borders.is_none_or(|b| {
+        !(start == 0 && b.top.is_some_and(|b| b.is_visible())
+            || *l1 == para.lines.len() && b.bottom.is_some_and(|b| b.is_visible())
+            || [b.left, b.right].into_iter().flatten().any(|b| b.is_visible()))
+    })
+}
+
 fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLayout, RowLayout)> {
     // Also rejects a NaN cut.
     if !(cut > 0.0 && cut < row.height) {
@@ -963,15 +1001,18 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     align_in_part(row, &mut cells, &splits, &realign, &mut ends, cut);
     // The top of the first thing that moves on in each cell.
+    let mut moved_content = false;
     let mut moved = vec![f32::MAX; cells.len()];
     // Whether each cell keeps anything on this page, and whether a line or picture of it that
     // moves on starts above the cut but runs below it (its space after aside).
     let mut kept_cells = vec![false; cells.len()];
     let mut cut_through = vec![false; cells.len()];
     for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
+        let para_count = items.iter().filter(|it| text_lines(it).is_some()).take(2).count();
         for (it, &split) in items.iter().zip(splits) {
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
-            let top = if let Some(r) = it.turned_bounds() {
+            let turned = it.turned_bounds();
+            let top = if let Some(r) = turned {
                 // Turned text moves as a whole, like a picture.
                 if fits(r.bottom()) {
                     *kept = true;
@@ -1010,13 +1051,20 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                 }
             };
             if let Some(top) = top {
+                // Turned lines move whole; ordinary lines count only the suffix past the cut.
+                let start = match it {
+                    Placed::Lines { l0, .. } if turned.is_some() => *l0,
+                    _ => split,
+                };
+                moved_content |= !empty_cell_mark(it, start, para_count);
                 *m = m.min(top);
             }
         }
     }
     let kept_any = kept_cells.iter().any(|&k| k);
     let first_moved = moved.iter().copied().fold(f32::MAX, f32::min);
-    if !kept_any || first_moved == f32::MAX {
+    // Single empty cell marks alone do not create a continuation fragment.
+    if !kept_any || !moved_content || first_moved == f32::MAX {
         return None;
     }
     // A cell left with nothing here because its first line or picture runs below the cut.
