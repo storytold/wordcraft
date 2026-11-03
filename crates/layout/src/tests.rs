@@ -14141,3 +14141,105 @@ mod review2707 {
 }
 
 mod shape_alpha;
+
+#[test]
+fn vertical_and_page_direction() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    for height in [5.0, 80.0] {
+        let mut doc = Document::from_text("Before\nAfter");
+        let chr = CharProps { font: Some(WRAP_TEST_FONT.into()), size: Some(10.0), ..Default::default() };
+        doc.styles.default_chr = chr.clone();
+        doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.space_before = Some(100.0);
+        let mut paragraph = Paragraph::new();
+        paragraph.insert_object(0, picture(20.0, 20.0, Default::default()), &chr).unwrap();
+        paragraph.props.line_spacing = Some(LineSpacing::Exactly(80.0));
+        paragraph.props.space_after = Some(0.0);
+        let mut table = Table::new(1, 1, 200.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([0.0; 4]);
+        table.props.borders = Some(Default::default());
+        table.rows[0].props.height = Some(height);
+        table.rows[0].props.height_rule = HeightRule::Exact;
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph)];
+        doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+        let layout = lay(&doc);
+        assert_eq!(layout.pages.len(), 1);
+        let path = Path(vec![1, 0, 0, 0]);
+        let line = crate::hit::page_lines(&layout.pages[0], StoryRef::Body).into_iter().find(|line| line.path == &path).unwrap();
+        let cell = Pos { story: StoryRef::Body, path: path.clone(), off: line.para.off_at_x(line.li, 0.0) };
+        assert_eq!(layout.caret_on(&cell, 0).is_some(), height == 80.0, "the retained object line needs goal-caret filtering");
+        for dir in [-1, 1] {
+            let origin = Pos::body(if dir < 0 { 2 } else { 0 }, 0);
+            let caret = layout.caret_on(&origin, 0).unwrap();
+            let (next, goal) = layout.vertical(&origin, Some(line.x), dir, 0).unwrap();
+            let expected = if height == 80.0 { path.clone() } else { Path::top(if dir < 0 { 0 } else { 2 }) };
+            assert_eq!(next.path, expected, "vertical movement skips only the invisible goal: {height}, direction {dir}");
+            assert_eq!(goal, line.x);
+            assert!(layout.caret_on(&next, 0).is_some());
+            // A short page step asks for the origin's own band but must move past it.
+            let y = caret.top + caret.height / 2.0;
+            let page_target = layout.line_toward(&origin, 0, line.x, y, dir).unwrap();
+            assert_eq!(page_target.path, expected, "page movement shares direction and clip eligibility: {height}, direction {dir}");
+            assert!(layout.caret_on(&page_target, 0).is_some());
+        }
+    }
+}
+
+#[test]
+fn page_goal_respects_cell_edge() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut doc = Document::from_text("Origin\nAlpha beta gamma delta epsilon\nAlternative");
+    doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+    doc.styles.default_chr.size = Some(10.0);
+    for block in 0..3 {
+        let paragraph = doc.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+        paragraph.props.line_spacing = Some(LineSpacing::Exactly(24.0));
+        paragraph.props.space_before = Some(0.0);
+        paragraph.props.space_after = Some(0.0);
+    }
+    let mut layout = lay(&doc);
+    assert_eq!(layout.pages.len(), 1);
+    let source = Path::top(1);
+    let target = Pos { story: StoryRef::Body, path: source.clone(), off: "Alpha beta ga".len() };
+    let anchor = layout.caret_anchor_on(&target, 0).unwrap();
+    let lines = crate::hit::page_lines(&layout.pages[0], StoryRef::Body);
+    let line = lines.iter().find(|line| line.path == &source).unwrap();
+    assert!(anchor.x > line.left, "choose a measured interior glyph caret");
+    let clip = Rect::new(line.left, line.top, (anchor.x - line.left) / 2.0, line.bottom - line.top);
+    let y = (line.top + line.bottom) / 2.0;
+    let path = Path(vec![1, 0, 0, 0]);
+    let index = layout.pages[0].items.iter().position(|item| matches!(item, Placed::Lines { path, .. } if path == &source)).unwrap();
+    let Placed::Lines { path: placed_path, .. } = &mut layout.pages[0].items[index] else { panic!("shaped line") };
+    *placed_path = path.clone();
+    layout.index.remove(&(StoryRef::Body, source));
+    layout.index.insert((StoryRef::Body, path.clone()), vec![(0, index)]);
+    for clipped in [true, false] {
+        let mut placed = layout.clone();
+        placed.pages[0].items.push(Placed::Cell {
+            rect: clip,
+            covered: false,
+            table: Path::top(1),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: clipped,
+        });
+        let target = Pos { path: path.clone(), ..target.clone() };
+        assert!(
+            crate::hit::page_lines(&placed.pages[0], StoryRef::Body).iter().any(|line| line.path == &path),
+            "the partially visible line must survive ink/band filtering"
+        );
+        assert_eq!(placed.caret_on(&target, 0).is_some(), !clipped, "only the selected interior caret is hidden");
+        for dir in [-1, 1] {
+            let origin = Pos::body(if dir < 0 { 2 } else { 0 }, 0);
+            let expected = if clipped { Path::top(if dir < 0 { 0 } else { 2 }) } else { path.clone() };
+            let page_target = placed.line_toward(&origin, 0, anchor.x, y, dir).unwrap();
+            assert_eq!(page_target.path, expected, "page movement uses the selected caret, not just visible earlier ink");
+            assert!(placed.caret_on(&page_target, 0).is_some());
+            let (vertical_target, goal) = placed.vertical(&origin, Some(anchor.x), dir, 0).unwrap();
+            assert_eq!(vertical_target.path, expected);
+            assert_eq!(goal, anchor.x);
+            assert!(placed.caret_on(&vertical_target, 0).is_some());
+        }
+    }
+}
