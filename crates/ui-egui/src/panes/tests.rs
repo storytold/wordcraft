@@ -479,3 +479,28 @@ fn navigation_arrows_and_enter_step_through_the_search_results() {
     h.get_by_label("No results");
     assert!(h.get_by_label("Next result").accesskit_node().is_disabled());
 }
+
+/// #5019: on a result past the first 500, the Results list shows it, marked and scrolled into view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_results_list_shows_and_marks_a_result_past_the_first_500() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let text: Vec<String> = (0..600).map(|i| format!("cat #{i}.")).collect();
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text(&text.join("\n"))), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app.run("edit.find", serde_json::json!({"text": "cat"})).unwrap();
+    assert_eq!(app.session.find.results.len(), 600);
+    app.ui.nav_tab = "results".into();
+    let mut h = pane_harness(app);
+    let (a, b) = h.state().session.find.results[500].clone();
+    h.state_mut().run("select.range", serde_json::json!({"anchor": a, "focus": b})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Result 501 of 600");
+    let row = h.get_by_label_contains("#500.");
+    assert_eq!(row.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the current result is marked");
+    let y = row.rect().center().y;
+    assert!((0.0..900.0).contains(&y), "and scrolled into view: {y}");
+    assert!(h.query_by_label_contains("#200.").is_none(), "the list holds the 500 around it, not the first 500");
+    let other = h.get_by_label_contains("#499.");
+    assert_ne!(other.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "only the current one");
+}

@@ -176,7 +176,6 @@ fn result_button(ui: &mut Ui, icon: &str, name: &str) -> egui::Response {
     resp.on_hover_text(name)
 }
 
-/// The search result the selection is on, if it is one.
 /// Most search results the Results list shows at once.
 const MAX_RESULT_ROWS: usize = 500;
 
@@ -190,6 +189,7 @@ pub(super) fn results_window(len: usize, current: Option<usize>) -> std::ops::Ra
     start..len.min(start.saturating_add(MAX_RESULT_ROWS))
 }
 
+/// The search result the selection is on, if it is one.
 fn current_result(app: &WordApp) -> Option<usize> {
     let sel = app.session.sel.ordered();
     app.session.find.results.iter().position(|r| *r == sel)
