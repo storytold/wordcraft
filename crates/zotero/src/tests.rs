@@ -589,6 +589,7 @@ fn citation_at_document_end_stays_closed() {
     assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }
 
+/// The bridge's direct writers must refuse before parsing or editing, while read queries and completion still work.
 #[test]
 fn viewing_refuses_zotero_writes_before_dispatch_but_keeps_queries() {
     let mut z = Z::new("Original", 0);

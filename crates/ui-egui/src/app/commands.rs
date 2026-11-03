@@ -4,12 +4,92 @@ use super::{
     table_pen, theme, widgets, zotero,
 };
 
+/// Dialogs whose controls insert content or change the current document.
+/// Keep this list aligned with `Dialog::open` and its insert/layout/reference delegates.
+/// Query, navigation, output and application-preference dialogs are deliberately omitted.
+fn editing_dialog(name: &str) -> bool {
+    matches!(
+        name,
+        "font"
+            | "paragraph"
+            | "asianTypography"
+            | "tabs"
+            | "borders"
+            | "pageBorders"
+            | "shading"
+            | "replace"
+            | "insertTable"
+            | "pageSetup"
+            | "link"
+            | "bookmark"
+            | "watermark"
+            | "phonetic"
+            | "newStyle"
+            | "manageStyles"
+            | "newTableStyle"
+            | "modifyTableStyle"
+            | "icons"
+            | "tableProperties"
+            | "tableCellMargins"
+            | "enclose"
+            | "pasteSpecial"
+            | "renameDocument"
+            | "recipientList"
+            | "newRecipientList"
+            | "insertMergeField"
+            | "fieldCode"
+            | "editFieldCode"
+            | "encryptPassword"
+            | "ruleIf"
+            | "ruleSkipIf"
+            | "defineList"
+            | "trackChangesOptions"
+            | "noteOptions"
+            | "columns"
+            | "symbol"
+            | "specialCharacters"
+            | "field"
+            | "insertSmartArt"
+            | "insertChart"
+            | "changeChartType"
+            | "chartData"
+            | "dropCap"
+            | "lineNumbers"
+            | "hyphenation"
+            | "manualHyphenation"
+            | "language"
+            | "envelopes"
+            | "labels"
+            | "tableFormula"
+            | "tableSort"
+            | "splitCells"
+            | "textToTable"
+            | "tableToText"
+            | "pictureSize"
+            | "pageNumbers"
+            | "caption"
+            | "crossReference"
+            | "index"
+            | "markEntry"
+            | "toc"
+            | "tableOfFigures"
+            | "sourceManager"
+            | "createSource"
+            | "restrictEditing"
+            | "organizer"
+            | "customProperties"
+            | "controlProperties"
+            | "colors"
+    )
+}
+
 impl WordApp {
     /// The UI must refuse edits before opening dialogs, reading paste data or launching integrations.
     pub(crate) fn viewing_blocks_command(&self, id: &str, params: &Value) -> bool {
         self.session.viewing_blocks_command(id, params)
             || (self.session.view.viewing
                 && (matches!(id, "ui.crop" | "ui.linkTextBox" | "ui.changePicture")
+                    || (id == "ui.dialog" && params.get("name").and_then(Value::as_str).is_some_and(editing_dialog))
                     || (id.starts_with("ui.zotero.") && !matches!(id, "ui.zotero.status" | "ui.zotero.answer"))))
     }
 

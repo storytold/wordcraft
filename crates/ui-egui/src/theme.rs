@@ -872,6 +872,7 @@ mod tests {
         }
     }
 
+    /// The orange indicator's foreground meets normal-text contrast in both supported themes.
     #[test]
     fn viewing_indicator_text_reads_in_both_themes() {
         for t in [super::Tokens::light(), super::Tokens::dark()] {

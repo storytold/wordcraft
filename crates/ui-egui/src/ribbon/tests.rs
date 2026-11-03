@@ -883,3 +883,117 @@ fn viewing_blocks_change_picture_before_opening_picker() {
     assert_eq!(*picked.borrow(), vec!["picture"]);
     assert!(app.change_picture_target.is_some());
 }
+
+/// A failed ribbon mode switch must keep Viewing and protection, in either tracking direction.
+#[test]
+fn failed_ribbon_tracking_switch_restores_viewing() {
+    use egui_kittest::kittest::Queryable;
+    for tracking in [false, true] {
+        let mut app =
+            WordApp::new(Session::new(wordcraft_doc::Document::from_text("Locked intro.\nEditable text.\nLocked end.")), crate::Services::default());
+        app.run("review.trackChanges", json!({"value": tracking})).unwrap();
+        app.run("select.text", json!({"text": "Editable text."})).unwrap();
+        app.run("review.restrict", json!({"exception": "add"})).unwrap();
+        app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+        app.run("view.viewing", json!({"value": true})).unwrap();
+        let before = app.session.doc.clone();
+        let depth = app.session.undo_depth();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        h.get_by_label("Viewing").click();
+        h.run_steps(2);
+        let target = if tracking { "Editing — edit the document directly" } else { "Reviewing — edits become suggestions" };
+        h.get_by_label(target).click();
+        h.run_steps(3);
+        assert!(h.state().session.view.viewing, "the failed tracking change must not unlock the editable exception");
+        assert_eq!(h.state().session.doc.settings.track_changes, tracking);
+        assert!(h.state().session.doc.same_content(&before));
+        assert_eq!(h.state().session.undo_depth(), depth);
+        assert!(h.state_mut().run("text.insert", json!({"text": "Blocked"})).is_err());
+        h.get_by_label("Viewing");
+    }
+}
+
+/// Failed tracking from ordinary Editing keeps that mode instead of introducing a Viewing lock.
+#[test]
+fn failed_tracking_switch_preserves_an_existing_editing_mode() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Editable text.")), crate::Services::default());
+    app.run("select.all", json!({})).unwrap();
+    app.run("review.restrict", json!({"exception": "add"})).unwrap();
+    app.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    let before = app.session.doc.clone();
+    assert!(set_tracking_mode(&mut app, true).is_err());
+    assert!(!app.session.view.viewing);
+    assert!(!app.session.doc.settings.track_changes);
+    assert!(app.session.doc.same_content(&before));
+    app.run("text.insert", json!({"text": "Allowed inside the exception"})).unwrap();
+}
+
+/// Successful mode changes leave Viewing, with tracking set as requested or already configured.
+#[test]
+fn tracking_mode_switch_keeps_successful_and_no_change_paths() {
+    for initially_tracking in [false, true] {
+        for requested in [false, true] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+            app.run("review.trackChanges", json!({"value": initially_tracking})).unwrap();
+            app.run("view.viewing", json!({"value": true})).unwrap();
+            set_tracking_mode(&mut app, requested).unwrap();
+            assert!(!app.session.view.viewing);
+            assert_eq!(app.session.doc.settings.track_changes, requested);
+            app.run("text.insert", json!({"text": "Allowed"})).unwrap();
+        }
+    }
+}
+
+/// Editing dialogs are refused before dispatch through both entrypoints, without replacing an open query dialog.
+#[test]
+fn viewing_refuses_editing_dialogs_before_opening_or_replacing_one() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    app.run("ui.dialog", json!({"name": "wordCount"})).unwrap();
+    let before = app.session.doc.clone();
+    let depth = app.session.undo_depth();
+    for name in ["insertTable", "link", "bookmark", "toc", "createSource", "font", "replace", "colors", "controlProperties", "recipientList"] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            let result = if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) };
+            assert!(result.unwrap_err().contains("Viewing"), "editing dialog {name}");
+            assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some("wordCount"));
+            assert!(app.colors.is_none(), "the color picker has a separate dispatch branch");
+            assert!(app.session.doc.same_content(&before));
+            assert_eq!(app.session.undo_depth(), depth);
+        }
+    }
+    app.run("view.viewing", json!({"value": false})).unwrap();
+    for execute_directly in [false, true] {
+        let params = json!({"name": "insertTable"});
+        if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
+        assert_eq!(app.dialog.as_ref().map(|d| d.name()), Some("insertTable"));
+        app.run("ui.closeDialog", json!({})).unwrap();
+    }
+}
+
+/// Viewing keeps reading, navigation and informational dialogs accessible through either command path.
+#[test]
+fn viewing_keeps_query_and_navigation_dialogs_available() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Original")), crate::Services::default());
+    app.run("view.viewing", json!({"value": true})).unwrap();
+    let before = app.session.doc.clone();
+    for name in ["wordCount", "find", "goto", "zoom", "commands", "about"] {
+        for execute_directly in [false, true] {
+            let params = json!({"name": name});
+            if execute_directly { app.execute("ui.dialog", params) } else { app.run("ui.dialog", params) }.unwrap();
+            assert!(app.dialog.is_some(), "query dialog {name} should open");
+            assert!(app.session.view.viewing);
+            assert!(app.session.doc.same_content(&before));
+            app.run("ui.closeDialog", json!({})).unwrap();
+        }
+    }
+}

@@ -1,5 +1,6 @@
 use super::*;
 
+/// Entering Viewing changes no document revision; edits and direct history replay must refuse before mutation.
 #[test]
 fn viewing_blocks_document_edits_and_history_but_keeps_reading_commands() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -38,6 +39,7 @@ fn viewing_blocks_document_edits_and_history_but_keeps_reading_commands() {
     s.run("text.insert", &json!({"text":"Allowed"})).unwrap();
 }
 
+/// The interaction lock is neither serialized nor a replacement for the document's tracking setting.
 #[test]
 fn viewing_is_manual_transient_and_keeps_track_changes_unchanged() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -53,6 +55,7 @@ fn viewing_is_manual_transient_and_keeps_track_changes_unchanged() {
     assert!(s.doc.settings.track_changes);
 }
 
+/// Switching to a different document must not transfer or clear the original document's Viewing choice.
 #[test]
 fn viewing_stays_with_its_document_when_switching_documents() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("First"));
@@ -65,6 +68,7 @@ fn viewing_stays_with_its_document_when_switching_documents() {
     assert!(s.run("text.insert", &json!({"text":"Blocked"})).is_err());
 }
 
+/// Every registered mutating command is refused before malformed or missing parameters are interpreted.
 #[test]
 fn viewing_disables_every_undoable_command_before_parameter_handling() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -76,6 +80,7 @@ fn viewing_disables_every_undoable_command_before_parameter_handling() {
     }
 }
 
+/// Mixed query/write commands keep their read path but reject writing parameters at the central guard.
 #[test]
 fn viewing_keeps_queries_but_refuses_polymorphic_write_parameters() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -96,6 +101,7 @@ fn viewing_keeps_queries_but_refuses_polymorphic_write_parameters() {
     }
 }
 
+/// Leaving a voluntary interaction lock must not remove an independently enforced document restriction.
 #[test]
 fn leaving_viewing_never_removes_document_protection() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Protected"));
@@ -106,6 +112,7 @@ fn leaving_viewing_never_removes_document_protection() {
     assert!(s.run("text.insert", &json!({"text":"Blocked"})).is_err());
 }
 
+/// Installing stale window state or temporarily taking a view out cannot unlock the shared document.
 #[test]
 fn viewing_cannot_be_cleared_by_an_older_window_view() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -120,6 +127,7 @@ fn viewing_cannot_be_cleared_by_an_older_window_view() {
     assert!(s.run("text.insert", &json!({"text":"Allowed"})).is_ok());
 }
 
+/// Invalid toggle values preserve the lock, and live inspection exposes it without creating an edit.
 #[test]
 fn viewing_rejects_malformed_values_without_unlocking_and_reports_live_state() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -134,6 +142,7 @@ fn viewing_rejects_malformed_values_without_unlocking_and_reports_live_state() {
     assert!(!s.dirty);
 }
 
+/// Replacing a document starts an independent editable document rather than inheriting the old interaction lock.
 #[test]
 fn viewing_does_not_carry_over_when_the_document_is_replaced() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
@@ -143,6 +152,7 @@ fn viewing_does_not_carry_over_when_the_document_is_replaced() {
     s.run("text.insert", &json!({"text":"Editable"})).unwrap();
 }
 
+/// Reading existing header/footer stories preserves their content, part structure and document revision.
 #[test]
 fn viewing_keeps_existing_header_footer_navigation_and_copy_without_creating_parts() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Body"));
@@ -165,6 +175,7 @@ fn viewing_keeps_existing_header_footer_navigation_and_copy_without_creating_par
     }
 }
 
+/// Closing header navigation while Viewing must not perform the usual cleanup that removes an empty part.
 #[test]
 fn viewing_can_leave_an_empty_header_without_stripping_it() {
     let mut s = Session::new(wordcraft_doc::Document::from_text("Body"));
@@ -178,6 +189,7 @@ fn viewing_can_leave_an_empty_header_without_stripping_it() {
     assert_eq!(s.rev(), revision);
 }
 
+/// Language preferences may affect future documents but cannot rewrite even a blank document being viewed.
 #[test]
 fn viewing_language_preferences_do_not_rewrite_the_current_blank_document() {
     let mut s = Session::new(wordcraft_doc::Document::new());

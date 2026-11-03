@@ -3,12 +3,20 @@
 Choose **Viewing — view the file but make no changes** from the interaction-mode
 menu beside Editing and Reviewing. Its button turns orange while Viewing is on.
 Choose Editing or Reviewing from the same menu to resume the corresponding mode.
+If document protection refuses the requested tracking change, Viewing stays on.
+A failed switch between Editing and Reviewing also keeps the previous mode.
 
 Viewing keeps the current page layout. Navigation, zoom, selection, copying,
 search, printing and exporting copies remain available. Document edits, comments,
 formatting, history changes, encryption changes, macros that write and Zotero
 writes are refused by the session, including commands sent through automation.
 The canvas does not request IME text input while Viewing is active.
+
+Editing dialogs, including Insert Table, Link, Bookmark, custom Table of Contents
+and Create Source, are refused before they open through `ui.dialog`. Word Count,
+Find, Go To, Zoom and informational dialogs remain available. The same early
+check applies to user actions and direct UI commands, and leaves an existing
+dialog in place when the requested editing dialog is refused.
 
 Change Picture is disabled even when a picture remains selected. Both user-facing
 and direct UI command entrypoints refuse it before opening a file picker or

@@ -198,17 +198,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         let mode = crate::widgets::interaction_mode_button(ui, editing_label, viewing, plan.buttons == 0);
                         egui::Popup::menu(&mode).show(|ui| {
                             if ui.selectable_label(!viewing && !track, tl!("Editing — edit the document directly")).clicked() {
-                                let _ = app.run("view.viewing", json!({"value": false}));
-                                if track {
-                                    let _ = app.run("review.trackChanges", json!({"value": false}));
-                                }
+                                let _ = set_tracking_mode(app, false);
                                 ui.close();
                             }
                             if ui.selectable_label(!viewing && track, tl!("Reviewing — edits become suggestions")).clicked() {
-                                let _ = app.run("view.viewing", json!({"value": false}));
-                                if !track {
-                                    let _ = app.run("review.trackChanges", json!({"value": true}));
-                                }
+                                let _ = set_tracking_mode(app, true);
                                 ui.close();
                             }
                             if ui.selectable_label(viewing, tl!("Viewing — view the file but make no changes")).clicked() {
@@ -414,6 +408,25 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
         });
+}
+
+/// Leave Viewing for Editing or Reviewing only if the requested tracking setting succeeds.
+/// Protection may refuse a document-wide tracking change even inside an editable exception.
+/// On failure, restore the previous Viewing choice and keep the original error visible;
+/// a failed switch from ordinary Editing must not unexpectedly enter Viewing.
+fn set_tracking_mode(app: &mut WordApp, tracking: bool) -> Result<(), String> {
+    let was_viewing = app.session.view.viewing;
+    app.run("view.viewing", json!({"value": false}))?;
+    if app.session.doc.settings.track_changes != tracking
+        && let Err(error) = app.run("review.trackChanges", json!({"value": tracking}))
+    {
+        if was_viewing {
+            app.run("view.viewing", json!({"value": true}))?;
+        }
+        app.status(error.clone());
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
