@@ -48,6 +48,131 @@ impl LineCap {
     }
 }
 
+/// An arrowhead's width across its line or length along it (ST_LineEndWidth and
+/// ST_LineEndLength, ECMA-376 §20.1.10.39–40): 2, 3 or 5 times the line's width, as Word draws it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ArrowSize {
+    /// Read a DrawingML size (`sm`, `med`, `lg`); absent or unknown values are medium.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "sm" => Self::Small,
+            "lg" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Small => "sm",
+            Self::Medium => "med",
+            Self::Large => "lg",
+        }
+    }
+
+    /// Read a VML width (`narrow`, `medium`, `wide`) or length (`short`, `medium`, `long`).
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "narrow" | "short" => Self::Small,
+            "wide" | "long" => Self::Large,
+            _ => Self::Medium,
+        }
+    }
+
+    /// How many [`arrow_unit`]s the arrowhead measures.
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Small => 2.0,
+            Self::Medium => 3.0,
+            Self::Large => 5.0,
+        }
+    }
+}
+
+/// The kind of an arrowhead (ST_LineEndType, ECMA-376 §20.1.10.33), kept for saving; every kind
+/// is drawn as a triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArrowKind {
+    #[default]
+    Triangle,
+    Stealth,
+    Diamond,
+    Oval,
+    Arrow,
+}
+
+impl ArrowKind {
+    /// Read a DrawingML end type other than `none`; unknown values are triangles.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "stealth" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "arrow" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+
+    /// The DrawingML spelling.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Triangle => "triangle",
+            Self::Stealth => "stealth",
+            Self::Diamond => "diamond",
+            Self::Oval => "oval",
+            Self::Arrow => "arrow",
+        }
+    }
+
+    /// Read a VML arrow (`block`, `classic`, `diamond`, `oval`, `open`) other than `none`.
+    pub fn from_vml(value: &str) -> Self {
+        match value {
+            "classic" => Self::Stealth,
+            "diamond" => Self::Diamond,
+            "oval" => Self::Oval,
+            "open" => Self::Arrow,
+            _ => Self::Triangle,
+        }
+    }
+}
+
+/// An arrowhead's kind and size (`a:headEnd` / `a:tailEnd`). The default is a medium triangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ArrowStyle {
+    pub kind: ArrowKind,
+    pub width: ArrowSize,
+    pub length: ArrowSize,
+}
+
+impl ArrowStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The arrowhead's length along its line and width across it, for a line `line_width` wide.
+    pub fn dims(self, line_width: f32) -> (f32, f32) {
+        let unit = arrow_unit(line_width);
+        (self.length.factor() * unit, self.width.factor() * unit)
+    }
+}
+
+/// What an arrowhead's size is a multiple of: the line's width, but at least 2 points (Word draws
+/// a thinner line's arrowheads as for a 2-point line).
+pub fn arrow_unit(line_width: f32) -> f32 {
+    let w = if line_width.is_finite() { line_width.clamp(0.25, 200.0) } else { 0.75 };
+    w.max(2.0)
+}
+
 /// The rest of a shape's properties. Empty (the default) for most shapes.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -69,6 +194,11 @@ pub struct ShapeExtra {
     pub arrow_start: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub arrow_end: bool,
+    /// The kind and size of the start and end arrowheads, when there are any.
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub start_style: ArrowStyle,
+    #[serde(skip_serializing_if = "ArrowStyle::is_default")]
+    pub end_style: ArrowStyle,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,6 +213,39 @@ pub struct ShapeExtra {
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_fill: Option<crate::fill::Fill>,
+    /// A horizontal rule (VML `o:hr`: a web page's `<hr>` pasted into Word): it takes its whole
+    /// line, and is drawn across [`HorizontalRule::pct`] of it or at the shape's own width.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hr: Option<HorizontalRule>,
+}
+
+/// How a horizontal rule sits on its line (VML `o:hrpct`, `o:hralign`), as Word draws one:
+/// across `pct` percent of the line's width (the paragraph's, inside its indents), or at the
+/// shape's own width when `pct` is 0; `align` places it when it is narrower than the line.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HorizontalRule {
+    pub pct: f32,
+    pub align: crate::props::Align,
+    /// Word's standard look (`o:hrstd`), kept for saving.
+    pub standard: bool,
+}
+
+impl HorizontalRule {
+    /// The rule's width on a line `line` wide, for a shape `own` wide.
+    pub fn width(&self, line: f32, own: f32) -> f32 {
+        let line = line.max(0.0);
+        if self.pct.is_finite() && self.pct > 0.0 { line * (self.pct.min(100.0) / 100.0) } else { own.clamp(0.0, line) }
+    }
+
+    /// Where a rule `w` wide starts on a line from `x`, `line` wide.
+    pub fn left(&self, x: f32, line: f32, w: f32) -> f32 {
+        match self.align {
+            crate::props::Align::Center => x + (line - w) / 2.0,
+            crate::props::Align::Right => x + line - w,
+            _ => x,
+        }
+    }
 }
 
 fn is_zero(v: &u32) -> bool {
