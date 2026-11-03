@@ -658,12 +658,23 @@ mod tests {
         // Turning downloading on fails: the window's own failure.
         assert!(!super::consent(&mut a, &ctx, "nl"));
         clean(&super::error_of(&a, "nl").expect("a failure is shown"));
-        // An install and the list fail in the engine.
+        // An install and the list fail in the engine. Another test's window, drawn meanwhile,
+        // can move them onto the engine's thread (`tick`): the call then starts the job, and its
+        // failure is recorded when the job ends.
+        let failed = |r: Result<bool, String>| {
+            if r == Ok(true) {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while super::busy() && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+            r != Ok(false)
+        };
         a.packs_rt.errors.clear();
         backend.inner.network.store(true, Ordering::Relaxed);
-        assert!(packs::start_install("nl").is_err());
+        assert!(failed(packs::start_install("nl")));
         clean(&super::error_of(&a, "nl").expect("the install's failure is shown"));
-        assert!(packs::start_refresh().is_err());
+        assert!(failed(packs::start_refresh()));
         clean(&super::error_of(&a, "").expect("the list's failure is shown"));
     }
 
