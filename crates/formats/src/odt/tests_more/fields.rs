@@ -57,10 +57,29 @@ fn fields_open_as_fields_with_their_shown_text() {
 }
 
 #[test]
-fn a_fixed_date_and_unknown_fields_are_plain_text() {
+fn a_fixed_date_is_a_locked_field_and_unknown_fields_are_plain_text() {
+    // A fixed date (§19.807 `text:fixed`) keeps what it shows: a locked field, written back fixed.
     let d = import(&body(r#"<text:p><text:date text:fixed="true">1 May</text:date>, <text:conditional-text text:condition="ooow:1" text:string-value-if-true="4" text:string-value-if-false="5">4</text:conditional-text>, <text:page-number text:select-page="next">5</text:page-number></text:p>"#)).unwrap();
-    assert!(fields(&d).is_empty());
-    assert_eq!(d.body[0].as_para().unwrap().text, "1 May, 4, 5");
+    assert_eq!(fields(&d), [("DATE".to_string(), "1 May".to_string())]);
+    let locked = d.body[0].as_para().unwrap().objects.iter().any(|o| matches!(o, InlineObject::Field { locked: true, .. }));
+    assert!(locked);
+    // Written back: with no picture to read its value under, as its text (a reader would show a
+    // fixed date without a value as today's).
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(!c.contains("<text:date") && c.contains("1 May"), "{c}");
+    // With a picture, fixed at the value it shows (§19.871).
+    let n = r#"xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0""#;
+    let d = import(&package(
+        &format!(
+            r#"<office:document-content {NS_T} {n}><office:automatic-styles><number:date-style style:name="N1"><number:day/><number:text> </number:text><number:month number:style="long" number:textual="true"/><number:text> </number:text><number:year number:style="long"/></number:date-style><number:time-style style:name="N2"><number:hours number:style="long"/><number:text>:</number:text><number:minutes number:style="long"/></number:time-style></office:automatic-styles><office:body><office:text><text:p><text:date text:fixed="true" style:data-style-name="N1" text:date-value="2026-05-01">1 May 2026</text:date> <text:time text:fixed="true" style:data-style-name="N2" text:time-value="2026-05-01T14:30:00">14:30</text:time></text:p></office:text></office:body></office:document-content>"#
+        ),
+        None,
+    ))
+    .unwrap();
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"text:date-value="2026-05-01""#) && c.contains(">1 May 2026</text:date>"), "{c}");
+    assert!(c.contains(r#"text:time-value="1899-12-30T14:30:00""#) && c.contains(">14:30</text:time>"), "{c}");
+    assert_eq!(c.matches(r#"text:fixed="true""#).count(), 2, "{c}");
     // A fixed date with neither a value nor text (LibreOffice's templates) shows the day: a
     // date field.
     let d = import(&body(r#"<text:p><text:date text:fixed="true"/>.</text:p>"#)).unwrap();
@@ -319,4 +338,20 @@ fn user_fields_stay_user_fields() {
     assert!(!meta.contains("GroupField1"), "not a document property too: {meta}");
     let back = import(&saved).unwrap();
     assert_eq!(back.custom_props, d.custom_props);
+}
+
+#[test]
+fn sender_fields_stay_fields() {
+    // LibreOffice's letter and fax templates: the sender's details (§7.3.6), shown as last filled
+    // in (WordCraft's `SENDER` field code), written back as the same fields.
+    let d = import(&body(r#"<text:p><text:sender-firstname>Ada</text:sender-firstname> <text:sender-lastname>Lovelace</text:sender-lastname>, <text:sender-email>ada@example.org</text:sender-email></text:p>"#)).unwrap();
+    assert_eq!(
+        fields(&d),
+        [("SENDER firstname".into(), "Ada".into()), ("SENDER lastname".into(), "Lovelace".into()), ("SENDER email".into(), "ada@example.org".into())]
+    );
+    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    assert!(
+        c.contains("<text:sender-firstname>Ada</text:sender-firstname>") && c.contains("<text:sender-email>ada@example.org</text:sender-email>"),
+        "{c}"
+    );
 }

@@ -232,6 +232,8 @@ pub enum Inline {
         instr: String,
         result: String,
         fmt: Fmt,
+        /// Its result is kept, not worked out again (Word's locked field, ODF's `text:fixed`).
+        locked: bool,
     },
     /// A footnote or endnote: its custom mark (empty: numbered) and its content, without the
     /// note's own mark. Only flows asked for notes ([`FlowOpts::notes`]) hold them; formats

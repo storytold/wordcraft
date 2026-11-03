@@ -35,13 +35,63 @@ const SIMPLE: &[(&str, &str)] = &[
     ("print-date", "PRINTDATE"),
 ];
 
+/// The sender fields (§7.3.6 `text:sender-firstname` … §7.3.7 `text:sender-state-or-province`).
+const SENDER_PARTS: [&str; 18] = [
+    "firstname",
+    "lastname",
+    "initials",
+    "title",
+    "position",
+    "email",
+    "phone-private",
+    "fax",
+    "company",
+    "phone-work",
+    "street",
+    "city",
+    "postal-code",
+    "country",
+    "state-or-province",
+    "country-code",
+    "street-number",
+    "address",
+];
+
+/// `el`, a field element, fixed at what it shows (§19.807 `text:fixed`), for the fields that can
+/// be.
+/// Field element `el` for locked field `instr` showing `result`, fixed (see [`fixed`]). A date
+/// or time is fixed at the value its text shows under its picture (§19.871, §19.880); `None`
+/// when that can't be read, as a reader shows a fixed date without a value as today's (then it
+/// is written as its text).
+pub(super) fn locked(el: &str, instr: &str, result: &str) -> Option<String> {
+    let code = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    let attr = match code.as_str() {
+        "DATE" => "text:date-value",
+        "TIME" => "text:time-value",
+        _ => return Some(fixed(el)),
+    };
+    let value = super::datastyle::picture_of(instr).and_then(|pic| super::datastyle::value_shown(&pic, result))?;
+    let el = fixed(el);
+    let (tag, rest) = el.find(['>', ' ']).and_then(|at| Some((el.get(..at)?, el.get(at..)?)))?;
+    Some(format!("{tag} {attr}=\"{value}\"{rest}"))
+}
+
+pub(super) fn fixed(el: &str) -> String {
+    const FIXABLE: [&str; 6] = ["<text:date", "<text:time", "<text:author-name", "<text:author-initials", "<text:sender-", "<text:file-name"];
+    if !FIXABLE.iter().any(|f| el.starts_with(f)) {
+        return el.to_string();
+    }
+    match el.find(['>', ' ']).and_then(|at| Some((el.get(..at)?, el.get(at..)?))) {
+        Some((tag, rest)) => format!("{tag} text:fixed=\"true\"{rest}"),
+        None => el.to_string(),
+    }
+}
+
 /// The Word field code for the `text:` field element `local` with attributes `a`, or `None`
 /// when it is no field WordCraft keeps (then its text is read as text).
 pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<String>) -> Option<String> {
     // Fixed, unless it holds no value to be fixed at (LibreOffice's templates: a date that shows
     // the day the document is made from them).
-    let fixed =
-        get(a, "text:fixed").is_some_and(|v| v.trim() == "true") && (get(a, "text:date-value").is_some() || get(a, "text:time-value").is_some());
     // A name a field code can hold as one word.
     let name = |k: &str| {
         get(a, k)
@@ -112,7 +162,9 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
                 _ => format!("REF {name} \\h"),
             })
         }
-        _ if fixed => None,
+        // The sender's details (§7.3.6–7.3.7), from the application's user data: WordCraft's
+        // own `SENDER` field code, shown as its last result.
+        _ if local.strip_prefix("sender-").is_some_and(|p| SENDER_PARTS.contains(&p)) => local.strip_prefix("sender-").map(|p| format!("SENDER {p}")),
         _ => {
             let code = SIMPLE.iter().find(|(e, _)| *e == local).map(|(_, code)| code.to_string())?;
             // A date or time in its date style (§19.473 `style:data-style-name`).
@@ -131,6 +183,10 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
     let mut words = instr.split_whitespace();
     let code = words.next()?.to_ascii_uppercase();
     match code.as_str() {
+        "SENDER" => {
+            let part = words.next().filter(|p| SENDER_PARTS.contains(p))?;
+            Some(format!("<text:sender-{part}>{result}</text:sender-{part}>"))
+        }
         "SEQ" => {
             let seq = words.next().filter(|n| !n.starts_with('\\') && n.len() <= MAX_REF_NAME)?;
             let fmt = match switch_arg(instr, '*').as_deref() {

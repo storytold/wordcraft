@@ -334,11 +334,8 @@ impl Body<'_> {
                 let at = if before.trim() == label { 0 } else { p.inlines.len() };
                 p.inlines.insert(at, Inline::Anchor(name.clone()));
             }
-            if fixed && !result.trim().is_empty() {
-                p.push_text(&result, &fmt);
-            } else {
-                p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt });
-            }
+            // A fixed field keeps what it shows (§19.807 `text:fixed`): a locked field.
+            p.inlines.push(Inline::Field { instr, result: result.trim().to_string(), fmt, locked: fixed && !result.trim().is_empty() });
             if let Some(name) = anchor {
                 p.inlines.push(Inline::AnchorEnd(name));
             }

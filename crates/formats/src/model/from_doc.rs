@@ -289,8 +289,8 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
         InlineObject::FieldEnd if opts.fields => vec![Inline::FieldEnd],
         // Where a bookmark ends, so it covers its text (Word's `_GoBack` is the last edit's spot).
         InlineObject::BookmarkEnd { name } if opts.fields && name != "_GoBack" => vec![Inline::AnchorEnd(name.clone())],
-        InlineObject::Field { instr, result, .. } if opts.fields => {
-            vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone() }]
+        InlineObject::Field { instr, result, locked, .. } if opts.fields => {
+            vec![Inline::Field { instr: instr.clone(), result: result.clone(), fmt: f.clone(), locked: *locked }]
         }
         _ => return None,
     })

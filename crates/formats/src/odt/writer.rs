@@ -449,20 +449,23 @@ impl Writer {
                 // A field around content: an index's is its element (see `index_at`).
                 Inline::FieldStart(_) | Inline::FieldEnd => {}
                 Inline::CommentEnd(id) => out.push_str(&format!("<office:annotation-end office:name=\"{}\"/>", annotation_name(self.prefix, *id))),
-                Inline::Field { instr, result, fmt } => match self.field_element(instr, result) {
-                    Some(el) => {
-                        match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
-                            Some(n) => out.push_str(&format!("<text:span text:style-name=\"{n}\">{el}</text:span>")),
-                            None => out.push_str(&el),
+                Inline::Field { instr, result, fmt, locked } => {
+                    match self.field_element(instr, result).and_then(|el| if *locked { super::fields::locked(&el, instr, result) } else { Some(el) })
+                    {
+                        Some(el) => {
+                            match self.text_style(&Fmt { link: None, ..fmt.clone() }) {
+                                Some(n) => out.push_str(&format!("<text:span text:style-name=\"{n}\">{el}</text:span>")),
+                                None => out.push_str(&el),
+                            }
+                            prev_space = false;
                         }
-                        prev_space = false;
+                        // No ODF field for it: what it shows, as text.
+                        None => {
+                            self.plain_inlines(&[Inline::Text(result.clone(), fmt.clone())], out);
+                            prev_space = result.ends_with(' ');
+                        }
                     }
-                    // No ODF field for it: what it shows, as text.
-                    None => {
-                        self.plain_inlines(&[Inline::Text(result.clone(), fmt.clone())], out);
-                        prev_space = result.ends_with(' ');
-                    }
-                },
+                }
                 // Inside a tracked change: its base text, which the text path marks as changed.
                 Inline::Ruby { base, fmt, .. } if fmt.ins.is_some() || fmt.del.is_some() => {
                     self.plain_inlines(&[Inline::Text(base.clone(), fmt.clone())], out);

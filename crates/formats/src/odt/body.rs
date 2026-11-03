@@ -1102,7 +1102,7 @@ impl Body<'_> {
             && let Some(set) = super::fields::set_instr(a)
         {
             let fmt = self.cur_fmt();
-            self.push_inline(Inline::Field { instr: set, result: String::new(), fmt });
+            self.push_inline(Inline::Field { instr: set, result: String::new(), fmt, locked: false });
             if get(a, "text:display").map(str::trim) == Some("none") {
                 self.skip = 1;
                 return true;
@@ -1176,7 +1176,7 @@ impl Body<'_> {
                             })
                             .collect();
                         if let Some(instr) = super::fields::xe_instr(k1.as_deref(), k2.as_deref(), &text) {
-                            let field = Inline::Field { instr, result: String::new(), fmt: Fmt::default() };
+                            let field = Inline::Field { instr, result: String::new(), fmt: Fmt::default(), locked: false };
                             // Inside a run: split it there.
                             let split = match p.inlines.get_mut(from) {
                                 Some(Inline::Text(t, f)) if off > 0 && t.is_char_boundary(off) && off < t.len() => {

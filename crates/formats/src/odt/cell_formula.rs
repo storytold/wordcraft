@@ -319,7 +319,7 @@ pub(super) fn into_field(blocks: &mut [FBlock], instr: String) {
     }
     let fmt = p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap_or_default();
     let result: String = p.inlines.iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t.as_str()) } else { None }).collect();
-    p.inlines = vec![Inline::Field { instr, result: result.trim().to_owned(), fmt }];
+    p.inlines = vec![Inline::Field { instr, result: result.trim().to_owned(), fmt, locked: false }];
 }
 
 /// The formula field a cell is, when it is one: its field code and the result it shows (a cell

@@ -222,3 +222,119 @@ pub(super) fn auto_ordered(parts: &[Part]) -> Vec<Part> {
     }
     out
 }
+
+/// English month names, in order; a month shown is its name or the start of it (three letters
+/// or more).
+const MONTHS: [&str; 12] = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/// The value a date or time shown as `shown` under Word picture `pic` stands for, as a fixed
+/// field's `text:date-value` / `text:time-value` (§19.871, §19.880) state it: `YYYY-MM-DD`, with
+/// `Thh:mm:ss` when it shows a time (on 1899-12-30, ODF's day 0, when it shows no date). `None`
+/// when the text doesn't read under the picture (month names in another language, say).
+pub(super) fn value_shown(pic: &str, shown: &str) -> Option<String> {
+    let parts = parts_of(pic);
+    let s: Vec<char> = shown.trim().chars().take(MAX_PICTURE).collect();
+    let mut i = 0usize;
+    let (mut day, mut month, mut year) = (None, None, None);
+    let (mut hour, mut minute, mut second, mut pm) = (None, None, 0u32, None);
+    // A run of digits (at most `max`) or of letters at `i`.
+    let digits = |i: &mut usize, max: usize| -> Option<u32> {
+        let start = *i;
+        while *i - start < max && s.get(*i).is_some_and(char::is_ascii_digit) {
+            *i += 1;
+        }
+        s.get(start..*i).filter(|d| !d.is_empty())?.iter().collect::<String>().parse().ok()
+    };
+    let word = |i: &mut usize| -> String {
+        let start = *i;
+        while s.get(*i).is_some_and(|c| c.is_alphabetic()) {
+            *i += 1;
+        }
+        s.get(start..*i).map(|w| w.iter().collect::<String>().to_lowercase()).unwrap_or_default()
+    };
+    for p in &parts {
+        match p {
+            Part::Text(t) => {
+                for c in t.chars() {
+                    match s.get(i) {
+                        Some(&got) if got.eq_ignore_ascii_case(&c) => i += 1,
+                        // Spaces are loose: one shown where the picture has none, or none where it has one.
+                        Some(&got) if got.is_whitespace() => i += 1,
+                        _ if c.is_whitespace() => {}
+                        _ => return None,
+                    }
+                }
+            }
+            Part::Day(_) => day = Some(digits(&mut i, 2)?),
+            Part::Month(_, false) => month = Some(digits(&mut i, 2)?),
+            Part::Month(_, true) => {
+                let w = word(&mut i);
+                let n = MONTHS.iter().position(|m| w.len() >= 3 && m.starts_with(w.as_str()))?;
+                month = Some(u32::try_from(n).ok()? + 1);
+            }
+            Part::Year(_) => {
+                let start = i;
+                let y = digits(&mut i, 4)?;
+                // Two digits: Word's window, 1930–2029.
+                year = Some(if i - start <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y });
+            }
+            Part::Weekday(_) => {
+                if word(&mut i).is_empty() {
+                    return None;
+                }
+            }
+            Part::Hours(_) => hour = Some(digits(&mut i, 2)?),
+            Part::Minutes(_) => minute = Some(digits(&mut i, 2)?),
+            Part::Seconds(_) => second = digits(&mut i, 2)?,
+            Part::AmPm => {
+                let w = word(&mut i);
+                pm = Some(match w.as_str() {
+                    "am" | "a" => false,
+                    "pm" | "p" => true,
+                    _ => return None,
+                });
+            }
+        }
+    }
+    if i < s.len() {
+        return None;
+    }
+    let time = match (hour, minute) {
+        (Some(h), m) => {
+            let h = match pm {
+                Some(true) if h < 12 => h + 12,
+                Some(false) if h == 12 => 0,
+                _ => h,
+            };
+            let m = m.unwrap_or(0);
+            (h < 24 && m < 60 && second < 60).then(|| format!("T{h:02}:{m:02}:{second:02}"))?
+        }
+        (None, Some(_)) => return None,
+        (None, None) => String::new(),
+    };
+    let date = match (year, month, day) {
+        (Some(y), Some(m), Some(d)) if (1..=12).contains(&m) && (1..=31).contains(&d) && y <= 9999 => format!("{y:04}-{m:02}-{d:02}"),
+        (None, None, None) if !time.is_empty() => "1899-12-30".to_string(),
+        _ => return None,
+    };
+    Some(format!("{date}{time}"))
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::value_shown;
+
+    #[test]
+    fn a_shown_date_or_time_reads_back_under_its_picture() {
+        assert_eq!(value_shown("dddd, MMMM dd, yyyy", "Sunday, November 01, 2026").as_deref(), Some("2026-11-01"));
+        assert_eq!(value_shown("dd/MM/yy", "03/11/26").as_deref(), Some("2026-11-03"));
+        assert_eq!(value_shown("hh:mm AM/PM", "04:04 PM").as_deref(), Some("1899-12-30T16:04:00"));
+        assert_eq!(value_shown("d MMM yyyy H:mm:ss", "5 Mar 1999 7:08:09").as_deref(), Some("1999-03-05T07:08:09"));
+        // Not readable: another language's month, extra text, an impossible day, junk.
+        assert_eq!(value_shown("d MMMM yyyy", "5 mars 2026"), None);
+        assert_eq!(value_shown("d MMMM yyyy", "5 March 2026 and more"), None);
+        assert_eq!(value_shown("dd/MM/yyyy", "45/11/2026"), None);
+        assert_eq!(value_shown("dd/MM/yyyy", ""), None);
+        assert_eq!(value_shown("", "anything"), None);
+    }
+}

@@ -569,13 +569,13 @@ impl<'a> Builder<'a> {
                         append(&mut out, "", &CharProps { style: Some(style.into()), ..Default::default() }, Some(obj));
                     }
                 }
-                Inline::Field { instr, result, fmt } => {
+                Inline::Field { instr, result, fmt, locked } => {
                     let cp = self.budget(char_props(fmt));
                     let (instr, result) = (clean_text(instr), clean_text(result));
                     if instr.trim().is_empty() {
                         append(&mut out, &result, &cp, None);
                     } else {
-                        let obj = InlineObject::Field { instr, result, locked: false, dirty: false, code: false, form: String::new() };
+                        let obj = InlineObject::Field { instr, result, locked: *locked, dirty: false, code: false, form: String::new() };
                         append(&mut out, "", &cp, Some(obj));
                     }
                 }
