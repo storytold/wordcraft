@@ -113,15 +113,16 @@ files it was given rather than guarding against other software on the computer.
 ## Preferences
 
 With `--connect`, an agent works in the user's own app, whose preferences are saved and used for
-every later document. Its commands can't change them: the user name and initials, AutoCorrect,
-keyboard shortcuts, the ribbon and Quick Access Toolbar, the File › Options settings (including
-the default proofing language, Check Spelling as You Type, Print Markup, how tracked changes are
-shown, and the window's own settings such as the theme and the Start screen). A command that
-would is refused with an error naming
-`--allow-preference-changes`, and what that command did is undone, document edits included
-(#3622). Start the app with `wordcraft --control 7981 --allow-preference-changes` to let an agent
-you trust change them. Reading them still works: `tools.customizeKeyboard` with `command` or `key`,
-and `file.options` without settings, which returns them.
+every later document. An agent can change them when asked to, unless the user has turned on File ›
+Options › Agents › **Keep agents from changing my preferences** (`file.options`
+`protectPreferences`). While that is on, its commands can't change the user name and initials,
+AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, or the File › Options
+settings (including the default proofing language, Check Spelling as You Type, Print Markup, how
+tracked changes are shown, the window's own settings such as the theme and the Start screen, and
+the setting itself). A command that would is refused with an error naming the setting, and what
+that command did is undone, document edits included (#3622). Reading them still works:
+`tools.customizeKeyboard` with `command` or `key`, and `file.options` without settings, which
+returns them.
 
 The lock covers commands only. The `click` and `key` tools send synthetic input, which the app
 plays back after the request, so an agent clicking through File › Options can still change a

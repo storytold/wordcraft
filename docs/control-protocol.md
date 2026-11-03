@@ -141,16 +141,17 @@ the same rule (unsaved changes need `{"force": true}`), and the active window st
 
 ### Preferences
 
-Commands can't change what the app saves for later documents: the user name and initials,
-AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File › Options
-settings (including the ones the window keeps itself: `ui.theme`, `ui.startScreen`,
-`ui.language`…). A command that would, sent by any
-method (`engine.execute`, the bare id, or with `doc`), is refused with an error that names
-`--allow-preference-changes`, and what that command did is undone (#3622). An agent reading a
-document could otherwise be steered by text in it into leaving an AutoCorrect entry or a rebound
-Save shortcut behind. Asking for a setting without changing it still answers. Start the app with
-`wordcraft --control 7981 --allow-preference-changes` to allow changes. The user's own changes, in
-the window, are never affected.
+Agents can change the user's preferences, as users ask them to (an AutoCorrect entry, a shortcut,
+their name). A user who'd rather they didn't turns on File › Options › Agents › **Keep agents from
+changing my preferences** (`file.options` `protectPreferences`, saved with the other options).
+While it is on, commands can't change what the app saves for later documents: the user name and
+initials, AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, and the File ›
+Options settings (including the ones the window keeps itself: `ui.theme`, `ui.startScreen`,
+`ui.language`…, and this setting). A command that would, sent by any method (`engine.execute`, the
+bare id, or with `doc`), is refused with an error that names the setting, and what that command
+did is undone (#3622). An agent reading a document can't then be steered by text in it into
+leaving an AutoCorrect entry or a rebound Save shortcut behind. Asking for a setting without
+changing it still answers. The user's own changes, in the window, are never affected.
 
 What the lock doesn't cover yet:
 

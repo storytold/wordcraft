@@ -131,15 +131,19 @@ fn saved(a: &WordApp) -> Value {
     v
 }
 
-/// #3622: control requests can't change the user's saved preferences, whichever way they name the
-/// command (`engine.execute`, the bare id, or addressed to a background document), and the lock
-/// lifts after each request; `--allow-preference-changes` lets them through.
+/// #3622: with File › Options › Agents › Keep agents from changing my preferences on, control
+/// requests can't change the user's saved preferences, whichever way they name the command
+/// (`engine.execute`, the bare id, or addressed to a background document), nor turn the setting
+/// off, and the lock lifts after each request. Off (the default), they go through.
 #[test]
 fn control_requests_cannot_change_saved_preferences() {
     let mut a = app();
+    assert!(a.execute("file.options", json!({"protectPreferences": true})).is_ok());
     let (first, _) = two_documents(&mut a);
     let before = saved(&a);
-    let refused = |r: &Value| r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("--allow-preference-changes"));
+    let refused = |r: &Value| r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("File › Options › Agents"));
+    let r = exec(&mut a, "file.options", json!({"protectPreferences": false}));
+    assert!(refused(&r), "{r}");
     let r = exec(&mut a, "tools.autocorrect", json!({"add": {"from": "invoice", "to": "pay to 12-3456"}}));
     assert!(refused(&r), "{r}");
     let r = send(&mut a, "tools.customizeKeyboard", json!({"assign": {"command": "edit.undo", "key": "Mod+S"}}));
@@ -162,7 +166,7 @@ fn control_requests_cannot_change_saved_preferences() {
     assert!(a.execute("file.setAuthor", json!({"name": "Ana"})).is_ok());
     assert_eq!(a.session.author, "Ana");
 
-    let mut a = app().allow_preference_changes(true);
+    let mut a = app();
     let r = exec(&mut a, "file.setAuthor", json!({"name": "Agent"}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(a.session.author, "Agent");

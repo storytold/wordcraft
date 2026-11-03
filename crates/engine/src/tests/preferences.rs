@@ -1,4 +1,5 @@
-//! Locked preferences (#3622): while automation drives the session, commands can't change what
+//! Locked preferences (#3622): while automation drives the session and the user has turned on
+//! File › Options › Agents › Keep agents from changing my preferences, commands can't change what
 //! the front end saves between runs, so an agent can't leave AutoCorrect entries, shortcuts, a
 //! ribbon or a user name behind for documents it never saw.
 
@@ -35,7 +36,21 @@ fn changes() -> Vec<(&'static str, Value)> {
         ("review.proofing", json!({})),
         ("review.wordCount", json!({"includeTextBoxes": false})),
         ("review.language", json!({"lang": "pl-PL", "default": true})),
+        ("file.options", json!({"protectPreferences": true})),
     ]
+}
+
+/// The protection is the user's: off by default, and once on an agent can't turn it off.
+#[test]
+fn protecting_preferences_is_off_by_default_and_agents_cannot_turn_it_off() {
+    let mut s = Session::new(crate::sample::sample_document());
+    assert!(!s.prefs.protect_preferences, "agents change preferences unless the user protects them");
+    let r = s.run("file.options", &json!({"protectPreferences": true})).unwrap();
+    assert_eq!(r["protectPreferences"], true);
+    s.preferences_locked = true;
+    assert!(matches!(s.run("file.options", &json!({"protectPreferences": false})), Err(CmdError::Disabled(_))));
+    assert!(s.prefs.protect_preferences);
+    assert_eq!(s.run("file.options", &json!({})).unwrap()["protectPreferences"], true, "reading it still answers");
 }
 
 /// Check Spelling as You Type is shown from the active document's view, and each open document has
@@ -72,7 +87,7 @@ fn automation_cannot_change_saved_preferences() {
         let before = kept(&s);
         let (doc, undo) = (s.doc.clone(), s.undo_depth());
         match s.run(id, &params) {
-            Err(CmdError::Disabled(why)) => assert!(why.contains("--allow-preference-changes"), "{id}: says how to allow it: {why}"),
+            Err(CmdError::Disabled(why)) => assert!(why.contains("File › Options › Agents"), "{id}: says how to allow it: {why}"),
             other => panic!("{id} {params}: expected a refusal, got {other:?}"),
         }
         assert_eq!(kept(&s), before, "{id} {params}");
@@ -114,7 +129,7 @@ fn no_command_changes_locked_preferences() {
         json!({}),
         json!({"value": true, "name": "Mallory", "initials": "MX", "lang": "pl-PL", "default": true, "detect": false}),
         json!({"add": {"from": "teh", "to": "evil", "tab": "Home", "group": "Clipboard", "command": "file.close"}, "assign": {"command": "edit.undo", "key": "Mod+S"}, "reset": true, "hide": "Home", "qatAdd": "file.close"}),
-        json!({"checkSpelling": false, "overtype": true, "units": "points", "region": "pl-PL", "includeTextBoxes": false, "markup": "all", "enabled": false}),
+        json!({"checkSpelling": false, "overtype": true, "units": "points", "region": "pl-PL", "includeTextBoxes": false, "markup": "all", "enabled": false, "protectPreferences": false}),
     ];
     let reaches_files = |id: &str| {
         (id.starts_with("file.") && !matches!(id, "file.setAuthor" | "file.options" | "file.printMarkup"))

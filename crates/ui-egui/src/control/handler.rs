@@ -173,11 +173,12 @@ fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
 /// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
 /// ids as commands. It refuses closing unsaved work and document operations without a document,
-/// and commands that would change the user's saved preferences unless the app allows it
-/// (`--allow-preference-changes`, #3622): an agent steered by a document it reads must not leave
-/// AutoCorrect entries, shortcuts or a user name behind for documents it never saw.
+/// and, while the user has turned on File › Options › Agents › Keep agents from changing my
+/// preferences (#3622), commands that would change the user's saved preferences: an agent steered
+/// by a document it reads then can't leave AutoCorrect entries, shortcuts or a user name behind
+/// for documents it never saw, nor turn the setting off.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
-    let locked = !app.control_changes_preferences;
+    let locked = app.session.prefs.protect_preferences;
     app.session.preferences_locked = locked;
     // The session's preferences are guarded command by command; the File › Options settings the
     // window keeps itself (`ui.*` commands never reach `Session::run`) are compared here.

@@ -43,7 +43,7 @@ pub use view::{StylesPaneDock, ViewState};
 
 /// Why a command is refused while [`Session::preferences_locked`] is set (#3622); the desktop app
 /// gives the same reason for the window's own settings.
-pub const PREFERENCES_LOCKED: &str = "automation can't change the user's preferences (user name, AutoCorrect, keyboard shortcuts, ribbon, options); start WordCraft with --allow-preference-changes to let it";
+pub const PREFERENCES_LOCKED: &str = "automation can't change the user's preferences (user name, AutoCorrect, keyboard shortcuts, ribbon, options) while File › Options › Agents › Keep agents from changing my preferences is on";
 
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
@@ -200,8 +200,8 @@ pub struct Session {
     /// While set, a command may not change what the front end saves between runs: the user name
     /// and initials, `prefs`, `keymap`, `ribbon` and Check Spelling as You Type. One that does is
     /// refused and undone (#3622). The desktop app sets it for requests from its control channel
-    /// (agents and scripts), unless it was started with `--allow-preference-changes`. The refusal
-    /// says [`PREFERENCES_LOCKED`].
+    /// (agents and scripts) while the user has turned on [`crate::Prefs::protect_preferences`].
+    /// The refusal says [`PREFERENCES_LOCKED`].
     pub preferences_locked: bool,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
     /// `None` is WordCraft's default, US English. The front end sets it from the interface

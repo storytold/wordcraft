@@ -56,6 +56,11 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// File › Options › Agents: keep agents from changing these preferences (#3622). On, the
+    /// desktop app sets [`crate::Session::preferences_locked`] for its control-channel requests,
+    /// so an agent can't change them, this one included. Off by default: users ask agents to
+    /// change AutoCorrect, shortcuts or their name.
+    pub protect_preferences: bool,
 }
 
 impl Default for Prefs {
@@ -80,6 +85,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            protect_preferences: false,
         }
     }
 }

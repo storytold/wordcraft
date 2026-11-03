@@ -1,14 +1,14 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--allow-preference-changes] [--sample] [files…]`;
+//! Usage: `wordcraft [--control <port>] [--sample] [files…]`;
 //! `--help` prints `USAGE`.
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
 //! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`. Its requests can't change the user's saved
-//! preferences (user name, AutoCorrect, shortcuts, ribbon, options) unless the app is started with
-//! `--allow-preference-changes` (#3622).
+//! removed on exit). See `docs/control-protocol.md`. While File › Options › Agents › Keep agents
+//! from changing my preferences is on, its requests can't change the user's saved preferences
+//! (user name, AutoCorrect, shortcuts, ribbon, options; #3622).
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -298,15 +298,12 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT [--allow-preference-changes]] [FILE…]
+  wordcraft [--sample] [--control PORT] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
-  --allow-preference-changes
-                      let control requests change your saved preferences (user name,
-                      AutoCorrect, keyboard shortcuts, ribbon, options); refused otherwise
   --version           print the version
   -h, --help          print this help
 ";
@@ -387,7 +384,6 @@ fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
-    let mut allow_preference_changes = false;
     let (args, other_files) = text_args();
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
@@ -404,7 +400,6 @@ fn main() -> eframe::Result {
                 }
             }
             "--sample" => sample = true,
-            "--allow-preference-changes" => allow_preference_changes = true,
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
                 return Ok(());
@@ -525,7 +520,7 @@ fn main() -> eframe::Result {
             if let Some(port) = control_port
                 && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
             {
-                app = app.with_control(rx).allow_preference_changes(allow_preference_changes);
+                app = app.with_control(rx);
                 key_file = file;
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start
