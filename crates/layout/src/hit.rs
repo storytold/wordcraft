@@ -285,6 +285,13 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     v
 }
 
+/// Whether line `l` is above (`dir < 0`) or below the caret `c`: past the caret's middle, and
+/// not the caret's own line.
+fn beyond(l: &LineHit, c: &Caret, dir: i32) -> bool {
+    let (mid, cur_mid) = ((l.top + l.bottom) / 2.0, c.top + c.height / 2.0);
+    if dir < 0 { mid < cur_mid - 1.0 && l.bottom <= cur_mid } else { mid > cur_mid + 1.0 && l.top >= cur_mid }
+}
+
 /// Of `lines`, the one nearest the caret moving up (`dir < 0`) or down: the lowest above it or
 /// the highest below it.
 fn nearest<'a, 'b>(lines: &[&'b LineHit<'a>], dir: i32) -> Option<&'b LineHit<'a>> {
@@ -635,18 +642,7 @@ impl DocLayout {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
-        let cur_mid = c.top + c.height / 2.0;
-        let cands: Vec<&LineHit> = lines
-            .iter()
-            .filter(|l| {
-                let mid = (l.top + l.bottom) / 2.0;
-                if dir < 0 {
-                    mid < cur_mid - 1.0 && l.bottom <= c.top + c.height * 0.5
-                } else {
-                    mid > cur_mid + 1.0 && l.top >= c.top + c.height * 0.5
-                }
-            })
-            .collect();
+        let cands: Vec<&LineHit> = lines.iter().filter(|l| beyond(l, &c, dir)).collect();
         let across: Vec<&LineHit> = cands.iter().copied().filter(|l| gx >= l.left - 2.0 && gx <= l.right + 2.0).collect();
         let target = match nearest(&across, dir) {
             // The nearest line across `gx`, unless lines between the caret's paragraph and that
@@ -674,6 +670,21 @@ impl DocLayout {
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+    }
+
+    /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
+    /// the caret at `pos`, the one nearest page height `y`, on a tie the one horizontally nearest
+    /// page x `x`; the position at `x` on it. Unlike [`DocLayout::hit`], how far the lines are
+    /// sideways never keeps the caret on its own line. `None` when no line is that way.
+    pub fn line_toward(&self, pos: &Pos, page_hint: usize, x: f32, y: f32, dir: i32) -> Option<Pos> {
+        let c = self.caret_on(pos, page_hint)?;
+        let page = self.pages.get(c.page)?;
+        let lines = page_lines(page, pos.story);
+        let dy = |l: &LineHit| band_dist(y, l.top, l.bottom - l.top);
+        let dx = |l: &LineHit| (l.left - x).max(x - l.right).max(0.0);
+        let l = lines.iter().filter(|l| beyond(l, &c, dir)).min_by(|a, b| dy(a).total_cmp(&dy(b)).then(dx(a).total_cmp(&dx(b))))?;
+        let off = l.para.off_at_x(l.li, x - l.x);
+        Some(Pos { story: l.story, path: l.path.clone(), off })
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).
