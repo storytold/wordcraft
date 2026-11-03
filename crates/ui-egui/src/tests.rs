@@ -2777,6 +2777,36 @@ fn a_clean_document_is_replaced_without_asking() {
     assert!(!body_text(&a).trim().is_empty());
 }
 
+/// #5299: a password-protected file named on the command line, opened after the first blank
+/// document was replaced (a region chosen in File › Options), still asks for its password: the
+/// window followed the replacement at once, so the first frame didn't take it for a switch of
+/// document and drop the Password box.
+#[test]
+fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is_replaced() {
+    let dir = scratch("password-startup");
+    let path = dir.join("locked.docx");
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Locked away"));
+    s.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
+
+    let mut a = app();
+    let blank = a.session.blank_document();
+    a.replace_startup_document(blank);
+    a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    // The frames that follow keep it, and the password opens the file.
+    a.sync_document();
+    a.sync_document();
+    assert_eq!(prompt(&a), Some("password"), "the box survives the first frames");
+    let params = match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { params, .. }) => params.clone(),
+        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
+    };
+    let mut with = params;
+    with["password"] = json!("sesame");
+    a.run("file.open", with).unwrap();
+    assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
