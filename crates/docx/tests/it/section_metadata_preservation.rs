@@ -25,7 +25,7 @@ fn document_xml(bytes: &[u8]) -> String {
 #[test]
 fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
     let input = docx(
-        r#"<w:p><w:pPr><w:sectPr><w:paperSrc w:first="261" w:other="260"/><w:noEndnote/><w15:footnoteColumns w:val="2"/><w:pgNumType w:fmt="decimal" w:chapStyle="1" w:chapSep="hyphen"/></w:sectPr></w:pPr><w:r><w:t>First section</w:t></w:r></w:p><w:p><w:r><w:t>Second section</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="12" w:other="34"/><w:noEndnote w:val="0"/><w15:footnoteColumns w:val="3"/><w:pgNumType w:fmt="upperRoman" w:chapStyle="9" w:chapSep="colon"/></w:sectPr>"#,
+        r#"<w:p><w:pPr><w:sectPr><w:paperSrc w:first="261" w:other="260"/><w:noEndnote/><w15:footnoteColumns w:val="2"/><w:pgNumType w:fmt="decimal" w:chapStyle="1" w:chapSep="hyphen"/></w:sectPr></w:pPr><w:r><w:t>First section</w:t></w:r></w:p><w:p><w:r><w:t>Second section</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="12" w:other="34"/><w:noEndnote w:val="0"/><w15:footnoteColumns w:val="3"/><w:pgNumType w:fmt="upperRoman" w:chapStyle="10" w:chapSep="colon"/></w:sectPr>"#,
     );
     let mut document = wordcraft_docx::read(&input).unwrap();
     let json = serde_json::to_vec(&document).unwrap();
@@ -40,7 +40,7 @@ fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
         assert!(xml.contains(r#"<w15:footnoteColumns w:val="2"/>"#), "cycle {cycle}: {xml}");
         assert!(xml.contains(r#"<w15:footnoteColumns w:val="3"/>"#), "cycle {cycle}: {xml}");
         assert!(xml.contains(r#"w:chapStyle="1" w:chapSep="hyphen""#), "cycle {cycle}: {xml}");
-        assert!(xml.contains(r#"w:chapStyle="9" w:chapSep="colon""#), "cycle {cycle}: {xml}");
+        assert!(xml.contains(r#"w:chapStyle="10" w:chapSep="colon""#), "cycle {cycle}: {xml}");
         assert!(xml.contains("xmlns:w15=") && xml.contains("mc:Ignorable=\"w14 w15 wp14\""), "cycle {cycle}: {xml}");
         document = wordcraft_docx::read(&bytes).unwrap();
         let json = serde_json::to_vec(&document).unwrap();
@@ -51,7 +51,7 @@ fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
 #[test]
 fn invalid_section_metadata_is_ignored_and_missing_values_stay_missing() {
     let bytes = docx(
-        r#"<w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="65536" w:other="-1"/><w15:footnoteColumns w:val="0"/><w:pgNumType w:chapStyle="10" w:chapSep="invalid"/></w:sectPr>"#,
+        r#"<w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="65536" w:other="-1"/><w15:footnoteColumns w:val="0"/><w:pgNumType w:chapStyle="256" w:chapSep="invalid"/></w:sectPr>"#,
     );
     let d = wordcraft_docx::read(&bytes).unwrap();
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());

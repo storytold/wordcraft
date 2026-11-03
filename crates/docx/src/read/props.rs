@@ -754,7 +754,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(f) = k.attr("w:fmt") {
                     s.page_num_format = NumFormat::from_ooxml(f);
                 }
-                s.chapter_style = k.attr("w:chapStyle").and_then(u32_of).filter(|v| (1..=9).contains(v)).map(|v| v as u8);
+                s.chapter_style = k.attr("w:chapStyle").and_then(u32_of).filter(|v| *v <= u8::MAX as u32).map(|v| v as u8);
                 s.chapter_sep = k.attr("w:chapSep").and_then(wordcraft_doc::section::ChapterSep::from_ooxml);
                 s.page_num_set = s.page_num_start.is_none() && s.page_num_format == NumFormat::Decimal;
             }

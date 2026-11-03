@@ -1011,3 +1011,11 @@ fn html_title_outside_head_is_metadata_not_body() {
         assert_eq!(d.core.title, "T", "{html}");
     }
 }
+
+#[test]
+fn latex_export_keeps_repeated_spaces() {
+    let tex = String::from_utf8(crate::export("tex", &Document::from_text("a  b   c")).unwrap().unwrap()).unwrap();
+    assert!(!tex.contains("  "), "{tex}");
+    let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
+    assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
+}

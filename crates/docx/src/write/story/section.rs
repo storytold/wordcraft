@@ -194,7 +194,7 @@ fn page_number_type(w: &mut W, s: &SectionProps) {
     if let Some(start) = s.page_num_start {
         attrs.push(("w:start", start.to_string()));
     }
-    if let Some(style) = s.chapter_style.filter(|v| (1..=9).contains(v)) {
+    if let Some(style) = s.chapter_style {
         attrs.push(("w:chapStyle", style.to_string()));
     }
     if let Some(separator) = s.chapter_sep {
