@@ -1162,9 +1162,13 @@ fn epub_links_to_bookmarks_in_other_chapters() {
     let (_, parts) = epub_parts(&crate::epub::export(&d).unwrap());
     let first = epub_text(&parts, "OEBPS/chapter1.xhtml");
     let second = epub_text(&parts, "OEBPS/chapter2.xhtml");
-    assert!(first.contains("<a href=\"chapter2.xhtml#_Toc2\">Chapter Two</a>"), "{first}");
+    // A web page's runs carry explicit Times New Roman 12 pt, so a link's text sits in a span:
+    // match the anchor and its text separately rather than pinning the exact markup.
+    assert!(first.contains("<a href=\"chapter2.xhtml#_Toc2\">"), "{first}");
+    assert!(first.contains("Chapter Two</span></a>"), "{first}");
     assert!(second.contains("<a id=\"_Toc2\"></a>"), "{second}");
-    assert!(first.contains("<a href=\"#here\">Same chapter</a>"), "{first}");
+    assert!(first.contains("<a href=\"#here\">"), "{first}");
+    assert!(first.contains("Same chapter</span></a>"), "{first}");
     assert!(first.contains("<a id=\"here\"></a>"), "{first}");
     // A fragment no chapter carries is written as plain text, not as a broken link.
     assert!(first.contains("missing target") && !first.contains("href=\"#missing\""), "{first}");
