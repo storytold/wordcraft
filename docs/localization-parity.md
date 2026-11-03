@@ -178,7 +178,10 @@ pinned pack index and installed through the font store into `<font store>/langua
   `proof.removePack` for agents). A pack is read at once; the lookup order is the dictionaries folder, the installed pack,
   then the system's Hunspell dictionaries.
 - A document with text in a language whose pack is available but not installed shows a bar
-  offering it; it never shows for a language without a pack, and closes per document.
+  offering it, and closes per document. Once the list of packs is known it never shows for a
+  language without a pack; before then (a fresh install) it offers a language with no dictionary
+  provisionally: Install fetches the list, then installs the pack if there is one, and the bar goes
+  if there isn't.
 - Help › About › Language data shows the full licence texts of the embedded English data and the
   installed packs.
 - One language list: Set Proofing Language lists the built-in languages and every installed or

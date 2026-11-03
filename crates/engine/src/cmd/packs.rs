@@ -244,11 +244,17 @@ mod tests {
             v.locale = "ca-valencia".into();
             v.size = 1_500_000;
             b.packs.push(v);
-            with_backend(b, |s, _| {
+            with_backend(b, |s, b| {
                 s.run("document.setText", &json!({"text": "Bon dia"})).unwrap();
                 mark(s, 0, "ca-ES-valencia");
                 let rows = packs::your_languages_with(s, None, &none);
                 assert_eq!(row(&rows, "ca-ES-valencia").pack.as_deref(), Some("ca-valencia"), "as the bar offers it");
+                // Installing the Catalan pack doesn't make Valencian installed.
+                b.network.store(true, Ordering::Relaxed);
+                s.run("proof.installPack", &json!({"locale": "ca"})).unwrap();
+                let rows = packs::your_languages_with(s, None, &none);
+                let v = row(&rows, "ca-ES-valencia");
+                assert_eq!((v.pack.as_deref(), v.installed, v.proofing), (Some("ca-valencia"), false, Proofing::Install));
             });
         }
 

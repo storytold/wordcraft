@@ -871,8 +871,9 @@ pub fn your_languages_with(s: &Session, folder: Option<&str>, dictionary: &dyn F
         if !proofable(t) {
             continue;
         }
-        let locale =
-            locale_for_tag(t, &|l| installed.iter().any(|i| i.locale == l)).or_else(|| locale_for_tag(t, &|l| index.iter().any(|p| p.locale == l)));
+        // The most specific pack, installed or offered, as the bar picks it ([`pack_for_tag`]): with
+        // `ca` installed, Valencian text is still the `ca-valencia` pack's row.
+        let locale = locale_for_tag(t, &|l| installed.iter().any(|i| i.locale == l) || index.iter().any(|p| p.locale == l));
         add(Some(t), locale);
     }
     for i in &installed {
