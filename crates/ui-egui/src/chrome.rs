@@ -298,7 +298,20 @@ pub(crate) fn fitted_title(title: &str, suffix: &str, available: f32, width: imp
 pub(crate) fn fitted_document_title(name: &str, state: &str, label: &str, available: f32, width: impl Fn(&str) -> f32) -> String {
     let suffix = format!("{state}{label}");
     if width(&suffix) <= available {
-        fitted_title(name, &suffix, available, width)
+        // Shorten raw text first: removing the closing PDI of an already isolated name would
+        // accidentally put the status and label inside its bidi isolate.
+        let display = |text: &str| format!("{}{suffix}", crate::i18n::isolate(text));
+        let mut shown: String = name.chars().take(240).collect();
+        if width(&display(&shown)) > available {
+            if width(&display("…")) > available {
+                return suffix;
+            }
+            while !shown.is_empty() && width(&display(&format!("{shown}…"))) > available {
+                shown.pop();
+            }
+            shown.push('…');
+        }
+        display(&shown)
     } else {
         fitted_title(state.trim_start(), label, available, width)
     }
@@ -426,7 +439,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             });
             let (qat_end, right_start) = if rtl { (right_start, qat_end) } else { (qat_end, right_start) };
             // Centred title.
-            let name = if app.has_document() { crate::i18n::isolate(&app.title_stem()) } else { "WordCraft".to_string() };
+            let name = if app.has_document() { app.title_stem() } else { "WordCraft".to_string() };
             let state = if !app.has_document() {
                 String::new()
             } else {
@@ -440,7 +453,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 format!(" — {state}")
             };
             let label = if crate::build_config::BUILD_LABEL.is_empty() { String::new() } else { format!(" ({})", crate::build_config::BUILD_LABEL) };
-            let title = format!("{name}{state}{label}");
+            let title = format!("{}{state}{label}", crate::i18n::isolate(&name));
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;

@@ -344,3 +344,5 @@ labels unambiguous. Those extra-number assignments have not been compared with W
 
 
 **PR #5196 title follow-up (2026-11-03):** A long document name is shortened before its save state and distribution label. An empty-window title protects the label too. If the state and label cannot both fit, the state is shortened before the label. Synthetic width boundaries and native headless title checks cover this policy; full Windows/Linux GUI qualification remains open.
+
+RTL title fitting shortens the raw name before adding its bidi isolate, leaving the save state and distribution label outside the balanced isolate. A catalog-independent Arabic fixture covers truncation and empty-window titles.
