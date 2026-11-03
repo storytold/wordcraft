@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CellSpacing, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps,
+    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -19,6 +19,16 @@ fn toggle(w: &mut W, name: &str, v: Option<bool>) {
 fn round(v: f32) -> i64 {
     let v = wordcraft_geom::finite(v);
     v.round().clamp(-1e9, 1e9) as i64
+}
+
+fn cell_spacing(w: &mut W, spacing: CellSpacing) {
+    let max = match spacing.kind {
+        wordcraft_doc::props::CellSpacingKind::Pct => 50_000,
+        wordcraft_doc::props::CellSpacingKind::Dxa
+        | wordcraft_doc::props::CellSpacingKind::Auto
+        | wordcraft_doc::props::CellSpacingKind::Nil => 31_680,
+    };
+    w.empty("w:tblCellSpacing", &[("w:w", &spacing.width.min(max).to_string()), ("w:type", spacing.kind.ooxml())]);
 }
 
 /// `w:rPr` content (without the wrapper). Link and revision marks are not run properties.
@@ -514,7 +524,7 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
     if let Some(v) = t.cell_spacing {
-        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
+        cell_spacing(w, v);
     }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
@@ -572,7 +582,7 @@ fn tblprex(w: &mut W, t: &TableProps) {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
     if let Some(v) = t.cell_spacing {
-        w.empty("w:tblCellSpacing", &[("w:w", &v.width.to_string()), ("w:type", v.kind.ooxml())]);
+        cell_spacing(w, v);
     }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);

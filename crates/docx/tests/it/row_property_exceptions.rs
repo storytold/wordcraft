@@ -139,6 +139,27 @@ fn table_cell_spacing_preserves_supported_types_and_bounds_hostile_widths() {
 }
 
 #[test]
+fn table_cell_spacing_writer_bounds_api_values_for_tables_and_row_exceptions() {
+    use wordcraft_doc::props::{CellSpacing, CellSpacingKind};
+
+    let ex = r#"<w:tblPrEx><w:tblCellSpacing w:w="120" w:type="dxa"/></w:tblPrEx>"#;
+    let body = format!(
+        r#"<w:tbl><w:tblPr><w:tblCellSpacing w:w="120" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{}</w:tbl><w:p/>"#,
+        row(ex, "A")
+    );
+    let mut document = wordcraft_docx::read(&docx(&body)).unwrap();
+    let wordcraft_doc::Block::Table(table) = std::sync::Arc::make_mut(&mut document.body[0]) else {
+        panic!("expected table");
+    };
+    table.props.cell_spacing = Some(CellSpacing { width: 60_000, kind: CellSpacingKind::Pct });
+    table.rows[0].props.exceptions.as_mut().unwrap().cell_spacing = Some(CellSpacing { width: 40_000, kind: CellSpacingKind::Dxa });
+
+    let xml = document_xml(&wordcraft_docx::write(&document).unwrap());
+    assert!(xml.contains(r#"<w:tblCellSpacing w:w="50000" w:type="pct"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:tblCellSpacing w:w="31680" w:type="dxa"/>"#), "{xml}");
+}
+
+#[test]
 fn new_table_properties_are_written_in_schema_order() {
     let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="Fit"><w:name w:val="Fit"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:fill="FFFF00"/><w:vAlign w:val="bottom"/><w:tcFitText/></w:tcPr></w:tblStylePr></w:style></w:styles>"#;
     let body = r#"
