@@ -8,7 +8,11 @@
 //! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
-//! starts the way the desktop app does with nothing to open (File › Home, #766).
+//! starts the way the desktop app does with nothing to open (File › Home, #766). A line
+//! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
+//! `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
+//! folder rather than the person's, or in `"storeDir"` given on the same line (with
+//! `CRAFT_LANGUAGE_PACK_INDEX` for a local pack index).
 //! Add `"fileProviderPreview": true` to the first line for synthetic, separately listed local
 //! and provider Recents. This opt-in affects only this offscreen example.
 
@@ -28,6 +32,19 @@ fn main() {
     } else {
         wordcraft_engine::sample::sample_document()
     };
+    match lines.iter().find_map(|l| l.get("demoPacks")) {
+        Some(serde_json::Value::String(s)) if s == "store" => {
+            // `"storeDir"` on the same line names the folder (to show packs put there beforehand).
+            let dir = lines
+                .iter()
+                .find_map(|l| l.get("storeDir").and_then(|v| v.as_str()))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("ui_shot-font-store-{}", std::process::id())));
+            wordcraft_engine::packs::use_font_store_in(dir, true);
+        }
+        Some(_) => wordcraft_engine::packs::set_backend(Some(std::sync::Arc::new(wordcraft_engine::packs::FixedBackend::sample()))),
+        None => {}
+    }
     let preview = lines.first().is_some_and(|line| line.get("fileProviderPreview").and_then(serde_json::Value::as_bool) == Some(true));
     let mut services = Services::default();
     if preview {
