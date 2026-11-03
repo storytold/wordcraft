@@ -467,3 +467,14 @@ fn source_over_the_limit_is_an_error_not_a_prefix() {
     assert!(err.contains("32 MiB"), "{err}");
     assert!(crate::import("tex", &big).is_some_and(|r| r.is_err()));
 }
+
+#[test]
+fn ligature_characters_split_across_runs_stay_apart() {
+    let d = crate::html::import(
+        "<p><span style=\"font-family:Arial\">a-</span><span style=\"font-family:Georgia\">-b '</span><span style=\"font-family:Arial\">'x</span></p>",
+    );
+    let tex = export(&d);
+    assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
+    let back = import(tex.as_bytes());
+    assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
+}
