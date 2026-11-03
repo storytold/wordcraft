@@ -1,6 +1,7 @@
 //! DOCX → [`Document`].
 
 pub(crate) mod chart;
+mod chunk;
 pub(crate) mod diagram;
 mod drawing_color;
 mod embed;
@@ -13,7 +14,7 @@ mod shape_style;
 mod story;
 mod wordart;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
@@ -45,6 +46,9 @@ mod toc;
 pub(crate) use meta::PROTECTION_HASH_ATTRS;
 pub(crate) use styles::LOWER_NAMES;
 use toc::{is_toc, toc_control_to_toc, toc_field_to_heading, unstyle_toc_links};
+
+use chunk::ChunkState;
+pub use chunk::{AltChunk, ChunkImporter, ReadOptions};
 
 /// Most fonts read from a font table, and the longest name (hostile files).
 const MAX_TABLE_FONTS: usize = 2000;
@@ -87,12 +91,12 @@ pub(crate) struct Reader<'p> {
     pub bookmarks: HashMap<String, String>,
     /// Restrict Editing exception ranges (`w:permStart`): the file's id → ours.
     pub perms: HashMap<String, u32>,
+    /// The next permission range id to give out (chunks' ranges take theirs from it too).
+    pub next_perm: u32,
     /// Chart and diagram parts by path, parsed once.
     graphic_parts: HashMap<String, Option<Arc<El>>>,
     /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
     graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
-    /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
-    graphic_budget: usize,
     /// Drawing ids connectors are glued to (`a:stCxn`, `a:endCxn`), and whether any shape's id
     /// was kept while reading (those not glued to are dropped at the end).
     pub glued: HashSet<u32>,
@@ -103,6 +107,8 @@ pub(crate) struct Reader<'p> {
     content_types: Option<ContentTypes>,
     /// Parts kept for charts, diagrams and OLE objects (see `embed`).
     embedded: EmbeddedManifest,
+    /// What alternative format chunks may still bring in, and how (see [`chunk`]).
+    chunks: ChunkState<'p>,
     /// Linked text boxes as read: (`wps:txbx/@id` or `wps:linkedTxbx/@id`, `seq` (0 for the box
     /// holding the text), text box part). See [`link_text_boxes`].
     pub txbx_links: Vec<(u32, u32, u32)>,
@@ -125,17 +131,24 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     if crate::is_encrypted(bytes) {
         return crate::read_with_password(bytes, None);
     }
-    read_package(bytes)
+    read_package(bytes, None)
 }
 
-/// [`read`] for bytes known not to be an encrypted package.
-pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
-    read_opened(&Package::open(bytes)?)
+/// [`read`] for bytes known not to be an encrypted package; `chunks` imports alternative format
+/// chunks in formats other than WordprocessingML.
+pub(crate) fn read_package(bytes: &[u8], chunks: Option<ChunkImporter>) -> Result<Document, DocxError> {
+    read_opened(&Package::open(bytes)?, chunks)
 }
 
 /// Read a package whose parts are already unpacked (from a zip, a Flat OPC file or a converted
 /// Word 2003 XML document).
-pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
+pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Result<Document, DocxError> {
+    read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc)
+}
+
+/// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
+/// graphic work left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
     let Some(root) = pkg.xml_strict(&main)? else {
@@ -164,9 +177,9 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
         perms: HashMap::new(),
+        next_perm: 0,
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
-        graphic_budget: MAX_GRAPHIC_WORK,
         glued: HashSet::new(),
         shape_ids: false,
         main: main.clone(),
@@ -175,6 +188,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         txbx_links: Vec::new(),
         theme_fills: Default::default(),
         group_fill: None,
+        chunks,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -267,7 +281,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     if let Some(body) = root.child("w:body") {
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
-        r.read_blocks(&mut sc, body, &rels, &mut blocks, 0);
+        r.read_blocks(&mut sc, body, &rels, &mut blocks, r.chunks.depth);
         r.flush_pending(&mut sc, &mut blocks);
         r.doc.body = blocks;
         unstyle_toc_links(&mut r.doc);
@@ -321,9 +335,10 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
+    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
     let mut doc = r.doc;
     doc.ensure_nonempty();
-    Ok(doc)
+    Ok((doc, left, bytes, graphic))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.
