@@ -1,7 +1,7 @@
 use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
 
 /// Fingerprint of everything outside the layout that changes how pages render: the view's
-/// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
+/// marks, bookmarks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
 pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
@@ -10,6 +10,7 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
+    app.session.prefs.show_bookmarks.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
@@ -221,11 +222,13 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
     app.canvas.table_preview_layout.as_ref().map(|(_, _, sel, _)| sel)
 }
 
-/// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
+/// Render options for this view's page rasters: marks, bookmarks, markup, dark page,
+/// header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
+    opts.display.bookmarks = app.session.prefs.show_bookmarks;
     opts.display.placeholders = true;
     opts.display.markup = app.session.view.show_markup;
     // Ink Replay draws the ink itself, stroke by stroke, over pages without it.

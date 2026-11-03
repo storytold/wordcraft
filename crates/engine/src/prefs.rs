@@ -44,6 +44,9 @@ pub struct Prefs {
     pub user_templates_folder: Option<String>,
     /// Formatting marks shown even while Show/Hide ¶ is off.
     pub marks: wordcraft_layout::display::FormattingMarks,
+    /// File › Options › Advanced › Show bookmarks: grey brackets round each bookmark on screen
+    /// (off, as in Word; prints and PDFs never show them).
+    pub show_bookmarks: bool,
     /// Mark grammar errors as you type (with Check spelling as you type on).
     pub mark_grammar: bool,
     /// Check spelling as you type (File › Options › Proofing). The live value is
@@ -72,6 +75,7 @@ impl Default for Prefs {
             dictionaries_folder: None,
             user_templates_folder: None,
             marks: Default::default(),
+            show_bookmarks: false,
             mark_grammar: true,
             check_spelling: true,
             ignore_uppercase: true,

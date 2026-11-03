@@ -284,6 +284,28 @@ fn custom_dictionary_words_persist_through_their_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// File › Options › Advanced › Show bookmarks (#3572): off as in Word, `file.options` turns it
+/// on and off and reports it, and a value that isn't true or false is refused and changes nothing.
+#[test]
+fn show_bookmarks_is_an_option_off_by_default() {
+    let mut s = s();
+    assert!(!s.prefs.show_bookmarks);
+    assert_eq!(crate::cmd::options::current(&s)["showBookmarks"], false);
+    let r = run(&mut s, "file.options", json!({"showBookmarks": true}));
+    assert_eq!((r["showBookmarks"].clone(), r["opened"].clone()), (json!(true), json!(false)));
+    assert!(s.prefs.show_bookmarks);
+    assert!(s.run("file.options", &json!({"showBookmarks": "no", "markGrammar": false})).is_err());
+    assert!(s.prefs.show_bookmarks && s.prefs.mark_grammar, "a refused call changes nothing");
+    run(&mut s, "file.options", json!({"showBookmarks": false}));
+    assert!(!s.prefs.show_bookmarks);
+    // Saved with the other preferences, and an older file without it reads as off.
+    s.prefs.show_bookmarks = true;
+    let saved = serde_json::to_value(&s.prefs).unwrap();
+    assert_eq!(saved["showBookmarks"], true);
+    assert!(serde_json::from_value::<crate::Prefs>(saved).unwrap().show_bookmarks);
+    assert!(!serde_json::from_value::<crate::Prefs>(json!({"markGrammar": false})).unwrap().show_bookmarks);
+}
+
 #[test]
 fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_their_roots() {
     // #3737 (findings 34 and WC-35): the custom dictionary file and the folder settings are

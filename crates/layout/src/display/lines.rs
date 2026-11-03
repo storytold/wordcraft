@@ -64,6 +64,11 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
         StoryRef::Part(id) => doc.parts.get(&id).and_then(|p| p.body.auto_color),
         StoryRef::Body => None,
     };
+    // Worked out once for the lines drawn, not once per line.
+    let bookmarks = match para {
+        Some(p) if opts.bookmarks => bookmark_marks(p),
+        _ => Vec::new(),
+    };
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
@@ -80,6 +85,103 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
         enclosures(&ctx, out);
         draw_rubies(&ctx, out);
         formatting_marks(&ctx, out);
+        bookmark_brackets(&ctx, &bookmarks, out);
+    }
+}
+
+/// The grey of bookmark brackets (Word's).
+pub const BOOKMARK_COLOR: Rgb = Rgb(0x80, 0x80, 0x80);
+
+/// What Show bookmarks draws where a bookmark starts or ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BookmarkMark {
+    /// Its start: a bracket opening onto its text.
+    Open,
+    /// Its end: a bracket closing it.
+    Close,
+    /// A bookmark around no text, which marks a place: an I-beam where it starts.
+    Point,
+}
+
+/// The bookmark marks of `para` by byte offset, in text order, from one pass over its text, so a
+/// paragraph of many bookmarks isn't scanned again for each one (#3614). Hidden bookmarks (named
+/// with a leading `_`, as Word's `_Toc…`, `_Ref…` and `_GoBack` are) show nothing, as in Word. A
+/// bookmark whose start and end in this paragraph have no text between them is a [`BookmarkMark::Point`].
+fn bookmark_marks(para: &Paragraph) -> Vec<(usize, BookmarkMark)> {
+    let mut marks = Vec::new();
+    // Each bookmark started and not yet ended: its mark, and the text characters before it.
+    let mut open: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
+    let mut objects = para.objects.iter();
+    let mut text_chars = 0usize;
+    for (off, c) in para.text.char_indices() {
+        if c != wordcraft_doc::para::OBJ {
+            text_chars += 1;
+            continue;
+        }
+        match objects.next() {
+            Some(InlineObject::BookmarkStart { name }) if !name.starts_with('_') => {
+                open.insert(name.as_str(), (marks.len(), text_chars));
+                marks.push((off, BookmarkMark::Open));
+            }
+            Some(InlineObject::BookmarkEnd { name }) if !name.starts_with('_') => match open.remove(name.as_str()) {
+                Some((i, before)) if before == text_chars => marks[i].1 = BookmarkMark::Point,
+                _ => marks.push((off, BookmarkMark::Close)),
+            },
+            _ => {}
+        }
+    }
+    marks
+}
+
+/// File › Options › Advanced › Show bookmarks: a grey bracket as tall as the line's caret where
+/// each bookmark on it starts and ends, opening towards its text (to the right in left-to-right
+/// text, to the left in right-to-left text), and an I-beam where one marks a place. They take no
+/// room: the text doesn't move when they are shown.
+fn bookmark_brackets(ctx: &LineContext<'_, '_, '_>, marks: &[(usize, BookmarkMark)], out: &mut Vec<Draw>) {
+    let line = ctx.line;
+    let from = marks.partition_point(|(off, _)| *off < line.start);
+    let to = marks.partition_point(|(off, _)| *off < line.stop).max(from);
+    let clusters = ctx.pl.clusters.get(line.c0..line.c1).unwrap_or_default();
+    // As tall as the caret on the line.
+    let (asc, desc) = ctx.pl.caret_metrics(ctx.li);
+    let (top, bottom) = (ctx.base - asc, ctx.base + desc);
+    let tick = ((bottom - top) * 0.2).clamp(1.0, 4.0);
+    let rule = |x0: f32, y0: f32, x1: f32, y1: f32| Draw::Line {
+        x0,
+        y0,
+        x1,
+        y1,
+        width: 0.75,
+        color: BOOKMARK_COLOR,
+        stroke: Stroke::Solid,
+        alpha: ctx.alpha,
+        text_bg: None,
+    };
+    for &(off, mark) in &marks[from..to] {
+        // Hidden text that isn't shown (and text deleted from the final view) shows no bracket.
+        let gone = ctx.pl.left_out.partition_point(|r| r.end <= off);
+        if ctx.pl.left_out.get(gone).is_some_and(|r| r.start <= off) {
+            continue;
+        }
+        // The bookmark's own marker on the line.
+        let i = clusters.partition_point(|c| c.start < off);
+        if !clusters.get(i).is_some_and(|c| c.start == off) {
+            continue;
+        }
+        let k = line.c0 + i;
+        let Some(left) = line.cl_left(k) else { continue };
+        let x = ctx.x + left;
+        out.push(rule(x, top, x, bottom));
+        // Which way the ticks at the top and bottom point.
+        let ahead = if line.cl_rtl(k) { -tick } else { tick };
+        let (a, b) = match mark {
+            BookmarkMark::Open => (x, x + ahead),
+            BookmarkMark::Close => (x - ahead, x),
+            BookmarkMark::Point => (x - tick / 2.0, x + tick / 2.0),
+        };
+        let (a, b) = (a.min(b), a.max(b));
+        out.push(rule(a, top, b, top));
+        out.push(rule(a, bottom, b, bottom));
     }
 }
 
