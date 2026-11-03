@@ -68,14 +68,21 @@ pub(super) fn tabs(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-/// A `sides` object: exactly the sides it names, each `{"style", "width", "color"}`.
+/// A `sides` object: exactly the sides it names, each with optional style, width, colour and flags.
 pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, CmdError> {
     let obj = v.as_object().ok_or_else(|| CmdError::Params("`sides` is an object".into()))?;
     let side = |k: &str, space: f32| -> Option<Border> {
         let x = obj.get(k).filter(|x| x.is_object())?;
         let style = p::str(x, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
         let width = p::f32(x, "width").unwrap_or(0.5).clamp(0.25, 6.0);
-        Some(Border { style, width, color: p::str(x, "color").and_then(Rgb::parse), space, ..Default::default() })
+        Some(Border {
+            style,
+            width,
+            color: p::str(x, "color").and_then(Rgb::parse),
+            space,
+            shadow: x.get("shadow").and_then(Value::as_bool),
+            frame: x.get("frame").and_then(Value::as_bool),
+        })
     };
     Ok(Borders {
         top: side("top", space_tb),

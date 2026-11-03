@@ -370,6 +370,11 @@ pub struct LineForm {
     pub width: f32,
     /// Top, bottom, left, right, between.
     pub sides: [bool; 5],
+    /// Flags belong to each original side and must survive editing unrelated border settings.
+    #[serde(skip)]
+    shadow: [Option<bool>; 5],
+    #[serde(skip)]
+    frame: [Option<bool>; 5],
 }
 
 const TOP: usize = 0;
@@ -395,6 +400,8 @@ impl LineForm {
     fn read(b: Option<&Borders>) -> LineForm {
         let side = |x: Option<Border>| x.filter(Border::is_visible);
         let s = b.map(|b| [side(b.top), side(b.bottom), side(b.left), side(b.right), side(b.between)]).unwrap_or_default();
+        let shadow = b.map(|b| [b.top, b.bottom, b.left, b.right, b.between].map(|x| x.and_then(|x| x.shadow))).unwrap_or_default();
+        let frame = b.map(|b| [b.top, b.bottom, b.left, b.right, b.between].map(|x| x.and_then(|x| x.frame))).unwrap_or_default();
         let on = s.map(|x| x.is_some());
         let first = s.iter().flatten().next().copied();
         let w = |i: usize| s.get(i).copied().flatten().map(|x| x.width).unwrap_or(0.0);
@@ -422,6 +429,8 @@ impl LineForm {
             color: first.and_then(|f| f.color).map(Rgb::hex).unwrap_or_default(),
             width: if width > 0.0 { width } else { 0.5 },
             sides: on,
+            shadow,
+            frame,
         }
     }
 
@@ -454,7 +463,14 @@ impl LineForm {
     }
 
     fn border(&self, side: usize) -> Border {
-        Border { style: self.style, width: self.side_width(side), color: Rgb::parse(&self.color), space: 0.0, ..Default::default() }
+        Border {
+            style: self.style,
+            width: self.side_width(side),
+            color: Rgb::parse(&self.color),
+            space: 0.0,
+            shadow: self.shadow.get(side).copied().flatten(),
+            frame: self.frame.get(side).copied().flatten(),
+        }
     }
 
     /// The `sides` parameter of `para.borders` / `design.pageBorders`.
@@ -465,6 +481,12 @@ impl LineForm {
                 let mut side = json!({"style": self.style.ooxml(), "width": self.side_width(i)});
                 if Rgb::parse(&self.color).is_some() {
                     side["color"] = json!(self.color);
+                }
+                if let Some(shadow) = self.shadow.get(i).copied().flatten() {
+                    side["shadow"] = json!(shadow);
+                }
+                if let Some(frame) = self.frame.get(i).copied().flatten() {
+                    side["frame"] = json!(frame);
                 }
                 m.insert(k.into(), side);
             }
@@ -820,6 +842,30 @@ mod tests {
         // Unchanged, OK runs nothing.
         let f = BordersForm::read(&app, 0).unwrap_or_else(|| panic!("form"));
         assert!(f.commands().is_empty());
+    }
+
+    #[test]
+    fn borders_dialog_preserves_side_shadow_and_frame_flags() {
+        let mut app = app_with("Border flags");
+        let _ = app.run(
+            "para.borders",
+            json!({"sides": {
+                "top": {"style": "single", "shadow": false, "frame": true},
+                "right": {"style": "single", "shadow": true, "frame": false}
+            }}),
+        );
+        let _ = app.run("para.borders", json!({}));
+        let Some(Dialog::Borders { form }) = app.dialog.take() else { panic!("Borders and Shading opens from the menu item") };
+        let mut form = *form;
+        form.para.width = 1.0;
+        form.apply(&mut app);
+
+        let props = app.session.doc.para_at(&app.session.sel.focus).map(|p| p.props.clone()).unwrap_or_default();
+        let borders = props.borders.unwrap_or_default();
+        assert_eq!(borders.top.and_then(|side| side.shadow), Some(false));
+        assert_eq!(borders.top.and_then(|side| side.frame), Some(true));
+        assert_eq!(borders.right.and_then(|side| side.shadow), Some(true));
+        assert_eq!(borders.right.and_then(|side| side.frame), Some(false));
     }
 
     /// #320: the Tabs dialog opens from the Paragraph dialog's command path, and the table's

@@ -494,7 +494,7 @@ fn cell_borders(css: &str) -> Option<wordcraft_doc::props::Borders> {
         }
         // CSS draws no border without a style, or at no width.
         let style = if width > 0.0 { style.unwrap_or(BorderStyle::None) } else { BorderStyle::None };
-        let border = Border { style, width, color, space: 0.0 };
+        let border = Border { style, width, color, space: 0.0, ..Default::default() };
         for side in sides {
             let slot = match side {
                 b't' => &mut b.top,
