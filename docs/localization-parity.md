@@ -1,7 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only); previously minor (Japanese DATE fields: the era, Japanese-numeral and weekday picture items — `ggge年M月d日` shows 令和8年10月17日, day-accurate from 明治 1868-01-25) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
-
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only); previously minor (Japanese DATE fields: the era, Japanese-numeral and weekday picture items — `ggge年M月d日` shows 令和8年10月17日, day-accurate from 明治 1868-01-25) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
 the clean-room rule live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n)
@@ -64,7 +63,7 @@ shared items below.
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
 | Hindi | hi | 0 | ❌ | Devanagari shaping via HarfRust, untested; no hyphenation | no | none | 4–6 |
 | Arabic | ar | ~2,730 entries (craft-i18n `locales/ar/wordcraft.tsv`); 98% / ~95% | most; newer panes English | shaping, joining, lam-alef, bidi ✅ (#207); mirrored UI ✅ (#1195); Arabic UI font fallback; no kashida; no proofing | no | partial | 2–4 (review + kashida/proofing elsewhere) |
-| French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (no proofing) | 1–2 (proofing) |
+| French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (spelling and suggestions from the French Language pack, elided forms first: `Jadore` → `J'adore`; no grammar marks) | 1–2 (grammar) |
 | Portuguese | pt-br (pt-PT none) | ~930; 98% / ~95% (pt-BR) | most | Latin ✅ | no | partial | 2–4 (pt-BR finish + pt-PT) |
 | Indonesian | id | 0 | ❌ | Latin ✅ | no | none | 3–4 |
 | Japanese | ja | ~930; 98% / ~95% | most | CJK ✅, IME ✅; ruby (Phonetic Guide) over its base text, kept by HTML export/import (#1681); word count counts each Han ideograph and kana as a word, not punctuation (#4547); no vertical text or document grid; DATE/TIME field pictures take the era (`g`/`gg`/`ggg`), era-year (`e`/`ee`, `n`/`nn`), Japanese-numeral (`A`/`O`/`C`/`I`) and weekday (`aaa`/`aaaa`) items, so `ggge年M月d日` shows 令和8年10月17日 | no | partial | 3–5 |
@@ -256,6 +255,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | craft-proof pin moved to craft-libs main with #589 and #590: French suggestions offer the elided form first (`Jadore` → `J'adore` before `J adore`; English keeps plural fixes first), and Valencian (`ca-ES-valencia`) text reads the `ca-valencia` pack |
 | 2026-11-03 | minor | Arabic (`ar`) interface: ~2,730 catalog rows from craft-i18n, `ar-*` locales, mirrored shell (ribbon, panes, File page, dialogs, menus), Arabic UI font fallback, document canvas independent (#1195); 28 languages; Hebrew UI still open |
 | 2026-11-03 | trivial | Language packs: language-packs-2 published and pinned, 75 packs, with Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto |
 | 2026-11-02 | trivial | Language packs (CP4.4): language-packs-1 published and pinned, 61 packs; Lithuanian, Romanian, Catalan, French, Greek, Slovak, Serbian and Latvian available; Dutch, German and the other compounding languages wait on craft-proof; Basque, Ukrainian and Uyghur excluded |
