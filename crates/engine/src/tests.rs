@@ -11981,3 +11981,68 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+#[test]
+fn page_steps_skip_hidden_cells() {
+    use wordcraft_doc::para::{Float, InlineObject};
+    use wordcraft_doc::props::{CharProps, HeightRule, LineSpacing};
+    use wordcraft_doc::{Block, Document, Paragraph, Path, Table};
+    use wordcraft_layout::Placed;
+    const STEP: f32 = 72.0;
+    for view in ["view.webLayout", "view.draft", "view.outline"] {
+        for height in [5.0, 80.0] {
+            let mut doc = Document::from_text("Before\nAfter");
+            let chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+            doc.styles.default_chr = chr.clone();
+            doc.last_section.page_h = 3.0 * STEP;
+            doc.last_section.margin_top = STEP;
+            doc.last_section.margin_bottom = STEP;
+            doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.space_before = Some(100.0);
+            let mut paragraph = Paragraph::new();
+            let object = InlineObject::Image {
+                media: "page-step-clip-probe".into(),
+                w: 20.0,
+                h: 20.0,
+                alt: String::new(),
+                float: Float::default(),
+                crop: [0.0; 4],
+                ole: None,
+            };
+            paragraph.insert_object(0, object, &chr).unwrap();
+            paragraph.props.line_spacing = Some(LineSpacing::Exactly(80.0));
+            paragraph.props.space_after = Some(0.0);
+            let mut table = Table::new(1, 1, 200.0);
+            table.props.style = None;
+            table.props.cell_margins = Some([0.0; 4]);
+            table.props.borders = Some(Default::default());
+            table.rows[0].props.height = Some(height);
+            table.rows[0].props.height_rule = HeightRule::Exact;
+            table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph)];
+            doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+            let mut session = Session::new(doc);
+            run(&mut session, view, json!({}));
+            let layout = session.layout();
+            assert_eq!(layout.pages.len(), 1, "{view}: use the continuous-page route");
+            let path = Path(vec![1, 0, 0, 0]);
+            let line = wordcraft_layout::hit::page_lines(&layout.pages[0], StoryRef::Body).into_iter().find(|line| line.path == &path).unwrap();
+            let clipped = layout.pages[0].items.iter().any(|item| matches!(item, Placed::Cell { clip: true, .. }));
+            assert_eq!(clipped, height == 5.0, "{view}: the exact-cell fixture must distinguish clipping");
+            for dir in [-1, 1] {
+                let origin = Pos::body(if dir < 0 { 2 } else { 0 }, 0);
+                session.sel = crate::Selection::caret(origin.clone());
+                session.page_hint = 0;
+                let caret = layout.caret_on(&origin, 0).unwrap();
+                let cell = Pos { story: StoryRef::Body, path: path.clone(), off: line.para.off_at_x(line.li, caret.x - line.x) };
+                assert_eq!(layout.caret_on(&cell, 0).is_some(), height == 80.0, "{view}: goal-caret visibility");
+                if height == 5.0 {
+                    let target_y = caret.top + 1.0 + dir as f32 * STEP;
+                    assert!(target_y >= line.top && target_y <= line.bottom, "{view}: the retained hidden band must attract the old page route");
+                }
+                run(&mut session, if dir < 0 { "caret.pageUp" } else { "caret.pageDown" }, json!({}));
+                let expected = if height == 80.0 { path.clone() } else { Path::top(if dir < 0 { 0 } else { 2 }) };
+                assert_eq!(session.sel.focus.path, expected, "{view}: {height}, direction {dir}");
+                assert!(session.layout().caret_on(&session.sel.focus, 0).is_some(), "page movement must land on a visible caret");
+            }
+        }
+    }
+}

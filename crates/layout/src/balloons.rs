@@ -139,7 +139,7 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
                 // A reply starts: a hairline between it and what it answers.
                 y += 3.0;
                 let border = Border { style: BorderStyle::Single, width: 0.25, color: Some(Rgb(0xC8, 0xC8, 0xC8)), space: 0.0 };
-                items.push(Placed::Rule { x0: x, y0: y, x1: x + inner, y1: y, border });
+                items.push(Placed::Rule { x0: x, y0: y, x1: x + inner, y1: y, border, source: None });
                 y += 3.0;
             }
             // Who wrote it, in their colour.
@@ -207,15 +207,15 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             next = top + h + GAP;
             let line = |style, width: f32| Border { style, width, color: Some(c.color), space: 0.0 };
             // Leader: along the text from the anchor to the page edge, then to the card.
-            page.items.push(Placed::Rule { x0: c.ax, y0: c.ay, x1: pw, y1: c.ay, border: line(BorderStyle::Dashed, 0.5) });
-            page.items.push(Placed::Rule { x0: pw, y0: c.ay, x1: x0, y1: top + 8.0, border: line(BorderStyle::Single, 0.5) });
+            page.items.push(Placed::Rule { x0: c.ax, y0: c.ay, x1: pw, y1: c.ay, border: line(BorderStyle::Dashed, 0.5), source: None });
+            page.items.push(Placed::Rule { x0: pw, y0: c.ay, x1: x0, y1: top + 8.0, border: line(BorderStyle::Single, 0.5), source: None });
             // The card: white, outlined and striped in the author's colour.
             let card = Rect::new(x0, top, card_w, h);
-            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF) });
-            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color });
+            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF), source: None });
+            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color, source: None });
             let (l, r, b) = (card.x, card.right(), card.bottom());
             for (ax, ay, bx, by) in [(l, top, r, top), (r, top, r, b), (l, b, r, b), (l, top, l, b)] {
-                page.items.push(Placed::Rule { x0: ax, y0: ay, x1: bx, y1: by, border: line(BorderStyle::Single, 0.5) });
+                page.items.push(Placed::Rule { x0: ax, y0: ay, x1: bx, y1: by, border: line(BorderStyle::Single, 0.5), source: None });
             }
             for mut it in items {
                 it.translate(x0, top);
