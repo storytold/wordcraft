@@ -31,7 +31,8 @@ use wordcraft_doc::Document;
 pub const MAX_ZIP_ENTRIES: u64 = 20_000;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "tex", "latex", "ltx", "epub"];
+pub const EXTENSIONS: &[&str] =
+    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "tex", "latex", "ltx", "epub"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
