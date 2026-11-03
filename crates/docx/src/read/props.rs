@@ -328,6 +328,7 @@ impl PropCtx {
                 "w:widowControl" => p.widow_control = Some(on_off(k)),
                 "w:contextualSpacing" => p.contextual_spacing = Some(on_off(k)),
                 "w:mirrorIndents" => p.mirror_indents = Some(on_off(k)),
+                "w:adjustRightInd" => p.adjust_right_indent = Some(on_off(k)),
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),

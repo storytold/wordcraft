@@ -934,6 +934,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn adjust_right_indent_inherits_and_can_be_overridden() {
+        assert!(!StyleSheet::empty().resolve_para(&ParaProps::default()).adjust_right_indent);
+        let mut s = StyleSheet::empty();
+        s.styles.push(Style {
+            id: "Normal".into(),
+            name: "Normal".into(),
+            para: ParaProps { adjust_right_indent: Some(true), ..Default::default() },
+            ..Default::default()
+        });
+        assert!(s.resolve_para(&ParaProps::default()).adjust_right_indent);
+        assert!(!s.resolve_para(&ParaProps { adjust_right_indent: Some(false), ..Default::default() }).adjust_right_indent);
+
+        let json = serde_json::to_value(ParaProps { adjust_right_indent: Some(false), ..Default::default() }).unwrap();
+        assert_eq!(json["adjustRightIndent"], false);
+        assert_eq!(serde_json::from_value::<ParaProps>(json).unwrap().adjust_right_indent, Some(false));
+    }
+
+    #[test]
     fn builtins_present() {
         let s = StyleSheet::builtin();
         for id in ["Normal", "Heading1", "Heading9", "Title", "Strong", "TableGrid", "TOC3", "Hyperlink", "ListParagraph"] {
