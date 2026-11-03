@@ -141,7 +141,7 @@ pub(crate) fn kept_table_can_start(ctx: &mut Ctx, pb: &PageBuilder, block: usize
     }
     let indivisible = row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0));
     let short_of_min = row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01);
-    Some(!indivisible && !short_of_min && table::split_row(geometry, room).is_some())
+    Some(!indivisible && !short_of_min && table::split_row_keeping_cells(geometry, room).is_some())
 }
 
 pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {

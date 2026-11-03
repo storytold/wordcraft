@@ -1,7 +1,6 @@
 # WordCraft roadmap
 
-> **PR #5166 — Keep headings with tables (2026-11-03):** A body heading kept with the next inline table uses the laid-out header, first body row and float clearance. Existing synthetic Word comparisons and layout regressions cover the narrow rule. Floating tables, longer paragraph chains and general oversized-row pagination retain their existing limitations.
-
+**PR #5166 — Keep headings with tables (2026-11-03):** A body heading kept with the next inline table uses the laid-out header, first body row and float clearance. Existing synthetic Word comparisons and layout regressions cover the narrow rule. Floating tables, longer paragraph chains and general oversized-row pagination retain their existing limitations.
 
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 

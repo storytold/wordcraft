@@ -158,3 +158,28 @@ fn kept_heading_counts_float_clearance_before_the_table() {
         assert_eq!([heading, table], [expected, usize::from(overlap)], "overlap={overlap}, keep={keep}");
     }
 }
+
+/// The first fragment must retain the beginning of each occupied cell, as placement does.
+#[test]
+fn kept_heading_follows_an_initial_picture_that_cannot_start_below_it() {
+    for (picture_height, keep, heading_page, picture_page) in [(160.0, true, 1, 1), (160.0, false, 0, 1), (40.0, true, 0, 0)] {
+        let mut doc = control(0.0, 0.0, false, 30, keep);
+        let text = doc.table(StoryRef::Body, &Path::top(2)).unwrap().rows[1].cells[0].blocks.clone();
+        let mut table = Table::new(1, 2, 328.0);
+        table.props.style = None;
+        table.props.fixed = true;
+        table.props.cell_margins = Some([0.0; 4]);
+        let mut paragraph = Paragraph::new();
+        paragraph.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        paragraph.props.space_before = Some(0.0);
+        paragraph.props.space_after = Some(0.0);
+        paragraph.insert_object(0, picture(60.0, picture_height, Default::default()), &Default::default()).unwrap();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(paragraph)];
+        table.rows[0].cells[1].blocks = text;
+        *doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap() = table;
+        let layout = lay(&doc);
+        assert_pagination_fixture_font(&layout);
+        assert_eq!(layout.caret(&Pos::body(1, 0)).unwrap().page, heading_page, "picture height {picture_height}, keep={keep}");
+        assert_eq!(layout.caret(&Pos { story: StoryRef::Body, path: Path(vec![2, 0, 0, 0]), off: 0 }).unwrap().page, picture_page);
+    }
+}
