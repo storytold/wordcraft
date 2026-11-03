@@ -16,7 +16,7 @@ regional overrides and hyphenation stay on the common pack paths. The removed Wo
 embedded French word list/pattern file. All language data remains in craft-i18n.
 
 The proposed app dependency temporarily pins the immutable library PR head
-`27bb1ebf065a58fc415ac9eb05c04a834d3cbb38` through the official storytold/craft-libs URL.
+`3c5ffadd3b3fb4bcbf657a245ad9c480d2b6e304` through the official storytold/craft-libs URL.
 That commit is not merged. Before integrating the application, merge/review the shared-library
 change, update the app pin and Cargo.lock to its official merge commit, and run the repository
 checks on that new application SHA. A passed check of a parent does not validate a new pin.
@@ -56,7 +56,7 @@ not claim a complete grammatical analysis or a guaranteed correction of every mi
 ## Verification
 
 Shared-library commands and the opt-in pinned Dicollecte gate are documented in
-[craft-proof's README](https://github.com/totoz64/craft-libs/blob/27bb1ebf065a58fc415ac9eb05c04a834d3cbb38/crates/proof/README.md).
+[craft-proof's README](https://github.com/totoz64/craft-libs/blob/3c5ffadd3b3fb4bcbf657a245ad9c480d2b6e304/crates/proof/README.md).
 The dictionary is a runtime input, never a committed test asset. The library tests cover
 regional pack overrides and reloads, apostrophes, options, NFC/NFD ranges and hyphenation.
 
@@ -77,4 +77,5 @@ No interactive GUI validation or cross-platform success is implied by a local fo
 
 | Date | Change | Evidence boundary |
 |---|---|---|
+| 2026-11-03 | Updated the temporary shared-library pin after the compound-apostrophe review fix | New app checks are required for this dependency revision |
 | 2026-11-03 | Adapted the original French contribution to shared craft-proof and Language packs; retained explicit France/Canada selection and regional new-document defaults | Shared library and app are reviewed/tested separately; integration depends on the official library merge and tests of the final app pin |
