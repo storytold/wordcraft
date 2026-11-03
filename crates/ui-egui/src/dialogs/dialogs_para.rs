@@ -482,12 +482,6 @@ impl LineForm {
                 if Rgb::parse(&self.color).is_some() {
                     side["color"] = json!(self.color);
                 }
-                if let Some(shadow) = self.shadow.get(i).copied().flatten() {
-                    side["shadow"] = json!(shadow);
-                }
-                if let Some(frame) = self.frame.get(i).copied().flatten() {
-                    side["frame"] = json!(frame);
-                }
                 m.insert(k.into(), side);
             }
         }

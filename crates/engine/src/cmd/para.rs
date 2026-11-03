@@ -24,6 +24,7 @@ pub(crate) use outline::{ensure_heading_style, set_heading};
 use outline::{move_paras, outline_step, sort};
 use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
 pub use tabs_borders::border_sides;
+pub(crate) use tabs_borders::preserve_unspecified_border_flags;
 use tabs_borders::{borders, tabs};
 
 pub fn specs() -> Vec<CommandSpec> {

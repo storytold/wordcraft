@@ -94,11 +94,39 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
     })
 }
 
+/// Keep each target's existing border flags when a sides update does not explicitly name them.
+pub(crate) fn preserve_unspecified_border_flags(
+    updated: &mut Borders,
+    existing: Borders,
+    input: &Value,
+) {
+    fn preserve(updated: &mut Option<Border>, existing: Option<Border>, input: Option<&Value>) {
+        let Some(updated) = updated else { return };
+        if input.and_then(|side| side.get("shadow")).is_none() {
+            updated.shadow = existing.and_then(|border| border.shadow);
+        }
+        if input.and_then(|side| side.get("frame")).is_none() {
+            updated.frame = existing.and_then(|border| border.frame);
+        }
+    }
+
+    preserve(&mut updated.top, existing.top, input.get("top"));
+    preserve(&mut updated.bottom, existing.bottom, input.get("bottom"));
+    preserve(&mut updated.left, existing.left, input.get("left"));
+    preserve(&mut updated.right, existing.right, input.get("right"));
+    preserve(&mut updated.between, existing.between, input.get("between"));
+    preserve(&mut updated.inside_v, existing.inside_v, input.get("insideV"));
+}
+
 pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(sides) = v.get("sides") {
         let b = border_sides(sides, 1.0, 4.0)?;
         // An explicit empty set keeps a style's borders off.
-        return fmt(s, &|p| p.borders = Some(b));
+        return fmt(s, &|p| {
+            let mut b = b;
+            preserve_unspecified_border_flags(&mut b, p.borders.unwrap_or_default(), sides);
+            p.borders = Some(b);
+        });
     }
     let kind = p::str(v, "kind").unwrap_or("bottom");
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
