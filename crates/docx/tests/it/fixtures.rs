@@ -1729,11 +1729,12 @@ fn chartex_docx(requires: &str, requires_ns: &str) -> Vec<u8> {
 }
 
 /// [`chartex_docx`], its drawing linked to a web address (`wp:docPr/a:hlinkClick`) when `link`,
-/// after a first choice (a shape) linked elsewhere.
+/// after a first choice linked elsewhere, which needs a namespace no reader knows, so a reader
+/// takes the chart's choice.
 fn chartex_docx_linked(requires: &str, requires_ns: &str, link: bool) -> Vec<u8> {
     let click = if link { r#"<a:hlinkClick r:id="rIdWeb"/>"# } else { "" };
     let other = if link {
-        r#"<mc:Choice Requires="wps"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="254000" cy="254000"/><wp:docPr id="9" name="Other"><a:hlinkClick r:id="rIdOther"/></wp:docPr><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"#
+        r#"<mc:Choice xmlns:w99="urn:example:unsupported" Requires="w99"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="254000" cy="254000"/><wp:docPr id="9" name="Other"><a:hlinkClick r:id="rIdOther"/></wp:docPr><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"#
     } else {
         ""
     };
