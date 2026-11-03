@@ -92,6 +92,8 @@ pub(super) struct Body<'a> {
     kept_open: Option<KeptOpen>,
     /// The body table whose markup is being kept (its `done`: the container's length before it).
     kept_table: Option<KeptOpen>,
+    /// The body index (a table of contents…) whose markup is being kept, likewise.
+    kept_index: Option<KeptOpen>,
     /// Body sections whose wrapper is kept as read: start tag, depth, the body's length before
     /// it; `None` for one read as a columned section (kept as a section break).
     kept_sections: Vec<Option<(std::sync::Arc<str>, usize, usize)>>,
@@ -220,6 +222,7 @@ impl<'a> Body<'a> {
             raw: &[],
             kept_open: None,
             kept_table: None,
+            kept_index: None,
             kept_sections: Vec::new(),
             section_masters: vec![None],
             pending_master: None,
@@ -300,6 +303,47 @@ impl<'a> Body<'a> {
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        // A body index, kept whole: its settings and templates, which WordCraft writes its own.
+        match &ev {
+            Ev::Start(q, _) => match &mut self.kept_index {
+                Some(k) => k.clean &= !(q.starts_with("draw:") || q.starts_with("office:annotation") || q.starts_with("text:change")),
+                None if q.starts_with("text:")
+                    && is_index(local(q))
+                    && !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.containers.len() == 1
+                    && self.tables.is_empty()
+                    && self.frame.is_none()
+                    && self.note.is_none()
+                    && self.del.is_none() =>
+                {
+                    self.end_para();
+                    self.kept_index = Some(KeptOpen { from: at.0, depth: self.depth + 1, clean: true, done: self.container().len() });
+                }
+                None => {}
+            },
+            Ev::End(q) if q.starts_with("text:") && is_index(local(q)) && self.kept_index.as_ref().is_some_and(|k| k.depth == self.depth) => {
+                let k = self.kept_index.take();
+                self.feed(ev);
+                if let Some(k) = k
+                    && k.clean
+                    && self.containers.len() == 1
+                    && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    let blocks = self.container();
+                    let n = blocks.len().saturating_sub(k.done);
+                    if n > 0
+                        && blocks.get(k.done..).is_some_and(|r| r.iter().all(|b| matches!(b, FBlock::Para(_))))
+                        && let Some(FBlock::Para(p)) = blocks.get_mut(k.done)
+                    {
+                        p.index = Some(Box::new((std::sync::Arc::from(xml), n)));
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
         // A body section: its start tag kept, put around its paragraphs at its end.
         match &ev {
             Ev::Start(q, _) if q == "text:section" && self.kept_sections.len() < 64 => {

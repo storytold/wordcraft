@@ -14,7 +14,7 @@ use crate::odt::{export, import};
 /// What a save may lose, and why. Matched against the start of a loss (see [`inventory`]).
 const ALLOWED: &[(&str, &str)] = &[];
 
-const NS: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0" xmlns:wcx="urn:example:wordcraft-test" office:version="1.3""#;
+const NS: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0" xmlns:wcx="urn:example:wordcraft-test" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" office:version="1.3""#;
 
 /// A sample package: `content.xml`, `styles.xml` and `meta.xml` bodies (inside their roots).
 struct Sample {
@@ -201,8 +201,24 @@ const SECTIONS: Sample = Sample {
     meta: "",
 };
 
+/// A form with its own properties and event listeners, and a field placed in the text.
+const FORMS: Sample = Sample {
+    name: "forms",
+    content: r##"<office:body><office:text><office:forms form:automatic-focus="false" form:apply-design-mode="false"><form:form form:name="Standard" form:apply-filter="true" form:command-type="table" office:target-frame="" wcx:origin="sample"><form:properties><form:property form:property-name="GroupBy" office:value-type="string" office:string-value=""/></form:properties><office:event-listeners><wcx:listener wcx:on="submit"/></office:event-listeners><form:text form:name="Reader" form:id="control1" xml:id="control1" form:control-implementation="ooo:com.sun.star.form.component.TextField" form:current-value="Ann"/></form:form></office:forms><text:p>Name: <draw:control draw:control="control1" svg:width="1.5in" svg:height="0.25in" text:anchor-type="as-char"/></text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
+/// A table of contents and an alphabetical index with their settings and templates.
+const INDEXES: Sample = Sample {
+    name: "indexes",
+    content: r##"<office:automatic-styles><style:style style:name="Sect9" style:family="section"><style:section-properties style:editable="false"><style:columns fo:column-count="1" fo:column-gap="0in"/></style:section-properties></style:style></office:automatic-styles><office:body><office:text><text:table-of-content text:style-name="Sect9" text:protected="true" text:name="Contents" wcx:kind="main"><text:table-of-content-source text:outline-level="2" text:use-index-marks="false"><text:index-title-template text:style-name="Contents_20_Heading">Contents</text:index-title-template><text:table-of-content-entry-template text:outline-level="1" text:style-name="Contents_20_1"><text:index-entry-chapter/><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:table-of-content-entry-template></text:table-of-content-source><text:index-body><text:index-title text:style-name="Sect9" text:name="Contents_Head"><text:p text:style-name="Contents_20_Heading">Contents</text:p></text:index-title><text:p text:style-name="Contents_20_1">Orchards<text:tab/>1</text:p></text:index-body></text:table-of-content><text:h text:outline-level="1">Orchards</text:h><text:p>Pears and <text:alphabetical-index-mark text:string-value="apples"/>apples.</text:p><text:alphabetical-index text:name="Words" text:protected="true"><text:alphabetical-index-source text:ignore-case="true" text:combine-entries="true" text:combine-entries-with-pp="false" fo:language="en" fo:country="GB"><text:index-title-template>Words</text:index-title-template><text:alphabetical-index-entry-template text:outline-level="1" text:style-name="Index_20_1"><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/></text:alphabetical-index-entry-template></text:alphabetical-index-source><text:index-body><text:index-title text:name="Words_Head"><text:p>Words</text:p></text:index-title><text:p text:style-name="Index_20_1">apples<text:tab/>1</text:p></text:index-body></text:alphabetical-index></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 7] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS];
+const SAMPLES: [Sample; 9] = [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -272,4 +288,27 @@ fn edits_leave_kept_markup_well_formed() {
             assert!(parts_well_formed(&again).is_ok(), "{}", s.name);
         }
     }
+}
+
+#[test]
+fn an_edited_index_is_written_from_the_model() {
+    // Unedited, the index keeps its templates; once an entry changes, the edit is what's saved.
+    use wordcraft_doc::Pos;
+    let d = import(&package(&INDEXES)).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains("text:combine-entries-with-pp=\"false\""), "{c}");
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text().starts_with("Orchards\t"))).unwrap();
+    let mut e = d.clone();
+    e.insert_text(&Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let c = content_of(&export(&e).unwrap());
+    assert!(c.contains("Edited Orchards"), "{c}");
+    // The other index, unedited, is still as read.
+    assert!(c.contains("text:combine-entries-with-pp=\"false\""), "{c}");
+}
+
+fn content_of(bytes: &[u8]) -> String {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut s).unwrap();
+    s
 }

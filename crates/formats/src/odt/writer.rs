@@ -681,6 +681,18 @@ impl Writer {
             // Only the first top-level block of a section starts its page.
             if depth == 0 {
                 self.master = self.pending_start.take();
+                // An index kept as read (its paragraphs all as read): as it was.
+                if let Some(FBlock::Para(p)) = blocks.get(i)
+                    && let Some(ix) = p.index.as_deref()
+                    && chains.is_none()
+                    && (self.master.is_none() || self.kept_pages)
+                    && self.kept_markup(&ix.0, out)
+                {
+                    self.master = None;
+                    out.push('\n');
+                    i += ix.1.max(1);
+                    continue;
+                }
                 // A table of contents or another index, with its entries.
                 if let Some((n, kind, titled)) = index_at(blocks, i) {
                     let joined = chains.is_some_and(|c| (i..i + n).any(|k| c.contains_key(&k)));

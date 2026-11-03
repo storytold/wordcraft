@@ -463,6 +463,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         mark: None,
         kept: None,
         wrap: None,
+        index: None,
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -503,6 +504,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark: None,
                         kept: None,
                         wrap: None,
+                        index: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -839,9 +841,43 @@ fn plain_control(kind: &wordcraft_doc::control::ControlKind) -> bool {
     matches!(kind, K::Text { .. } | K::CheckBox { .. } | K::DropDown { .. } | K::ComboBox { .. } | K::Date { .. })
 }
 
+/// The index kept as read starting at block `i` of `bl`, while the paragraphs it takes are all
+/// as read: how many blocks, and its markup.
+fn kept_index(doc: &Document, bl: &Blocks, i: usize) -> Option<(usize, std::sync::Arc<str>)> {
+    let k = doc.kept.of("odt")?;
+    let p = bl.get(i)?.as_para()?;
+    let (n, run, xml) = k.index(p)?;
+    let paras: Vec<&Paragraph> = bl.get(i..i + n)?.iter().filter_map(|b| b.as_para()).collect();
+    (paras.len() == *n && wordcraft_doc::kept::run_fingerprint(paras.into_iter()) == *run).then(|| (*n, xml.clone()))
+}
+
 fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {
     let mut out = Vec::new();
-    for b in bl {
+    let mut skip = 0usize;
+    for (i, b) in bl.iter().enumerate() {
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        // An index kept as read, while every paragraph it takes still is what was read: its
+        // flow paragraphs, the first carrying its markup and how many there are.
+        if tracked.paras
+            && depth == 0
+            && let Some(ix) = kept_index(doc, bl, i)
+        {
+            let from = out.len();
+            for b in bl.get(i..i + ix.0).unwrap_or(&[]) {
+                if let Block::Para(p) = &**b {
+                    out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para));
+                }
+            }
+            let n = out.len() - from;
+            if let Some(FBlock::Para(first)) = out.get_mut(from) {
+                first.index = Some(Box::new((ix.1, n)));
+            }
+            skip = ix.0.saturating_sub(1);
+            continue;
+        }
         match &**b {
             Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
             Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),

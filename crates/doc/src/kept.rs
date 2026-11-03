@@ -37,6 +37,12 @@ pub struct KeptXml {
     pub wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
     /// While reading: the same by paragraph `rev`, until [`Kept::seal`].
     pub pending_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
+    /// Indexes kept as read: by their first paragraph's fingerprint, how many top-level
+    /// paragraphs they take, those paragraphs' fingerprint together ([`run_fingerprint`]),
+    /// and the index's markup. Written as read while those paragraphs are all as read.
+    pub indexes: HashMap<u64, (usize, u64, Arc<str>)>,
+    /// While reading: by the first paragraph's `rev`, how many paragraphs, and the markup.
+    pub pending_indexes: HashMap<u64, (usize, Arc<str>)>,
     /// Named definitions the kept markup refers to (styles, font faces…), by a key the format
     /// chooses (`"auto:P12"`, `"style:Heading_20_1"`), as read.
     pub defs: BTreeMap<String, Arc<str>>,
@@ -122,6 +128,21 @@ impl KeptXml {
         }
         self.wraps.get(&fingerprint(p))
     }
+    /// The index kept as read starting at paragraph `p`: how many paragraphs it takes, their
+    /// [`run_fingerprint`] when read, its markup.
+    pub fn index(&self, p: &Paragraph) -> Option<&(usize, u64, Arc<str>)> {
+        if self.indexes.is_empty() {
+            return None;
+        }
+        self.indexes.get(&fingerprint(p))
+    }
+    /// Keep an index's markup, starting at the paragraph whose `rev` is `rev` and taking `n`.
+    pub fn keep_pending_index(&mut self, rev: u64, n: usize, xml: Arc<str>) {
+        if self.bytes.saturating_add(xml.len()) <= MAX_KEPT_BYTES {
+            self.bytes += xml.len();
+            self.pending_indexes.insert(rev, (n, xml));
+        }
+    }
     /// Keep wrapper markup for the paragraph whose `rev` is `rev`, within the budget.
     pub fn keep_pending_wrap(&mut self, rev: u64, wrap: (Vec<Arc<str>>, u32)) {
         let n: usize = wrap.0.iter().map(|t| t.len()).sum();
@@ -203,6 +224,15 @@ pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
     h.finish()
 }
 
+/// What a run of paragraphs is in the model, together.
+pub fn run_fingerprint<'a>(paras: impl Iterator<Item = &'a Paragraph>) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in paras {
+        fingerprint(p).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// What table `t` is in the model.
 pub fn table_fingerprint(t: &crate::Table) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -248,8 +278,18 @@ impl crate::Document {
     /// After reading: the markup kept for paragraphs still as the reader made them is filed
     /// under their fingerprints (see [`Kept::seal`]); the rest is dropped.
     pub fn seal_kept(&mut self) {
-        // The body's tables kept, by their place among its tables.
+        // The body's tables kept, by their place among its tables; its indexes, by their run of
+        // top-level paragraphs.
         if let Some(k) = self.kept.get_mut() {
+            let pending = std::mem::take(&mut k.pending_indexes);
+            for (i, b) in self.body.iter().enumerate() {
+                let Some(p) = b.as_para() else { continue };
+                let Some((n, xml)) = pending.get(&p.rev) else { continue };
+                let run: Option<Vec<&Paragraph>> = self.body.get(i..i + n).map(|r| r.iter().filter_map(|b| b.as_para()).collect());
+                if let Some(run) = run.filter(|r| r.len() == *n) {
+                    k.indexes.entry(fingerprint(p)).or_insert((*n, run_fingerprint(run.into_iter()), xml.clone()));
+                }
+            }
             let pending = std::mem::take(&mut k.pending_tables);
             let tables: Vec<&crate::Table> = self.body.iter().filter_map(|b| b.as_table()).collect();
             for (n, xml) in pending {

@@ -673,6 +673,9 @@ pub struct Para {
     /// Sections kept as read around paragraphs ([`wordcraft_doc::kept`]): the start tags of
     /// those opening before this paragraph (outermost first), and how many close after it.
     pub wrap: Option<Box<(Vec<std::sync::Arc<str>>, u32)>>,
+    /// An index (a table of contents…) kept as read that starts with this paragraph
+    /// ([`wordcraft_doc::kept`]): its markup, and how many blocks of the flow it takes.
+    pub index: Option<Box<(std::sync::Arc<str>, usize)>>,
 }
 
 impl Para {

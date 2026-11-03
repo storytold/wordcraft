@@ -55,6 +55,7 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 (3, "office:font-face-decls") => child_key("font", &q, &a),
                 (3, "office:master-styles") => child_key("master", &q, &a),
                 (4, "office:text") if content && q.starts_with("text:") && q.ends_with("-decls") => Some(format!("decls:{q}")),
+                (4, "office:text") if content && q == "office:forms" => Some("forms".to_string()),
                 _ => None,
             };
             if let Some(key) = key {
@@ -343,6 +344,159 @@ pub(super) fn with_kept_meta(meta: String, defs: &BTreeMap<String, Arc<str>>, or
         Some(at) if !kept.is_empty() => format!("{}{kept}{}", meta.get(..at).unwrap_or(""), meta.get(at..).unwrap_or("")),
         _ => meta,
     }
+}
+
+/// Whether a child of a `form:form` is a form control (else the form's own properties or
+/// event listeners).
+fn is_control(q: &str) -> bool {
+    q.starts_with("form:") && !matches!(q, "form:properties" | "form:form")
+}
+
+/// The children `depth` deep in `xml` (the root is 1): each one's element, `form:name` and
+/// markup.
+fn children_at(xml: &str, at_depth: usize) -> Vec<(String, Option<String>, &str)> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut open: Option<(String, Option<String>, usize)> = None;
+    events_at(xml.as_bytes(), |ev, at| match ev {
+        Ev::Start(q, a) => {
+            depth += 1;
+            if depth == at_depth && open.is_none() {
+                open = Some((q, get(&a, "form:name").map(str::to_string), at.0));
+            }
+        }
+        Ev::End(_) => {
+            if depth == at_depth
+                && let Some((q, name, from)) = open.take()
+                && let Some(x) = xml.get(from..at.1)
+            {
+                out.push((q, name, x));
+            }
+            depth = depth.saturating_sub(1);
+        }
+        Ev::Text(_) => {}
+    });
+    out
+}
+
+/// Control `ours` (as WordCraft writes it) with what the file's control `theirs` had that
+/// WordCraft doesn't model and so can't have changed: its other attributes (not its ids) and its
+/// properties and event listeners.
+fn with_unmodelled(ours: &str, theirs: &str) -> String {
+    let attrs_of = |xml: &str| {
+        let mut out: Vec<(String, String)> = Vec::new();
+        let mut first = true;
+        super::xml::events(xml.as_bytes(), |ev| {
+            if let Ev::Start(_, a) = ev
+                && std::mem::take(&mut first)
+            {
+                out = a;
+            }
+        });
+        out
+    };
+    let have: BTreeSet<String> = attrs_of(ours).into_iter().map(|(k, _)| k).collect();
+    let extra: String = attrs_of(theirs)
+        .into_iter()
+        .filter(|(k, _)| !have.contains(k) && !matches!(k.as_str(), "form:id" | "xml:id" | "form:name") && !k.starts_with("xmlns"))
+        .map(|(k, v)| format!(" {k}=\"{}\"", super::writer::x(&v)))
+        .collect();
+    let kids: String = children_at(theirs, 2)
+        .into_iter()
+        .filter(|(q, ..)| matches!(q.as_str(), "form:properties" | "office:event-listeners"))
+        .filter(|(q, ..)| !ours.contains(&format!("<{q}")))
+        .map(|(.., x)| x)
+        .collect();
+    // Into its start tag, and before its end (an empty one opened for them).
+    let Some(end) = ours.find('>') else { return ours.to_string() };
+    let (head, rest) = ours.split_at(end);
+    let empty = head.ends_with('/');
+    let head = head.trim_end_matches('/');
+    let name = head.trim_start_matches('<').split(char::is_whitespace).next().unwrap_or("");
+    if empty {
+        if kids.is_empty() { format!("{head}{extra}/>") } else { format!("{head}{extra}>{kids}</{name}>") }
+    } else {
+        let close = format!("</{name}>");
+        let body = rest.get(1..).unwrap_or("");
+        match body.rfind(&close) {
+            Some(at) => format!("{head}{extra}>{}{kids}{}", body.get(..at).unwrap_or(""), body.get(at..).unwrap_or("")),
+            None => format!("{head}{extra}>{body}"),
+        }
+    }
+}
+
+/// The document's forms (`office:forms`, §13.2) as the file had them (`orig`), with the
+/// controls WordCraft writes (`ours`, its own `office:forms`): the file's forms element and each
+/// form's own start tag, properties and event listeners as read; the controls the document has
+/// in the first form (the file's controls are the document's, read into it and written back);
+/// `ours` alone when the file had none, its own form when the file had none.
+pub(super) fn merge_forms(orig: Option<&str>, ours: String) -> String {
+    let Some(orig) = orig else { return ours };
+    // `ours`: the controls (children of its one form).
+    let ours_controls = children_at(&ours, 3);
+    let orig_controls: Vec<(String, Option<String>, &str)> = children_at(orig, 3).into_iter().filter(|(q, ..)| is_control(q)).collect();
+    // Each of ours with what the file's control by that name (else in that place) had and
+    // WordCraft doesn't model.
+    let mut used = vec![false; orig_controls.len()];
+    let mut controls = String::new();
+    for (i, (q, name, xml)) in ours_controls.iter().enumerate() {
+        let same = |(k, (oq, oname, _)): &(usize, &(String, Option<String>, &str))| !used[*k] && oq == q && oname == name;
+        let found = orig_controls.iter().enumerate().find(|c| same(c)).map(|(k, _)| k).or_else(|| {
+            let nth = ours_controls.iter().take(i).filter(|(oq, ..)| oq == q).count();
+            orig_controls.iter().enumerate().filter(|(k, (oq, ..))| !used[*k] && oq == q).nth(nth).map(|(k, _)| k)
+        });
+        match found.and_then(|k| orig_controls.get(k).map(|c| (k, c.2))) {
+            Some((k, theirs)) => {
+                used[k] = true;
+                controls.push_str(&with_unmodelled(xml, theirs));
+            }
+            None => controls.push_str(xml),
+        }
+    }
+    // `orig`: its forms element, each form's start tag and non-control children.
+    let mut head: Option<String> = None;
+    let mut forms: Vec<(String, String)> = Vec::new();
+    let mut child: Option<(usize, bool)> = None;
+    let mut depth = 0usize;
+    events_at(orig.as_bytes(), |ev, at| match ev {
+        Ev::Start(q, _) => {
+            depth += 1;
+            let tag = orig.get(at.0..at.1).unwrap_or("");
+            let opened = || tag.strip_suffix("/>").map_or_else(|| tag.to_string(), |t| format!("{}>", t.trim_end()));
+            match depth {
+                1 => head = Some(opened()),
+                2 if q == "form:form" => forms.push((opened(), String::new())),
+                3 if child.is_none() => child = Some((at.0, is_control(&q))),
+                _ => {}
+            }
+        }
+        Ev::End(_) => {
+            if depth == 3
+                && let Some((from, control)) = child.take()
+                && !control
+                && let (Some(f), Some(x)) = (forms.last_mut(), orig.get(from..at.1))
+            {
+                f.1.push_str(x);
+            }
+            depth = depth.saturating_sub(1);
+        }
+        Ev::Text(_) => {}
+    });
+    let Some(head) = head else { return ours };
+    let mut out = head;
+    if forms.is_empty() && !controls.is_empty() {
+        out.push_str(&format!("<form:form form:name=\"Form\">{controls}</form:form>"));
+    }
+    for (i, (start, kids)) in forms.iter().enumerate() {
+        out.push_str(start);
+        out.push_str(kids);
+        if i == 0 {
+            out.push_str(&controls);
+        }
+        out.push_str("</form:form>");
+    }
+    out.push_str("</office:forms>");
+    out
 }
 
 /// A list of declarations as the file had it (`orig`, a `text:variable-decls` or the like),

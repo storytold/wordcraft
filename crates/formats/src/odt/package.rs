@@ -997,7 +997,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let content = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text>\n{}{tracked}{var_decls}{user_decls}{decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
-        super::forms::forms_xml(&w.forms, &hidden_controls(doc))
+        // The file's forms as read, with the document's controls.
+        super::kept::merge_forms(kept.and_then(|k| k.defs.get("forms")).map(|d| &**d), super::forms::forms_xml(&w.forms, &hidden_controls(doc)))
     );
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     hw.accents = accents;

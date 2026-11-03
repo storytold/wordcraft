@@ -194,7 +194,7 @@ fn hidden_controls_are_kept() {
         r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form>{hidden}</form:form></office:forms><text:p>x</text:p></office:text></office:body></office:document-content>"#
     );
     let c = entry(&export(&import(&package(&only, None)).unwrap()).unwrap(), "content.xml");
-    assert!(c.contains("<office:forms ") && c.contains("<form:hidden "), "{c}");
+    assert!(c.contains("<office:forms") && c.contains("<form:hidden "), "{c}");
 }
 
 #[test]

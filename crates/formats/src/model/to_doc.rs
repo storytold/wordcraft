@@ -470,6 +470,28 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Keeps a paragraph's markup read from the file (its own, its frame wrap, the index it
+    /// starts) pending until the document is sealed.
+    fn keep_pending(&mut self, p: &Para, rev: u64) {
+        if p.kept.is_none() && p.wrap.is_none() && p.index.is_none() {
+            return;
+        }
+        if self.doc.kept.get().is_none() {
+            self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
+        }
+        if let Some(k) = self.doc.kept.get_mut() {
+            if let Some(xml) = &p.kept {
+                k.keep_pending(rev, xml.clone());
+            }
+            if let Some(w) = &p.wrap {
+                k.keep_pending_wrap(rev, (**w).clone());
+            }
+            if let Some(ix) = &p.index {
+                k.keep_pending_index(rev, ix.1, ix.0.clone());
+            }
+        }
+    }
+
     fn para(&mut self, p: &Para, list_num: Option<u32>) -> Paragraph {
         let mut out = Paragraph::new();
         out.props = para_props(p, list_num);
@@ -625,19 +647,7 @@ impl<'a> Builder<'a> {
         out.touch();
         // Its markup kept for the writer, as long as nothing changes the paragraph from here on
         // (see `wordcraft_doc::kept`: the reader seals it once the document is done).
-        if p.kept.is_some() || p.wrap.is_some() {
-            if self.doc.kept.get().is_none() {
-                self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
-            }
-            if let Some(k) = self.doc.kept.get_mut() {
-                if let Some(xml) = &p.kept {
-                    k.keep_pending(out.rev, xml.clone());
-                }
-                if let Some(w) = &p.wrap {
-                    k.keep_pending_wrap(out.rev, (**w).clone());
-                }
-            }
-        }
+        self.keep_pending(p, out.rev);
         out
     }
 
