@@ -163,6 +163,9 @@ impl WordApp {
             self.interface_faces = theme::resolve_interface_faces(&font);
             self.interface_font = Some(font);
         }
+        // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
+        // another interface language, asks for an installed Arabic font when none is embedded.
+        let system_arabic = lang.rtl() || self.want_system_arabic;
         if !self.styled
             || font_changed
             || self.fonts_dirty
@@ -170,6 +173,7 @@ impl WordApp {
             || lang.prefers_korean() != self.fonts_korean
             || lang.prefers_hant() != self.fonts_hant
             || system_cjk != self.fonts_system_cjk
+            || system_arabic != self.fonts_system_arabic
         {
             // Every window's borrowed faces: the fonts are the app's.
             let mut faces = self.canvas.ime_faces.clone();
@@ -180,19 +184,20 @@ impl WordApp {
                     }
                 }
             }
-            theme::install_fonts_language_extra_with(
+            theme::install_fonts_language_arabic(
                 ctx,
                 lang.prefers_hans(),
                 lang.prefers_korean(),
                 lang.prefers_hant(),
                 system_cjk,
                 &faces,
-                self.interface_faces.as_ref(),
+                theme::ExtraFaces { arabic: system_arabic, interface: self.interface_faces.as_ref() },
             );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_hant = lang.prefers_hant();
             self.fonts_system_cjk = system_cjk;
+            self.fonts_system_arabic = system_arabic;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             // egui quits on Command-Q, which is Ctrl+Q off the Mac: Word's Reset Paragraph
