@@ -479,7 +479,7 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
-    let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_area: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
     let (h, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
         layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height
@@ -539,8 +539,10 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
 #[derive(Clone, Copy)]
 pub(crate) struct PageFrame<'a> {
     pub(crate) sect: &'a SectionProps,
-    /// Override the Margin anchor area without changing the declared margin bands.
-    pub(crate) margin_top: Option<f32>,
+    /// Override the Margin anchor area (its top and bottom) with the rendered body's, without
+    /// changing the declared margin bands: a header or footer that reaches past its margin moves
+    /// the area Word measures from (#2485).
+    pub(crate) margin_area: Option<(f32, f32)>,
     /// Page position of the box's (0, 0); (0, 0) for body text.
     pub(crate) origin: (f32, f32),
     /// The page's number: inside and outside are left and right on odd pages, the other way
@@ -573,7 +575,19 @@ impl PageFrame<'_> {
     }
 }
 
+/// The Margin anchor area down the page, start and extent: the rendered body when `f` has one
+/// (both edges: Word centres a header picture between the body's top and the footer's top, not
+/// down to the declared bottom margin), else the declared margins; at least 18 pt, as
+/// [`SectionProps::text_height`].
+pub(crate) fn margin_y(f: &PageFrame) -> (f32, f32) {
+    let s = f.sect;
+    match f.margin_area {
+        Some((top, bottom)) => (top, (bottom - top).max(18.0)),
+        None => (s.margin_top, s.text_height()),
+    }
+}
+
 /// The page `pb` is filling, for placing floating objects on it (`mirror`: [`Ctx::mirror`]).
 pub(crate) fn page_frame<'a>(pb: &PageBuilder<'a>, mirror: bool) -> PageFrame<'a> {
-    PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror }
+    PageFrame { sect: pb.sect, margin_area: None, origin: (0.0, 0.0), number: pb.number, mirror }
 }

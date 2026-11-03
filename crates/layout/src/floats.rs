@@ -1,5 +1,5 @@
 use super::ctx::Ctx;
-use super::page::{PageBuilder, PageFrame};
+use super::page::{PageBuilder, PageFrame, margin_y};
 use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
 use super::{
@@ -82,14 +82,9 @@ pub(crate) fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: 
     };
     let page_y = |f: &PageFrame| {
         let s = f.sect;
-        let top = f.margin_top.unwrap_or(s.margin_top);
         match float.v_rel {
             Anchor::Page => Some((0.0, s.page_h)),
-            Anchor::Margin => {
-                let mut reference = s.clone();
-                reference.margin_top = top;
-                Some((top, reference.text_height()))
-            }
+            Anchor::Margin => Some(margin_y(f)),
             Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
             Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
             _ => None,
@@ -354,7 +349,7 @@ pub(crate) fn anchor_floats(
         // The paragraph's top, and whether text was placed before it on the page.
         let top = y0 - before;
         let text_before = top > pb.top + 0.5 || pb.col > 0;
-        let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let frame = PageFrame { sect: pb.sect, margin_area: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
