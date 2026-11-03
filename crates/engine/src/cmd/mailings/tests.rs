@@ -52,6 +52,13 @@ fn csv_delimiter_ignores_quoted_text() {
     assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
 }
 
+#[test]
+fn csv_delimiter_skips_leading_blank_lines() {
+    let want = vec![vec!["Name", "Email"], vec!["Ann", "ann@x.org"]];
+    assert_eq!(parse_csv("\nName,Email\nAnn,ann@x.org\n"), want);
+    assert_eq!(parse_csv("\r\n\r\nName;Email\r\nAnn;ann@x.org"), want);
+}
+
 /// Field types ignore case (ECMA-376 Part 1, 17.16.1), and `MERGEFIELDX` is another field.
 #[test]
 fn merge_field_types_ignore_case() {

@@ -1,4 +1,4 @@
-use super::bookmarks::{bookmark, enclose_preview, icons_body};
+use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
 use super::font::{apply_font, preview_size};
@@ -36,6 +36,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
         Dialog::Refs(f) => crate::dialogs_refs::body(app, ui, f),
         Dialog::Commands { .. } => commands_dialog(app, ui, d),
+        Dialog::Macros { name } => macros(app, ui, name),
         Dialog::Icons { query, category, selected } => icons_body(app, ui, query, category, selected),
         Dialog::PasteSpecial { .. } => paste_special_dialog(app, ui, d),
         Dialog::About { .. } => about_dialog(ui, d),
@@ -1001,7 +1002,7 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.label(egui::RichText::new(tl!("Suggested")).font(semibold(12.5)));
         SEARCH_SUGGESTIONS.iter().filter_map(|id| reg.get(id)).collect()
     } else {
-        reg.all().iter().filter(|c| command_matches(c, query)).collect()
+        reg.all().iter().filter(|c| !NOT_IN_SEARCH.contains(&c.id) && command_matches(c, query)).collect()
     };
     hits.truncate(14);
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1074,7 +1075,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     ui.set_width(660.0);
-    let names = ["About", "Contributors", "Models"].map(|n| tl!(n).to_string());
+    let names = ["About", "Contributors", "Models", "Language data"].map(|n| tl!(n).to_string());
     if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = i as u8;
     }
@@ -1082,6 +1083,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     match *tab {
         1 => crate::credits::contributors_ui(ui),
         2 => crate::credits::models_ui(ui),
+        3 => crate::language_packs::about_tab(ui),
         _ => {
             ui.label(egui::RichText::new(tl!("WordCraft")).font(semibold(22.0)));
             let build = option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or(tl!("development build"));
@@ -1095,8 +1097,8 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.")).small().weak());
         }
     }
-    let (ok, cancel) = buttons(ui, tl!("Close"));
-    ok || cancel
+    // One Close button: About has nothing to cancel.
+    super::chrome::close_button(ui)
 }
 
 fn discard_recovery_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1491,6 +1493,10 @@ fn match_fields_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     let (ok, cancel) = buttons(ui, tl!("Close"));
     ok || cancel
 }
+
+/// Commands Search leaves out: they need a parameter it can't give (which Language pack), and
+/// File › Options › Language does them with the list in front of the person.
+const NOT_IN_SEARCH: [&str; 2] = ["proof.installPack", "proof.removePack"];
 
 fn check_errors_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::CheckErrors { unknown, records } = d else {

@@ -372,7 +372,7 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::WORDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
@@ -490,6 +490,8 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            // Language packs from the suite's font store; an Install click is the person's own.
+            wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
