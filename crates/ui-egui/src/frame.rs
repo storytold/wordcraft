@@ -192,13 +192,21 @@ impl Drag {
 
     /// Move along the dominant pointer axis, keeping the grab point fixed in the document
     /// when scrolling moves its page. The boolean says the movement is horizontal.
-    pub(crate) fn update_axis(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, min: f32, press_origin: Pos2) -> bool {
+    pub(crate) fn update_axis(
+        &mut self,
+        pointer: Pos2,
+        pages: &[egui::Rect],
+        bands: &[(f32, f32)],
+        scale: f32,
+        min: f32,
+        press_origin: Pos2,
+    ) -> bool {
         let delta = pointer - self.press;
         let horizontal = delta.x.abs() >= delta.y.abs();
         let press = self.press;
         self.press += pages.get(self.page).map_or(egui::Vec2::ZERO, |p| p.min - press_origin);
         let pointer = if horizontal { pos2(pointer.x, self.press.y) } else { pos2(self.press.x, pointer.y) };
-        self.update(pointer, pages, scale, min, false);
+        self.update(pointer, pages, bands, scale, min, false);
         self.press = press;
         horizontal
     }
@@ -224,7 +232,7 @@ impl Drag {
 
     /// Follow the pointer. A move keeps the grabbed point under it, across pages too; a resize
     /// moves the grabbed edges, keeping `min` size and, with `keep_aspect`, the proportions.
-    pub fn update(&mut self, pointer: Pos2, pages: &[egui::Rect], scale: f32, min: f32, keep_aspect: bool) {
+    pub fn update(&mut self, pointer: Pos2, pages: &[egui::Rect], bands: &[(f32, f32)], scale: f32, min: f32, keep_aspect: bool) {
         if !self.moved && pointer.distance(self.press) < DRAG_START {
             return;
         }
@@ -233,7 +241,7 @@ impl Drag {
         match self.grab {
             Grab::Move => {
                 let Some(origin) = pages.get(self.page) else { return };
-                let Some((page, r)) = crate::canvas::nearest_page(pages, pointer).and_then(|i| Some((i, pages.get(i)?))) else { return };
+                let Some((page, r)) = crate::canvas::nearest_page(pages, bands, pointer).and_then(|i| Some((i, pages.get(i)?))) else { return };
                 let (x, y) = ((pointer.x - r.min.x) / scale, (pointer.y - r.min.y) / scale);
                 // The grabbed point within the frame, points.
                 let gx = (self.press.x - origin.min.x) / scale - self.start.x;
@@ -308,6 +316,19 @@ mod tests {
 
     const R: Rect = Rect { x: 100.0, y: 50.0, w: 200.0, h: 100.0 };
 
+    /// #4802: an axis-locked copy follows the visible body band across a hidden margin.
+    #[test]
+    fn an_axis_locked_drag_uses_visible_page_bands() {
+        let pages = [egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(612.0, 792.0)), egui::Rect::from_min_size(pos2(0.0, 626.0), vec2(612.0, 792.0))];
+        let bands = [(36.0, 648.0), (36.0, 648.0)];
+        let start = Rect { x: 100.0, y: 100.0, w: 60.0, h: 40.0 };
+        let mut drag = Drag::new(Grab::Move, 0, start, 0.0, pos2(100.0, 100.0));
+        assert!(!drag.update_axis(pos2(103.0, 668.0), &pages, &bands, 1.0, 4.0, pages[0].min));
+        assert_eq!(drag.to_page, 1, "the visible second page, despite the nearer first-page centre");
+        assert_eq!(drag.rect.x, start.x, "the horizontal coordinate remains locked");
+        assert_eq!(drag.rect.y, 42.0, "coordinates retain the full page origin");
+    }
+
     #[test]
     fn resize_moves_only_the_grabbed_edges() {
         assert_eq!(resized(R, Handle { x: 1, y: 0 }, 30.0, 99.0, 4.0, false), Rect::new(100.0, 50.0, 230.0, 100.0));
@@ -351,13 +372,13 @@ mod tests {
         let pages =
             [egui::Rect::from_min_size(pos2(10.0, 10.0), vec2(612.0, 792.0)), egui::Rect::from_min_size(pos2(10.0, 812.0), vec2(612.0, 792.0))];
         let mut d = Drag::new(Grab::Move, 0, R, 0.0, pos2(10.0 + 150.0, 10.0 + 60.0));
-        d.update(pos2(161.0, 71.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(161.0, 71.0), &pages, &[], 1.0, 4.0, false);
         assert!(!d.moved, "under the drag threshold");
-        d.update(pos2(210.0, 110.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(210.0, 110.0), &pages, &[], 1.0, 4.0, false);
         assert!(d.moved);
         assert_eq!((d.to_page, d.rect), (0, Rect::new(150.0, 90.0, 200.0, 100.0)));
         // Onto the next page.
-        d.update(pos2(160.0, 812.0 + 60.0), &pages, 1.0, 4.0, false);
+        d.update(pos2(160.0, 812.0 + 60.0), &pages, &[], 1.0, 4.0, false);
         assert_eq!((d.to_page, d.rect), (1, R));
     }
 

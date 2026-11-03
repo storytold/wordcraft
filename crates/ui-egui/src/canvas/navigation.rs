@@ -2,19 +2,23 @@ use super::pages::{page_screen_scale, to_screen};
 use super::{DocLayout, Pos2, Rect, Ui, WordApp, pos2, vec2};
 
 /// Page index and document coordinates under a screen point.
-pub fn page_at(rects: &[Rect], layout: &DocLayout, scale: f32, p: Pos2) -> Option<(usize, f32, f32)> {
-    let i = nearest_page(rects, p)?;
+pub fn page_at(rects: &[Rect], bands: &[(f32, f32)], layout: &DocLayout, scale: f32, p: Pos2) -> Option<(usize, f32, f32)> {
+    let i = nearest_page(rects, bands, p)?;
     let r = rects.get(i)?;
     let scale = layout.pages.get(i).map_or(scale, |page| page_screen_scale(*r, page, scale));
     Some((i, (p.x - r.min.x) / scale, (p.y - r.min.y) / scale))
 }
 
-/// The page whose screen rect is under (or nearest to) a screen point.
-pub fn nearest_page(rects: &[Rect], p: Pos2) -> Option<usize> {
+/// The page whose visible band is under (or nearest to) a screen point.
+/// Bands are offsets from each full page rect; a missing band uses the whole page.
+pub fn nearest_page(rects: &[Rect], bands: &[(f32, f32)], p: Pos2) -> Option<usize> {
     let mut best: Option<(usize, f32)> = None;
     for (i, r) in rects.iter().enumerate() {
+        // Painting cuts the hidden margins to these bands. Measure against the same
+        // visible rectangle, while page_at keeps the full origin for document coordinates.
+        let r = bands.get(i).map_or(*r, |&(top, bottom)| Rect::from_min_max(pos2(r.min.x, r.min.y + top), pos2(r.max.x, r.min.y + bottom)));
         let d = if r.contains(p) {
-            // Pages overlap in the margins Hide White Space cuts: the one whose middle is nearer wins.
+            // A centre-distance tie-breaker for overlapping rectangles without bands.
             1e-3 * (p.y - r.center().y).abs() / r.height().max(1.0)
         } else {
             let dx = (r.min.x - p.x).max(p.x - r.max.x).max(0.0);

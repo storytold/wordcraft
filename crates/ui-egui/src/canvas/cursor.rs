@@ -19,7 +19,7 @@ pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
 
 pub fn pos_from_screen(app: &mut WordApp, p: Pos2) -> Option<Pos> {
     let layout = app.session.layout();
-    let (page, x, y) = page_at(&app.canvas.page_rects, &layout, app.canvas.scale, p)?;
+    let (page, x, y) = page_at(&app.canvas.page_rects, &app.canvas.page_bands, &layout, app.canvas.scale, p)?;
     let story = app.session.sel.focus.story;
     app.session.layout().hit(page, x, y, story)
 }

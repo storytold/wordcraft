@@ -83,7 +83,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     let starts = pressed && resp.contains_pointer();
     match mode {
         DrawMode::Pen(tool) => {
-            if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
+            if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, &app.canvas.page_bands, layout, scale, p)) {
                 app.canvas.ink = Some(InkDrag { page, tool, pts: vec![[x, y]] });
             } else if down
                 && let Some(p) = at
@@ -105,7 +105,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             }
             if (starts || down)
                 && let Some(erased) = app.canvas.erasing
-                && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p))
+                && let Some((page, x, y)) = at.and_then(|p| page_at(rects, &app.canvas.page_bands, layout, scale, p))
                 && wordcraft_engine::cmd::draw::ink_at(&mut app.session, page, x, y).is_some()
             {
                 // The first stroke a drag erases starts an undo step; the rest join it.
@@ -127,7 +127,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
 }
 
 fn lasso_pointer(app: &mut WordApp, (starts, down, released, at): (bool, bool, bool, Option<Pos2>), rects: &[Rect], layout: &DocLayout, scale: f32) {
-    if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
+    if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, &app.canvas.page_bands, layout, scale, p)) {
         // A press on the selection drags it; anywhere else starts a new loop.
         let grab = wordcraft_engine::cmd::draw::lasso_bounds(&app.session, layout).is_some_and(|(bp, r)| {
             bp == page && x >= r.x - GRAB_SLOP && x <= r.right() + GRAB_SLOP && y >= r.y - GRAB_SLOP && y <= r.bottom() + GRAB_SLOP

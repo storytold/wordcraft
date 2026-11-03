@@ -48,7 +48,7 @@ fn available(app: &WordApp) -> bool {
 
 /// The spot under screen point `p`: page, page point, resize reach and the spot.
 fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32, f32, Target)> {
-    let (page, x, y) = crate::canvas::page_at(rects, layout, scale, p)?;
+    let (page, x, y) = crate::canvas::page_at(rects, &app.canvas.page_bands, layout, scale, p)?;
     let reach = REACH_PX / page_scale(rects, layout, scale, page)?;
     let t = table_mouse::target_at(layout, &app.session.doc, app.session.sel.focus.story, page, x, y, reach)?;
     Some((page, x, y, reach, t))
@@ -219,7 +219,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
         }
     }
     let Some(p) = hover else { return };
-    let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
+    let Some((page, x, y)) = crate::canvas::page_at(rects, &app.canvas.page_bands, layout, scale, p) else { return };
     let Some(sc) = page_scale(rects, layout, scale, page) else { return };
     let (doc, story, reach) = (&app.session.doc, app.session.sel.focus.story, REACH_PX / sc);
     let s = |x: f32, y: f32| to_screen(rects, layout, scale, page, x, y);
