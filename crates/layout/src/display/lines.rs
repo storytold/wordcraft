@@ -106,25 +106,31 @@ enum BookmarkMark {
 /// The bookmark marks of `para` by byte offset, in text order, from one pass over its text, so a
 /// paragraph of many bookmarks isn't scanned again for each one (#3614). Hidden bookmarks (named
 /// with a leading `_`, as Word's `_Toc…`, `_Ref…` and `_GoBack` are) show nothing, as in Word. A
-/// bookmark whose start and end in this paragraph have no text between them is a [`BookmarkMark::Point`].
+/// bookmark whose start and end in this paragraph have nothing between them (no text, and no
+/// object other than markers: a picture counts) is a [`BookmarkMark::Point`].
 fn bookmark_marks(para: &Paragraph) -> Vec<(usize, BookmarkMark)> {
     let mut marks = Vec::new();
-    // Each bookmark started and not yet ended: its mark, and the text characters before it.
+    // Each bookmark started and not yet ended: its mark, and the content (characters and objects
+    // other than markers) before it.
     let mut open: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
     let mut objects = para.objects.iter();
-    let mut text_chars = 0usize;
+    let mut content = 0usize;
     for (off, c) in para.text.char_indices() {
         if c != wordcraft_doc::para::OBJ {
-            text_chars += 1;
+            content += 1;
             continue;
         }
-        match objects.next() {
+        let o = objects.next();
+        if o.is_some_and(|o| !o.is_marker()) {
+            content += 1;
+        }
+        match o {
             Some(InlineObject::BookmarkStart { name }) if !name.starts_with('_') => {
-                open.insert(name.as_str(), (marks.len(), text_chars));
+                open.insert(name.as_str(), (marks.len(), content));
                 marks.push((off, BookmarkMark::Open));
             }
             Some(InlineObject::BookmarkEnd { name }) if !name.starts_with('_') => match open.remove(name.as_str()) {
-                Some((i, before)) if before == text_chars => marks[i].1 = BookmarkMark::Point,
+                Some((i, before)) if before == content => marks[i].1 = BookmarkMark::Point,
                 _ => marks.push((off, BookmarkMark::Close)),
             },
             _ => {}

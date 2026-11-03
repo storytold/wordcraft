@@ -126,6 +126,17 @@ fn a_bookmark_marking_a_place_is_an_i_beam_and_hidden_ones_show_nothing() {
     let l = lay(&d);
     let b = brackets(&draws(&d, &l, true));
     assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [1, -1]);
+    // So does a picture: a bookmark round an inline picture alone isn't a place.
+    let mut d = Document::from_text("Hello world");
+    let pic = InlineObject::Image { media: "m".into(), w: 30.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    d.insert_object(&Pos::body(0, 5), pic, &CharProps::default()).unwrap();
+    bookmark(&mut d, 0, (5, 8), "Picture");
+    let l = lay(&d);
+    let b = brackets(&draws(&d, &l, true));
+    assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [1, -1], "{b:?}");
+    // Either side of the picture (bytes 8..11 once the start marker is in).
+    at_caret(&l, &b[0], Pos::body(0, 8));
+    at_caret(&l, &b[1], Pos::body(0, 11));
 }
 
 #[test]
