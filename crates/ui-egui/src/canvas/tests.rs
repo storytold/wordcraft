@@ -4839,6 +4839,11 @@ fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0x10, 0x20, 0x40));
     app.run("view.readMode", json!({})).unwrap();
     assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("view.darkMode", json!({"value":true})).unwrap();
+    assert!(page_render_options(&app, false).dark, "Dark page enabled after a tint takes priority in Read Mode");
+    assert_ne!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED), "the tint is no longer the paper");
+    app.run("view.darkMode", json!({"value":false})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
     app.run("view.readPageColor", json!({"value":"sepia"})).unwrap();
     assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), wordcraft_render::SEPIA_PAPER);
     app.run("view.readPageColor", json!({"value":"inverse"})).unwrap();

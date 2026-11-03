@@ -249,6 +249,28 @@ fn command_search_matches_every_word() {
     assert!(!command_matches(table, "   "));
 }
 
+/// #3398: the interactive command-search result opens the paper-colour selector. The engine
+/// command itself remains parameterised for scripts, agents and other programmatic callers.
+#[test]
+fn screen_paper_color_search_result_opens_general_options() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_engine::cmd::view::PaperColor;
+
+    let mut app = app_with("Unchanged document");
+    app.dialog = Some(Dialog::Commands { query: "screen paper color".into(), swallow: false });
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    h.query(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button).label_contains("Screen Paper Color"))
+        .expect("the paper-colour command is a search result")
+        .click();
+    h.run_steps(3);
+
+    assert!(h.state().ui.backstage);
+    assert_eq!(h.state().ui.backstage_page, "options");
+    assert_eq!(h.state().ui.options_pane, "general");
+    assert_eq!(h.state().session.prefs.paper_color, PaperColor::Document, "opening the selector does not choose a preset");
+}
+
 /// Ordinary Turkish queries must find dotted-I labels, while canonical English labels and
 /// ASCII command IDs retain their old case-insensitive search in every interface language.
 #[test]

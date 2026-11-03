@@ -236,14 +236,26 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     if !opts.dark {
         opts.paper = app.session.prefs.paper_color.color();
     }
-    // In Read Mode the Page color sets the paper and the dark page, and Switch Modes is ignored.
+    // In Read Mode explicit Sepia/Inverse colors override the paper; None keeps the selected
+    // screen tint and honours Dark page if the user enabled it afterwards.
     if app.session.view.read_mode {
         use wordcraft_engine::cmd::view::ReadPageColor;
-        let color = app.session.view.read_page_color;
-        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { app.session.prefs.paper_color.color() });
-        opts.dark = color == ReadPageColor::Inverse;
-        if opts.dark {
-            opts.read_paper = Some(wordcraft_doc::props::Rgb::WHITE);
+        match app.session.view.read_page_color {
+            ReadPageColor::None => {
+                opts.read_paper = Some(app.session.prefs.paper_color.color());
+                // Read Mode traditionally ignores a pre-existing Dark page with the document
+                // background. A selected tint turns Dark page off, so a true value alongside a
+                // tint means the user enabled it afterwards and it takes priority.
+                opts.dark &= app.session.prefs.paper_color != wordcraft_engine::cmd::view::PaperColor::Document;
+            }
+            ReadPageColor::Sepia => {
+                opts.read_paper = Some(wordcraft_render::SEPIA_PAPER);
+                opts.dark = false;
+            }
+            ReadPageColor::Inverse => {
+                opts.read_paper = Some(wordcraft_doc::props::Rgb::WHITE);
+                opts.dark = true;
+            }
         }
     }
     opts.display.dim_header = !dim_body;
