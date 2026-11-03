@@ -2646,6 +2646,16 @@ fn only_web_and_email_links_are_followed() {
     }
 }
 
+#[test]
+fn followed_links_reach_the_launcher_without_command_line_syntax() {
+    assert_eq!(for_launcher("https://x.example/a|calc"), "https://x.example/a%7Ccalc");
+    assert_eq!(for_launcher("https://x.example/a^b<c>d(e)f!g\"h i"), "https://x.example/a%5Eb%3Cc%3Ed%28e%29f%21g%22h%20i");
+    // Ordinary links, queries and existing escapes are unchanged.
+    for ok in ["https://example.com/a?b=1&c=2#d", "mailto:someone@example.com", "https://example.com/caf%C3%A9"] {
+        assert_eq!(for_launcher(ok), ok);
+    }
+}
+
 /// Ctrl+click on a link to a bookmark puts the caret at the bookmark's start, as Word does;
 /// only Go To selects the bookmark's text (#1236).
 #[test]

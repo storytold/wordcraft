@@ -335,7 +335,7 @@ fn handle_primary_press(
                 let _ = app.run("select.collapse", json!({}));
             }
         } else if is_followable_link(&link) {
-            app.canvas.open_url = Some(link);
+            app.canvas.open_url = Some(for_launcher(&link));
         } else {
             app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
         }

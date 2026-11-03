@@ -48,3 +48,19 @@ pub(super) fn is_generated_bookmark_link(link: &str) -> bool {
 pub(super) fn is_followable_link(url: &str) -> bool {
     wordcraft_doc::link::is_web_or_mail_link(url)
 }
+
+/// `url` as it is handed to the system to open: the characters a Windows command line acts on
+/// (`|`, `<`, `>`, `(`, `)`, `^`, `!`, `"`, and spaces) percent-encoded, which a browser reads the
+/// same. Under WSL the browser crate starts the link through `cmd.exe /c start`, escaping only
+/// `^` and `&`, so `https://x/a|calc` would run `calc`. `&` is left alone: it separates a query's
+/// fields, and that launcher escapes it.
+pub(super) fn for_launcher(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        match c {
+            '|' | '<' | '>' | '(' | ')' | '^' | '!' | '"' | ' ' => out.push_str(&format!("%{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
