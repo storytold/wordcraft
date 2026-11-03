@@ -558,12 +558,30 @@ fn ordered_list_keeps_start_number() {
     assert_eq!(export(&import("5. a\n6. b")).trim_end(), "5. a\n6. b");
 }
 
+/// A quote of several paragraphs stays one quote: the paragraphs were written with a blank line
+/// between them, which ends a block quote, so it came back as one quote per paragraph.
+#[test]
+fn a_quote_of_several_paragraphs_stays_one_quote() {
+    let src = "> Hi,\n>\n> First paragraph.\n>\n> Second paragraph.\n\nOutside.\n";
+    let md = export(&import(src));
+    assert_eq!(md.trim_end(), "> Hi,\n>\n> First paragraph.\n>\n> Second paragraph.\n\nOutside.");
+    assert_eq!(export(&import(&md)).trim_end(), md.trim_end(), "and stays so when read back");
+    // One quote, not three.
+    let quotes = import(&md).body.iter().filter(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("Quote"))).count();
+    assert_eq!(quotes, 3, "three quoted paragraphs");
+    assert_eq!(md.matches("\n\n").count(), 1, "one blank line only, before the text outside the quote");
+    // A quote followed by a quoted list is one quote too; a list after the quote is not part of it.
+    assert_eq!(export(&import("> a\n>\n> - x\n\n- y\n")).trim_end(), "> a\n>\n> - x\n\n- y");
+    // Two quotes separated by a paragraph stay two.
+    assert_eq!(export(&import("> a\n\nmid\n\n> b\n")).trim_end(), "> a\n\nmid\n\n> b");
+}
+
 /// A list inside a block quote stays in the quote: its items were imported as quoted list
 /// paragraphs but written back without `>`, so the list moved out of the quote.
 #[test]
 fn a_list_inside_a_quote_stays_quoted() {
     let src = "> Intro\n>\n> - one\n> - two\n>   - nested\n> 1. first\n\nAfter.\n";
-    let want = "> Intro\n\n> - one\n> - two\n>     - nested\n> 1. first\n\nAfter.";
+    let want = "> Intro\n>\n> - one\n> - two\n>     - nested\n> 1. first\n\nAfter.";
     let md = export(&import(src));
     assert_eq!(md.trim_end(), want);
     assert_eq!(export(&import(&md)).trim_end(), want, "and stays so when read back");
