@@ -218,6 +218,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_listed = false;
     let mut prev_style: Option<(String, bool)> = None;
     let mut last_top = 0.0f32;
+    let mut mark_top = None;
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
     // runs with the box's text (#2357).
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
@@ -225,6 +226,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_end = 0.0f32;
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
+        mark_top = None;
         let mut path = prefix.to_vec();
         path.push(i as u32);
         match &**b {
@@ -313,6 +315,11 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     edges.up = (y + lead - prev_end).max(0.0);
                 }
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
+                if let (Some(last), Some(first)) = (pl.lines.last(), pl.lines.first())
+                    && mark_alone(&pl, pl.lines.len() - 1)
+                {
+                    mark_top = Some(y + lead + last.top - first.top);
+                }
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
@@ -376,7 +383,15 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), mark_top, table_areas, page_table_wraps }
+}
+
+/// Whether line `k` is the paragraph's last and holds only its mark (and markers such as
+/// bookmarks) after a line break: the empty line of `text<w:br/>¶`.
+pub(crate) fn mark_alone(pl: &ParaLayout, k: usize) -> bool {
+    k + 1 == pl.lines.len()
+        && k.checked_sub(1).and_then(|p| pl.lines.get(p)).is_some_and(|p| p.end == para::LineEnd::LineBreak)
+        && pl.lines.get(k).and_then(|l| pl.clusters.get(l.c0..l.c1)).is_some_and(|cs| cs.iter().all(|c| c.kind == para::ClKind::Marker))
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -436,6 +451,9 @@ pub(crate) struct BoxLayout {
     pub(crate) height: f32,
     pub(crate) floats_bottom: f32,
     pub(crate) last_top: f32,
+    /// Where the last paragraph's last line starts when that line holds only the paragraph mark,
+    /// after a closing line break (`text<w:br/>¶`).
+    pub(crate) mark_top: Option<f32>,
 }
 
 /// Where floating table `tl` goes in a box `width` wide whose next paragraph starts at `y`, and
