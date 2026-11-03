@@ -87,6 +87,24 @@ open instead of relying on any application's default:
 - in-line pictures standing on the baseline;
 - tab stops measured as `settings.xml` says.
 
+## Known differences between WordCraft's and LibreOffice's layout of the same file
+
+Found by saving WordCraft's own documents as ODT and opening them in LibreOffice. These aren't
+choices the file can state, so the presets don't cover them:
+
+- **Footers.** Word, and WordCraft for its own documents, places a footer's text so it ends at the
+  footer's distance from the bottom of the page. ODF places it at the top of the footer area. A
+  one-line footer in a 1 inch bottom margin sits about 20 pt higher in LibreOffice. Matching it
+  would need the footer's text height when writing, and would depend on how a footer's height and
+  spacing combine, which is one of the cases above.
+- **Proportional line spacing.** Both draw the same distance from line to line. Word puts the
+  extra space of a multiple (say 1.15) above the text, LibreOffice below it. Where the font size
+  changes (a heading after body text) the two differ by a few points.
+- **Leader dots** in a table of contents start right after the text in LibreOffice and after a
+  small gap in WordCraft.
+- **Objects that may not overlap text** (`style:wrap="none"` with several on one paragraph):
+  LibreOffice moves them down by its own rules (`draw:wrap-influence-on-position`).
+
 ## Not implemented
 
 LibreOffice refreshes fixed dates and fills in the user's sender fields when it opens a template
@@ -113,6 +131,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Known layout differences listed. |
 | 2026-11-03 | Paragraph spacing (`sumParagraphSpacing`); a file's `AddParaTableSpacing` is followed, and WordCraft writes it. WordCraft's `settings.xml` now declares the `ooo` namespace, without which LibreOffice ignored all of its settings. |
 | 2026-11-03 | Section column balancing (`balanceSectionColumns`); §20.428's contradiction recorded. WordCraft writes `text:dont-balance-text-columns` on every columned section. |
 | 2026-11-02 | Unstated page margins are a setting (`pageMargin`: WordCraft 0, XSL's initial value; LibreOffice 2 cm), not law: the standard refers to XSL's margins without saying whether XSL's default comes too. |
