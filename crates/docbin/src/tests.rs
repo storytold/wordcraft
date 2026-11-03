@@ -2730,6 +2730,6 @@ fn field_results_keep_their_text_and_runs() {
             .iter()
             .any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { instr, result, .. } if instr == "PAGE" && result == "1\u{e9}2")),
         "{:?}",
-        p.objects.len()
+        p.objects
     );
 }
