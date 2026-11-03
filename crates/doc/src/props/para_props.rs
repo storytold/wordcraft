@@ -35,6 +35,7 @@ impl Align {
 pub enum ParagraphTextDirection {
     LrTb,
     LrTbV,
+    Tb,
     TbRl,
     TbRlV,
     TbLr,
@@ -52,6 +53,7 @@ impl ParagraphTextDirection {
         match value {
             "lrTb" => Some(Self::LrTb),
             "lrTbV" => Some(Self::LrTbV),
+            "tb" => Some(Self::Tb),
             "tbRl" => Some(Self::TbRl),
             "tbRlV" => Some(Self::TbRlV),
             "tbLr" => Some(Self::TbLr),
@@ -70,6 +72,7 @@ impl ParagraphTextDirection {
         match self {
             Self::LrTb => "lrTb",
             Self::LrTbV => "lrTbV",
+            Self::Tb => "tb",
             Self::TbRl => "tbRl",
             Self::TbRlV => "tbRlV",
             Self::TbLr => "tbLr",

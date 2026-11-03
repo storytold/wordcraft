@@ -84,7 +84,7 @@ fn paragraph_text_direction_round_trips_through_two_saves_and_json() {
     use wordcraft_doc::props::ParaProps;
     use wordcraft_doc::props::ParagraphTextDirection;
 
-    let values = ["lrTb", "lrTbV", "tbRl", "tbRlV", "tbLr", "tbLrV", "btLr", "tbV", "rl", "rlV", "lr", "lrV"];
+    let values = ["lrTb", "lrTbV", "tb", "tbRl", "tbRlV", "tbLr", "tbLrV", "btLr", "tbV", "rl", "rlV", "lr", "lrV"];
     let mut body: String =
         values.iter().map(|value| format!(r#"<w:p><w:pPr><w:textDirection w:val="{value}"/></w:pPr><w:r><w:t>{value}</w:t></w:r></w:p>"#)).collect();
     body.push_str(r#"<w:p><w:r><w:t>Inherited</w:t></w:r></w:p>"#);
@@ -119,7 +119,9 @@ fn paragraph_style_text_direction_is_preserved_and_direct_value_overrides_it() {
     let body = r#"<w:p><w:pPr><w:pStyle w:val="Vertical"/></w:pPr><w:r><w:t>Style</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Vertical"/><w:textDirection w:val="lrTb"/></w:pPr><w:r><w:t>Override</w:t></w:r></w:p>"#;
     let d = wordcraft_docx::read(&docx_with_styles(body, styles)).unwrap();
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert_eq!(xml.matches(r#"<w:pStyle w:val="Vertical"/>"#).count(), 2, "both paragraphs keep their style: {xml}");
     assert!(xml.contains(r#"<w:pStyle w:val="Vertical"/><w:textDirection w:val="lrTb"/>"#), "direct horizontal is explicit: {xml}");
+    assert_eq!(xml.matches("w:textDirection").count(), 1, "only the direct paragraph writes a direction: {xml}");
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_docx::write(&d).unwrap())).unwrap();
     let mut styles_xml = String::new();
     z.by_name("word/styles.xml").unwrap().read_to_string(&mut styles_xml).unwrap();
