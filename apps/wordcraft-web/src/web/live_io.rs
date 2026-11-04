@@ -64,17 +64,31 @@ impl LiveIo {
         LiveIo { events, socket: None }
     }
 
+    /// The browser still holds bytes it hasn't transmitted (`bufferedAmount`): `send` only
+    /// queues them.
+    pub fn buffered(&self) -> bool {
+        self.socket.as_ref().is_some_and(|s| s.ws.buffered_amount() > 0)
+    }
+
     /// Carries out `actions`, in order.
     pub fn run(&mut self, actions: Vec<Action>, app: &mut WordApp) {
         for a in actions {
             match a {
                 Action::Connect(url) => self.connect(&url),
                 Action::Send(bytes) => {
-                    if let Some(s) = &self.socket
-                        && s.ws.ready_state() == web_sys::WebSocket::OPEN
-                        && let Err(e) = s.ws.send_with_u8_array(&bytes)
-                    {
-                        log::warn!("craft-live: send: {e:?}");
+                    let sent = match &self.socket {
+                        Some(s) if s.ws.ready_state() == web_sys::WebSocket::OPEN => match s.ws.send_with_u8_array(&bytes) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                log::warn!("craft-live: send: {e:?}");
+                                false
+                            }
+                        },
+                        _ => false,
+                    };
+                    if !sent {
+                        // Back to the session: it goes out on the next connection.
+                        self.events.push(Event::Unsent(bytes));
                     }
                 }
                 Action::Disconnect(code, reason) => {
