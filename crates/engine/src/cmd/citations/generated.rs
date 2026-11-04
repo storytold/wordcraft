@@ -198,6 +198,8 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
         // field's own paragraph, as WordCraft inserts one, its old entries rebuilt below.
         // What follows its closing field end, and its first paragraph's properties and section
         // break, are the document's and stay.
+        // (The field it is made: what comes before it in its paragraph may hold other fields.)
+        let mut converted = None;
         if let Some((instr, start, last, end)) = wrapped_list(s, i) {
             // The entries between its first and last paragraphs go.
             for _ in i.saturating_add(1)..last {
@@ -219,6 +221,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
             };
             let p = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
             p.delete(start, first_end)?;
+            converted = Some(instr.trim_start().to_string());
             p.insert_object(
                 start,
                 InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
@@ -232,14 +235,14 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
                 s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(rest))?;
             }
         }
-        let kind = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind);
+        let kind = converted.or_else(|| s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind));
         let Some(kind) = kind else {
             i += 1;
             continue;
         };
         add_entry_style(s);
         if kind.starts_with("INDEX") {
-            crate::cmd::index::rebuild(s, i, None)?;
+            crate::cmd::index::rebuild_from(s, i, None, kind)?;
             i += 1;
             continue;
         }
@@ -518,5 +521,21 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(kinds, ["bookmark", "page", "end", "list"]);
         assert_eq!(texts(&s), ["", "Below"]);
+    }
+
+    /// A list field before a wrapped list's field in its paragraph doesn't take its place: the
+    /// wrapped list is the one rebuilt.
+    #[test]
+    fn a_wrapped_list_is_rebuilt_as_itself_after_another_list_field() {
+        let mut s = wrapped("Old one\nOld two\nBelow", 0, 1, "Old two".len());
+        s.doc.sources.push(wordcraft_doc::Source { tag: "a".into(), kind: "book".into(), title: "Listed Source".into(), ..Default::default() });
+        let index =
+            InlineObject::Field { instr: "INDEX".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.insert_object(0, index, &CharProps::default()).unwrap();
+        }
+        update_generated(&mut s).unwrap();
+        let t = texts(&s);
+        assert!(t.iter().any(|t| t.contains("Listed Source")), "the bibliography was rebuilt: {t:?}");
     }
 }
