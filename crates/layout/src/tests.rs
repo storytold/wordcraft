@@ -12705,7 +12705,7 @@ fn a_list_item_that_shows_nothing_reports_no_missing_font() {
     // Its number is shaped in its mark's font before the paragraph turns out to show nothing
     // (#3982): that font isn't shown in another, so it isn't missing from what's drawn.
     let mut d = Document::from_text("Alpha\n\nBeta");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 4), &|p| {
         p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
     })
