@@ -335,7 +335,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
-    for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
+    let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
+    // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
+    // REF before the SET shows the last value set, as Word's bookmark does after an update.
+    let last_set = set_values(s, &paths);
+    let mut set: std::collections::HashMap<String, String> = Default::default();
+    for (story, path) in paths {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
             continue;
@@ -367,7 +372,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let f = FieldCode::parse(instr);
                     let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
                     let r = if name == "REF" {
-                        if !has_switch(instr, 'p') { bookmark_text(&s.doc, target) } else { None }
+                        if has_switch(instr, 'p') {
+                            None
+                        } else {
+                            bookmark_text(&s.doc, target).or_else(|| {
+                                let key = target.to_lowercase();
+                                set.get(&key).or_else(|| last_set.get(&key)).cloned()
+                            })
+                        }
                     } else if !has_switch(instr, 'p') {
                         pages.get(target).map(|(num, page_fmt)| {
                             let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
@@ -380,6 +392,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         updates.push((k, if name == "REF" { text_result(instr, r) } else { r }));
                     }
                 }
+                // A value given a name (the layout draws nothing for it; its result stays).
+                "SET" => {
+                    if let Some((n, v)) = set_args(instr)
+                        && set.len() < MAX_SET
+                    {
+                        set.insert(n, v);
+                    }
+                }
                 // The summary properties; a quoted text after the name replaces the property.
                 "TITLE" | "SUBJECT" | "AUTHOR" | "KEYWORDS" | "COMMENTS" => {
                     if let Some(v) = new_property_value(instr) {
@@ -388,6 +408,16 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
+                // The user's name and initials (File › Options › General); a quoted text after
+                // the name is shown instead.
+                "USERNAME" | "USERINITIALS" => {
+                    let v = match new_property_value(instr) {
+                        Some(v) => v.to_string(),
+                        None if name == "USERNAME" => s.author.clone(),
+                        None => s.user_initials(),
+                    };
+                    updates.push((k, text_result(instr, v)));
+                }
                 "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
                 "NUMCHARS" => {
                     let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();
@@ -469,4 +499,33 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             para.touch();
         }
     }
+}
+
+/// Most names SET fields give values.
+const MAX_SET: usize = 10_000;
+
+/// A SET field's name (lower case: names are a bookmark's, which ignore case) and value.
+fn set_args(instr: &str) -> Option<(String, String)> {
+    let f = FieldCode::parse(instr);
+    let name = f.args.first().map(|n| n.trim()).filter(|n| !n.is_empty() && n.chars().count() <= 40)?;
+    let value: String = f.args.get(1..).map(|v| v.join(" ")).unwrap_or_default().chars().take(MAX_SET).collect();
+    Some((name.to_lowercase(), value))
+}
+
+/// The value each name has after the last SET giving it one, in the stories at `paths`.
+fn set_values(s: &Session, paths: &[(StoryRef, Path)]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for (story, path) in paths {
+        let Some(p) = s.doc.para(*story, path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::Field { instr, .. } = o
+                && wordcraft_layout::fields::field_name(instr) == "SET"
+                && let Some((n, v)) = set_args(instr)
+                && out.len() < MAX_SET
+            {
+                out.insert(n, v);
+            }
+        }
+    }
+    out
 }
