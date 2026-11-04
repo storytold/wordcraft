@@ -44,14 +44,25 @@ pub struct A11yCache {
 struct Key {
     layout: Arc<DocLayout>,
     doc: Id,
+    /// Whether the page shows Insert › Table's preview copy rather than the document: the two
+    /// can otherwise share a layout identity only across the preview's start and end, which must
+    /// rebuild the tree even when the page's rectangles and caret are unchanged.
+    previewing: bool,
     pages: (usize, usize),
     rects: Vec<Rect>,
     sel: (Pos, Pos),
 }
 
 impl Key {
+    /// Compares two AccessKit cache keys: layout identity, document id, table-preview flag, page range,
+    /// page rectangles and selection.
     fn same(&self, o: &Key) -> bool {
-        Arc::ptr_eq(&self.layout, &o.layout) && self.doc == o.doc && self.pages == o.pages && self.rects == o.rects && self.sel == o.sel
+        Arc::ptr_eq(&self.layout, &o.layout)
+            && self.doc == o.doc
+            && self.previewing == o.previewing
+            && self.pages == o.pages
+            && self.rects == o.rects
+            && self.sel == o.sel
     }
 }
 
@@ -80,10 +91,24 @@ pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout:
         return;
     }
     let pages = page_window(rects, view).unwrap_or((0, 0));
-    let sel = (app.session.sel.anchor.clone(), app.session.sel.focus.clone());
-    let key = Key { layout: layout.clone(), doc: doc_id, pages, rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(), sel };
+    // The page may show Insert › Table's preview copy while the grid is hovered (#3931): describe
+    // the same document and selection the pages and caret are drawn from, not the real document
+    // that the preview's layout does not belong to.
+    let preview = crate::canvas::preview_sel(app);
+    let sel = preview.map_or_else(|| (app.session.sel.anchor.clone(), app.session.sel.focus.clone()), |sel| (sel.anchor.clone(), sel.focus.clone()));
+    let key = Key {
+        layout: layout.clone(),
+        doc: doc_id,
+        previewing: preview.is_some(),
+        pages,
+        rects: rects.get(pages.0..pages.1).unwrap_or_default().to_vec(),
+        sel,
+    };
     if !app.canvas.a11y.key.as_ref().is_some_and(|k| k.same(&key)) {
-        app.canvas.a11y.tree = build(&app.session.doc, layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
+        // Build before writing the cache: the preview document borrows `app`, and the tree is
+        // owned, so the borrow ends with this statement.
+        let tree = build(crate::canvas::page_doc(app), layout, doc_id, rects, pages, (&key.sel.0, &key.sel.1));
+        app.canvas.a11y.tree = tree;
         app.canvas.a11y.key = Some(key);
     }
     let title = app.title_stem();
@@ -435,6 +460,7 @@ impl Builder<'_> {
             Some(url) => {
                 let lid = lb.pid.with(("link", lb.li, lb.seg));
                 let mut l = Node::new(Role::Link);
+                l.set_label(n.value().filter(|text| !text.is_empty()).unwrap_or(url).to_owned());
                 l.set_url(url.clone());
                 l.set_bounds(bounds(r));
                 self.add(lid, Some(lb.pid), l);
@@ -544,6 +570,68 @@ mod tests {
             update = out.platform_output.accesskit_update.take();
         }
         update.expect("AccessKit output")
+    }
+
+    /// What AccessKit is told after a few frames in which Insert › Table's grid hovers `rows` ×
+    /// `cols`: the picker sets the request from the popup after the ribbon draws, and the canvas
+    /// lays out and describes the page from that preview.
+    fn described_with_table_preview(app: &mut crate::WordApp, ctx: &egui::Context, rows: usize, cols: usize) -> accesskit::TreeUpdate {
+        ctx.enable_accesskit();
+        let mut update = None;
+        for _ in 0..4 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                // Set it in every pass, as the grid does while its square is hovered.
+                app.canvas.table_preview = Some((rows, cols));
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            out.textures_delta.clear();
+            update = out.platform_output.accesskit_update.take();
+        }
+        update.expect("AccessKit output")
+    }
+
+    /// #3931 review: the page shows a previewed table while Insert › Table's grid is hovered, so
+    /// the AccessKit tree must describe that page's table, not the real document's block at the
+    /// preview's path. In the preview copy path `[0]` is a 2 × 2 table; in the real document it is
+    /// the paragraph "Lanterns". Describing the real document with the preview layout made the
+    /// table node lose its dimensions (and its cells their text) whenever a screen reader was on.
+    #[test]
+    fn the_preview_table_is_described_from_the_previewed_page() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites")), Default::default());
+        let update = described_with_table_preview(&mut app, &egui::Context::default(), 2, 2);
+        let nodes: HashMap<NodeId, &Node> = update.nodes.iter().map(|(id, n)| (*id, n)).collect();
+        let tables: Vec<_> = nodes.iter().filter(|(_, n)| n.role() == Role::Table).map(|(id, _)| *id).collect();
+        assert_eq!(tables.len(), 1, "the previewed page has one table");
+        let table = nodes[&tables[0]];
+        assert_eq!(table.row_count(), Some(2), "the 2 × 2 preview's rows, not the real paragraph at its path");
+        assert_eq!(table.column_count(), Some(2), "the 2 × 2 preview's columns");
+
+        // The preview's caret is in the table; the document's own caret names a paragraph that
+        // the preview layout no longer has at that path, so it must not reach the tree instead.
+        let (_, doc) = nodes.iter().find(|(_, n)| n.role() == Role::Document).expect("a document node");
+        let selection = doc.text_selection().expect("the preview's caret is described");
+        let mut parent = HashMap::new();
+        for (id, n) in &nodes {
+            for c in n.children() {
+                parent.insert(*c, *id);
+            }
+        }
+        let mut at = Some(selection.focus.node);
+        let mut in_table = false;
+        while let Some(id) = at {
+            if id == tables[0] {
+                in_table = true;
+                break;
+            }
+            at = parent.get(&id).copied();
+        }
+        assert!(in_table, "the described caret is the preview's, inside the preview table");
     }
 
     /// #488: with AccessKit on, the canvas describes the document: a heading with its level, a
@@ -702,7 +790,7 @@ mod tests {
         let n = layout.pages.len();
         let rects = vec![Rect::from_min_size(egui::pos2(f32::NAN, 0.0), egui::vec2(f32::INFINITY, 1.0)); n];
         let p = Pos::body(0, 1_000_000);
-        let t = build(&doc, &layout, Id::new("doc"), &rects, (0, n + 5), (&p, &p));
+        let t = build(&doc, &layout, Id::unique("doc"), &rects, (0, n + 5), (&p, &p));
         assert!(!t.nodes.is_empty() && t.nodes.len() <= MAX_NODES);
         assert!(t.selection.is_some(), "an offset past the end lands at the end");
         assert!(page_window(&rects, Rect::NOTHING).is_none());

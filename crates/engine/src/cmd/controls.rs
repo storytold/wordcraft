@@ -112,9 +112,11 @@ fn symbol_param(v: &Value, k: &str) -> Option<char> {
 /// A date `YYYY-MM-DD` (a full ISO date-time is fine too): (year, month, day), checked.
 pub fn parse_date(t: &str) -> Option<(i64, u32, u32)> {
     let t = t.trim();
-    let y: i64 = t.get(0..4)?.parse().ok()?;
-    let m: u32 = t.get(5..7)?.parse().ok()?;
-    let d: u32 = t.get(8..10)?.parse().ok()?;
+    // Digits only: `str::parse` would also accept a leading '+'.
+    let field = |r: std::ops::Range<usize>| t.get(r).filter(|s| s.bytes().all(|b| b.is_ascii_digit()));
+    let y: i64 = field(0..4)?.parse().ok()?;
+    let m: u32 = field(5..7)?.parse().ok()?;
+    let d: u32 = field(8..10)?.parse().ok()?;
     if t.get(4..5) != Some("-") || t.get(7..8) != Some("-") || !(1..=9999).contains(&y) || !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m)
     {
         return None;
@@ -123,31 +125,56 @@ pub fn parse_date(t: &str) -> Option<(i64, u32, u32)> {
 }
 
 pub fn days_in_month(y: i64, m: u32) -> u32 {
-    match m {
-        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
+    // The length of a month is the day before the first of the next month. Month lengths repeat
+    // every 400 years, so the year within its Gregorian cycle (`rem_euclid(400)`) is enough and
+    // always fits chrono, for any `y`. An invalid month keeps the old 31-day default.
+    let y = y.rem_euclid(400);
+    let first = |y: i64, m: u32| i32::try_from(y).ok().and_then(|y| chrono::NaiveDate::from_ymd_opt(y, m, 1));
+    match (first(y, m), if m == 12 { first(y + 1, 1) } else { first(y, m + 1) }) {
+        (Some(a), Some(b)) => u32::try_from((b - a).num_days()).unwrap_or(31),
         _ => 31,
     }
 }
 
-/// Days since 1970-01-01 for a date (inverse of [`super::civil_from_days`]).
+/// Days since 1970-01-01 for a date (inverse of [`super::civil_from_days`]), exact for any year.
+///
+/// The Gregorian calendar repeats every 400 years (146_097 days): chrono converts the year
+/// within its cycle and whole cycles are added back as days (an i128 so the extremes can't
+/// overflow). 1970-01-01 is `num_days_from_ce` 719_163; the result matches the proleptic
+/// Gregorian count the old hand-rolled code gave.
 pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = i64::from((m + 9) % 12);
-    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    let (cycles, year) = (i128::from(y.div_euclid(400)), y.rem_euclid(400));
+    i32::try_from(year)
+        .ok()
+        .and_then(|year| chrono::NaiveDate::from_ymd_opt(year, m, d))
+        .and_then(|date| {
+            let days = i128::from(chrono::Datelike::num_days_from_ce(&date)) - 719_163 + cycles * 146_097;
+            i64::try_from(days).ok()
+        })
+        .unwrap_or(0)
+}
+
+/// The built-in name of the placeholder style. Its id is localized: German Word writes
+/// `Platzhaltertext`, English `PlaceholderText`.
+const PLACEHOLDER_STYLE_NAME: &str = "Placeholder Text";
+
+/// The id of the document's placeholder style: the one named "Placeholder Text", else the
+/// English id.
+fn placeholder_style_id(doc: &wordcraft_doc::Document) -> String {
+    doc.styles
+        .styles
+        .iter()
+        .find(|st| st.kind == StyleKind::Character && st.name.eq_ignore_ascii_case(PLACEHOLDER_STYLE_NAME))
+        .map(|st| st.id.clone())
+        .unwrap_or_else(|| PLACEHOLDER_STYLE.into())
 }
 
 /// The placeholder style, added to the document when it hasn't one.
 fn ensure_placeholder_style(s: &mut Session) {
-    if s.doc.styles.get(PLACEHOLDER_STYLE).is_none() {
+    if s.doc.styles.get(&placeholder_style_id(&s.doc)).is_none() {
         s.doc.styles.styles.push(Style {
             id: PLACEHOLDER_STYLE.into(),
-            name: "Placeholder Text".into(),
+            name: PLACEHOLDER_STYLE_NAME.into(),
             kind: StyleKind::Character,
             based_on: Some("DefaultParagraphFont".into()),
             chr: CharProps { color: Some(TextColor::Rgb(Rgb(0x66, 0x66, 0x66))), ..Default::default() },
@@ -161,13 +188,13 @@ fn ensure_placeholder_style(s: &mut Session) {
 /// Formatting for placeholder text based on `base`.
 fn placeholder_props(s: &mut Session, base: &CharProps) -> CharProps {
     ensure_placeholder_style(s);
-    CharProps { style: Some(PLACEHOLDER_STYLE.into()), link: None, ..base.clone() }
+    CharProps { style: Some(placeholder_style_id(&s.doc)), link: None, ..base.clone() }
 }
 
-/// `base` without the placeholder style (for real content).
-fn content_props(base: &CharProps) -> CharProps {
+/// `base` without the placeholder style (for real content), whatever its localized id.
+fn content_props(doc: &wordcraft_doc::Document, base: &CharProps) -> CharProps {
     let mut p = base.clone();
-    if p.style.as_deref() == Some(PLACEHOLDER_STYLE) {
+    if p.style.as_deref().is_some_and(|id| id == PLACEHOLDER_STYLE || id == placeholder_style_id(doc)) {
         p.style = None;
     }
     p
@@ -248,7 +275,7 @@ fn content_base(s: &Session, r: &ControlRange) -> CharProps {
         .para_at(&a)
         .map(|p| if r.is_empty() { p.props_of_char(r.start.off).clone() } else { p.props_of_char(a.off).clone() })
         .unwrap_or_default();
-    content_props(&props)
+    content_props(&s.doc, &props)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -259,7 +286,7 @@ fn content_base(s: &Session, r: &ControlRange) -> CharProps {
 /// and stops showing it. Returns the formatting the text should get, when it changes.
 pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     if s.sel.is_collapsed() {
-        let at = s.doc.typing_pos(&s.sel.focus);
+        let at = super::protect::typing_pos(s, &s.doc.typing_pos(&s.sel.focus));
         if at != s.sel.focus {
             s.sel = Selection::caret(at);
         }
@@ -299,7 +326,14 @@ pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     if !r.control.showing_placeholder || !r.contains(&b) {
         return Ok(None);
     }
-    let props = content_base(s, &r);
+    // Text typed in place of the placeholder takes the control's own run properties (Word, and
+    // ECMA-376 §17.5.2.27), else the content's formatting without the placeholder style. The
+    // showing placeholder's own character style is that style, whatever a producer called it
+    // (Word localizes only the id; another program may localize the name too).
+    let props = match &r.control.run_props {
+        Some(rp) => content_props(&s.doc, rp),
+        None => CharProps { style: None, ..content_base(s, &r) },
+    };
     s.sel = Selection { anchor: r.content_start(), focus: r.end.clone() };
     if let Some(c) = s.doc.control_mut(&r.start) {
         c.showing_placeholder = false;
@@ -423,7 +457,7 @@ fn insert(s: &mut Session, v: &Value, kind: ControlKind) -> CmdResult {
     // An inline control: around the selection (text and pictures), else at the caret with its
     // placeholder or value.
     let wraps = a != b && a.path == b.path && matches!(ctl.kind, ControlKind::RichText | ControlKind::Text { .. } | ControlKind::Picture);
-    let base = s.doc.para_at(&a).map(|p| content_props(&p.props_of_char(a.off).clone())).unwrap_or_default();
+    let base = s.doc.para_at(&a).map(|p| content_props(&s.doc, &p.props_of_char(a.off).clone())).unwrap_or_default();
     if wraps {
         s.doc.insert_object(&b, InlineObject::ControlEnd, &base)?;
         let start = a.clone();
@@ -464,7 +498,7 @@ fn insert_block(s: &mut Session, mut ctl: ContentControl, a: &Pos, b: &Pos) -> C
     let last = if b.path.parent() == a.path.parent() { b.path.clone() } else { a.path.clone() };
     ctl.block = true;
     let empty = a.path == last && s.doc.para(story, &a.path).is_some_and(|p| p.is_empty());
-    let base = s.doc.para(story, &a.path).map(|p| content_props(&p.props_of_char(0).clone())).unwrap_or_default();
+    let base = s.doc.para(story, &a.path).map(|p| content_props(&s.doc, &p.props_of_char(0).clone())).unwrap_or_default();
     let item = matches!(ctl.kind, ControlKind::RepeatingSection { .. }).then(|| {
         let mut i = ContentControl::new(ControlKind::RepeatingSectionItem);
         i.block = true;
@@ -545,27 +579,8 @@ fn info(s: &mut Session, v: &Value) -> CmdResult {
     Ok(describe(s, &r))
 }
 
-fn properties(s: &mut Session, v: &Value) -> CmdResult {
-    let r = target(s, v)?;
-    let mut c = r.control.clone();
-    let mut content: Option<String> = None;
-    if let Some(t) = short(v, "title") {
-        c.title = t;
-    }
-    if let Some(t) = short(v, "tag") {
-        c.tag = t;
-    }
-    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
-    c.lock = ControlLock::from_flags(no_delete, no_edit);
-    if let Some(t) = p::bool(v, "temporary") {
-        c.temporary = t;
-    }
-    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
-        if c.showing_placeholder && t != c.placeholder_shown() {
-            content = Some(t.clone());
-        }
-        c.placeholder_text = t;
-    }
+fn apply_kind_properties(c: &mut ContentControl, v: &Value) -> Option<String> {
+    let mut content = None;
     match &mut c.kind {
         ControlKind::Text { multi_line } => {
             if let Some(m) = p::bool(v, "multiLine") {
@@ -598,6 +613,33 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             content = Some((if *checked { *checked_char } else { *unchecked_char }).to_string());
         }
         _ => {}
+    }
+    content
+}
+
+fn properties(s: &mut Session, v: &Value) -> CmdResult {
+    let r = target(s, v)?;
+    let mut c = r.control.clone();
+    let mut content: Option<String> = None;
+    if let Some(t) = short(v, "title") {
+        c.title = t;
+    }
+    if let Some(t) = short(v, "tag") {
+        c.tag = t;
+    }
+    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
+    c.lock = ControlLock::from_flags(no_delete, no_edit);
+    if let Some(t) = p::bool(v, "temporary") {
+        c.temporary = t;
+    }
+    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
+        if c.showing_placeholder && t != c.placeholder_shown() {
+            content = Some(t.clone());
+        }
+        c.placeholder_text = t;
+    }
+    if let Some(kc) = apply_kind_properties(&mut c, v) {
+        content = Some(kc);
     }
     if let Some(text) = content {
         let base = content_base(s, &r);
@@ -728,6 +770,31 @@ mod tests {
         assert_eq!(days_from_civil(1970, 1, 1), 0);
         assert_eq!(super::super::civil_from_days(days_from_civil(2000, 3, 1)), (2000, 3, 1));
     }
+
+    #[test]
+    fn parse_date_rejects_signs_and_non_digits() {
+        for bad in ["2024-+1-+5", "+123-01-01", "2024-01-+5", "2024-+1-05", "-024-01-01"] {
+            assert_eq!(parse_date(bad), None, "{bad}");
+        }
+        assert_eq!(parse_date("2024-01-05"), Some((2024, 1, 5)));
+        assert_eq!(parse_date("2024-01-05T10:00:00"), Some((2024, 1, 5)));
+    }
+
+    #[test]
+    fn days_from_civil_and_days_in_month_exact_beyond_chronos_range() {
+        // Past `NaiveDate`'s ±262143 the 400-year cycles carry the result; values from the
+        // pre-chrono formula, both directions, both sides of the epoch.
+        for (y, m, d, days) in
+            [(262_144i64, 1u32, 1u32, 95_026_602i64), (273_022, 10, 18, 99_000_000), (-262_145, 3, 1, -96_465_964), (-271_821, 4, 21, -99_999_999)]
+        {
+            assert_eq!(days_from_civil(y, m, d), days, "{y}-{m}-{d}");
+            assert_eq!(super::super::civil_from_days(days), (y, m, d), "{days}");
+        }
+        assert_eq!(days_in_month(272_952, 2), 29, "272952 is a leap year");
+        assert_eq!(days_in_month(-269_153, 2), 28);
+        // The extremes must not overflow or panic (i128 intermediates / `rem_euclid`).
+        let _ = (days_from_civil(i64::MAX, 12, 31), days_from_civil(i64::MIN, 1, 1), days_in_month(i64::MAX, 2), days_in_month(i64::MIN, 2));
+    }
 }
 
 #[cfg(test)]
@@ -746,6 +813,74 @@ mod editing_tests {
     }
     fn info(s: &mut Session) -> serde_json::Value {
         run(s, "developer.control", json!({}))
+    }
+
+    /// A form from German Word names its placeholder style `Platzhaltertext` ("Placeholder Text"),
+    /// and each control's `w:rPr` gives the style entered text takes (`Eingabe`, bold black).
+    /// Text typed over the placeholder takes the control's run properties, as in Word (17 of 17
+    /// values filled in Word did); without them it drops the placeholder style whatever its id.
+    /// WordCraft kept the German placeholder style, so entries stayed grey.
+    #[test]
+    fn typing_over_a_localized_placeholder_takes_the_controls_formatting() {
+        use wordcraft_doc::props::{CharProps, Rgb, TextColor};
+        use wordcraft_doc::styles::{Style, StyleKind};
+        let style =
+            |id: &str, name: &str, chr: CharProps| Style { id: id.into(), name: name.into(), kind: StyleKind::Character, chr, ..Default::default() };
+        let typed_style = |run_props: Option<CharProps>| {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            let grey = CharProps { color: Some(TextColor::Rgb(Rgb(0x80, 0x80, 0x80))), ..Default::default() };
+            s.doc.styles.styles.push(style("Platzhaltertext", "Placeholder Text", grey));
+            s.doc.styles.styles.push(style("Eingabe", "Eingabe", CharProps { bold: Some(true), ..Default::default() }));
+            run(&mut s, "text.insert", json!({"text": "Name: "}));
+            run(&mut s, "developer.plainText", json!({"tag": "name"}));
+            let start = s.doc.control_at(&s.sel.focus).unwrap().start;
+            s.doc.control_mut(&start).unwrap().run_props = run_props;
+            // The placeholder uses the document's own placeholder style; none is added.
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            let shown = s.doc.para_at(&r.content_start()).unwrap().props_of_char(r.content_start().off).style.clone();
+            assert_eq!(shown.as_deref(), Some("Platzhaltertext"));
+            assert_eq!(s.doc.styles.styles.iter().filter(|st| st.name == "Placeholder Text").count(), 1);
+            run(&mut s, "caret.right", json!({}));
+            run(&mut s, "text.insert", json!({"text": "Ada"}));
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            s.doc.para_at(&r.content_start()).unwrap().props_of_char(r.content_start().off).style.clone()
+        };
+        let eingabe = CharProps { style: Some("Eingabe".into()), ..Default::default() };
+        assert_eq!(typed_style(Some(eingabe)).as_deref(), Some("Eingabe"), "the control's run properties");
+        assert_eq!(typed_style(None), None, "no placeholder style left");
+        // A producer that localizes the style's name as well: the showing placeholder's own
+        // style goes all the same.
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let grey = CharProps { color: Some(TextColor::Rgb(Rgb(0x80, 0x80, 0x80))), ..Default::default() };
+        s.doc.styles.styles.push(style("TexteEspaceReserve", "Texte de l'espace réservé", grey));
+        run(&mut s, "text.insert", json!({"text": "Nom : "}));
+        run(&mut s, "developer.plainText", json!({"tag": "nom"}));
+        let r = s.doc.control_at(&s.sel.focus).unwrap();
+        s.doc.format_range(&r.content_start(), &r.end, &|c| c.style = Some("TexteEspaceReserve".into())).unwrap();
+        run(&mut s, "caret.right", json!({}));
+        run(&mut s, "text.insert", json!({"text": "Ada"}));
+        let r = s.doc.control_at(&s.sel.focus).unwrap();
+        let typed = s.doc.para_at(&r.content_start()).unwrap().props_of_char(r.content_start().off).style.clone();
+        assert_eq!(typed, None, "a placeholder style localized in id and name");
+    }
+
+    /// Typed text with line breaks in it (`type_text` with paragraphs, a typed paste) is the
+    /// Enter key pressed between the lines, so a one-line control, where Enter does nothing, stays
+    /// one paragraph, and a multi-line one splits (#3973: the line breaks went in as one command
+    /// and split a one-line control).
+    #[test]
+    fn typed_line_breaks_do_not_split_a_one_line_control() {
+        for (multi_line, paragraphs) in [(false, 1), (true, 2)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            run(&mut s, "text.insert", json!({"text": "Name: "}));
+            run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+            run(&mut s, "developer.properties", json!({"control": "name", "multiLine": multi_line}));
+            run(&mut s, "caret.right", json!({}));
+            run(&mut s, "text.insert", json!({"text": "Ada\rLovelace", "raw": true}));
+            assert_eq!(s.doc.body.len(), paragraphs, "multi-line control: {multi_line}");
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            assert_eq!(r.control.tag, "name", "still inside the control");
+        }
     }
 
     #[test]
