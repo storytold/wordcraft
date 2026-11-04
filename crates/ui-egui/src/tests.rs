@@ -7219,7 +7219,6 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
 }
 
 #[test]
-#[test]
 fn the_status_message_is_shown_and_spoken_in_focus_and_full_screen() {
     use egui_kittest::kittest::Queryable;
     // The two screens that replace the status bar with the slim screen bar: a refusal
