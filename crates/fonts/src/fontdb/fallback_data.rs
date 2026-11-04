@@ -1,5 +1,7 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
-use super::*;
+use super::{Arc, HashMap};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{FileRef, MetadataProvider};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
@@ -205,6 +207,9 @@ pub(super) struct FallbackCache {
     pub(super) map: HashMap<(char, u32), Option<Arc<FontFace>>>,
 }
 
+/// What a run-level fallback lookup is keyed by: sorted, deduplicated chars, excluded face, bold, italic.
+pub(super) type RunFallbackKey = (Vec<char>, u32, bool, bool);
+
 /// [`FontDb::fallback_for_run`] results: (sorted, deduplicated chars, excluded face, bold,
 /// italic) → face, valid while the loaded face count is `faces`.
 #[derive(Default)]
@@ -212,8 +217,7 @@ pub(super) struct RunFallbackCache {
     pub(super) faces: usize,
     /// Chars held in the keys (bounds memory: hostile runs can be long).
     pub(super) chars: usize,
-    #[allow(clippy::type_complexity)]
-    pub(super) map: HashMap<(Vec<char>, u32, bool, bool), Option<Arc<FontFace>>>,
+    pub(super) map: HashMap<RunFallbackKey, Option<Arc<FontFace>>>,
 }
 
 /// Most cached run-level fallbacks, and most chars in their keys, before the cache is reset.

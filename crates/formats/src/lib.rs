@@ -1,6 +1,7 @@
 //! WordCraft import/export for the "other" text formats: plain text, Markdown (CommonMark subset
-//! plus GFM tables and strikethrough), HTML, RTF, OpenDocument Text and LaTeX — and, read-only,
-//! spreadsheet cells for mail-merge recipient lists ([`sheet`]: .xlsx/.xlsm/.xls/.ods).
+//! plus GFM tables and strikethrough), HTML (and MHT web archives, read-only), RTF, OpenDocument
+//! Text and LaTeX — and, read-only, spreadsheet cells for mail-merge recipient lists ([`sheet`]:
+//! .xlsx/.xlsm/.xls/.ods).
 //!
 //! Every format maps to a small flow model ([`model::Flow`]: paragraphs with a kind, list
 //! membership, alignment and formatted spans; tables of cells), which [`model::to_doc`] and
@@ -14,6 +15,7 @@ pub mod html;
 pub mod latex;
 pub mod markdown;
 pub mod mathml;
+pub mod mht;
 pub mod model;
 pub mod odt;
 pub mod rtf;
@@ -22,8 +24,13 @@ pub mod txt;
 
 use wordcraft_doc::Document;
 
+/// Most entries an ODT or spreadsheet package may declare, as many as a Word package
+/// (`wordcraft_docx::package::MAX_ENTRIES`); checked before `zip` parses them (#3660).
+pub const MAX_ZIP_ENTRIES: u64 = 20_000;
+
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx"];
+pub const EXTENSIONS: &[&str] =
+    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "ott", "fodt", "tex", "latex", "ltx"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -31,9 +38,11 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
     let r = match ext.as_str() {
         "txt" | "text" => Ok(txt::import(bytes)),
         "md" | "markdown" => Ok(markdown::import(&txt::decode(bytes))),
-        "html" | "htm" | "xhtml" => Ok(html::import(&html::decode(bytes))),
+        "html" | "htm" | "xhtml" => Ok(html::import_page(&html::decode(bytes), &|_| None)),
+        "mht" | "mhtml" => Ok(mht::import(bytes)),
         "rtf" => rtf::import(bytes),
-        "odt" => odt::import(bytes),
+        "odt" | "ott" => odt::import(bytes),
+        "fodt" => odt::import_flat(bytes),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
         _ => return None,
     };
@@ -44,14 +53,28 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
 }
 
 /// [`import`] onto `page` (its size and margins) for the formats whose files give no page size:
-/// plain text, Markdown and HTML start on it, and their tables size to it (#1381). The other
+/// plain text, Markdown, HTML and MHT start on it, and their tables size to it (#1381). The other
 /// formats keep the page their file gives.
 pub fn import_on(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Option<Result<Document, String>> {
+    import_with(ext, bytes, page, &wordcraft_doc::odf_profile::OdfProfile::default())
+}
+
+/// [`import_on`], OpenDocument files filling in what their standard leaves open as `odf` says
+/// (see [`wordcraft_doc::odf_profile`]).
+pub fn import_with(
+    ext: &str,
+    bytes: &[u8],
+    page: &wordcraft_doc::SectionProps,
+    odf: &wordcraft_doc::odf_profile::OdfProfile,
+) -> Option<Result<Document, String>> {
     let ext = ext.trim_start_matches('.').to_ascii_lowercase();
     let mut doc = match ext.as_str() {
+        "odt" | "ott" => return Some(odt::import_with(bytes, page, odf)),
+        "fodt" => return Some(odt::import_flat_with(bytes, page, odf)),
         "txt" | "text" => txt::import_on(bytes, page),
         "md" | "markdown" => markdown::import_on(&txt::decode(bytes), page),
         "html" | "htm" | "xhtml" => html::import_on(&html::decode(bytes), &|_| None, page),
+        "mht" | "mhtml" => mht::import_on(bytes, page),
         _ => return import(&ext, bytes),
     };
     doc.ensure_nonempty();
@@ -67,6 +90,8 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
+        "ott" => odt::export_template(doc),
+        "fodt" => odt::export_flat(doc),
         "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
         _ => return None,
     })

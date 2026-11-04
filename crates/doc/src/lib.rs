@@ -2,9 +2,9 @@
 //!
 //! A [`Document`] holds the main story (`body`) and secondary stories (`parts`: headers,
 //! footers, notes, comments, text boxes). A story is a list of [`Block`]s: paragraphs and tables;
-//! table cells hold block lists of their own. Blocks are `Arc`-shared, so cloning a document is
-//! cheap (undo snapshots, handing a frozen copy to the renderer) and edits copy only what they
-//! touch (`Arc::make_mut`).
+//! table cells hold block lists of their own. Blocks, the style sheet and the list definitions
+//! are `Arc`-shared, so cloning a document is cheap (undo snapshots, handing a frozen copy to the
+//! renderer) and edits copy only what they touch (`Arc::make_mut`).
 //!
 //! Positions ([`Pos`]) name a story, a [`Path`] to a paragraph and a byte offset in it. Paths
 //! compare in document order.
@@ -28,6 +28,7 @@ pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod ime_text;
+pub mod kept;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -38,6 +39,7 @@ pub mod math_latex;
 pub mod math_linear;
 pub mod math_symbols;
 pub mod numbering;
+pub mod odf_profile;
 pub mod para;
 pub mod props;
 pub mod resolve;
@@ -48,6 +50,7 @@ pub mod symbol_fonts;
 pub mod table;
 pub mod wordart;
 pub mod wrap;
+pub mod zip_guard;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -97,8 +100,12 @@ pub struct Document {
     /// Properties of the last section (OOXML's body-level `w:sectPr`).
     pub last_section: SectionProps,
     pub parts: BTreeMap<u32, Part>,
-    pub styles: StyleSheet,
-    pub numbering: Numbering,
+    /// Shared, like the blocks: an undo step copies it only when a command changes it (a full
+    /// copy is kilobytes a style, so typing into a document with hundreds of styles cost megabytes
+    /// a step).
+    pub styles: Arc<StyleSheet>,
+    /// Shared like [`Document::styles`].
+    pub numbering: Arc<Numbering>,
     pub comments: BTreeMap<u32, Comment>,
     pub revisions: Vec<Revision>,
     pub settings: Settings,
@@ -126,6 +133,10 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// Markup kept from the file it was opened from, for writing back what isn't edited (see
+    /// [`kept`]); never saved, ignored by `==`.
+    #[serde(skip)]
+    pub kept: kept::Kept,
 }
 
 #[cfg(test)]

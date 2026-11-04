@@ -38,8 +38,8 @@ fn sample() -> Document {
     p.insert_text(n, ".", &CharProps::default()).unwrap();
     blocks.push(para_block(p));
     blocks.push(para_block(Paragraph::with_text("Second Level", CharProps::default()).styled("Heading2")));
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for (t, nm, lvl) in [("first bullet", bul, 0u8), ("second bullet", bul, 0), ("nested bullet", bul, 1)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(wordcraft_doc::props::NumRef { num: nm, level: lvl });
@@ -166,8 +166,8 @@ fn check_round_trip(ext: &str, rich: bool) {
 /// Two bullets directly followed by two numbered items.
 fn bullets_then_numbers() -> Document {
     let mut d = Document::new();
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let mut blocks = Vec::new();
     for (t, nm) in [("dot one", bul), ("dot two", bul), ("num one", num), ("num two", num)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
@@ -198,14 +198,17 @@ fn numbered_list_after_bullets_keeps_its_kind() {
 fn markdown_list_items_that_start_like_blocks_keep_their_text() {
     for text in ["---", "--", "1. Intro", "# Agenda", "ordinary item"] {
         let mut d = Document::new();
-        let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
         p.props.numbering = Some(wordcraft_doc::props::NumRef { num: bul, level: 0 });
         d.body = vec![para_block(p)];
         let bytes = export("md", &d).unwrap().unwrap();
         let blocks = flat(&import("md", &bytes).unwrap().unwrap());
         let [FBlock::Para(p)] = blocks.as_slice() else { panic!("{text}: {}", String::from_utf8_lossy(&bytes)) };
-        assert_eq!((p.text().as_str(), p.kind, p.list), (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1 })));
+        assert_eq!(
+            (p.text().as_str(), p.kind, p.list),
+            (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }))
+        );
     }
 }
 
@@ -365,7 +368,7 @@ fn txt_export_writes_symbol_font_text_as_unicode() {
 #[test]
 fn txt_export_keeps_list_labels() {
     let mut d = Document::new();
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
     let mut p = Paragraph::with_text("alpha", CharProps::default());
     p.props.numbering = Some(wordcraft_doc::props::NumRef { num: bul, level: 0 });
     d.body = vec![para_block(p), para_block(Paragraph::with_text("plain", CharProps::default()))];
@@ -1001,4 +1004,21 @@ fn dropped_names_and_links_are_logged_once_per_document() {
     let tex = format!("\\href{{https://e.com/{long}}}{{a}} \\url{{https://e.com/{long}}}");
     let (_, warned) = crate::test_log::warnings(|| crate::latex::import(tex.as_bytes()));
     assert_eq!(count(&warned, "links longer"), 1, "{warned:?}");
+}
+
+#[test]
+fn html_title_outside_head_is_metadata_not_body() {
+    for html in ["<title>T</title><p>b</p>", "<html><title>T</title><body>b</body></html>"] {
+        let d = crate::html::import(html);
+        assert_eq!(para_texts(&d), vec!["b".to_string()], "{html}");
+        assert_eq!(d.core.title, "T", "{html}");
+    }
+}
+
+#[test]
+fn latex_export_keeps_repeated_spaces() {
+    let tex = String::from_utf8(crate::export("tex", &Document::from_text("a  b   c")).unwrap().unwrap()).unwrap();
+    assert!(!tex.contains("  "), "{tex}");
+    let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
+    assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }
