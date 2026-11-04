@@ -50,22 +50,31 @@ impl LineNumbersForm {
 pub(super) fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> bool {
     ui.checkbox(&mut f.on, tl!("Add line numbering"));
     ui.add_enabled_ui(f.on, |ui| {
-        egui::Grid::new("lnum").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            ui.label(tl!("Start at:"));
-            ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767));
-            ui.end_row();
-            ui.label(tl!("From text:"));
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut f.auto_distance, tl!("Auto"));
-                ui.add_enabled(
-                    !f.auto_distance,
-                    egui::DragValue::new(&mut f.distance).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2),
-                );
+        crate::rtl::Table::new("lnum").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Start at:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.start).range(1..=32_767)));
             });
-            ui.end_row();
-            ui.label(tl!("Count by:"));
-            ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100));
-            ui.end_row();
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("From text:")));
+                r.cell(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut f.auto_distance, tl!("Auto"));
+                        ui.add_enabled(
+                            !f.auto_distance,
+                            egui::DragValue::new(&mut f.distance)
+                                .speed(0.01)
+                                .range(0.0..=22.0 * 72.0 / unit().pt_per_unit())
+                                .measure(unit())
+                                .max_decimals(2),
+                        );
+                    });
+                });
+            });
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Count by:")));
+                r.cell(|ui| ui.add(egui::DragValue::new(&mut f.count_by).range(1..=100)));
+            });
         });
         heading(ui, "Numbering:");
         for (v, l) in [("restartPage", "Restart Each Page"), ("restartSection", "Restart Each Section"), ("continuous", "Continuous")] {
@@ -112,16 +121,24 @@ impl HyphenationForm {
 pub(super) fn hyphenation_ui(app: &mut WordApp, ui: &mut Ui, f: &mut HyphenationForm) -> bool {
     ui.checkbox(&mut f.auto, tl!("Automatically hyphenate document"));
     ui.checkbox(&mut f.caps, tl!("Hyphenate words in CAPS"));
-    egui::Grid::new("hyph").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Hyphenation zone:"));
-        ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2));
-        ui.end_row();
-        ui.label(tl!("Limit consecutive hyphens to:"));
-        let no_limit = tl!("No limit").to_string();
-        ui.add(
-            egui::DragValue::new(&mut f.limit).range(0..=99).custom_formatter(move |n, _| if n < 0.5 { no_limit.clone() } else { format!("{n:.0}") }),
-        );
-        ui.end_row();
+    crate::rtl::Table::new("hyph").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Hyphenation zone:")));
+            r.cell(|ui| {
+                ui.add(egui::DragValue::new(&mut f.zone).speed(0.01).range(0.0..=22.0 * 72.0 / unit().pt_per_unit()).measure(unit()).max_decimals(2))
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Limit consecutive hyphens to:")));
+            r.cell(|ui| {
+                let no_limit = tl!("No limit").to_string();
+                ui.add(
+                    egui::DragValue::new(&mut f.limit)
+                        .range(0..=99)
+                        .custom_formatter(move |n, _| if n < 0.5 { no_limit.clone() } else { format!("{n:.0}") }),
+                )
+            });
+        });
     });
     ui.add_space(6.0);
     let manual = ui.button(tl!("Manual…")).clicked();
@@ -236,7 +253,7 @@ pub(super) fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> b
     ui.add_space(8.0);
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
@@ -323,21 +340,17 @@ impl LanguageForm {
 
 /// A language's name in the interface language (the tag itself when we don't know it).
 pub(super) fn language_name(tag: &str) -> String {
-    LANGUAGES.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, n)| tl!(n).to_string()).unwrap_or_else(|| tag.to_string())
+    crate::ribbon::display_name(Some(tag))
 }
 
 pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
     ui.label(tl!("Mark selected text as:"));
-    let mut list: Vec<(String, String)> = LANGUAGES.iter().map(|(t, _)| (t.to_string(), language_name(t))).collect();
-    if !LANGUAGES.iter().any(|(t, _)| t.eq_ignore_ascii_case(&f.lang)) {
-        list.push((f.lang.clone(), f.lang.clone()));
-    }
-    list.sort_by_key(|a| a.1.to_lowercase());
+    let list = crate::ribbon::language_list(&f.lang);
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).border_strong)).inner_margin(4.0).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(220.0).min_scrolled_height(220.0).show(ui, |ui| {
             ui.set_min_width(300.0);
             for (tag, name) in &list {
-                let on = f.lang.eq_ignore_ascii_case(tag);
+                let on = crate::ribbon::same_language(&f.lang, tag);
                 let r = ui.selectable_label(on, name.as_str());
                 if r.clicked() {
                     f.lang = tag.clone();

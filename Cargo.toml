@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -25,10 +25,10 @@ wordcraft-pdf = { path = "crates/pdf" }
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
 # craft-proof is the proposed French Language pack adaptation in storytold/craft-libs#557,
-# based on main 55332dd (including #497). Replace this unmerged PR head with the reviewed
-# official merge commit and rerun the app gates before integration. The font store's
-# `language-pack` kind is #486 (CP4.1).
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "3c5ffadd3b3fb4bcbf657a245ad9c480d2b6e304", version = "=0.1.0" }
+# based on main 38740b4, including #589 (elision-first suggestions) and #590 (Catalan
+# Valencia lookup). Replace this unmerged PR head with the reviewed official merge commit
+# and rerun the app gates before integration. The font store's `language-pack` kind is #486.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "b5bb5435de1dee52a5f73aa27ba99779854dbd99", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }

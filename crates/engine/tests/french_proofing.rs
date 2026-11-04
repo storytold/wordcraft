@@ -3,6 +3,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_doc::{Document, Pos, StoryRef};
@@ -104,7 +105,7 @@ fn french_packs_through_review_regions_undo_and_reload() {
     assert!(spelling.iter().all(|i| i["lang"].as_str().is_some_and(|tag| !tag.is_empty())));
 
     let mut cached = Session::new(Document::from_text("chaat"));
-    cached.doc.styles.default_chr.lang = Some("fr-CA".into());
+    Arc::make_mut(&mut cached.doc.styles).default_chr.lang = Some("fr-CA".into());
     assert_eq!(spelling_in_layout(&mut cached), 1);
     let before = proof::dictionary_generation();
     std::fs::write(pack.join("spelling.dic"), DIC.replacen("7\n", "8\n", 1) + "chaat\n").unwrap();
