@@ -1,5 +1,20 @@
 use super::*;
 
+/// #3619: a huge finite width can't make a tall picture's height infinite, which a `.json` save
+/// writes as `null` and can't read back.
+#[test]
+fn a_huge_picture_width_keeps_the_size_finite() {
+    let img = image::RgbaImage::from_pixel(2, 400, image::Rgba([10, 20, 30, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let r = s.run("insert.picture", &json!({"data": base64_encode(&png), "width": 3e38})).unwrap();
+    let (w, h) = (r["width"].as_f64().unwrap(), r["height"].as_f64().unwrap());
+    assert!(w.is_finite() && h.is_finite() && (h / w - 200.0).abs() < 0.01, "{w} x {h}");
+    let saved = crate::io::save_bytes("a.json", &s.doc).unwrap();
+    assert!(crate::io::open_bytes("a.json", &saved).is_ok());
+}
+
 /// A 4 × 4 RGB TIFF that says its strips are JPEG (they aren't): its header still reads.
 fn jpeg_strip_tiff() -> Vec<u8> {
     let mut t = Vec::new();

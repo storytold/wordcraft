@@ -1,5 +1,5 @@
 use super::body::Body;
-use super::limits::{MAX_ENTRY, MAX_SECTIONS};
+use super::limits::{MAX_ENTRY, MAX_EXTRA_SPACES, MAX_SECTIONS};
 use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Columns, Cursor, Document, FBlock, Flow, HashMap, Meta, Para, Read, SectionProps, model, page_parts};
@@ -773,11 +773,15 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     // The page background picture's bytes.
     let page_image = pages.doc.page_image.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill)));
     let objects = (entries.as_slice(), &manifest);
-    let mut parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects)).unwrap_or_default();
+    // One `text:s` budget for the headers and footers and then the body.
+    let mut spaces_left = MAX_EXTRA_SPACES;
+    let mut parts =
+        styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, objects, &mut spaces_left)).unwrap_or_default();
     first_pages(&mut pages);
     let mut body = Body::new(&styles, &pages, &mut fetch);
     (body.entries, body.manifest) = (objects.0, Some(objects.1));
     body.raw = &content;
+    body.spaces_left = spaces_left;
     super::xml::events_at(&content, |ev, at| body.feed_at(ev, at));
     let mut blocks = body.take_blocks();
     // The file's own definitions: what kept paragraphs refer to, and the style definitions

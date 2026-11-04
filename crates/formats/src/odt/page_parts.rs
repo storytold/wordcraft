@@ -69,12 +69,15 @@ impl Parts {
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
 /// [`add`] puts those parts into the document.
 /// `objects`: the package's entry names and manifest media types, for embedded objects.
+/// `spaces_left` is the document's [`MAX_EXTRA_SPACES`] budget, which the body read after them
+/// goes on with.
 pub(super) fn read(
     xml: &[u8],
     styles: &Styles,
     pages: &mut Pages,
     fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
     objects: (&[String], &std::collections::HashMap<String, String>),
+    spaces_left: &mut usize,
 ) -> Parts {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
@@ -126,9 +129,11 @@ pub(super) fn read(
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
         (reader.entries, reader.manifest) = (objects.0, Some(objects.1));
+        reader.spaces_left = *spaces_left;
         for ev in evs {
             reader.feed(ev);
         }
+        *spaces_left = reader.spaces_left;
         out.watermark = out.watermark.take().or(reader.watermark.take());
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {

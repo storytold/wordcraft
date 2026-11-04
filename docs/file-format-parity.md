@@ -12,6 +12,8 @@ gives ~64%; we discount it to ~60% because DOCX fidelity has never been checked 
 files. DOCX dominates the weight: a Word user sends and receives .docx; everything else is
 occasional.
 
+Print Markup HTML, Markdown and text copies collect comment anchors with one forward object walk (#3614). Unicode quotes, tables, overlapping comment ranges, replies and unmatched object storage retain their behavior. Quote limits, body-only anchor traversal and readiness estimates are unchanged.
+
 ## Drawing payloads
 
 DOCX textboxes retain their own frame and story when they contain an inline picture.
@@ -407,6 +409,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-10-31 | trivial | ODT: footnotes and endnotes (`text:note`, ODF 1.3 §6.3) open as note stories built as Word's (Footnote Text or Endnote Text paragraphs starting with the note's mark, the reference in the reference style, a `text:label` custom mark kept) and are written back with `text:note-citation`s numbered as LibreOffice shows them (footnotes 1, 2, 3; endnotes i, ii, iii); before, notes were dropped on open. `formats::odt::tests_more::notes` |
 | 2026-10-31 | trivial | ODT: headers and footers are written to each section's master page (every, left and first page), with Word's header and footer distances converted to ODF's header and footer bands and back on open; text fields (`text:page-number`, `text:page-count`, `text:date`, `text:time`, document information, `text:bookmark-ref`) open as WordCraft fields and are written back as ODF fields. `formats::odt::tests_more::{headers, fields}` |
 | 2026-10-31 | trivial | ODT: paragraph spacing, indents and line spacing (`fo:margin-*`, `fo:text-indent`, `fo:line-height`, `style:line-height-at-least`; `style:line-spacing` leading as a proportional approximation) read from automatic and common styles and written back; the default and Standard paragraph styles give the document defaults, so an ODT paragraph without spacing has none instead of Word's 8 pt after and 1.15 lines. `formats::odt::tests_more::spacing` |
+| 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
 | 2026-11-03 | trivial | Replace Table of Contents keeps Word's title above the section break over entries in columns, and Remove takes the title, the blank paragraph and its break with the table, as observed in Word for Mac (#4041) |
 | 2026-11-02 | minor | `w:altChunk` content (MHT, HTML, RTF, text, nested documents) brought in on open, where it stands; `.mht`/`.mhtml` open; HTML reads `style` element rules, paragraph margins, indents and line height, cell widths and borders, and an opened page takes Word's web-page defaults. Insert › Text from File keeps the file's pictures and lists |
 | 2026-11-02 | trivial | DOCX: a VML horizontal rule (`v:rect o:hr`, a web page's `<hr>` pasted into Word) is drawn across its line as Word draws it — the whole width inside the paragraph's indents, or `o:hrpct` of it, or its own width, placed by `o:hralign` — instead of as a 1 pt dot; in a table cell it follows the column; it saves back as the same VML rule |

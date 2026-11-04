@@ -47,6 +47,8 @@ Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existin
 
 Document model hangs (#3614, #3692): paragraph object walks, image deduplication, linear-equation letter runs and text box paste no longer do quadratic work or unbounded copies on hostile files. This narrows gap #3; the engine, DOCX reader and UI loops named in #3614 remain.
 
+Print Markup text-copy exports also walk paragraph objects once when collecting comment quotes (#3614). Body/table traversal, quote limits, reply order and exported text remain unchanged. Other engine, reader and UI scans remain separate.
+
 Active footnote and endnote text stays readable while editing (#2545). This fixes a display-context defect; the broader fidelity, accessibility and readiness gates below are unchanged.
 
 Russian language-aware sorting now keeps ё with е instead of after я, with the diaeresis as a secondary difference. Composed and decomposed ё and й compare equally. Fixed synthetic collation tests cover order, case and index headings; this does not establish full Cyrillic or CLDR collation parity.
@@ -160,6 +162,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | 2026-11-04 | trivial | #19: ODT element audit; files from other applications checked |
 | 2026-11-01 | trivial | #19 narrowed: ODT read and written nearly whole on this branch (styles, tables, notes, comments, tracked changes including formatting, fields, indexes and marks, drawings, charts, embedded objects, forms, ruby, password protection, flat ODT), checked against LibreOffice; what's left listed; estimate 18–27 h → 10–16 h |
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
+| 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
 | 2026-10-30 | trivial | #20 narrowed: layout resource caps and linear-time passes (#3867, #3866) |
 | 2026-11-03 | minor | #11: Arabic interface with mirrored shell (#1195); key languages missing are now hi and id (plus pt-PT); Hebrew UI still open |
 | 2026-11-03 | trivial | #8 (CP4.3): one language list: Set Proofing Language, Review › Language and the status bar offer the Language pack languages (Bulgarian was in none); every published pack named in English; Valencian is `ca-ES-valencia`; gap 8 names built-in proofing |
