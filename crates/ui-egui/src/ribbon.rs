@@ -47,11 +47,16 @@ use insert::insert;
 #[cfg(test)]
 pub(crate) use language::PROOFING_LANGUAGES;
 #[cfg(test)]
+pub(crate) use language::all_languages;
+#[cfg(test)]
 use language::language_checks;
-pub(crate) use language::language_name;
+#[cfg(test)]
+pub(crate) use language::short_languages;
+pub(crate) use language::sort_key;
 pub(crate) use language::{
-    caret_language, caret_language_proofed, caret_missing_dictionary, caret_no_proof, caret_unreadable_dictionary, language_menu,
+    caret_lang_tag, caret_language, caret_language_proofed, caret_missing_dictionary, caret_no_proof, caret_unreadable_dictionary, language_menu,
 };
+pub(crate) use language::{display_name, language_list, language_name, same_language, tag_for_pack};
 use layout::layout;
 #[cfg(test)]
 use layout::{columns_items, margins_items, orientation_items};
