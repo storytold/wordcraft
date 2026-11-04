@@ -187,3 +187,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.dgh52ohp125-tech]
+real_name = "ahmad hammoud"
+display_name = "ahmad hammoud"
