@@ -6,7 +6,7 @@ use super::select::{
     has_sizable, obj_size, objects_list, picked_objects, selected, selected_all, with_float, with_obj,
 };
 use super::shape::{
-    NO_TEXT_BOX, can_link, color_ids, has_text_box, link_text_box, set_text_body, shape_effects, shape_style, style_ids, text_box_target,
+    NO_TEXT_BOX, add_text, can_link, color_ids, has_text_box, link_text_box, set_text_body, shape_effects, shape_style, style_ids, text_box_target,
 };
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 
@@ -322,10 +322,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let mut last = serde_json::Value::Null;
             for pos in &targets {
                 let o = edit_obj(s, pos, |o| {
-                    if let InlineObject::Shape { fill, stroke, stroke_width, effects, extra, .. } = o {
+                    if let InlineObject::Shape { fill, stroke, stroke_width, effects, float, extra, .. } = o {
                         (*fill, *stroke, *stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
                         extra.outline_fill = None;
                         effects.shadow = if st.shadow { wordcraft_doc::effects::Shadow::preset("offsetBottomRight") } else { None };
+                        float.effect = effects.extent();
                     } else if let Some(c) = crate::cmd::canvas::style_mut(o) {
                         (c.fill, c.stroke, c.stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
                     }
@@ -338,6 +339,9 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"style": "outline|fill|fillLight|subtle|moderate|intense", "color"?: "dark1|accent1|…|accent6"}  (fill, outline and shadow in one step, from the document's theme colours; default accent1)"#,
         )
         .when(has_shape_or_canvas),
+        CommandSpec::new("shape.addText", "Add Text", "Shape Format › Text", add_text)
+            .params(r#"{}  (gives the selected shape a text box story so text can be typed in it)"#)
+            .when(has_shape),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(
                 r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,

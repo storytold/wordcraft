@@ -101,6 +101,7 @@ fn shape_style_sets_fill_outline_and_shadow_from_the_theme() {
     assert_eq!(look(&s).1, theme.get(5).copied(), "the outline is the theme's accent 2");
     s.run("shape.style", &json!({"style": "intense"})).unwrap();
     assert!(look(&s).3, "intense casts a shadow");
+    assert_ne!(selected(&s).unwrap().1.frame().unwrap().2.effect, [0.0; 4], "intense updates float.effect");
     let after = look(&s);
     assert!(s.run("shape.style", &json!({"style": "sparkly"})).is_err());
     assert!(s.run("shape.style", &json!({"style": "fill", "color": "accent9"})).is_err());
@@ -120,6 +121,16 @@ fn shape_style_sets_fill_outline_and_shadow_from_the_theme() {
         let InlineObject::Shape { fill, stroke, .. } = o else { panic!("expected shape") };
         assert_eq!((fill.map(|f| f.main_color()), stroke), (want.fill, want.stroke));
     }
+
+    // shape.addText attaches a text box in one undoable step and respects document protection.
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    let v = s.run("shape.addText", &json!({})).unwrap();
+    let id = v["textBox"].as_u64().unwrap() as u32;
+    assert_eq!(text_box_target(&s).map(|(_, i)| i), Some(id));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(text_box_target(&s).is_none(), "undo detaches the added text box");
+    s.doc.settings.protection = Some("readOnly".into());
+    assert!(s.run("shape.addText", &json!({})).is_err(), "refused in a read-only document");
 }
 
 /// The body's top-level paragraphs, an object's character shown as ▣.

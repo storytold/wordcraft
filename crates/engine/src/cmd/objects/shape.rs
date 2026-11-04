@@ -100,6 +100,26 @@ pub(crate) fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdRe
     Ok(json!({"textBox": id, "body": body}))
 }
 
+/// `shape.addText`: attaches a text box story to the selected shape if it doesn't already have one.
+pub(super) fn add_text(s: &mut Session, _: &Value) -> CmdResult {
+    let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("select a shape first".into()))?;
+    let id = match s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) {
+        Some(InlineObject::Shape { story: Some(id), .. }) if is_text_box(s, *id) => *id,
+        Some(InlineObject::Shape { .. }) => {
+            let empty_para = wordcraft_doc::Paragraph::with_text("", wordcraft_doc::props::CharProps::default());
+            let id = s.doc.try_add_part(wordcraft_doc::PartKind::TextBox, vec![std::sync::Arc::new(wordcraft_doc::Block::Para(empty_para))])?;
+            edit_obj(s, &pos, |o| {
+                if let InlineObject::Shape { story, .. } = o {
+                    *story = Some(id);
+                }
+            })?;
+            id
+        }
+        _ => return Err(CmdError::Disabled("select a shape first".into())),
+    };
+    Ok(json!({"textBox": id}))
+}
+
 pub(super) fn can_link(s: &Session) -> Option<&'static str> {
     match text_box_target(s) {
         None => Some(NO_TEXT_BOX),

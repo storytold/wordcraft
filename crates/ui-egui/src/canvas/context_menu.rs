@@ -125,21 +125,9 @@ fn add_shape_text(app: &mut WordApp) {
     if crate::objects::enter_text_box(app) {
         return;
     }
-    let Some((pos, _)) = wordcraft_engine::cmd::objects::selected(&app.session) else { return };
-    let empty_para = wordcraft_doc::Paragraph::with_text("", wordcraft_doc::props::CharProps::default());
-    let Ok(id) = app.session.doc.try_add_part(wordcraft_doc::PartKind::TextBox, vec![std::sync::Arc::new(wordcraft_doc::Block::Para(empty_para))])
-    else {
-        return;
-    };
-    if let Ok(para) = app.session.doc.para_mut(pos.story, &pos.path)
-        && let Some(wordcraft_doc::para::InlineObject::Shape { story, .. }) = para.object_at_mut(pos.off)
-    {
-        *story = Some(id);
-        para.touch();
+    if app.run("shape.addText", json!({})).is_ok() {
+        crate::objects::enter_text_box(app);
     }
-    app.session.relayout();
-    let end = app.session.doc.end_of(wordcraft_doc::StoryRef::Part(id));
-    let _ = app.run("caret.set", json!({"pos": end}));
 }
 
 /// Draws the right-click context menu for the current canvas selection (equation, shape, picture,
