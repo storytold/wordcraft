@@ -296,7 +296,10 @@ impl PropCtx {
                     c.east_asian_layout = (l != EastAsianLayout::default()).then_some(l);
                 }
                 "w:fitText" => {
-                    let width = k.attr("w:val").and_then(u32_of).map(|v| v.min(wordcraft_doc::props::MAX_FIT_TEXT_WIDTH));
+                    let width = k
+                        .attr("w:val")
+                        .and_then(|v| measure(v, 20.0))
+                        .map(|pt| (pt * 20.0).round().clamp(0.0, wordcraft_doc::props::MAX_FIT_TEXT_WIDTH as f32) as u32);
                     let id = k.attr("w:id").and_then(int).and_then(|v| i32::try_from(v).ok());
                     c.fit_text = (width.is_some() || id.is_some()).then_some(FitText { width, id });
                 }

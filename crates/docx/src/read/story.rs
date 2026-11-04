@@ -121,6 +121,7 @@ struct PB {
     text: String,
     runs: Vec<Run>,
     objects: Vec<InlineObject>,
+    source_run_start: Option<usize>,
 }
 
 impl PB {
@@ -137,8 +138,10 @@ impl PB {
         self.push_run(wordcraft_doc::para::OBJ.len_utf8(), props);
     }
     fn push_run(&mut self, len: usize, props: &CharProps) {
+        let same_source_run =
+            self.source_run_start.is_some_and(|start| self.runs.len() > start) && self.runs.last().is_some_and(|run| run.props == *props);
         match self.runs.last_mut() {
-            Some(r) if wordcraft_doc::para::runs_can_merge(&r.props, props) => r.len += len,
+            Some(r) if same_source_run || wordcraft_doc::para::runs_can_merge(&r.props, props) => r.len += len,
             _ => self.runs.push(Run { len, props: props.clone() }),
         }
     }

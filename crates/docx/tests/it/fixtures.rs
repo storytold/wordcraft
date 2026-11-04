@@ -131,6 +131,24 @@ fn fit_text_width_and_group_id_survive_two_save_reopen_cycles() {
 }
 
 #[test]
+fn fit_text_unit_width_and_source_run_children_round_trip() {
+    let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:val="0.5in"/></w:rPr><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:p>"#);
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+
+    for _ in 0..2 {
+        let bytes = wordcraft_docx::write(&doc).unwrap();
+        doc = wordcraft_docx::read(&bytes).unwrap();
+        let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+        assert_eq!(para.text, "a\tb");
+        assert_eq!(para.runs.len(), 1);
+        assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+    }
+}
+
+#[test]
 fn fit_text_without_width_is_omitted_on_save() {
     let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:id="1"/></w:rPr><w:t>text</w:t></w:r></w:p>"#);
     let para = doc.body.first().and_then(|b| b.as_para()).unwrap();

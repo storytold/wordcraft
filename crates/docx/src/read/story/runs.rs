@@ -132,6 +132,7 @@ impl Reader<'_> {
             Some(p) => self.run_props(p, ctx),
             None => self.run_props_none(ctx),
         };
+        let previous_source_run_start = pb.source_run_start.replace(pb.runs.len());
         let mut note: Option<(NoteKind, u32, Option<String>)> = None;
         for k in r.els() {
             self.read_run_child(sc, pb, k, (&props, rels), &mut note, depth + 1);
@@ -139,6 +140,7 @@ impl Reader<'_> {
         if let Some((kind, id, custom)) = note.take() {
             self.emit_obj(sc, pb, InlineObject::NoteRef { kind, id, custom: custom.unwrap_or_default() }, &props);
         }
+        pb.source_run_start = previous_source_run_start;
     }
 
     fn read_run_child(
