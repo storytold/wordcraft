@@ -222,7 +222,7 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
     crate::rtl::vertical(ui, |ui| {
         ui.add_space(h / 2.0 - 10.0);
         let can_add = sel.group.is_some() && !f.command.is_empty();
-        let add = ui.add_enabled(can_add, egui::Button::new(tl!("Add >>")).min_size(vec2(96.0, 0.0)));
+        let add = ui.add_enabled(can_add, egui::Button::new(crate::rtl::arrows(tl!("Add >>"))).min_size(vec2(96.0, 0.0)));
         if add.on_disabled_hover_text(tl!("Pick a custom group (New Group makes one)")).clicked() {
             let mut m = address(&sel);
             m.remove("command");
@@ -235,7 +235,7 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
             }
         }
         let can_remove = sel.group.is_some() || tab_custom;
-        if ui.add_enabled(can_remove, egui::Button::new(tl!("<< Remove")).min_size(vec2(96.0, 0.0))).clicked()
+        if ui.add_enabled(can_remove, egui::Button::new(crate::rtl::arrows(tl!("<< Remove"))).min_size(vec2(96.0, 0.0))).clicked()
             && change(app, f, json!({"remove": address(&sel)})).is_some()
         {
             f.selected = match (&sel.group, &sel.command) {
@@ -357,12 +357,12 @@ fn qat_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
     crate::rtl::vertical(ui, |ui| {
         ui.add_space(h / 2.0 - 10.0);
         let can_add = !f.command.is_empty() && !ids.contains(&f.command);
-        if ui.add_enabled(can_add, egui::Button::new(tl!("Add >>")).min_size(vec2(96.0, 0.0))).clicked()
+        if ui.add_enabled(can_add, egui::Button::new(crate::rtl::arrows(tl!("Add >>"))).min_size(vec2(96.0, 0.0))).clicked()
             && change(app, f, json!({"qatAdd": f.command})).is_some()
         {
             f.qat_selected = f.command.clone();
         }
-        if ui.add_enabled(!f.qat_selected.is_empty(), egui::Button::new(tl!("<< Remove")).min_size(vec2(96.0, 0.0))).clicked() {
+        if ui.add_enabled(!f.qat_selected.is_empty(), egui::Button::new(crate::rtl::arrows(tl!("<< Remove"))).min_size(vec2(96.0, 0.0))).clicked() {
             change(app, f, json!({"qatRemove": f.qat_selected}));
         }
     });
