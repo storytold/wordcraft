@@ -344,7 +344,7 @@ fn repeated_numeric_refs_keep_the_first_body_bookmark() {
 /// A target's instance must not invent a different label for its actual ancestor paragraph.
 #[test]
 fn full_context_keeps_the_actual_ancestor_instance_label() {
-    let mut s = session(
+    let mut s = open(
         &[
             para(Some((1, 0)), &text("Synthetic ancestor")),
             para(Some((6, 1)), &marked("_ActualAncestor", 80, "Synthetic child")),
