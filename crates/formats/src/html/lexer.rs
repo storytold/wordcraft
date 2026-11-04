@@ -202,17 +202,45 @@ fn office_math(body: &str) -> Option<&str> {
 }
 
 /// Skip a Word fallback for Office Math right after it (`<![if !msEquation]>…<![endif]>`: the
-/// picture written for readers without math), leaving `lx` past it; anything else, and a fallback
-/// that is never closed, is left alone.
+/// picture written for readers without math), leaving `lx` past it. Its end is the `<![endif]>`
+/// that matches it, conditional sections inside (`<![if !vml]>…<![endif]>`) counted; anything
+/// else, and a fallback that is never closed, is left alone.
 pub(super) fn skip_math_fallback(lx: &mut Lexer) {
     const OPEN: &[u8] = b"<![if !msequation]>";
-    const END: &[u8] = b"<![endif]>";
     let rest = lx.rest();
     let ws = rest.len() - rest.trim_start().len();
     let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
-    let body = after.get(OPEN.len()..).unwrap_or(&[]);
-    if after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) && body.windows(END.len()).any(|w| w.eq_ignore_ascii_case(END)) {
-        lx.pos += ws + OPEN.len();
-        lx.skip_past("<![endif]>");
+    if !after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) {
+        return;
     }
+    let body = after.get(OPEN.len()..).unwrap_or(&[]);
+    if let Some(end) = matching_endif(body) {
+        lx.pos += ws + OPEN.len() + end;
+    }
+}
+
+/// Where the `<![endif]>` closing a conditional section that `body` is the inside of ends
+/// (nested `<![if …]>` sections counted); `None` when it is never closed.
+fn matching_endif(body: &[u8]) -> Option<usize> {
+    const IF: &[u8] = b"<![if";
+    const END: &[u8] = b"<![endif]>";
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while let Some(k) = body.get(i..)?.iter().position(|&c| c == b'<') {
+        i += k;
+        let at = body.get(i..)?;
+        if at.get(..END.len()).is_some_and(|h| h.eq_ignore_ascii_case(END)) {
+            if depth == 0 {
+                return Some(i + END.len());
+            }
+            depth -= 1;
+            i += END.len();
+        } else if at.get(..IF.len()).is_some_and(|h| h.eq_ignore_ascii_case(IF)) {
+            depth = depth.saturating_add(1);
+            i += IF.len();
+        } else {
+            i += 1;
+        }
+    }
+    None
 }

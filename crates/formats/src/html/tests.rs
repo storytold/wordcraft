@@ -827,3 +827,13 @@ fn ms_equation_fallback_stays_when_no_equation_is_read_or_it_is_unclosed() {
     let unclosed = "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c</p>";
     assert_eq!(inline_marks(&parse(unclosed)), ["a[q]b", "c"]);
 }
+
+#[test]
+fn ms_equation_fallback_ends_at_its_own_endif() {
+    // Word's fallback holds a VML section of its own: the fallback ends at the endif matching it.
+    let vml = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]><span><![if !vml]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>v</span><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(vml)), ["a[q]b"]);
+    // An unclosed fallback doesn't take a later, unrelated section's endif as its own.
+    let other = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c<![if !vml]>d<![endif]>e</p>"#;
+    assert_eq!(inline_marks(&parse(other)), ["a[q]b", "cde"]);
+}
