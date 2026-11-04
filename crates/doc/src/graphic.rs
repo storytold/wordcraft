@@ -71,6 +71,8 @@ pub enum GraphicKind {
     Diagram,
     /// Word's native InkML, kept opaque; displayed as its fallback picture when available.
     Ink,
+    /// A 3D model (`am3d:model3d` and its glTF part), kept opaque; displayed as its fallback picture when available.
+    Model3d,
 }
 
 impl GraphicKind {
@@ -80,6 +82,7 @@ impl GraphicKind {
             GraphicKind::Chart => "chart",
             GraphicKind::Diagram => "diagram",
             GraphicKind::Ink => "ink",
+            GraphicKind::Model3d => "3D model",
         }
     }
 }
@@ -117,8 +120,13 @@ pub enum GraphicItem {
         #[serde(default)]
         font: Option<String>,
     },
-    /// A picture (`Document::media` key) stretched into `rect`.
-    Image { rect: [f32; 4], media: String },
+    /// A picture (`Document::media` key) stretched into `rect`, with `crop` as an inline picture's.
+    Image {
+        rect: [f32; 4],
+        media: String,
+        #[serde(default)]
+        crop: [f32; 4],
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

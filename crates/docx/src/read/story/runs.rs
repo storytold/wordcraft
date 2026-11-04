@@ -98,7 +98,7 @@ impl Reader<'_> {
                 }
             }
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
+                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_kept_alternate(sc, k, rels)) {
                     let props = self.run_props_none(ctx);
                     self.emit_obj(sc, pb, o, &props);
                 } else if let Some(c) = children_of_choice(k) {
@@ -298,7 +298,7 @@ impl Reader<'_> {
             ),
             "w:ruby" => self.read_ruby(sc, pb, k, props),
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
+                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_kept_alternate(sc, k, rels)) {
                     self.emit_obj(sc, pb, o, props);
                 } else if let Some(c) = children_of_choice(k) {
                     for x in c.els() {
