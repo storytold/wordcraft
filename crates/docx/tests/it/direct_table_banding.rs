@@ -69,7 +69,7 @@ fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
 #[test]
 fn direct_band_sizes_preserve_zero_and_bound_invalid_or_oversized_values() {
     let input = docx(&table(
-        r#"<w:tblStyleRowBandSize w:val="0"/><w:tblStyleColBandSize w:val="4294967296"/>"#,
+        r#"<w:tblStyleRowBandSize w:val="-00"/><w:tblStyleColBandSize w:val="4294967296"/>"#,
         "",
         r#"<w:tblPrEx><w:tblStyleRowBandSize w:val="bad"/><w:tblStyleColBandSize w:val="5000"/></w:tblPrEx>"#,
     ));

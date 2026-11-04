@@ -18,6 +18,9 @@ use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
 
 pub(super) fn band_size(value: &str) -> Option<u32> {
     let value = value.trim();
+    if let Some(digits) = value.strip_prefix('-') {
+        return (!digits.is_empty() && digits.bytes().all(|byte| byte == b'0')).then_some(0);
+    }
     let digits = value.strip_prefix('+').unwrap_or(value);
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
