@@ -73,6 +73,9 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Clusters no line may start with, not even when a word too long for the line is split: a
+    /// footnote or endnote mark and what is glued to it (see `glue_note_marks`), sorted.
+    pub(crate) no_line_start: Vec<u32>,
     /// Bidi embedding level of each byte of the paragraph text (UAX #9, before the per-line
     /// rule L1). Empty when the paragraph is plain left-to-right text.
     pub bidi_levels: Vec<u8>,

@@ -6244,6 +6244,60 @@ fn a_note_mark_after_a_hyphen_bookmark_or_soft_hyphen() {
     assert!(broke_after_salt, "a hidden mark keeps the break after the hyphen");
 }
 
+/// #5402: whatever surrounds a note mark, no line starts with it, with what lies between it and
+/// the text it follows (a bookmark, hidden text), or with what is glued after it, at any width,
+/// with or without automatic hyphenation. Only a space after the mark is a place to break.
+#[test]
+fn a_note_mark_never_starts_a_line_whatever_surrounds_it() {
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    let (head, tail) = ("Lorem ipsum dolor sit amet consectetur", " adipiscing elit sed do eiusmod tempor");
+    let mut layouts = 0;
+    for before in [".", ")", "\u{201d}", "-", "\u{2013}", "\u{2014}", "\u{ad}", "/", "a", "7", "\u{5b57}"] {
+        for between in ["", "bookmark", "hidden"] {
+            for after in [",", ".", ")", "s", " ", ""] {
+                for auto in [false, true] {
+                    let text =
+                        format!("{head}{before}{}{after}{}", if between == "hidden" { "x" } else { "" }, if after.is_empty() { "" } else { tail });
+                    let mut d = Document::from_text(&text);
+                    d.settings.auto_hyphenation = auto;
+                    let mut at = head.len() + before.len();
+                    let mut forbidden = Vec::new();
+                    match between {
+                        "bookmark" => {
+                            d.insert_object(&Pos::body(0, at), InlineObject::BookmarkStart { name: "b".into() }, &Default::default()).unwrap();
+                            forbidden.push(at);
+                            at += obj;
+                        }
+                        "hidden" => {
+                            d.format_range(&Pos::body(0, at), &Pos::body(0, at + 1), &|c| c.hidden = Some(true)).unwrap();
+                            forbidden.push(at);
+                            at += 1;
+                        }
+                        _ => {}
+                    }
+                    footnote(&mut d, &Pos::body(0, at), "A note.");
+                    forbidden.push(at);
+                    if !after.is_empty() && after != " " {
+                        forbidden.push(at + obj);
+                    }
+                    for m in (100..=530).step_by(9) {
+                        let starts = body_line_starts(&d, m as f32);
+                        layouts += 1;
+                        for f in &forbidden {
+                            assert!(
+                                !starts.contains(f),
+                                "{before:?} {between:?} mark {after:?} auto {auto}, margin {m}: a line starts at {f}: {starts:?} in {:?}",
+                                d.para(StoryRef::Body, &Path::top(0)).map(|p| p.text.clone())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(layouts > 10_000, "{layouts} layouts");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
