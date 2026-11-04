@@ -570,7 +570,10 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
         if !mt.trim().starts_with("application/vnd.oasis.opendocument.text") {
-            return Err(format!("ODT: not a text document ({})", mt.trim()));
+            // Its media type named only when it reads as one (a damaged package's may be a picture).
+            let mt = mt.trim();
+            let shown = mt.len() <= 100 && mt.chars().all(|c| c.is_ascii_graphic());
+            return Err(if shown { format!("ODT: not a text document ({mt})") } else { "ODT: not a text document".to_string() });
         }
     }
     let styles_xml = read_entry(&mut z, "styles.xml");

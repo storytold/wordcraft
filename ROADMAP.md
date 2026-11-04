@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-04: ODT checked against 220 files from other applications (Microsoft Office, OpenOffice.org, StarOffice, Calligra, Lotus Symphony; local only): every file LibreOffice opens opens again after a WordCraft save (a manifest entry was missing), 166 round-trip pixel-identical and 194 with the same text; hidden sections stay hidden and unedited lists are written as read (gap 19).
 - 2026-11-03: ODT paragraphs holding bookmarks, notes, formulas and objects, and the page-anchored frames before a paragraph, are written as read while unchanged (gap 19); styles of different families sharing a name are kept apart. Over the corpus 123 of 133 files round-trip pixel-identical (118), 132 with the same text, and the attributes and values a save loses fall from 539 to under 315.
 - 2026-11-03: ODT paragraphs showing text boxes and shapes holding text are written as read while that text is unchanged (gap 19). Over the corpus 111 of 133 files now round-trip pixel-identical (103), the round-trip difference falls from 44k to 39k pixels, and the element kinds a save loses fall from 16 to 8.
 - 2026-11-03: ODT paragraphs holding comments or tracked changes are written as read while those are unchanged (gap 19): a comment edited, resolved or answered, or a change accepted, sends its paragraph to the model; the file's change regions are kept beside WordCraft's own. Over the corpus the words a save loses fall from 29 to 4.

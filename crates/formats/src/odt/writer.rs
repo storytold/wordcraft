@@ -92,6 +92,52 @@ pub(super) const FRAME_PARENT: &str = "\u{0}frame";
 /// LibreOffice doesn't show a floating picture inside a text box.
 pub(super) const GRAPHICS_PARENT: &str = "\u{0}graphics";
 
+/// The run of list items written as one list from `start` in `blocks`: where it ends, and each
+/// level's kind as its first item there says. An item of another list, or (lists not told apart)
+/// a top-level item of the other kind, starts a new list; with section wrappers (`wraps`), so
+/// does an item opening a section, and one closing a section ends it.
+fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9]) {
+    let p = match blocks.get(start) {
+        Some(FBlock::Para(p)) => p,
+        _ => return (start.saturating_add(1), [ListOut { ordered: false, label: None, start: 1 }; 9]),
+    };
+    let id = p.list.map_or(0, |l| l.list);
+    let first = ListOut { ordered: p.list.is_some_and(|l| l.ordered), label: None, start: 1 };
+    let mut kinds = [first; 9];
+    let mut seen = [false; 9];
+    let mut i = start;
+    while let Some(FBlock::Para(q)) = blocks.get(i) {
+        let Some(li) = q.list else { break };
+        let l = li.level.min(8) as usize;
+        if li.list != id || (id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
+            break;
+        }
+        let wrap = q.wrap.as_deref().filter(|_| wraps);
+        if i > start && wrap.is_some_and(|w| !w.0.is_empty()) {
+            break;
+        }
+        if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
+            && !*s
+        {
+            *s = true;
+            *k = ListOut { ordered: li.ordered, label: li.label, start: li.start };
+        }
+        i += 1;
+        if wrap.is_some_and(|w| w.1 > 0) {
+            break;
+        }
+    }
+    (i.max(start + 1), kinds)
+}
+
+/// The `xml:id` of the list markup `xml` (kept as read) begins with, if it does.
+fn list_xml_id(xml: &str) -> Option<String> {
+    let head = xml.strip_prefix("<text:list")?.split('>').next()?;
+    let at = head.find("xml:id=\"")? + "xml:id=\"".len();
+    let len = head.get(at..)?.find('"')?;
+    head.get(at..at + len).map(str::to_string)
+}
+
 /// Paragraph `p` begins with a column break (Word's), which ODF states on the paragraph.
 fn starts_column(p: &Para) -> bool {
     matches!(p.inlines.first(), Some(Inline::Text(t, _)) if t.starts_with(wordcraft_doc::para::COLUMN_BREAK))
@@ -716,6 +762,40 @@ impl Writer {
         (self.story_top, self.sections_open) = saved;
     }
 
+    /// The run of top-level paragraphs `p` begins kept as read whole (an index's, a list's),
+    /// written as it was, when it can be: how many blocks it took.
+    fn kept_run(&mut self, blocks: &[FBlock], i: usize, out: &mut String) -> Option<usize> {
+        let Some(FBlock::Para(p)) = blocks.get(i) else { return None };
+        let ix = p.index.as_deref()?;
+        if !(self.master.is_none() || self.kept_pages) {
+            return None;
+        }
+        // The sections kept as read its first paragraph opens and its last closes, around it.
+        let mut markup = String::new();
+        if !self.kept_markup(&ix.0, &mut markup) {
+            return None;
+        }
+        let last = match blocks.get(i + ix.1.max(1) - 1) {
+            Some(FBlock::Para(q)) => q.wrap.as_deref().map(|w| (Vec::new(), w.1)),
+            _ => None,
+        };
+        self.open_wrap(p.wrap.as_deref().map(|w| (w.0.clone(), 0)).as_ref(), out);
+        out.push_str(&markup);
+        self.close_wrap(last.as_ref(), out);
+        self.master = None;
+        // A list kept so: a list continuing it, written from the model, names it.
+        if let Some(l) = p.list
+            && let Some(id) = list_xml_id(&ix.0)
+        {
+            if l.list != 0 {
+                self.list_xml.entry(l.list).or_insert_with(|| id.clone());
+            }
+            self.last_list = Some(id);
+        }
+        out.push('\n');
+        Some(ix.1.max(1))
+    }
+
     /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`).
     fn open_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) {
         for tag in wrap.map(|w| w.0.as_slice()).unwrap_or(&[]) {
@@ -751,16 +831,11 @@ impl Writer {
             // Only the first top-level block of a section starts its page.
             if depth == 0 {
                 self.master = self.pending_start.take();
-                // An index kept as read (its paragraphs all as read): as it was.
-                if let Some(FBlock::Para(p)) = blocks.get(i)
-                    && let Some(ix) = p.index.as_deref()
-                    && chains.is_none()
-                    && (self.master.is_none() || self.kept_pages)
-                    && self.kept_markup(&ix.0, out)
+                // An index or a list kept as read (its paragraphs all as read): as it was.
+                if chains.is_none()
+                    && let Some(n) = self.kept_run(blocks, i, out)
                 {
-                    self.master = None;
-                    out.push('\n');
-                    i += ix.1.max(1);
+                    i += n;
                     continue;
                 }
                 // A table of contents or another index, with its entries.
@@ -786,25 +861,15 @@ impl Writer {
                 FBlock::Para(p) if p.list.is_some() => {
                     let start = i;
                     let id = p.list.map_or(0, |l| l.list);
-                    let first = ListOut { ordered: p.list.is_some_and(|l| l.ordered), label: None, start: 1 };
-                    let mut kinds = [first; 9];
-                    let mut seen = [false; 9];
-                    while let Some(FBlock::Para(q)) = blocks.get(i) {
-                        let Some(li) = q.list else { break };
-                        let l = li.level.min(8) as usize;
-                        // An item of another list, or (lists not told apart) a top-level item of
-                        // the other kind, starts a new list.
-                        if li.list != id || (id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
-                            break;
-                        }
-                        if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
-                            && !*s
-                        {
-                            *s = true;
-                            *k = ListOut { ordered: li.ordered, label: li.label, start: li.start };
-                        }
-                        i += 1;
-                    }
+                    let (end, kinds) = list_run(blocks, start, self.wraps_at(depth));
+                    i = end;
+                    // The sections kept as read its first item opens and its last closes, around it.
+                    let wrap_of = |k: usize| match blocks.get(k) {
+                        Some(FBlock::Para(q)) => q.wrap.as_deref().filter(|_| self.wraps_at(depth)),
+                        _ => None,
+                    };
+                    let (opens, closes) = (wrap_of(start).map(|w| (w.0.clone(), 0)), wrap_of(end.saturating_sub(1)).map(|w| (Vec::new(), w.1)));
+                    self.open_wrap(opens.as_ref(), out);
                     self.list_styles.push(kinds);
                     let lname = format!("{}L{}", self.prefix, self.list_styles.len());
                     let id_of_list = id;
@@ -868,6 +933,7 @@ impl Writer {
                         }
                         out.push_str("</text:list>");
                     }
+                    self.close_wrap(closes.as_ref(), out);
                     out.push('\n');
                 }
                 FBlock::Para(p) => {

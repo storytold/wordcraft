@@ -140,3 +140,13 @@ fn every_file_written_has_its_manifest_entry() {
     }
     assert!(manifest.contains(r#"manifest:full-path="Configurations2/accelerator/current.xml" manifest:media-type="""#), "{manifest}");
 }
+
+#[test]
+fn a_damaged_media_type_isnt_shown_in_the_error() {
+    // A package whose `mimetype` holds a picture: refused, saying so without the bytes.
+    let pkg = crate::odt::tests::zip_of(&[("mimetype", b"\x89PNG\r\n\x1a\n\x00\x00binary"), ("content.xml", b"<x/>")]);
+    let e = import(&pkg).unwrap_err();
+    assert_eq!(e, "ODT: not a text document");
+    let pkg = crate::odt::tests::zip_of(&[("mimetype", b"application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", b"<x/>")]);
+    assert_eq!(import(&pkg).unwrap_err(), "ODT: not a text document (application/vnd.oasis.opendocument.spreadsheet)");
+}

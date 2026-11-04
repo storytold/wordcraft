@@ -296,9 +296,34 @@ const NOTES_AND_FORMULAS: Sample = Sample {
     meta: "",
 };
 
+/// Lists as LibreOffice and OpenOffice write them: a label followed by a space, a picture
+/// bullet, an unnumbered header, a nested level, and a list going on with the first by its id.
+const LISTS: Sample = Sample {
+    name: "lists",
+    content: r##"<office:automatic-styles><text:list-style style:name="L1"><text:list-level-style-number text:level="1" style:num-prefix="(" style:num-suffix=")" style:num-format="a" text:start-value="3"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="space" fo:text-indent="-0.25in" fo:margin-left="0.5in"/></style:list-level-properties></text:list-level-style-number><text:list-level-style-number text:level="2" style:num-format="i" text:display-levels="2"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="nothing" fo:text-indent="-0.25in" fo:margin-left="0.75in"/></style:list-level-properties></text:list-level-style-number></text:list-style><text:list-style style:name="L2"><text:list-level-style-image text:level="1" xlink:href="Pictures/dot.png" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment" style:vertical-pos="middle" style:vertical-rel="line" fo:width="0.12in" fo:height="0.12in"><style:list-level-label-alignment text:label-followed-by="listtab" text:list-tab-stop-position="0.5in" fo:text-indent="-0.25in" fo:margin-left="0.5in"/></style:list-level-properties></text:list-level-style-image></text:list-style><style:style style:name="P7" style:family="paragraph"><style:paragraph-properties wcx:item="kept"/></style:style></office:automatic-styles><office:body><office:text><text:list xml:id="list1" text:style-name="L1"><text:list-header><text:p>A heading not counted</text:p></text:list-header><text:list-item><text:p text:style-name="P7">First</text:p></text:list-item><text:list-item><text:p>Second</text:p><text:list><text:list-item><text:p>Inner</text:p></text:list-item></text:list></text:list-item></text:list><text:p>Between the lists.</text:p><text:list xml:id="list2" text:continue-list="list1" text:style-name="L1"><text:list-item><text:p>Third, going on</text:p></text:list-item></text:list><text:list xml:id="list3" text:style-name="L2"><text:list-item><text:p>Pictured</text:p></text:list-item></text:list></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 15] =
-    [TEXT, STYLES, META, DECLS, TABLE, PAGES, SECTIONS, FORMS, INDEXES, DRAWINGS, COMMENTS, CHANGES, TEXT_BOXES, BOOKMARKS, NOTES_AND_FORMULAS];
+const SAMPLES: [Sample; 16] = [
+    TEXT,
+    STYLES,
+    META,
+    DECLS,
+    TABLE,
+    PAGES,
+    SECTIONS,
+    FORMS,
+    INDEXES,
+    DRAWINGS,
+    COMMENTS,
+    CHANGES,
+    TEXT_BOXES,
+    BOOKMARKS,
+    NOTES_AND_FORMULAS,
+    LISTS,
+];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
 fn well_formed(xml: &[u8]) -> bool {
@@ -625,4 +650,78 @@ fn a_note_or_formula_edited_is_written_from_the_model() {
     let saved = export(&e).unwrap();
     assert!(!names(&saved).iter().any(|n| n.starts_with("Object 9")), "{:?}", names(&saved));
     assert!(parts_well_formed(&saved).is_ok());
+}
+
+#[test]
+fn a_list_kept_as_read_is_gone_on_with_and_an_edited_one_written_anew() {
+    let d = import(&package(&LISTS)).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    // As read; the list going on with it (written from the model) names it.
+    assert!(c.contains(r#"<text:list xml:id="list1" text:style-name="L1">"#) && c.contains(r#"text:label-followed-by="space""#), "{c}");
+    let going_on = c.split("Between the lists.").nth(1).unwrap_or("");
+    assert!(going_on.contains(r#"text:continue-list="list1""#), "{c}");
+    // An item edited: the list written from the model, its numbering going on still.
+    let mut e = d.clone();
+    let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("Second"))).unwrap();
+    if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
+    let saved = export(&e).unwrap();
+    let c = content_of(&saved);
+    assert!(!c.contains(r#"xml:id="list1""#) && c.contains("Second"), "{c}");
+    assert!(parts_well_formed(&saved).is_ok());
+    let going_on = c.split("Between the lists.").nth(1).unwrap_or("");
+    let first = c.split("<text:list xml:id=\"").nth(1).and_then(|r| r.split('"').next()).unwrap_or_default();
+    assert!(going_on.contains(&format!("text:continue-list=\"{first}\"")), "{c}");
+}
+
+#[test]
+fn a_hidden_section_stays_hidden_however_it_is_written() {
+    // §19.818 `text:display="none"`: what it holds is hidden text. Ending in a list, it isn't
+    // written around its blocks; they are hidden text themselves.
+    let content = r##"<office:automatic-styles><text:list-style style:name="L5"><text:list-level-style-bullet text:level="1" text:bullet-char="-"/></text:list-style></office:automatic-styles><office:body><office:text><text:p>Shown.</text:p><text:section text:name="Notes" text:display="none"><text:p>Hidden words.</text:p><text:list xml:id="l5" text:style-name="L5"><text:list-item><text:p>Hidden item.</text:p></text:list-item></text:list></text:section><text:p>Shown again.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "hidden", content, styles: "", meta: "" })).unwrap();
+    let hidden = |d: &wordcraft_doc::Document, start: &str| {
+        let p = d.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with(start)).unwrap();
+        p.runs.iter().all(|r| r.props.hidden == Some(true))
+    };
+    assert!(hidden(&d, "Hidden words") && hidden(&d, "Hidden item") && !hidden(&d, "Shown again"));
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert!(hidden(&back, "Hidden words") && hidden(&back, "Hidden item") && !hidden(&back, "Shown again"));
+}
+
+#[test]
+fn a_section_ending_in_a_list_closes_before_the_list_goes_on() {
+    // The list goes on after the section (the same list): written as read or from the model, the
+    // section closes before it, so what follows isn't drawn into it (hidden with it).
+    let content = r##"<office:automatic-styles><text:list-style style:name="L6"><text:list-level-style-number text:level="1" style:num-format="1"/></text:list-style></office:automatic-styles><office:body><office:text><text:section text:name="Hidden" text:display="none"><text:p>Hidden words.</text:p><text:list xml:id="l6" text:style-name="L6"><text:list-item><text:p>Hidden item.</text:p></text:list-item></text:list></text:section><text:list xml:id="l7" text:continue-list="l6" text:style-name="L6"><text:list-item><text:p>Shown item.</text:p></text:list-item></text:list><text:p>Shown after.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "list in section", content, styles: "", meta: "" })).unwrap();
+    let check = |d: &wordcraft_doc::Document, sectioned: bool| {
+        let saved = export(d).unwrap();
+        assert!(parts_well_formed(&saved).is_ok());
+        let c = content_of(&saved);
+        if sectioned {
+            let close = c.find("</text:section>").unwrap_or(usize::MAX);
+            assert!(close < c.find("Shown item.").unwrap_or(0), "{c}");
+            assert!(c.find("Hidden item.").unwrap_or(usize::MAX) < close, "{c}");
+        }
+        let back = import(&saved).unwrap();
+        let hidden = |start: &str| {
+            let p = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with(start)).unwrap();
+            p.runs.iter().all(|r| r.props.hidden == Some(true))
+        };
+        assert!(hidden("Hidden item") && !hidden("Shown item") && !hidden("Shown after"), "{c}");
+    };
+    check(&d, true);
+    // Everything edited: written from the model, without the section (its paragraphs aren't
+    // as read), its text hidden still.
+    let mut e = d.clone();
+    for b in e.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.style = Some("Edited".into());
+            p.touch();
+        }
+    }
+    check(&e, false);
 }

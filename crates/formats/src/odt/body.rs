@@ -104,6 +104,14 @@ pub(super) struct Body<'a> {
     kept_table: Option<KeptOpen>,
     /// The body index (a table of contents…) whose markup is being kept, likewise.
     kept_index: Option<KeptOpen>,
+    /// Sections hidden (§19.818 `text:display="none"`) open: their depth, how many containers were
+    /// open, and the length of the one holding them, at their start.
+    hidden_sections: Vec<(usize, usize, usize)>,
+    /// A hidden section just read: the containers open and where its blocks start, hidden
+    /// before the next event (when what ends with it has ended).
+    hide_pending: Option<(usize, usize)>,
+    /// The top-level list whose markup is being kept, likewise (its items' paragraphs all kept).
+    kept_list: Option<KeptOpen>,
     /// Sections whose wrapper is kept as read (in the body's or a text box's top level): start
     /// tag, depth, the length of what holds it before it and how many containers are open;
     /// `None` for one read as a columned section (kept as a section break) or anywhere else.
@@ -238,6 +246,9 @@ impl<'a> Body<'a> {
             kept_open: None,
             kept_table: None,
             kept_index: None,
+            kept_list: None,
+            hidden_sections: Vec::new(),
+            hide_pending: None,
             kept_sections: Vec::new(),
             section_masters: vec![None],
             pending_master: None,
@@ -314,6 +325,85 @@ impl<'a> Body<'a> {
         self.item_start = None;
     }
 
+    /// [`Body::feed_at`] for a section hidden (§19.818 `text:display="none"`): what it holds is
+    /// hidden text, so it stays hidden written without the section (see [`Body::hide_read`]).
+    fn hidden_section(&mut self, ev: &Ev) {
+        match ev {
+            Ev::Start(q, a) if q == "text:section" && get(a, "text:display").map(str::trim) == Some("none") && self.hidden_sections.len() < 64 => {
+                self.end_para();
+                let at = (self.depth + 1, self.containers.len(), self.container().len());
+                self.hidden_sections.push(at);
+            }
+            Ev::End(q) if q == "text:section" && self.hidden_sections.last().is_some_and(|h| h.0 == self.depth) => {
+                if let Some((_, open, from)) = self.hidden_sections.pop() {
+                    self.hide_pending = Some((open, from));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The hidden section just read made hidden text. Its blocks are written from the model,
+    /// hidden: markup kept as read doesn't say so itself (its section might not be written
+    /// around it).
+    pub(super) fn hide_read(&mut self) {
+        if let Some((open, from)) = self.hide_pending.take()
+            && self.containers.len() == open
+        {
+            hide(self.container().get_mut(from..).unwrap_or_default(), 0);
+        }
+    }
+
+    /// [`Body::feed_at`] for a top-level list (§5.3.1): kept whole, as read, when each of its
+    /// paragraphs is (a paragraph's own markup can't say how its list numbers and draws its
+    /// labels: a label followed by a space, a picture bullet, an unnumbered header). Not one
+    /// continuing another by its `xml:id`, which WordCraft may write anew, nor one without
+    /// its own, which a list continuing it can't name. `None` when it took the event.
+    fn whole_list(&mut self, ev: Ev, at: (usize, usize)) -> Option<Ev> {
+        match &ev {
+            Ev::Start(q, a)
+                if q == "text:list"
+                    && self.kept_list.is_none()
+                    && self.lists.is_empty()
+                    && self.para.is_none()
+                    && get(a, "text:continue-list").is_none()
+                    && get(a, "xml:id").is_some_and(|i| !i.is_empty())
+                    && !self.raw.is_empty()
+                    && self.in_text
+                    && self.skip == 0
+                    && self.del.is_none()
+                    && self.loose.is_empty()
+                    && self.at_body_level() =>
+            {
+                self.end_para();
+                let done = self.container().len();
+                self.kept_list =
+                    Some(KeptOpen { from: at.0, depth: self.depth + 1, clean: true, done, comments: KeptComments::default(), prefix: String::new() });
+                Some(ev)
+            }
+            Ev::End(q) if q == "text:list" && self.kept_list.as_ref().is_some_and(|k| k.depth == self.depth) => {
+                let k = self.kept_list.take();
+                self.feed(ev);
+                if let Some(k) = k
+                    && self.containers.len() == 1
+                    && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
+                {
+                    let blocks = self.container();
+                    let n = blocks.len().saturating_sub(k.done);
+                    let whole = |b: &FBlock| matches!(b, FBlock::Para(p) if p.kept.is_some() && p.index.is_none() && p.wrap.is_none());
+                    if n > 0
+                        && blocks.get(k.done..).is_some_and(|r| r.iter().all(whole))
+                        && let Some(FBlock::Para(p)) = blocks.get_mut(k.done)
+                    {
+                        p.index = Some(Box::new((std::sync::Arc::from(xml), n)));
+                    }
+                }
+                None
+            }
+            _ => Some(ev),
+        }
+    }
+
     /// [`Body::feed_at`] for a drawing outside a paragraph (a page-anchored frame in the text):
     /// its markup kept, for the paragraph it joins. `None` when it took the event.
     fn loose_drawing(&mut self, ev: Ev, at: (usize, usize)) -> Option<Ev> {
@@ -351,6 +441,8 @@ impl<'a> Body<'a> {
     /// whole and refers to nothing outside itself keeps its markup (`Para::kept`), so a save
     /// that doesn't change it writes it as it was (see `wordcraft_doc::kept`).
     pub(super) fn feed_at(&mut self, ev: Ev, at: (usize, usize)) {
+        self.hide_read();
+        self.hidden_section(&ev);
         // A body index, kept whole: its settings and templates, which WordCraft writes its own.
         match &ev {
             Ev::Start(q, _) => match &mut self.kept_index {
@@ -429,9 +521,9 @@ impl<'a> Body<'a> {
                 {
                     // Around top-level paragraphs and tables: the first opens it, the last closes it.
                     let blocks = self.container();
-                    // (Not a list item: a list is written around its items.)
-                    let wrappable = |b: Option<&FBlock>| !matches!(b, None | Some(FBlock::Para(Para { list: Some(_), .. })));
-                    if blocks.len() > from && wrappable(blocks.get(from)) && wrappable(blocks.last()) {
+                    // (A list item too: the list its items are written as opens and closes them,
+                    // a section boundary ending it.)
+                    if blocks.len() > from {
                         if let Some(b) = blocks.get_mut(from) {
                             block_wrap(b).0.insert(0, tag);
                         }
@@ -489,6 +581,7 @@ impl<'a> Body<'a> {
             _ => {}
         }
         let Some(ev) = self.loose_drawing(ev, at) else { return };
+        let Some(ev) = self.whole_list(ev, at) else { return };
         match &ev {
             Ev::Start(q, a) => match &mut self.kept_open {
                 Some(k) => {
@@ -641,6 +734,7 @@ impl<'a> Body<'a> {
             self.end_note();
         }
         self.end_para();
+        self.hide_read();
         // Drawings after the last paragraph: a paragraph of their own.
         if !self.loose.is_empty() {
             self.start_para(None, None);
@@ -1850,6 +1944,38 @@ fn keepable(q: &str) -> bool {
         || q.starts_with("text:change")
         || q.starts_with("form:")
         || (q.ends_with("-start") || q.ends_with("-end")) && !q.starts_with("text:bookmark-"))
+}
+
+/// `blocks` hidden: their text and paragraph marks, and those in their tables' cells.
+fn hide(blocks: &mut [FBlock], depth: usize) {
+    let hidden = |f: &mut Fmt| f.extra.get_or_insert_with(Default::default).hidden = Some(true);
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                for i in &mut p.inlines {
+                    match i {
+                        Inline::Text(_, f)
+                        | Inline::Control { fmt: f, .. }
+                        | Inline::Ruby { fmt: f, .. }
+                        | Inline::Field { fmt: f, .. }
+                        | Inline::Note { fmt: f, .. } => {
+                            hidden(f);
+                        }
+                        _ => {}
+                    }
+                }
+                p.mark.get_or_insert_with(Default::default).hidden = Some(true);
+                (p.kept, p.index) = (None, None);
+            }
+            FBlock::Table(t) if depth < model::MAX_DEPTH => {
+                t.kept = None;
+                for c in t.rows.iter_mut().flatten() {
+                    hide(&mut c.blocks, depth + 1);
+                }
+            }
+            FBlock::Table(_) => {}
+        }
+    }
 }
 
 /// Whether `q` is a drawing that can hold text: a frame, a group or a shape.
