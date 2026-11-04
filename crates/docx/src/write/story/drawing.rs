@@ -27,8 +27,8 @@ impl Writer<'_> {
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
         w.empty("a:blip", &[("r:embed", &rid)]);
-        if crop.iter().any(|c| *c > 0.0) {
-            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
+        if crop.iter().any(|c| wordcraft_geom::finite(*c) != 0.0) {
+            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(-1.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
         }
         w.open("a:stretch", &[]);
