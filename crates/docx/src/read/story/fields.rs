@@ -68,7 +68,10 @@ impl Reader<'_> {
         f.phase = Phase::Result;
         if !f.spilled && !nested_in_instr && is_range_instr(&f.instr) {
             f.range = true;
-            let (obj, props) = (InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, f.props.clone());
+            let (obj, props) = (
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, form: std::mem::take(&mut f.form) },
+                f.props.clone(),
+            );
             self.emit_obj(sc, pb, obj, &props);
         }
     }
@@ -89,7 +92,12 @@ impl Reader<'_> {
         }
         if f.phase == Phase::Instr && !nested_in_instr && is_range_instr(&f.instr) {
             // A range field with no result yet.
-            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
+            self.emit_obj(
+                sc,
+                pb,
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, form: f.form },
+                &f.props,
+            );
             self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
@@ -113,9 +121,13 @@ impl Reader<'_> {
         // in) keeps the field a range too: a cached text result has one revision at most, so
         // each piece stays an ordinary run with its own `w:ins` / `w:del` (#1037).
         let tracked_inside = f.buf.iter().any(|(_, p)| (p.ins, p.del, &p.fmt_change) != (f.props.ins, f.props.del, &f.props.fmt_change));
-        if !nested_in_instr && f.form.is_empty() && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some())))
-        {
-            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
+        if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
+            self.emit_obj(
+                sc,
+                pb,
+                InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty, form: f.form },
+                &f.props,
+            );
             for (it, p) in f.buf {
                 match it {
                     Item::Text(t) => self.emit_text(sc, pb, &t, &p),

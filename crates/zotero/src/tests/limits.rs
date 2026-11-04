@@ -24,7 +24,9 @@ fn objects_para(objects: Vec<InlineObject>) -> Paragraph {
 
 /// `n` empty Zotero citation fields in a row.
 fn citations(n: usize) -> Vec<InlineObject> {
-    (0..n).flat_map(|_| [InlineObject::FieldStart { instr: CITE.into(), locked: false, dirty: false }, InlineObject::FieldEnd]).collect()
+    (0..n)
+        .flat_map(|_| [InlineObject::FieldStart { instr: CITE.into(), locked: false, dirty: false, form: String::new() }, InlineObject::FieldEnd])
+        .collect()
 }
 
 // Finding 12: one endnote referenced many times is listed once, not once per reference.
@@ -48,7 +50,9 @@ fn listing_stops_at_the_field_budget() {
     assert_eq!(fields::list(&doc).len(), fields::MAX_FIELDS);
     // Codes count too: a few huge codes fill the byte budget before the field budget.
     let big = format!("{CITE}{}", "x".repeat(fields::MAX_CODE_BYTES / 4 - 1000));
-    let huge = (0..5).flat_map(|_| [InlineObject::FieldStart { instr: big.clone(), locked: false, dirty: false }, InlineObject::FieldEnd]).collect();
+    let huge = (0..5)
+        .flat_map(|_| [InlineObject::FieldStart { instr: big.clone(), locked: false, dirty: false, form: String::new() }, InlineObject::FieldEnd])
+        .collect();
     doc.body = vec![para_block(objects_para(huge))];
     assert_eq!(fields::list(&doc).len(), 4);
 }

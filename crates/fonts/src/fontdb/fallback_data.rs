@@ -17,9 +17,9 @@ pub(super) struct SysFallback {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const SYS_MISSES_MAX: usize = 65_536;
 
-/// Installed font files larger than this are not searched for fallback characters.
+/// Installed font files larger than this are not searched for general fallback characters.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
+const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
 
 /// Which characters each cataloged font file maps (#605). Before it, every distinct character no
 /// loaded font covered read and parsed every installed font file again: 500 distinct Tangut
@@ -45,6 +45,8 @@ pub(super) struct IndexedFile {
     /// The code points the file's faces map, as sorted, disjoint inclusive ranges (`None` until
     /// the file is read; empty when it can't be read or is too large).
     pub(super) ranges: Option<Box<[(u32, u32)]>>,
+    /// Whether coverage has already been checked through [`read_family_coverage`].
+    pub(super) family_checked: bool,
     /// Loaded for a character it covers: its faces are searched as loaded fonts from then on.
     pub(super) used: bool,
 }
@@ -120,6 +122,64 @@ pub(super) fn read_fallback_file(path: &std::path::Path) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     file.take(SYS_FALLBACK_MAX_FILE + 1).read_to_end(&mut data).ok()?;
     (data.len() as u64 <= SYS_FALLBACK_MAX_FILE).then_some(data)
+}
+
+/// Coverage ranges for a cataloged preferred-family font file: uses [`read_fallback_file`] when
+/// within [`SYS_FALLBACK_MAX_FILE`], or reads only each face's `cmap` table for larger collections
+/// without reading the whole file into memory.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn read_family_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> {
+    if let Some(data) = read_fallback_file(path) {
+        return coverage_ranges(&data);
+    }
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX_FACES: u32 = 256;
+    const MAX_CMAP: u32 = 4 << 20;
+    let Ok(mut file) = std::fs::File::open(path) else { return Box::new([]) };
+    let Ok(meta) = file.metadata() else { return Box::new([]) };
+    if !meta.is_file() {
+        return Box::new([]);
+    }
+    let mut read_at = |offset: u64, len: usize| -> Option<Vec<u8>> {
+        let mut buf = vec![0; len];
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        file.read_exact(&mut buf).ok()?;
+        Some(buf)
+    };
+    let be32 = |b: &[u8], at: usize| b.get(at..at + 4).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes);
+    let Some(head) = read_at(0, 12) else { return Box::new([]) };
+    let starts: Vec<u32> = if head.starts_with(b"ttcf") {
+        let n = be32(&head, 8).unwrap_or(0).min(MAX_FACES) as usize;
+        read_at(12, n * 4).map(|b| b.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect()).unwrap_or_default()
+    } else {
+        vec![0]
+    };
+    let mut all: Vec<(u32, u32)> = Vec::new();
+    for start in starts {
+        let Some(dir) = read_at(start.into(), 12) else { continue };
+        let Some(tables) = dir.get(4..6).and_then(|s| s.try_into().ok()).map(u16::from_be_bytes) else { continue };
+        let Some(records) = read_at(u64::from(start) + 12, usize::from(tables) * 16) else { continue };
+        let Some(rec) = records.as_chunks::<16>().0.iter().find(|r| r.starts_with(b"cmap")) else { continue };
+        let (Some(offset), Some(len)) = (be32(rec, 8), be32(rec, 12)) else { continue };
+        if len > MAX_CMAP {
+            continue;
+        }
+        let Some(cmap) = read_at(offset.into(), len as usize) else { continue };
+        let mini = super::names::mini_font(&[(*b"cmap", cmap)]);
+        all.extend(coverage_ranges(&mini).iter().copied());
+        if all.len() >= (1 << 17) {
+            break;
+        }
+    }
+    all.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(all.len());
+    for (s, e) in all {
+        match out.last_mut() {
+            Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
+        }
+    }
+    out.into_boxed_slice()
 }
 
 /// Families preferred for right-to-left scripts (Persian, Arabic, Urdu, Hebrew) when the

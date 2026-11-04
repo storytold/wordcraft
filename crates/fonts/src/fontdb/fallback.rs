@@ -1,7 +1,7 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{
-    CoverageIndex, IndexedFile, SYS_FALLBACK_MAX_FILE, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file,
+    CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file, read_family_coverage,
 };
 use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
 use super::{Arc, FontDb};
@@ -254,26 +254,25 @@ impl FontDb {
             catalog_paths.dedup();
             index.files = catalog_paths
                 .into_iter()
-                .map(|path| known.remove(&path).unwrap_or_else(|| IndexedFile { used: index.loaded.contains(&path), path, ranges: None }))
+                .map(|path| {
+                    known.remove(&path).unwrap_or_else(|| IndexedFile {
+                        used: index.loaded.contains(&path),
+                        path,
+                        ranges: None,
+                        family_checked: false,
+                    })
+                })
                 .collect();
             index.generation = Some(generation);
         }
         let CoverageIndex { files, reads, .. } = &mut *index;
         for file in files.iter_mut().filter(|f| paths.contains(&f.path)) {
-            if let Some(ranges) = &file.ranges
-                && (!ranges.is_empty() || std::fs::metadata(&file.path).is_ok_and(|m| m.len() <= SYS_FALLBACK_MAX_FILE))
-            {
-                if ranges_hold(ranges, cp) {
-                    return true;
-                }
-                continue;
+            if file.ranges.as_ref().is_none_or(|r| r.is_empty() && !file.family_checked) {
+                *reads += 1;
+                file.ranges = Some(read_family_coverage(&file.path));
+                file.family_checked = true;
             }
-            *reads += 1;
-            let data = read_fallback_file(&file.path).or_else(|| std::fs::read(&file.path).ok());
-            let ranges = data.as_deref().map(coverage_ranges).unwrap_or_default();
-            let hit = ranges_hold(&ranges, cp);
-            file.ranges = Some(ranges);
-            if hit {
+            if file.ranges.as_deref().is_some_and(|ranges| ranges_hold(ranges, cp)) {
                 return true;
             }
         }
@@ -363,9 +362,9 @@ impl FontDb {
                 self.catalog.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|e| e.path.clone()).collect();
             paths.sort();
             paths.dedup();
-            let files = paths
-                .into_iter()
-                .map(|path| known.remove(&path).unwrap_or_else(|| IndexedFile { used: index.loaded.contains(&path), path, ranges: None }));
+            let files = paths.into_iter().map(|path| {
+                known.remove(&path).unwrap_or_else(|| IndexedFile { used: index.loaded.contains(&path), path, ranges: None, family_checked: false })
+            });
             index.files = files.collect();
             index.generation = Some(generation);
         }

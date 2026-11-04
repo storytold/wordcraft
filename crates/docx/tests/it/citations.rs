@@ -222,7 +222,7 @@ fn orphan_markers_from_editing_are_dropped_on_save() {
     d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_object(0, InlineObject::FieldEnd, &c).unwrap();
     d.para_mut(StoryRef::Body, &Path::top(1))
         .unwrap()
-        .insert_object(1, InlineObject::FieldStart { instr: "ADDIN X".into(), locked: true, dirty: false }, &c)
+        .insert_object(1, InlineObject::FieldStart { instr: "ADDIN X".into(), locked: true, dirty: false, form: String::new() }, &c)
         .unwrap();
     let xml = document_xml(&write(&d).unwrap());
     assert_eq!(count(&xml, "begin"), 0);
@@ -236,7 +236,8 @@ fn programmatic_range_field_writes_as_word_field() {
     let mut d = Document::from_text("ab");
     let c = CharProps::default();
     let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
-    p.insert_object(1, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM {}".into(), locked: false, dirty: false }, &c).unwrap();
+    p.insert_object(1, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM {}".into(), locked: false, dirty: false, form: String::new() }, &c)
+        .unwrap();
     let end = 1 + OBJ.len_utf8() + 1;
     p.insert_object(end, InlineObject::FieldEnd, &c).unwrap();
     d.set_custom_prop("ZOTERO_PREF_1", "<data/>");

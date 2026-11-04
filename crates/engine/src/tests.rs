@@ -3855,7 +3855,12 @@ fn imported_range_toc_is_refreshed_in_place() {
             let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
             let n = p.len();
             p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false }, &CharProps::default()).unwrap();
+            p.insert_object(
+                0,
+                InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false, form: String::new() },
+                &CharProps::default(),
+            )
+            .unwrap();
         }
         let mut s = Session::new(d);
         for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -3904,8 +3909,12 @@ fn toc_menu_offers_update_field_after_save_and_reopen() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
     }
     let mut s = Session::new(d);
     for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -4298,7 +4307,8 @@ fn toc_menu_targets_the_toc_update_table_refreshes() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(para)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false, form: String::new() }, &CharProps::default())
+            .unwrap();
     }
     let mut s = Session::new(d);
     let at = |s: &mut Session, block: usize| {
@@ -4415,7 +4425,7 @@ fn imported_dirty_toc_updates_in_place_and_clears() {
         p.insert_object(n, wordcraft_doc::InlineObject::FieldEnd, &wordcraft_doc::props::CharProps::default()).unwrap();
         p.insert_object(
             0,
-            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true },
+            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true, form: String::new() },
             &wordcraft_doc::props::CharProps::default(),
         )
         .unwrap();
@@ -4474,8 +4484,12 @@ fn toc_page_numbers_reach_the_right_margin() {
         toc2.para.indent_left = Some(36.9);
         toc2.para.indent_first = Some(-22.7);
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap();
         p.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
     }

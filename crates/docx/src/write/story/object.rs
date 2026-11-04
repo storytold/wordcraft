@@ -59,9 +59,9 @@ impl Writer<'_> {
             InlineObject::Field { instr, result, locked, dirty, form, .. } => {
                 self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
             }
-            InlineObject::FieldStart { instr, locked, dirty } => {
+            InlineObject::FieldStart { instr, locked, dirty, form } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, *dirty, "", props);
+                self.field_start(w, instr, *locked, *dirty, form, props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {

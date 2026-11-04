@@ -368,10 +368,13 @@ fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
 #[test]
 fn field_result_rpr_change_and_table_revisions_round_trip() {
     let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section 3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let form_fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Field1"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:ins w:id="10" w:author="Alice"><w:r><w:t>Added </w:t></w:r></w:ins><w:r><w:rPr><w:b/><w:rPrChange w:id="11" w:author="Bob"><w:rPr/></w:rPrChange></w:rPr><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
     let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-    let d = read(&package(&format!("{fld}{tbl}"))).unwrap();
+    let d = read(&package(&format!("{fld}{form_fld}{tbl}"))).unwrap();
     let xml = document_xml(&write(&d).unwrap());
-    assert!(xml.contains("<w:rPrChange "), "{xml}");
+    assert!(xml.contains(r#"<w:name w:val="Field1"/>"#), "{xml}");
+    assert!(xml.contains("Added ") && xml.contains("<w:ins "), "{xml}");
+    assert_eq!(xml.matches("<w:rPrChange ").count(), 2, "{xml}");
     assert!(xml.contains("<w:tblPrExChange "), "{xml}");
     assert!(xml.contains("<w:cellIns "), "{xml}");
 }
