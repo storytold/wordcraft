@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -24,12 +24,12 @@ wordcraft-pdf = { path = "crates/pdf" }
 # Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
 # language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
 # `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
-# Khmer support is storytold/craft-libs#551, synchronized with main 01315d9,
+# Khmer support is storytold/craft-libs#551, synchronized with main 38740b4,
 # including French elision ordering (#589) and Valencian pack selection (#590).
-# Keep the accepted companion commit reachable; see docs/khmer-integration.md.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "f4875b2f30697d56bfdc94494c3b33d2bb0f75ca", version = "=0.1.0" }
+# Keep the companion commit reachable for review; see docs/khmer-integration.md.
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "8b831f21b0d91019ea663ee53c0f2e101c8e17f5", version = "=0.1.0" }
 # Document word counts need Khmer boundaries without pulling in proofing packs.
-craft-khmer = { git = "https://github.com/storytold/craft-libs", rev = "f4875b2f30697d56bfdc94494c3b33d2bb0f75ca", version = "=0.1.0" }
+craft-khmer = { git = "https://github.com/storytold/craft-libs", rev = "8b831f21b0d91019ea663ee53c0f2e101c8e17f5", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }

@@ -309,8 +309,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("shape.change", "Change Shape", "Shape Format › Insert Shapes", |s, v| {
             let kind: wordcraft_doc::para::ShapeKind = serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_obj(s, |o| {
-                if let InlineObject::Shape { kind: k, .. } = o {
+                if let InlineObject::Shape { kind: k, extra, .. } = o {
                     *k = kind;
+                    // A geometry kept from a file is no longer this shape's.
+                    extra.odf_geometry = None;
                 }
             })
         })

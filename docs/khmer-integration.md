@@ -1,14 +1,19 @@
 # Khmer language integration
 
-Reconciled 2026-11-04 with WordCraft main `1340705f`, craft-libs main `01315d9`,
-and craft-i18n main `575cfde` (including WordCraft’s catalog updates `cde4900` and `9d6d54d`).
+Reconciled 2026-11-04 with WordCraft main `92ecb401`, craft-libs main `38740b4`,
+and craft-i18n main `c199dc4` (including WordCraft’s catalog updates `cde4900` and `9d6d54d`).
 This draft pins the companion heads of [craft-libs #551](https://github.com/storytold/craft-libs/pull/551)
 and [craft-i18n #122](https://github.com/storytold/craft-i18n/pull/122), fetched through the upstream repositories.
 Merge the dependencies first and retain or update those pins. See [examples and evidence](khmer-evidence.md).
 
+Data embedding is currently disabled pending inherited frequency-source notices,
+maintainer Embeddable sign-off and the model/config policy decision. The Khmer
+engine implementation and earlier data-enabled evidence remain for review;
+current builds use the no-data path. See the provenance section below.
+
 ## User behavior
 
-An explicit Khmer language build provides offline dictionary/model word wrapping,
+After maintainer approval, an explicit Khmer language build can provide offline dictionary/model word wrapping,
 spelling suggestions and preferred-spelling/phrase rules. There is no JavaScript
 runtime or online checking service. Preferred-form rules are not general sentence
 grammar or semantic checking.
@@ -71,7 +76,8 @@ regression checks a wrap crossing pages.
    staged by its existing verified cache/fetch tooling. No raw Khmer dictionaries
    or publisher books are committed to the app or shared-library repository.
 2. `craft-libs` adds `craft-khmer`, below the app layer, and integrates it into
-   `craft-proof`. `CRAFT_KHMER_DIR` selects a staged pack. The offline build
+   `craft-proof`. A supplied `CRAFT_KHMER_DIR` is currently rejected because the
+   pack is Download-only. After approval, the offline build
    validates source and canonical hashes and produces separate lossless Brotli
    assets. `CRAFT_KHMER_REQUIRED=1` rejects absent data; explicit corrupt or
    incomplete data always fails. With no directory, the crate builds without data.
@@ -79,8 +85,8 @@ regression checks a wrap crossing pages.
    local language crate. Cargo.toml and Cargo.lock pin craft-libs #551 through
    the official git URL; craft-i18n.rev pins #122. No local Cargo patch is
    required to reproduce the submitted app. No release workflow changes are included.
-   Existing default CI checks the no-Khmer-data path; use the explicit build below
-   to exercise the Khmer language data. Runtime-pack loading remains a separate decision.
+   Current CI checks the no-Khmer-data path. The explicit data build is gated
+   pending maintainer classification. Runtime-pack loading remains a separate decision.
 
 The full language payload is 714,343 compressed bytes from 4,230,002 canonical
 bytes, with every dictionary record and all 39,127 f64 model weights retained.
@@ -166,7 +172,7 @@ Dictionary lookup accepts either an exact repeated expression or its valid stem 
 
 ## Credit
 
-Contributor: **@sungkhum**, with Sol-agent assistance. Aksara is MIT licensed,
+Contributor: **Nathan Wells (@sungkhum)**, with Sol-agent assistance. Aksara is MIT licensed,
 Copyright (c) 2025 SBBIC Khmer. Both previous WordCraft contributors are credited
 above and in source. See their original proposals:
 [touchde #3110](https://github.com/storytold/wordcraft/pull/3110),
@@ -174,43 +180,45 @@ above and in source. See their original proposals:
 The contributor's founding of SBBIC.org and work on Khmer word breaking with the
 Unicode Consortium provide relevant experience, not institutional endorsement.
 
-## Reproduce an explicit Khmer build
+## Validate the current build
 
-Check out the companion data revision named in `craft-i18n.rev`, then use its
-existing manifest tool to stage the source files. From the WordCraft checkout,
-with `../craft-i18n` at that revision and a fresh `../khmer-pack` destination:
+Check out the companion data revision named in `craft-i18n.rev`. Run current app
+checks with `CRAFT_KHMER_DIR` and `CRAFT_KHMER_REQUIRED` unset:
 
 ```sh
-cargo run --manifest-path ../craft-i18n/Cargo.toml --bin language-packs -- stage --locale km --out ../khmer-pack
-CRAFT_I18N_DIR="$(cd ../craft-i18n && pwd)" CRAFT_KHMER_DIR="$(cd ../khmer-pack && pwd)" CRAFT_KHMER_REQUIRED=1 cargo xtask ci
-CRAFT_I18N_DIR="$(cd ../craft-i18n && pwd)" CRAFT_KHMER_DIR="$(cd ../khmer-pack && pwd)" CRAFT_KHMER_REQUIRED=1 cargo run --locked -p wordcraft
+cargo xtask ci
 ```
 
-Use absolute paths for environment variables when Cargo is invoked from another
-directory. Staging downloads only pinned files and verifies their hashes; the
-subsequent language engine runs offline. On Windows, set the same environment
-variables using PowerShell before the Cargo commands. For a no-Khmer-data build,
-leave both `CRAFT_KHMER_DIR` and `CRAFT_KHMER_REQUIRED` unset.
+The proposed companion staging tool preserves SBBIC's and SIL's upstream licences
+under distinct names, plus the contributor-supplied SEAlang notice in
+`LICENCES/NOTICES.txt`. It requires an Embeddable class and currently rejects `km`
+before fetching or writing anything. The app's shared dependency independently
+rejects `CRAFT_KHMER_DIR` while its pinned class is Download-only; there is no
+override. Source inspection can use the pinned upstream URLs or verified cache.
 
 ## Data provenance and notices
 
-On 2026-11-03, SBBIC contributor @sungkhum identified SBBIC internal work,
-[SEAlang's frequency lists](http://sealang.net/project/list/), and
-[SIL NRSI's khmerlbdict](https://github.com/silnrsi/khmerlbdict) as sources for
-Aksara's language resources; SBBIC also contributed to khmerlbdict. SIL's
-[README](https://github.com/silnrsi/khmerlbdict/blob/master/README.md) independently
-records its use of the SEAlang Khmer frequency list and other named lists.
-SIL publishes its [MIT license](https://github.com/silnrsi/khmerlbdict/blob/master/LICENSE),
-Copyright (c) 2015 SIL NRSI. The contributor supplied SEAlang's MIT notice,
-Copyright (c) 2010, Doug Cooper, with a screenshot of the project's License page.
-Aksara's pinned repository carries the MIT notice, Copyright (c) 2025 SBBIC Khmer.
-All three copyright lines and the full permission notice ship in WordCraft's `NOTICE`.
+Nathan Wells (@sungkhum), working as SBBIC, confirmed on 2026-11-04 that the
+frequency dictionary combines SIL khmerlbdict with his own original work, and
+that the SymSpell dictionary, multiple-spellings list, titles, affix rules and
+tagger model are his original SBBIC work. SBBIC previously reported permission to
+train the tagger on internal documents; no private corpus is redistributed.
 
-This establishes the reported resource lineage and published/supplied license
-notices. SBBIC confirmed on 2026-11-03 that the tagger was trained on internal
-documents it has permission to train with. This is not a source-by-source
-training-data manifest. No private source corpus is shipped in this PR. The pinned
-raw-file hashes identify the distributed Aksara artifacts.
+The [per-file evidence record](https://github.com/storytold/craft-libs/pull/551)
+(`crates/khmer/PROVENANCE.md`) quotes these contributor statements and identifies
+all six pinned Aksara paths. SIL's README at
+[`54abc6b87f4ffa6a0c95c09836c7c86648002273`](https://github.com/silnrsi/khmerlbdict/blob/54abc6b87f4ffa6a0c95c09836c7c86648002273/README.md)
+lists SEAlang, CLDR names and further inputs. That is the evidence snapshot,
+not a confirmed historical SIL input revision. Its inherited CLDR version/notice
+and the source coverage for the combined frequency artifact remain unresolved.
+
+The supplied MIT notices identify SBBIC Khmer (2025), SIL NRSI (2015), and Doug
+Cooper (2010, SEAlang). All three are retained in WordCraft's `NOTICE`, the shared
+crate's `LICENSE-AKSARA`, and the staged licence record. Those notices alone do
+not establish every inherited source's permissions. Under craft-i18n ADR 0004,
+the pack is Download-only pending evidence and maintainer Embeddable sign-off.
+The maintainer also needs to settle the ADR scope for trained models and converted
+configuration. Current `craft-khmer` rejects embedding this pending pack.
 
 The `craft-i18n.rev` update retains the companion Khmer manifest together with
 its upstream catalog history; unrelated catalog commits are not Khmer translations.

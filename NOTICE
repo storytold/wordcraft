@@ -164,13 +164,14 @@ list (author, source, license) is in ATTRIBUTION.md.
 
 Optional Khmer language data (Aksara)
 
-Builds made with CRAFT_KHMER_DIR include Aksara's language model and proofing
-lexicons from SBBIC Khmer (https://github.com/sbbic-khmer/aksara-khmer-word-processor).
-SBBIC identifies internal work, the SEAlang frequency lists
-(http://sealang.net/project/list/), and SIL NRSI's Khmer line-breaking dictionary
-(https://github.com/silnrsi/khmerlbdict) as sources. These materials are MIT licensed;
-their copyright and permission notices follow. Builds without CRAFT_KHMER_DIR
-omit this data. See docs/khmer-integration.md for provenance and its limits.
+The Khmer engine is adapted from SBBIC Khmer's Aksara
+(https://github.com/sbbic-khmer/aksara-khmer-word-processor).
+Nathan Wells, working as SBBIC, identifies the frequency dictionary as SIL
+khmerlbdict combined with his own work, and the other five inputs as his original
+SBBIC work. SIL's README lists SEAlang and CLDR among its inherited sources.
+The supplied MIT notices follow; they do not resolve every inherited source's
+permissions. Optional data embedding is disabled pending maintainer approval
+and inherited-source notices. See docs/khmer-integration.md for the evidence.
 
 MIT License
 
@@ -199,7 +200,7 @@ SOFTWARE.
 Khmer integration credits: The dictionary adapter follows the separation introduced by NguyenDuc2309 in
 WordCraft #1579. Boundary safeguards and wrapped-line caret work build on
 touchde's WordCraft #3110 (MIT, WordCraft contributors). No ICU Khmer data
-is copied into this contribution. Contributor: @sungkhum, with Sol-agent assistance.
+is copied into this contribution. Contributor: Nathan Wells (@sungkhum), with Sol-agent assistance.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)
 are permissively licensed (MIT/Apache-2.0/BSD/ISC/Zlib) and fetched through crates.io or pinned Git sources.

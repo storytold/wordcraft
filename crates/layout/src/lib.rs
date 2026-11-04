@@ -51,6 +51,7 @@ mod notes;
 mod page;
 mod pass;
 mod placed;
+mod substituted;
 mod table_flow;
 
 #[cfg(test)]
@@ -79,6 +80,7 @@ use page::item_bottom;
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
+pub use substituted::MAX_SUBSTITUTED;
 
 /// How the document is viewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
