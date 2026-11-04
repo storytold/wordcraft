@@ -16,6 +16,8 @@ mod properties;
 mod toc;
 
 use fields::caption;
+#[cfg(test)]
+use fields::output_fields_with;
 pub use fields::{
     CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
 };

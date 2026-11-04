@@ -32,3 +32,22 @@ pub fn set_bookmark_error(text: &str) {
 pub(crate) fn bookmark_error() -> Option<Arc<str>> {
     BOOKMARK_ERROR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
+
+/// What output prints for a `REF` to a missing bookmark, in the interface language
+/// ([`set_reference_error`]); `None` until the shell sets it (English).
+static REFERENCE_ERROR: RwLock<Option<Arc<str>>> = RwLock::new(None);
+
+/// Tell the engine what PDFs, prints and page images show for a `REF` to a bookmark the document
+/// doesn't have, in the interface language: Word prints "Error! Reference source not found." in
+/// its own. The shell calls this when its language is set; headless sessions print English.
+pub fn set_reference_error(text: &str) {
+    let mut slot = REFERENCE_ERROR.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.as_deref() != Some(text) {
+        *slot = Some(Arc::from(text));
+    }
+}
+
+/// The text [`set_reference_error`] recorded, for output's `REF` results.
+pub(crate) fn reference_error() -> Option<Arc<str>> {
+    REFERENCE_ERROR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
