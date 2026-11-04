@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod complex;
 mod grid;
+mod khmer;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;

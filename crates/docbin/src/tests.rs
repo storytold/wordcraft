@@ -750,6 +750,19 @@ fn paragraph_props_and_heading_style() {
     assert_eq!(p1.props.style.as_deref(), Some("Normal"));
 }
 
+#[test]
+fn thai_distributed_paragraph_alignment_is_imported() {
+    let spec = RichSpec {
+        text: "Thai\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, grpprl(&[(0x2461, &[9])]))],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    assert_eq!(para0(&doc).props.align, Some(wordcraft_doc::Align::ThaiDistribute));
+}
+
 /// #534: Chinese theses set a first-line indent of two characters (`sprmPDxaLeft1`, whose operand
 /// is two bytes, plus `sprmPDxcLeft1` in hundredths of a character), and exact line spacing as a
 /// negative LSPD `dyaLine`. Both were lost: the indent read as four bytes, and exact 20pt as

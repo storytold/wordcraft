@@ -10,7 +10,8 @@ pub(super) fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u
     let unit = crate::options::unit().pt_per_unit();
     Dialog::Paragraph {
         rtl: rp.bidi,
-        align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
+        // The serde name (`thaiDistribute`), the one `para.set` and the combo's choices use.
+        align: serde_json::to_value(rp.align.visual(rp.bidi)).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(),
         left: vl / unit,
         right: vr / unit,
         first: rp.indent_first / unit,

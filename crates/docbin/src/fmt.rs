@@ -340,6 +340,8 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 2 => Some(Align::Right),
                 3 => Some(Align::Justify),
                 4 => Some(Align::Distribute),
+                // [MS-DOC] §2.6.2: only sprmPJc defines 9 as Thai Distributed.
+                9 if prl.op == P_JC => Some(Align::ThaiDistribute),
                 _ => Some(Align::Left),
             };
         }

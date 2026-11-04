@@ -127,6 +127,20 @@ fn every_keytip_command_is_registered() {
 }
 
 #[test]
+fn home_keytip_applies_thai_distributed_without_typing() {
+    use wordcraft_doc::{Align, Path, StoryRef};
+    let mut a = app();
+    activate(&mut a);
+    for key in [egui::Key::H, egui::Key::Num1] {
+        assert!(handle_key(&mut a, key));
+    }
+    assert_eq!(a.ui.keytips, Phase::Off);
+    let p = a.session.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.align, Some(Align::ThaiDistribute));
+    assert!(p.text.is_empty(), "keytip keys never enter the document");
+}
+
+#[test]
 fn letters_are_unique_inside_every_tab() {
     let a = app();
     let (tabs, cmds) = letters(&a);
