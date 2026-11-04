@@ -638,8 +638,6 @@ pub struct WordApp {
     pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
-    /// The pass the Print page was last drawn in: a gap means it has just been opened.
-    print_page_pass: Option<u64>,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
@@ -763,6 +761,9 @@ pub struct WordApp {
     pub missing_fonts: crate::chrome::MissingFontsMemo,
     /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
     pub status_counts: (u64, StatusCounts),
+    /// The window's viewport and the pass its Print page was last drawn in: a gap means the
+    /// page has just been opened. Per window, as each window counts its own passes.
+    print_page_pass: Option<(egui::ViewportId, u64)>,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
