@@ -75,8 +75,10 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// Said when the text comes after another document or window was brought forward.
 pub(crate) const CANCELLED: &str = "the paste was cancelled: another document or window is active";
 
-/// How long a deferred Paste waits for egui's text before saying there is none.
-const PASTE_WAIT_SECS: f64 = 1.0;
+/// How long a deferred Paste waits for egui's text before saying there is none: longer than the
+/// three seconds egui-winit's Wayland bridge may take to deliver it, so a late answer is still
+/// claimed here and never reaches the page as an ordinary paste.
+const PASTE_WAIT_SECS: f64 = 3.5;
 /// Frames a deferred Paste lets go by before asking egui: the menu it came from closes first.
 /// egui-winit drops a paste whose keyboard focus changed between the request and the text, and
 /// a closing context menu changes it.
@@ -106,7 +108,11 @@ pub(crate) struct PendingPaste {
 /// asked, and only the main window's input passes through [`claim`] (a window opened with View ›
 /// New Window keeps the old behaviour).
 fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    // A paste that brings its own content (an agent's html, rtf or picture) has what it needs;
+    // only Keep Text Only must have the clipboard's text.
+    let brings_content = ["html", "rtf", "picture"].iter().any(|k| params.get(*k).is_some());
     if id == "edit.pasteSpecial"
+        || (brings_content && id != "edit.pasteText")
         || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f())
         || app.active_viewport() != egui::ViewportId::ROOT
     {
@@ -501,6 +507,25 @@ mod tests {
         assert_eq!(first_para(&a), "", "nor into the one it was meant for, unseen");
     }
 
+    /// egui-winit's Wayland bridge may deliver the text up to three seconds after the request: an
+    /// answer that slow is still the menu Paste's, claimed and pasted, never left to the page as
+    /// an ordinary paste after a "no text" message.
+    #[test]
+    fn a_slow_answer_within_the_bridge_budget_is_still_claimed() {
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        frame(&mut a, &ctx, 1.5, vec![]);
+        assert!(a.pending_paste.is_some(), "still waiting after a second and a half");
+        let (_, left) = frame(&mut a, &ctx, 0.03 + 2.95, vec![paste("slow")]);
+        assert!(left.is_empty(), "claimed, not left to the page");
+        assert_eq!(first_para(&a), "slow");
+        assert!(a.status_msg.is_none(), "no 'no text' message before it");
+    }
+
     /// Keep Text Only and Merge Formatting wait the same way and run as themselves.
     #[test]
     fn the_waiting_paste_keeps_its_own_command() {
@@ -532,7 +557,7 @@ mod tests {
         frame(&mut a, &ctx, 0.03 + PASTE_WAIT_SECS + 0.1, vec![]);
         assert!(a.pending_paste.is_none());
         assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some("the clipboard has no text to paste"));
-        let (_, left) = frame(&mut a, &ctx, 2.0, vec![paste("late")]);
+        let (_, left) = frame(&mut a, &ctx, 0.03 + PASTE_WAIT_SECS + 1.0, vec![paste("late")]);
         assert_eq!(left.len(), 1);
         assert_eq!(first_para(&a), "");
     }
@@ -559,5 +584,13 @@ mod tests {
         let mut a = app(unreachable());
         assert!(a.run("edit.paste", json!({})).is_err());
         assert!(a.pending_paste.is_none());
+
+        // A paste that brings its own formatted content runs at once, with it.
+        let mut a = app(unreachable());
+        a.ctx = Some(ctx.clone());
+        a.run("edit.paste", json!({"html": "<p>plain <b>strong</b></p>"})).unwrap();
+        assert!(a.pending_paste.is_none());
+        assert_eq!(first_para(&a), "plain strong");
+        assert!(bold_at(&a, 7));
     }
 }
