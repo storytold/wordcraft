@@ -315,7 +315,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                     // AutoSave switch: greyed out, with the reason as its tooltip, when AutoSave can't
                     // cover the document (#196, #176); clicking it then offers Save As where that helps.
-                    let block = app.autosave_block();
+                    // A file only opened here isn't blocked for the switch: turning it on is the
+                    // consent `file.autosave` waits for (#5467), so it shows and toggles normally.
+                    let block = app.autosave_block().filter(|b| *b != crate::AutoSaveBlock::NotSavedHere);
                     let on = app.autosaves();
                     let color = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
                     // The text is part of the switch (#3370): clicking it toggles AutoSave, and chrome

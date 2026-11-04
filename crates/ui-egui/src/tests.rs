@@ -4959,6 +4959,53 @@ fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #5467: AutoSave had to be turned on again for every reopened document, and couldn't be: a
+/// file only opened in this session was blocked until the user saved it by hand. Turning the
+/// switch on is the consent to rewrite the file, so it now covers the opened file; the blocks
+/// that are real impossibilities (unsaved, a lossy format) still refuse with their reasons.
+#[test]
+fn autosave_can_be_turned_on_for_a_reopened_document() {
+    let dir = scratch("autosave-reopen");
+    let docx = dir.join("chapter.docx");
+    let mut first = typed();
+    first.run("file.save", json!({"path": docx.to_string_lossy()})).unwrap();
+
+    let mut a = app();
+    a.run("file.open", json!({"path": docx.to_string_lossy()})).unwrap();
+    assert_eq!(a.autosave_block(), Some(AutoSaveBlock::NotSavedHere), "opened, not saved here yet");
+    assert!(!a.autosaves());
+    assert_eq!(a.run("file.autosave", json!({"value": true})).unwrap(), json!({"value": true}));
+    assert!(a.autosaves(), "the switch covers the opened file");
+    assert_eq!(a.autosave_block(), None);
+    a.run("text.insert", json!({"text": "Reopened "})).unwrap();
+    a.autosave_tick(now_ms() + 10_000.0);
+    assert!(!a.session.dirty, "AutoSave wrote the reopened file");
+    let saved = wordcraft_engine::io::open_path(&docx).unwrap();
+    assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Reopened "));
+
+    // Toggling (what the switch does) turns it on too.
+    let mut b = app();
+    b.run("file.open", json!({"path": docx.to_string_lossy()})).unwrap();
+    assert_eq!(b.run("file.autosave", json!({})).unwrap(), json!({"value": true}));
+    assert!(b.autosaves());
+
+    // A lossy format still refuses, with the Format reason.
+    let md = dir.join("notes.md");
+    std::fs::write(&md, "# Notes\n").unwrap();
+    let mut c = app();
+    c.run("file.open", json!({"path": md.to_string_lossy()})).unwrap();
+    let err = c.run("file.autosave", json!({"value": true})).unwrap_err();
+    assert_eq!(err, AutoSaveBlock::Format { name: "notes.md".into() }.reason());
+    assert!(!c.autosaves());
+
+    // An unsaved document still refuses, with the Unsaved reason.
+    let mut d = typed();
+    let err = d.run("file.autosave", json!({"value": true})).unwrap_err();
+    assert_eq!(err, AutoSaveBlock::Unsaved.reason());
+    assert!(!d.autosaves());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #176: in the browser saving is a download, so AutoSave can't keep a file up to date; the
 /// switch is blocked with a reason instead of being on while nothing is saved.
 #[test]

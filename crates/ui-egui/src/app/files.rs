@@ -397,10 +397,14 @@ impl WordApp {
     /// `file.autosave` (the AutoSave switch, and scripts): `value` turns AutoSave on or off;
     /// without it, it toggles what the switch shows. Turning it on for a document AutoSave can't
     /// cover is an error that says why, instead of a switch that is on but saves nothing (#196).
+    /// A file only opened in this session isn't impossible to cover, just not yet consented to:
+    /// turning AutoSave on is that consent, so it covers the file from then on (#5467).
     pub(super) fn set_autosave(&mut self, params: &Value) -> Result<Value, String> {
         let on = params.get("value").and_then(Value::as_bool).unwrap_or(!self.autosaves());
-        if on && let Some(block) = self.autosave_block() {
-            return Err(block.reason());
+        match self.autosave_block() {
+            Some(AutoSaveBlock::NotSavedHere) if on => self.autosave_path = self.session.path.clone(),
+            Some(block) if on => return Err(block.reason()),
+            _ => {}
         }
         self.autosave = on;
         self.session.autosave = on;
