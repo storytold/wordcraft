@@ -487,7 +487,7 @@ pub fn install_fonts_language_extra(
     faces: &[Arc<wordcraft_fonts::FontFace>],
     composition: Option<wordcraft_fonts::FaceRef>,
 ) {
-    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, false, faces, composition);
+    install_font_definitions(ctx, font_definitions_language(prefer_hans, prefer_korean, prefer_hant, system_cjk), faces, composition);
 }
 
 /// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
@@ -503,7 +503,18 @@ pub fn install_fonts_language_arabic(
     faces: &[Arc<wordcraft_fonts::FontFace>],
     composition: Option<wordcraft_fonts::FaceRef>,
 ) {
-    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
+    let fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
+    install_font_definitions(ctx, fonts, faces, composition);
+}
+
+/// Install the interface `fonts` with document-font `faces` after them ([`add_fallback_faces`])
+/// and the document face the input method's composition is drawn in ([`set_composition_face`]).
+pub fn install_font_definitions(
+    ctx: &egui::Context,
+    mut fonts: FontDefinitions,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+    composition: Option<wordcraft_fonts::FaceRef>,
+) {
     add_fallback_faces(&mut fonts, faces);
     set_composition_face(&mut fonts, composition);
     ctx.set_fonts(fonts);

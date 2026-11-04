@@ -1615,15 +1615,15 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     if !new.is_empty() || face != app.canvas.ime_face {
         app.canvas.ime_faces.extend(new);
         app.canvas.ime_face = face;
-        crate::theme::install_fonts_language_extra(
-            ctx,
+        // The interface fonts as last installed, the Arabic one included.
+        let fonts = crate::theme::font_definitions_language_arabic(
             app.fonts_hans,
             app.fonts_korean,
             app.fonts_hant,
             app.fonts_system_cjk,
-            &app.canvas.ime_faces,
-            app.canvas.ime_face,
+            app.fonts_system_arabic,
         );
+        crate::theme::install_font_definitions(ctx, fonts, &app.canvas.ime_faces, app.canvas.ime_face);
         ctx.request_repaint();
     }
     // New fonts apply from the next frame; until the composition family is bound (or
