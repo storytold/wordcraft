@@ -22,6 +22,17 @@ pub(crate) struct Parked {
 }
 
 impl WordApp {
+    /// Replace the document the window opened with before anything else happens (the first blank
+    /// document, made again on the region File › Options chose): the session's document is
+    /// swapped and the window follows it at once. Replacing it with `session.set_document`
+    /// alone leaves the window showing the old document, so the first frame took the change for
+    /// a switch and dropped the dialog a command line file had just asked for, a password box
+    /// among them (#5299).
+    pub fn replace_startup_document(&mut self, doc: wordcraft_doc::Document) {
+        self.session.set_document(doc);
+        self.sync_document();
+    }
+
     /// Follow the session's active document. When it isn't the one the window last showed, the
     /// shown document's own state is put aside (or dropped, if it was closed or replaced), the
     /// new one's comes back, and the window's state about the page that was shown starts afresh
@@ -49,6 +60,7 @@ impl WordApp {
         self.canvas.show_other_document(seen);
         self.controls = Default::default();
         self.dialog = None;
+        self.spelling_review = None;
         self.colors = None;
         self.restrict = crate::dialogs_review::RestrictPane { open: self.restrict.open, ..Default::default() };
         self.status_msg = None;

@@ -5,6 +5,15 @@
 //! the menus, ribbon, shortcuts, control channel and MCP all reach the same behaviour.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// WordCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.wordcraft.png")),
+    accent: Some([0x3f, 0x5f, 0xe0]),
+    ..craft_update::suite::WORDCRAFT
+};
+
 /// An English UI string in the current interface language ([`i18n::t`]).
 #[macro_export]
 macro_rules! tl {
@@ -43,6 +52,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub(crate) mod language_packs;
 mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
@@ -52,9 +62,11 @@ pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
+pub mod proofing_pane;
 pub mod read_aloud;
 pub mod ribbon;
 pub mod ribbon_fit;
+pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
 pub mod system_clipboard;
@@ -192,8 +204,9 @@ pub struct UiState {
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
     pub show_discord: bool,
-    /// User name (File › Options) for comments and tracked changes; empty keeps the default.
-    pub author: String,
+    /// User name (File › Options) for comments and tracked changes. `None` (no saved name) keeps
+    /// the default; a saved empty name stays empty (#4368).
+    pub author: Option<String>,
     /// Desktop: the main window's size and position, restored at the next launch.
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
@@ -315,7 +328,7 @@ impl Default for UiState {
             pane_order: Vec::new(),
             nav_collapsed: Default::default(),
             show_discord: true,
-            author: String::new(),
+            author: None,
             window: None,
             language: i18n::AUTO.into(),
             editing: wordcraft_engine::Prefs::default(),
@@ -466,6 +479,8 @@ pub struct WordApp {
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).
     pub restrict: dialogs_review::RestrictPane,
+    /// The language-aware spelling and grammar task pane.
+    pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
@@ -486,6 +501,8 @@ pub struct WordApp {
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
     pub(crate) updates_rt: updates_ui::Runtime,
+    /// Language pack installs, the missing-pack bar ([`language_packs`]).
+    pub(crate) packs_rt: language_packs::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
     shots: control::Shots,
@@ -513,11 +530,19 @@ pub struct WordApp {
     fonts_hans: bool,
     /// Whether the installed UI fonts use the Korean CJK face order.
     fonts_korean: bool,
+    fonts_hant: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
+    /// Whether the installed UI fonts were asked to include an installed Arabic font (an Arabic
+    /// interface; used when no embedded face has Arabic letters).
+    fonts_system_arabic: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
+    /// Arabic text is (about to be) on screen in a non-Arabic interface, e.g. "العربية" in the
+    /// language picker or Language packs list: load an installed Arabic font when no embedded face
+    /// covers it (dev builds without craft-fonts).
+    pub(crate) want_system_arabic: bool,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,
