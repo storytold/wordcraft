@@ -51,6 +51,12 @@ fn unicode_fallback_uses_the_declared_count() {
         (br"{\rtf1\uc1\u233\cell VISIBLE}", "éVISIBLE"),
         (br"{\rtf1\uc1\u233\row VISIBLE}", "éVISIBLE"),
         (br"{\rtf1\uc0\u233\par VISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\nVISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\rVISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc9\u233abcdefgh\*VISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\nVISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\rVISIBLE}", "é\nVISIBLE"),
+        (br"{\rtf1\uc0\u233\*VISIBLE}", "éVISIBLE"),
         (br"{\rtf1\uc0\u233X}", "éX"),
         (br"{\rtf1\uc1\u233?X}", "éX"),
         (br"{\rtf1{\uc2147483647\u233?}X}", "éX"),
@@ -58,6 +64,17 @@ fn unicode_fallback_uses_the_declared_count() {
     ] {
         let doc = import(rtf).unwrap();
         assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), expected, "{rtf:?}");
+    }
+}
+
+#[test]
+fn unicode_fallback_in_revision_authors_counts_control_words() {
+    for (rtf, expected) in [
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc9\u233abcdefgh\par Zed;}}{\revised\revauth1 text}}".as_slice(), "éZed"),
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc0\u233\par Zed;}}{\revised\revauth1 text}}", "éZed"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.revisions.first().map(|r| r.author.as_str()), Some(expected), "{rtf:?}");
     }
 }
 
