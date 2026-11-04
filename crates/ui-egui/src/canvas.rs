@@ -16,6 +16,8 @@ use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
 mod context_menu;
+#[cfg(test)]
+pub(crate) use context_menu::issue_heading;
 mod cursor;
 mod geometry;
 mod input;
