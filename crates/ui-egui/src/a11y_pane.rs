@@ -10,10 +10,6 @@ use crate::theme::{regular, semibold};
 
 /// Review › Check Accessibility: the findings for the document as it is now.
 pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Accessibility") {
-        let _ = app.run("view.accessibilityPane", json!({"value": false}));
-        return;
-    }
     let issues = issues(app, ui);
     if issues.is_empty() {
         ui.label(egui::RichText::new(tl!("No accessibility issues found.")).weak());
@@ -90,10 +86,6 @@ fn go_to(app: &mut WordApp, issue: &Value) {
 /// Alt Text: the selected picture's, shape's, chart's or group's description and decorative mark,
 /// or the title and description of the table the caret is in.
 pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Alt Text") {
-        let _ = app.run("view.altTextPane", json!({"value": false}));
-        return;
-    }
     if let Some((pos, obj)) = wordcraft_engine::cmd::objects::selected(&app.session) {
         let decorative = obj.is_decorative();
         ui.label(egui::RichText::new(tl!("Describe what this object shows, for people who can't see it.")).weak());
