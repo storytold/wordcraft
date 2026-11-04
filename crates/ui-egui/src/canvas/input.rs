@@ -277,9 +277,6 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
             }
             _ => app.canvas.multi_drag = None,
         }
-        if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
-            let _ = app.run("edit.pasteFormat", json!({}));
-        }
         apply_format_painter(app);
     }
     show_hover_link(app, &pointer);
