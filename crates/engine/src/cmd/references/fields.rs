@@ -72,6 +72,67 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+fn unlocked_field_instr(o: &InlineObject) -> Option<&str> {
+    match o {
+        InlineObject::Field { instr, locked: false, .. } | InlineObject::FieldStart { instr, locked: false, .. } => Some(instr),
+        _ => None,
+    }
+}
+
+fn apply_field_update(para: &mut Paragraph, k: usize, r: String, clear_dirty: bool) {
+    let offs = para.object_offsets();
+    match para.objects.get_mut(k) {
+        Some(InlineObject::Field { result, dirty, .. }) => {
+            *result = r;
+            if clear_dirty {
+                *dirty = false;
+            }
+            return;
+        }
+        Some(InlineObject::FieldStart { .. }) => {}
+        _ => return,
+    }
+    let Some(&start_off) = offs.get(k) else { return };
+    let mut depth = 1usize;
+    let mut end_idx = None;
+    for (idx, obj) in para.objects.iter().enumerate().skip(k + 1) {
+        match obj {
+            InlineObject::FieldStart { .. } => depth += 1,
+            InlineObject::FieldEnd => {
+                depth -= 1;
+                if depth == 0 {
+                    end_idx = Some(idx);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end_k) = end_idx else { return };
+    if end_k != k + 1 {
+        return;
+    }
+    let Some(&end_off) = offs.get(end_k) else { return };
+    let content_start = start_off + wordcraft_doc::para::OBJ.len_utf8();
+    if content_start > end_off {
+        return;
+    }
+    let mut props = para
+        .run_ranges()
+        .find(|(rng, p)| rng.end > content_start && rng.start < end_off && p.del.is_none())
+        .map(|(_, p)| p.clone())
+        .unwrap_or_else(|| para.props_of_char(start_off).clone());
+    props.ins = None;
+    props.del = None;
+    let _ = para.delete(content_start, end_off);
+    if para.insert_text(content_start, &r, &props).is_ok()
+        && clear_dirty
+        && let Some(InlineObject::FieldStart { dirty, .. }) = para.objects.get_mut(k)
+    {
+        *dirty = false;
+    }
+}
+
 /// Renumber the body's SEQ fields in document order, honouring `\* format`, `\s level` (restart
 /// after each heading of that level), `\r n` (reset to n), `\c` (repeat) and `\h` (hide), and
 /// fill body STYLEREF fields ([`wordcraft_layout::styleref`]): chapter numbers (`STYLEREF n \s`,
@@ -131,7 +192,7 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
                 }
             }
         }
-        let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+        let Some(instr) = unlocked_field_instr(o) else { continue };
         let f = FieldCode::parse(instr);
         if f.name != "SEQ" {
             continue;
@@ -164,7 +225,7 @@ fn styleref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let Some(instr) = unlocked_field_instr(o) else { continue };
             if FieldCode::parse(instr).name != "STYLEREF" {
                 continue;
             }
@@ -202,7 +263,7 @@ fn ref_results(doc: &wordcraft_doc::Document, stored: &wordcraft_doc::Document) 
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let Some(instr) = unlocked_field_instr(o) else { continue };
             // `\r`, `\n` and `\w` show the bookmarked paragraph's number, which isn't computed
             // here: those keep their stored result rather than print the paragraph's text.
             if wordcraft_layout::fields::field_name(instr) != "REF" || ['p', 'r', 'n', 'w'].iter().any(|&sw| has_switch(instr, sw)) {
@@ -249,10 +310,7 @@ fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
 fn apply_results(doc: &mut wordcraft_doc::Document, results: Vec<FieldResult>) -> Result<(), CmdError> {
     for (story, path, k, r) in results {
         let para = doc.para_mut(story, &path)?;
-        if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
-            *result = r;
-            *dirty = false;
-        }
+        apply_field_update(para, k, r, true);
         para.touch();
     }
     Ok(())
@@ -346,12 +404,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     let mut set: std::collections::HashMap<String, String> = Default::default();
     for (story, path) in paths {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
+        if !p.objects.iter().any(|o| unlocked_field_instr(o).is_some()) {
             continue;
         }
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
-            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let Some(instr) = unlocked_field_instr(o) else { continue };
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
@@ -460,11 +518,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         }
         let para = s.doc.para_mut(story, &path)?;
         for (k, r) in updates {
-            if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
-                // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
-                *result = r;
-                *dirty = false;
-            }
+            apply_field_update(para, k, r, true);
         }
         para.touch();
     }
@@ -490,7 +544,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             let Some(p) = doc.para(story, &path) else { continue };
             let mut updates: Vec<(usize, String)> = Vec::new();
             for (k, o) in p.objects.iter().enumerate() {
-                let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+                let Some(instr) = unlocked_field_instr(o) else { continue };
                 let name = wordcraft_layout::fields::field_name(instr);
                 if !matches!(name.as_str(), "DATE" | "TIME") {
                     continue;
@@ -504,9 +558,7 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             }
             let Ok(para) = doc.para_mut(story, &path) else { continue };
             for (k, r) in updates {
-                if let Some(InlineObject::Field { result, .. }) = para.objects.get_mut(k) {
-                    *result = r;
-                }
+                apply_field_update(para, k, r, false);
             }
             para.touch();
         }

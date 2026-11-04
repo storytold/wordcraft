@@ -351,9 +351,21 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
             }
             Block::Table(t) => {
                 resolve_table(t, accept);
+                let drop_row = |r: &Row| (r.props.del.is_some() && accept) || (r.props.ins.is_some() && !accept);
+                if t.rows.len() > 1 && t.rows.iter().any(|r| !drop_row(r)) {
+                    t.rows.retain(|r| !drop_row(r));
+                }
                 for r in &mut t.rows {
+                    r.props.ins = None;
+                    r.props.del = None;
                     resolve_row(r, accept);
+                    let drop_cell = |c: &Cell| (c.props.del.is_some() && accept) || (c.props.ins.is_some() && !accept);
+                    if r.cells.len() > 1 && r.cells.iter().any(|c| !drop_cell(c)) {
+                        r.cells.retain(|c| !drop_cell(c));
+                    }
                     for c in &mut r.cells {
+                        c.props.ins = None;
+                        c.props.del = None;
                         resolve_cell(c, accept);
                         resolve_containers(&mut c.blocks, accept, depth + 1);
                     }
@@ -372,6 +384,11 @@ pub fn resolve_table(t: &mut Table, accept: bool) {
 
 /// Accept or reject a row's change.
 pub fn resolve_row(r: &mut Row, accept: bool) {
+    if let Some(ex) = r.props.exceptions.as_deref_mut()
+        && let Some(ch) = ex.fmt_change.take().filter(|_| !accept)
+    {
+        *ex = TableProps { fmt_change: None, ..ch.old };
+    }
     if let Some(ch) = r.props.fmt_change.take().filter(|_| !accept) {
         r.props = RowProps { fmt_change: None, ins: r.props.ins, del: r.props.del, exceptions: r.props.exceptions.take(), ..ch.old };
     }
@@ -412,13 +429,5 @@ pub fn row_diff(r: &RowProps) -> Vec<Value> {
         .unwrap_or_default()
 }
 pub fn cell_diff(c: &CellProps) -> Vec<Value> {
-    c.fmt_change
-        .as_ref()
-        .map(|ch| {
-            diff(
-                &CellProps { fmt_change: None, ins: None, del: None, ..ch.old.clone() },
-                &CellProps { fmt_change: None, ins: None, del: None, ..c.clone() },
-            )
-        })
-        .unwrap_or_default()
+    c.fmt_change.as_ref().map(|ch| diff(&strip_cell(&ch.old), &strip_cell(c))).unwrap_or_default()
 }

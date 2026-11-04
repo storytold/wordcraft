@@ -120,7 +120,15 @@ impl Reader<'_> {
         // A tracked insertion or deletion inside the result (one the field itself isn't wrapped
         // in) keeps the field a range too: a cached text result has one revision at most, so
         // each piece stays an ordinary run with its own `w:ins` / `w:del` (#1037).
-        let tracked_inside = f.buf.iter().any(|(_, p)| (p.ins, p.del, &p.fmt_change) != (f.props.ins, f.props.del, &f.props.fmt_change));
+        let non_empty = |(it, _): &(Item, CharProps)| match it {
+            Item::Text(t) => !t.is_empty(),
+            Item::Obj(o) => !o.plain_text().is_empty(),
+        };
+        let first_fmt = f.buf.iter().find(|x| non_empty(x)).map(|(_, p)| &p.fmt_change);
+        let tracked_inside = f
+            .buf
+            .iter()
+            .any(|x @ (_, p)| (p.ins, p.del) != (f.props.ins, f.props.del) || (non_empty(x) && first_fmt.is_some_and(|fc| &p.fmt_change != fc)));
         if !nested_in_instr && (tracked_inside || f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some()))) {
             self.emit_obj(
                 sc,
