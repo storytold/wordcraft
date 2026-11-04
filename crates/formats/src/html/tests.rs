@@ -752,3 +752,24 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+/// #5537: the clipboard's HTML carries each paragraph's spacing and indents, so a mail client lays
+/// the text out as WordCraft does. A page saved as HTML doesn't write them (yet).
+#[test]
+fn the_clipboard_fragment_writes_a_paragraphs_spacing_and_indents() {
+    let chr = wordcraft_doc::CharProps::default();
+    let mut quote = wordcraft_doc::Paragraph::with_text("Quote", chr.clone());
+    quote.props.space_before = Some(6.0);
+    quote.props.space_after = Some(12.0);
+    quote.props.indent_left = Some(36.0);
+    quote.props.indent_first = Some(-18.0);
+    let mut plain = wordcraft_doc::Paragraph::with_text("Plain", chr);
+    plain.props.indent_right = Some(-0.0);
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(quote), wordcraft_doc::para_block(plain)];
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("<p style=\"margin-top:6pt;margin-bottom:12pt;margin-left:36pt;text-indent:-18pt\">"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-right:0pt\">"), "{fragment}");
+    let page = export(&d);
+    assert!(!page.contains("margin-") && !page.contains("text-indent"), "{page}");
+}

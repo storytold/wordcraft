@@ -198,12 +198,41 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     Ok(copy_result(s))
 }
 
+/// The copy as a document whose top-level paragraphs carry, as their own formatting, the space
+/// before and after and the indents they have in the source document (`styles`): the copy holds
+/// only the built-in styles, so its HTML would otherwise lose what the source's styles give (#5537).
+fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet) -> wordcraft_doc::Document {
+    let mut d = f.to_document();
+    for b in &mut d.body {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            let r = styles.resolve_para(&p.props);
+            // A list item's indents come from its list, which the copy doesn't hold, and its
+            // style's spacing is contextual: it gets none, as before.
+            let list = r.numbering.is_some();
+            // Contextual spacing drops the space between paragraphs of one style, which a
+            // paragraph on its own can't show, so it is left out rather than shown everywhere.
+            // Automatic spacing resolves to the 14 pt it is laid out with.
+            let space = |v: f32| (!list && !r.contextual_spacing).then_some(v);
+            // A right-to-left paragraph's indents would land on the wrong side in an HTML
+            // paragraph without a direction, so they are left out.
+            let ind = |v: f32| (!list && !r.bidi).then_some(v);
+            let pp = &mut p.props;
+            pp.space_before = space(r.space_before);
+            pp.space_after = space(r.space_after);
+            pp.indent_left = ind(r.indent_left);
+            pp.indent_right = ind(r.indent_right);
+            pp.indent_first = ind(r.indent_first);
+        }
+    }
+    d
+}
+
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
 /// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        Some(f) => wordcraft_formats::html::export_fragment(&with_source_spacing(f, &s.doc.styles)),
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});

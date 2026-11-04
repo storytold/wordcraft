@@ -1240,6 +1240,77 @@ fn copying_an_equation_puts_mathml_on_the_clipboard() {
     assert!(r["html"].as_str().is_some_and(|h| h.contains("Speed") && !h.contains("<math")), "{r}");
 }
 
+/// A session whose Normal style gives 4 pt before and 10 pt after, unlike the built-in Normal a
+/// copy's own document has.
+fn normal_with_space_after() -> Session {
+    let mut s = s();
+    if let Some(n) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Normal") {
+        n.para.space_after = Some(10.0);
+        n.para.space_before = Some(4.0);
+    }
+    s
+}
+
+/// #5537: other programs get the space the style gives and the indent the paragraph sets.
+#[test]
+fn copying_paragraphs_puts_their_style_and_own_spacing_on_the_clipboard() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "para.indents", json!({"left": 36, "firstLine": 18}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let second = html.match_indices("<p").nth(1).map_or(html.len(), |(i, _)| i);
+    let (one, two) = html.split_at(second);
+    assert!(one.contains("One") && one.contains("margin-top:4pt") && one.contains("margin-bottom:10pt"), "{html}");
+    assert!(one.contains("margin-left:0pt") && !one.contains("text-indent"), "{html}");
+    assert!(two.contains("Two") && two.contains("margin-top:4pt") && two.contains("margin-bottom:10pt"), "{html}");
+    assert!(two.contains("margin-left:36pt") && two.contains("text-indent:18pt"), "{html}");
+}
+
+/// #5537: automatic (HTML-style) space after goes on the clipboard as the 14 pt WordCraft lays out.
+#[test]
+fn copying_a_paragraph_with_automatic_spacing_gives_it_14_points() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "para.spacing", json!({"afterAuto": true}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("One") && html.contains("margin-bottom:14pt"), "{html}");
+}
+
+/// #5537: a right-to-left paragraph keeps its space before and after on the clipboard, but not its
+/// indents, which an HTML paragraph without a direction would put on the wrong side.
+#[test]
+fn copying_a_right_to_left_paragraph_leaves_its_indents_out() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    run(&mut s, "para.rtl", json!({}));
+    run(&mut s, "para.indents", json!({"left": 36}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("One") && html.contains("margin-bottom:10pt"), "{html}");
+    assert!(!html.contains("margin-left") && !html.contains("margin-right") && !html.contains("text-indent"), "{html}");
+}
+
+/// #5537: a copied list item gets no spacing, as before: its indents come from its list, which
+/// the copy doesn't carry.
+#[test]
+fn copying_a_bulleted_list_adds_no_spacing_to_its_items() {
+    let mut s = normal_with_space_after();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo\nThree"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(["One", "Two", "Three"].iter().all(|t| html.contains(t)), "{html}");
+    assert!(!html.contains("margin-") && !html.contains("text-indent"), "{html}");
+}
+
 /// Whether `xml` is one element whose tags all nest and close (enough to check a clipboard
 /// payload without an XML parser in the engine's tests).
 fn one_balanced_element(xml: &str) -> bool {
