@@ -212,14 +212,14 @@ fn rgba_color(c: [u8; 4]) -> peniko::Color {
 /// their width under non-uniform scaling), bitmaps stretched, all clipped to `r` and faded by `alpha`.
 /// Strokes have round caps and joins, as GDI draws them, and are at least one device pixel wide, so
 /// cosmetic (width 0) pens show as hairlines at any zoom.
-pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine) {
+pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine, clip: &kurbo::BezPath) {
     ctx.set_transform(view);
     let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
     let faded = alpha < 1.0;
     if faded {
         ctx.push_opacity_layer(alpha);
     }
-    ctx.push_clip_layer(&r.to_path(0.1));
+    ctx.push_clip_layer(clip);
     let pixel = device_pixel(view);
     for it in v.pic.place(*r, *crop) {
         match it {

@@ -134,7 +134,7 @@ impl Reader<'_> {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None, shape: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.

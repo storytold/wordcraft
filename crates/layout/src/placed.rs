@@ -36,6 +36,8 @@ pub enum Placed {
         path: Path,
         off: usize,
         spin: Spin,
+        /// Crop to Shape: the outline it is clipped to (None: its rect).
+        shape: Option<wordcraft_doc::para::ShapeKind>,
     },
     Shape {
         rect: Rect,

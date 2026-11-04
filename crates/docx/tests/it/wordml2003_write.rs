@@ -69,7 +69,7 @@ fn sample() -> Document {
     let mut img = Paragraph::new();
     img.insert_object(
         0,
-        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "dot".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "dot".into(), float: Default::default(), crop: [0.0; 4], ole: None, shape: None },
         &CharProps::default(),
     )
     .unwrap();

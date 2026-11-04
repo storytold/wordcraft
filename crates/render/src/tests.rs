@@ -514,6 +514,7 @@ fn dimmed_header_image_renders() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
@@ -875,6 +876,7 @@ fn metafile_picture_is_drawn_as_vectors() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -910,8 +912,16 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
             let mut d = Document::new();
             let media = d.add_media(bytes.clone(), ext);
             let mut p = wordcraft_doc::Paragraph::new();
-            let obj =
-                wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None };
+            let obj = wordcraft_doc::para::InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop,
+                ole: None,
+                shape: None,
+            };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -948,6 +958,7 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -994,6 +1005,7 @@ fn metafile_text_records_are_painted() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1040,6 +1052,7 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1078,6 +1091,7 @@ fn unreadable_metafile_keeps_the_grey_box() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1317,4 +1331,102 @@ fn rounded_rectangle_corners_follow_their_radius() {
 fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
+}
+
+/// Fit on a metafile: padding is left empty, the drawing keeps its proportions (it used to
+/// be stretched over the whole frame).
+#[test]
+fn padded_metafile_picture_keeps_its_proportions() {
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0, -0.5, 0.0, -0.5],
+        ole: None,
+        shape: None,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+    assert!(at(0.75, 0.5)[0] > 200 && at(0.75, 0.5)[1] < 60, "the red half in the middle: {:?}", at(0.75, 0.5));
+    for fy in [0.1, 0.9] {
+        assert!(at(0.75, fy)[..3].iter().all(|c| *c > 200), "padding at {fy} is paper: {:?}", at(0.75, fy));
+    }
+}
+
+/// A solid red 40 × 40 px picture shown 100 × 100 pt with `shape` and `crop`: the page and
+/// the picture's frame.
+fn red_picture(shape: Option<ShapeKind>, crop: [f32; 4]) -> (Rendered, wordcraft_geom::Rect) {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 0, 0, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut d = Document::new();
+    let media = d.add_media(png, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 100.0,
+        h: 100.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop,
+        ole: None,
+        shape: shape.map(wordcraft_doc::para::PictureShape::new),
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    (render_page(&d, &l.pages[0], 1.0, &opts), rect)
+}
+
+/// Crop to Shape: an ellipse-cropped picture leaves its frame's corners unpainted.
+#[test]
+fn ellipse_cropped_picture_leaves_its_corners_unpainted() {
+    let red = |p: [u8; 4]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+    let (img, r) = red_picture(Some(ShapeKind::Ellipse), [0.0; 4]);
+    let at = |fx: f32, fy: f32| img.pixel((r.x + r.w * fx) as u32, (r.y + r.h * fy) as u32);
+    assert!(red(at(0.5, 0.5)), "centre: {:?}", at(0.5, 0.5));
+    for (fx, fy) in [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95)] {
+        assert!(at(fx, fy)[..3].iter().all(|c| *c > 200), "corner {fx},{fy} is paper: {:?}", at(fx, fy));
+    }
+    // Without the outline the corners are the picture's.
+    let (img, r) = red_picture(None, [0.0; 4]);
+    assert!(red(img.pixel((r.x + r.w * 0.05) as u32, (r.y + r.h * 0.05) as u32)));
+}
+
+/// Fit: negative crop is padding, drawn transparent (not the picture's edge pixels smeared).
+#[test]
+fn negative_crop_pads_the_picture_with_nothing() {
+    let red = |p: [u8; 4]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+    // Padded by half its height above and below: the middle half of the frame is picture.
+    let (img, r) = red_picture(None, [0.0, -0.5, 0.0, -0.5]);
+    let at = |fx: f32, fy: f32| img.pixel((r.x + r.w * fx) as u32, (r.y + r.h * fy) as u32);
+    assert!(red(at(0.5, 0.5)), "middle: {:?}", at(0.5, 0.5));
+    for fy in [0.1, 0.9] {
+        assert!(at(0.5, fy)[..3].iter().all(|c| *c > 200), "padding at {fy} is paper: {:?}", at(0.5, fy));
+    }
 }

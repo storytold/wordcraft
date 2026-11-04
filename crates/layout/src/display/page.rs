@@ -368,10 +368,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, spin, .. } => spun(
+        Placed::Image { rect, media, crop, spin, shape, .. } => spun(
             *spin,
             *rect,
-            vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), decorative: false }],
+            vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, shape: *shape, alt: String::new(), decorative: false }],
             out,
         ),
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {

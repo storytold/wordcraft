@@ -23,6 +23,7 @@ fn picture() -> InlineObject {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        shape: None,
     }
 }
 fn model_box() -> Document {

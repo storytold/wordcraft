@@ -259,11 +259,15 @@ impl Reader<'_> {
                 if let Some(v) = sr.attr(n).and_then(int)
                     && let Some(slot) = crop.get_mut(i)
                 {
-                    *slot = (v.clamp(0, 100_000) as f32 / 100_000.0).clamp(0.0, 1.0);
+                    // Negative: padding (Fit), kept within the model's limit.
+                    *slot = (v.clamp(-100_000_000, 100_000) as f32 / 100_000.0).clamp(wordcraft_doc::para::MIN_CROP, 1.0);
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None })
+        // Crop to Shape: a preset outline other than the plain rectangle, drawn as the nearest
+        // shape WordCraft has.
+        let shape = pic.find("pic:spPr").and_then(|sp| sp.child("a:prstGeom")).and_then(super::super::shape_style::picture_shape);
+        Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None, shape })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups

@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::graphic::GraphicKind;
-use wordcraft_doc::para::{Float, InlineObject, Wrap, WrapText};
+use wordcraft_doc::para::{Float, InlineObject, MAX_CROP, MIN_CROP, PictureShape, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::{Rgb, TextVert, VAlign};
 use wordcraft_doc::{Pos, StoryRef, TextBody};
 use wordcraft_geom::Spin;

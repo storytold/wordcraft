@@ -1,6 +1,6 @@
 use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
-use super::picture::{adjust, adjust_media, crop, recolor, relook, remove_background, reset, size};
+use super::picture::{adjust, adjust_media, crop, crop_aspect, crop_to_box, crop_to_shape, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
     has_sizable, obj_size, objects_list, selected, with_float, with_obj,
@@ -17,8 +17,20 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(has_sizable),
         CommandSpec::new("picture.crop", "Crop", "Picture Format › Size", crop)
             .params(
-                r#"{"left"?, "top"?, "right"?, "bottom"? (fractions of the source 0–0.95; the two sides of an axis keep at least 5% between them; a side left out is uncropped), "width"?: pt, "height"?: pt (the new display size, in the same undo step; a floating picture also moves by what a left/top crop trims, so the visible part stays put)}"#,
+                r#"{"left"?, "top"?, "right"?, "bottom"? (fractions of the source -100–0.95, negative pads that side; the two sides of an axis keep at least 5% between them; a side left out is uncropped), "width"?: pt, "height"?: pt (the new display size, in the same undo step; a floating picture also moves by what a left/top crop trims, so the visible part stays put)}"#,
             )
+            .when(has_picture),
+        CommandSpec::new("picture.cropToShape", "Crop to Shape", "Picture Format › Size", crop_to_shape)
+            .params(r#"{"shape": "rectangle|roundedRectangle|ellipse|flowchartOr|triangle|rightTriangle|diamond|arrow|star|heart" (the outline the picture is clipped to, keeping its crop and size; rectangle takes it off)}"#)
+            .when(has_picture),
+        CommandSpec::new("picture.cropAspect", "Aspect Ratio", "Picture Format › Size", crop_aspect)
+            .params(r#"{"ratio": "1:1|2:3|3:4|3:5|4:5|3:2|4:3|5:3|5:4|16:9|16:10"} (crops what shows, centred, to the largest rectangle of the ratio inside it, never enlarging; the box takes that size, keeping its top-left)"#)
+            .when(has_picture),
+        CommandSpec::new("picture.cropFill", "Fill", "Picture Format › Size", |s, _| crop_to_box(s, false))
+            .params("{} (crops the whole picture, centred, so it covers its box keeping its proportions)")
+            .when(has_picture),
+        CommandSpec::new("picture.cropFit", "Fit", "Picture Format › Size", |s, _| crop_to_box(s, true))
+            .params("{} (shows the whole picture inside its box keeping its proportions, the rest of the box empty)")
             .when(has_picture),
         // Kept for scripts written before every object had alt text: `object.altText` on a picture.
         CommandSpec::new("picture.altText", "Alt Text", "Picture Format › Accessibility", |s, v| {

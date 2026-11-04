@@ -449,6 +449,10 @@ Picture Format|Picture Styles|Picture Border|picture.border
 Picture Format|Accessibility|Alt Text|picture.altText
 Shape Format|Accessibility|Alt Text|object.altText
 Picture Format|Size|Crop|picture.crop
+Picture Format|Size|Crop to Shape|picture.cropToShape
+Picture Format|Size|Aspect Ratio|picture.cropAspect
+Picture Format|Size|Fill|picture.cropFill
+Picture Format|Size|Fit|picture.cropFit
 Picture Format|Size|Size|picture.size
 Picture Format|Size|Rotation|arrange.rotation
 SmartArt Design|Create Graphic|Add Shape|smartArt.addShape

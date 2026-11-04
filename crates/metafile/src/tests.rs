@@ -905,8 +905,15 @@ fn crop_window_keeps_a_sliver_and_stays_finite() {
     assert!(top.y.abs() < 1e-3 && (bottom.y - 27.44).abs() < 1e-3, "{top:?} {bottom:?}");
     for c in [[f32::NAN, f32::INFINITY, -1.0, 2.0], [0.9; 4], [1.0, 1.0, 0.0, 0.0], [f32::MAX, f32::MIN, f32::NEG_INFINITY, 0.5]] {
         let [x, y, w, h] = crate::crop_window(c);
-        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        assert!([x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0, "{c:?}");
+        // Only a negative side (padding) lets the window reach past the source.
+        if c.iter().all(|v| v.is_nan() || *v >= 0.0) {
+            assert!(x >= 0.0 && y >= 0.0 && x + w <= 1.0 + 1e-9 && y + h <= 1.0 + 1e-9, "{c:?}");
+        }
     }
+    // Padding: a Fit picture's window is larger than the source, the source inside it.
+    let [x, y, w, h] = crate::crop_window([0.0, -0.5, 0.0, -0.5]);
+    assert!(x == 0.0 && w == 1.0 && y == -0.5 && h == 2.0, "{y} {h}");
 }
 
 /// The narrowest crop on the largest frame layout makes (4000 pt, far down a 22-inch page) still
