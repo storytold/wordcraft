@@ -1,4 +1,4 @@
-use super::*;
+use super::{DEFAULT_TAB, MAX_DICTIONARY, UiState, WordApp, desktop_theme, recent_fonts_from, theme};
 
 /// What the operating system says about light and dark. macOS and Windows answer through winit;
 /// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
@@ -12,7 +12,7 @@ impl WordApp {
     /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
-        ui.author = self.session.author.clone();
+        ui.author = Some(self.session.author.clone());
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();
         ui.editing = self.session.prefs.clone();
@@ -47,8 +47,10 @@ impl WordApp {
         self.legacy_interface_size =
             self.ui.legacy_interface_size.take().filter(|_| self.ui.interface_size.is_auto()).and_then(|old| theme::legacy_interface_percent(&old));
         // The session owns the name from here on; `prefs` copies it back when saving.
-        let author = std::mem::take(&mut self.ui.author);
-        if !author.trim().is_empty() {
+        // A saved empty name stays empty (#4368); one of only spaces keeps the default.
+        if let Some(author) = self.ui.author.take()
+            && (author.is_empty() || !author.trim().is_empty())
+        {
             self.session.author = author;
         }
         self.session.initials = std::mem::take(&mut self.ui.initials).chars().take(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).collect();
@@ -61,6 +63,7 @@ impl WordApp {
         self.session.prefs = std::mem::take(&mut self.ui.editing);
         // Check spelling as you type follows the saved preference (#1792).
         self.session.view.proofing = self.session.prefs.check_spelling;
+        self.session.view.read_page_color = self.session.prefs.read_page_color;
         // The saved dictionaries folder (#1063) is searched from the start.
         if let Some(f) = self.session.prefs.dictionaries_folder.as_deref() {
             wordcraft_engine::cmd::options::use_dictionaries_folder(Some(f));
@@ -71,6 +74,7 @@ impl WordApp {
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
+        self.session.prefs.check_spelling = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
         let reg = self.session.registry.clone();

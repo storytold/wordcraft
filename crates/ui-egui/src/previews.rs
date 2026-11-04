@@ -378,7 +378,7 @@ fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, 
         .unwrap_or(h / 2.0);
     let mut opts = wordcraft_render::RenderOptions::default();
     opts.display.placeholders = true;
-    let img = wordcraft_render::render_area(&d, page, 0.0, mid - h / 2.0, w, h, ppp, &opts);
+    let img = wordcraft_render::render_area(&d, page, wordcraft_geom::Rect::new(0.0, mid - h / 2.0, w, h), ppp, &opts);
     let px = img.to_straight();
     let mut out = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px);
     // An ink mask, tinted with the theme's text colour when drawn, so the pictures read on dark tiles (#817).
@@ -399,7 +399,7 @@ pub fn ink_mask(img: &mut egui::ColorImage) {
     }
 }
 
-/// A font list entry: `name` in its own face, 240×20 pt. The face is read for the preview alone
+/// A font list entry: `name` in its own face, 244×22 pt. The face is read for the preview alone
 /// and dropped (#848): browsing the list used to load every family shown for good, so each trip
 /// through the Font box grew memory by tens of megabytes. A name the font has no glyphs for (a
 /// symbol font's), or a font that can't be read, shows in the default face.
@@ -409,18 +409,46 @@ pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
         .preview_face(name)
         .filter(|f| name.chars().filter(|c| !c.is_whitespace()).all(|c| f.covers(c)))
         .unwrap_or_else(|| db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular"));
-    let img = wordcraft_render::render_text_line(&face, name, 13.0, 244.0, 22.0, 2.0, ppp);
-    egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+    // Rendered taller than the row and cut back to the drawn text: faces with tall line metrics
+    // (Arabic, CJK) put their baseline well below a Latin face's, and a fixed 22 pt strip showed
+    // only the top of their names.
+    let img = wordcraft_render::render_text_line(&face, name, 13.0, 244.0, FONT_PREVIEW_RENDER_H, 2.0, ppp);
+    let img = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
+    center_rows_on_ink(&img, (FONT_PREVIEW_H * ppp).round() as usize)
+}
+
+/// Height of a font-menu entry's picture, in points.
+const FONT_PREVIEW_H: f32 = 22.0;
+/// Height the entry is first rendered at, tall enough for any face's first line at 13 pt.
+const FONT_PREVIEW_RENDER_H: f32 = 56.0;
+
+/// `img` cut to `rows` pixel rows centred on what is drawn in it (the rows that differ from the
+/// top-left background pixel). An image that is already that short, or blank, keeps its top rows.
+fn center_rows_on_ink(img: &egui::ColorImage, rows: usize) -> egui::ColorImage {
+    let [w, h] = img.size;
+    let rows = rows.clamp(1, h.max(1));
+    if w == 0 || h <= rows {
+        return img.clone();
+    }
+    let background = img.pixels.first().copied().unwrap_or_default();
+    let inked =
+        |y: usize| img.pixels.get(y.saturating_mul(w)..y.saturating_add(1).saturating_mul(w)).is_some_and(|row| row.iter().any(|p| *p != background));
+    let top = (0..h).find(|y| inked(*y)).unwrap_or(0);
+    let bottom = (0..h).rev().find(|y| inked(*y)).unwrap_or(top);
+    let middle = top.saturating_add(bottom).saturating_add(1) / 2;
+    let start = middle.saturating_sub(rows / 2).min(h.saturating_sub(rows));
+    let pixels = img.pixels.get(start.saturating_mul(w)..start.saturating_add(rows).saturating_mul(w)).unwrap_or_default().to_vec();
+    egui::ColorImage::new([w, rows], pixels)
 }
 
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
 pub fn snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32) -> Option<egui::ColorImage> {
-    snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None, false)
+    snippet_blocks(base, vec![Block::Para(para)], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin, paper: None, dark: false })
 }
 
 /// [`snippet`] on the dark page of View › Switch Modes when `dark` (the Styles gallery, #663).
 pub fn style_snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32, dark: bool) -> Option<egui::ColorImage> {
-    snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None, dark)
+    snippet_blocks(base, vec![Block::Para(para)], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin, paper: None, dark })
 }
 
 /// How a gallery draws a page preview: as rendered on a light interface or on Switch Modes' dark
@@ -429,16 +457,17 @@ pub fn preview_tint(t: &Tokens, dark_page: bool) -> egui::Color32 {
     if t.dark && !dark_page { egui::Color32::from_gray(0xC8) } else { egui::Color32::WHITE }
 }
 
-fn snippet_blocks(
-    base: &Document,
-    blocks: Vec<Block>,
-    w: f32,
-    h: f32,
-    ppp: f32,
+struct SnippetOptions {
+    width: f32,
+    height: f32,
+    pixels_per_point: f32,
     margin: f32,
     paper: Option<wordcraft_doc::Rgb>,
     dark: bool,
-) -> Option<egui::ColorImage> {
+}
+
+fn snippet_blocks(base: &Document, blocks: Vec<Block>, options: SnippetOptions) -> Option<egui::ColorImage> {
+    let SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin, paper, dark } = options;
     let mut d = Document::new();
     d.styles = base.styles.clone();
     d.numbering = base.numbering.clone();
@@ -456,7 +485,7 @@ fn snippet_blocks(
         opts.paper = p;
     }
     opts.dark = dark;
-    let img = wordcraft_render::render_area(&d, page, 0.0, 0.0, w + 2.0 * margin, h + margin, ppp, &opts);
+    let img = wordcraft_render::render_area(&d, page, wordcraft_geom::Rect::new(0.0, 0.0, w + 2.0 * margin, h + margin), ppp, &opts);
     let px = img.to_straight();
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
 }
@@ -500,7 +529,7 @@ pub fn style_preview(app: &mut WordApp, ui: &mut Ui, id: &str, ty: &str, size: e
                 Block::Para(p)
             }
         };
-        snippet_blocks(doc, vec![block], w, h, ppp, 4.0, None, false)
+        snippet_blocks(doc, vec![block], SnippetOptions { width: w, height: h, pixels_per_point: ppp, margin: 4.0, paper: None, dark: false })
     });
     if let Some(hd) = tex {
         let sz = hd.size_vec2() / ppp;
@@ -627,7 +656,11 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
                 Block::Para(Paragraph::with_text(tl!("Heading 1"), CharProps::default()).styled("Heading1")),
                 Block::Para(Paragraph::with_text(tl!("Body text in a short paragraph to show spacing."), CharProps::default())),
             ];
-            snippet_blocks(&s.doc, blocks, 120.0, 110.0, ppp * 0.42, 6.0, None, false)
+            snippet_blocks(
+                &s.doc,
+                blocks,
+                SnippetOptions { width: 120.0, height: 110.0, pixels_per_point: ppp * 0.42, margin: 6.0, paper: None, dark: false },
+            )
         });
         if let Some(h) = tex {
             let sz = h.size_vec2() / ppp;
@@ -662,7 +695,11 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
                 c.blocks = vec![para_block(Paragraph::with_text(" ", CharProps { size: Some(5.0), ..Default::default() }))];
             }
         }
-        snippet_blocks(doc, vec![Block::Table(tb), Block::Para(Paragraph::new())], 104.0, 70.0, ppp * 0.48, 4.0, None, false)
+        snippet_blocks(
+            doc,
+            vec![Block::Table(tb), Block::Para(Paragraph::new())],
+            SnippetOptions { width: 104.0, height: 70.0, pixels_per_point: ppp * 0.48, margin: 4.0, paper: None, dark: false },
+        )
     });
     if let Some(h) = tex {
         let sz = h.size_vec2() / ppp;
@@ -675,3 +712,45 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
 
 #[cfg(test)]
 mod tests;
+#[test]
+fn font_preview_rows_are_centred_on_the_drawn_text() {
+    let ink = egui::Color32::BLACK;
+    let paper = egui::Color32::WHITE;
+    // Ink low in a tall picture, as a face with a deep baseline draws it.
+    let mut img = egui::ColorImage::filled([4, 40], paper);
+    for y in 28..34 {
+        img.pixels[y * 4 + 1] = ink;
+    }
+    let cut = center_rows_on_ink(&img, 10);
+    assert_eq!(cut.size, [4, 10]);
+    let rows: Vec<usize> = (0..10).filter(|y| cut.pixels[y * 4 + 1] == ink).collect();
+    assert_eq!(rows, [2, 3, 4, 5, 6, 7], "all six inked rows, with equal space above and below");
+    // Blank, short, empty and oversized requests never panic.
+    assert_eq!(center_rows_on_ink(&egui::ColorImage::filled([4, 40], paper), 10).size, [4, 10]);
+    assert_eq!(center_rows_on_ink(&img, 400).size, [4, 40]);
+    assert_eq!(center_rows_on_ink(&img, 0).size, [4, 1]);
+    assert_eq!(center_rows_on_ink(&egui::ColorImage::filled([0, 0], paper), 10).size, [0, 0]);
+}
+
+/// Every loaded face's name fits its font-menu row: faces with tall line metrics (the
+/// craft-fonts Arabic and Japanese faces) were cut off at the bottom.
+#[test]
+fn font_preview_shows_the_whole_name_in_every_loaded_face() {
+    let ppp = 2.0;
+    let rows = (FONT_PREVIEW_H * ppp).round() as usize;
+    for family in wordcraft_fonts::FontDb::with_font_dirs(Vec::new()).families() {
+        let face = wordcraft_fonts::FontDb::global().face(&family, "Regular");
+        let tall = wordcraft_render::render_text_line(&face, &family, 13.0, 244.0, FONT_PREVIEW_RENDER_H, 2.0, ppp);
+        let tall = egui::ColorImage::from_rgba_unmultiplied([tall.width as usize, tall.height as usize], &tall.to_straight());
+        let img = center_rows_on_ink(&tall, rows);
+        let [w, h] = img.size;
+        assert_eq!(h, rows, "{family}");
+        let background = img.pixels[0];
+        let inked = |y: usize| img.pixels[y * w..(y + 1) * w].iter().any(|p| *p != background);
+        assert!((0..h).any(inked), "{family}: the name is drawn");
+        assert!(!inked(0) && !inked(h - 1), "{family}: the name touches the edge of its row");
+        // Nothing of the name is left outside the cut.
+        let all = (0..tall.size[1]).filter(|y| tall.pixels[y * w..(y + 1) * w].iter().any(|p| *p != tall.pixels[0])).count();
+        assert_eq!((0..h).filter(|y| inked(*y)).count(), all, "{family}: part of the name is cut off");
+    }
+}

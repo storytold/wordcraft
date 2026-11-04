@@ -1,7 +1,7 @@
+use super::Rgb;
 use super::export::{LINE_WIDTH, TABCOLSEP};
 use super::limits::MAX_NEST;
 use super::math::{balanced, closers};
-use super::*;
 
 /// Font size declarations (points, for the default 10 pt article).
 pub(super) fn size_of(name: &str) -> Option<f32> {
