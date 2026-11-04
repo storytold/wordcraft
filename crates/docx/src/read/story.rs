@@ -81,6 +81,12 @@ struct FieldState {
     sizes: Vec<(usize, Option<f32>)>,
     /// A legacy form field's `w:ffData`, as raw XML.
     form: String,
+    /// Once a field ends inside this one's code (`{ IF { REF a } = 0 … }`): the code as run XML,
+    /// nested fields complete, kept as the field's `code_xml` (#1671). Empty without nesting.
+    code_xml: String,
+    /// The code can't be kept as XML (too long, or a tracked change inside the field that the
+    /// field itself isn't in): the nested fields' results stand in for them in `instr`.
+    code_xml_lost: bool,
 }
 
 /// The last paragraph of a block list: its last block, or inside a final table the last

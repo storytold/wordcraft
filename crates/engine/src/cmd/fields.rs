@@ -158,7 +158,12 @@ fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     }
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
-        InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } => *instr = code.clone(),
+        // A new code replaces any fields nested in the old one.
+        InlineObject::Field { instr, code_xml, .. } => {
+            *instr = code.clone();
+            code_xml.clear();
+        }
+        InlineObject::FieldStart { instr, .. } => *instr = code.clone(),
         _ => {}
     })?;
     super::references::update_fields(s)?;

@@ -6,7 +6,15 @@ use wordcraft_doc::props::{CharProps, NumRef};
 use wordcraft_doc::{ListKind, PartKind, Pos, para_block};
 
 fn field(instr: &str) -> InlineObject {
-    InlineObject::Field { instr: instr.into(), result: "stale".into(), locked: false, dirty: false, code: false, form: String::new() }
+    InlineObject::Field {
+        instr: instr.into(),
+        result: "stale".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    }
 }
 
 /// Body paragraphs: `(style, text, page break before)`; a header with one STYLEREF per code.

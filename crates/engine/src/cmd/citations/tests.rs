@@ -340,6 +340,7 @@ fn table_of_figures_from_word_and_typed_captions() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     s.doc.insert_object(&at, field, &CharProps::default()).unwrap();
     s.run("references.updateFigures", &json!({})).unwrap();
@@ -389,6 +390,7 @@ fn table_of_figures_from_word_replaces_its_saved_list() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     p.insert_object(0, field, &CharProps::default()).unwrap();
     for _ in 0..2 {
@@ -411,6 +413,7 @@ fn table_of_figures_goes_by_the_seq_identifier() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     let plain = CharProps::default();
     let mut imported = Paragraph::new().styled("Caption");
@@ -444,6 +447,7 @@ fn caption_label_after_a_chapter_number_field() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     let plain = CharProps::default();
     // STYLEREF, " Specimen ", SEQ Figure, ": A rock"

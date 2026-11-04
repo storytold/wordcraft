@@ -38,7 +38,7 @@ pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let instr = format!("{} {name} \\h", if show == "page" { "PAGEREF" } else { "REF" });
     let end = s.doc.insert_object(
         &at,
-        InlineObject::Field { instr, result: result.clone(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field { instr, result: result.clone(), locked: false, dirty: false, code: false, form: String::new(), code_xml: String::new() },
         &props,
     )?;
     s.sel = Selection::caret(end);

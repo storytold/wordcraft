@@ -52,7 +52,15 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
     let end = head.len();
     head.insert_object(
         end,
-        InlineObject::Field { instr: instr.to_string(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: instr.to_string(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &CharProps::default(),
     )?;
     let i = if s.doc.para_at(&at).is_some_and(|p| p.is_empty()) { at.path.last() } else { s.doc.split_paragraph(&at)?.path.last() };

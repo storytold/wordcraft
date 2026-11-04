@@ -196,6 +196,7 @@ fn doc_with_header_fields() -> (wordcraft_doc::Document, u32) {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     let mut doc = wordcraft_doc::Document::from_text("one two three");
     doc.core.creator = "Ada".into();
@@ -298,8 +299,15 @@ fn header_fields_session(doc: wordcraft_doc::Document, instrs: &[&str]) -> (Sess
     let mut p = Paragraph::new();
     for instr in instrs {
         let off = p.len();
-        let field =
-            InlineObject::Field { instr: (*instr).into(), result: "stale".into(), locked: false, dirty: false, code: false, form: String::new() };
+        let field = InlineObject::Field {
+            instr: (*instr).into(),
+            result: "stale".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        };
         p.insert_object(off, field, &CharProps::default()).unwrap();
     }
     let mut doc = doc;
@@ -472,7 +480,15 @@ fn toc_tabs_ignore_nonentries() {
         .unwrap()
         .insert_object(
             0,
-            InlineObject::Field { instr: "TOC".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "TOC".into(),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps::default(),
         )
         .unwrap();

@@ -1,6 +1,7 @@
+use super::fields::{run_xml, same_rev};
 use super::{
-    CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
-    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+    CharProps, El, FieldState, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx,
+    StoryCtx, TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
 };
 
 impl Reader<'_> {
@@ -179,7 +180,9 @@ impl Reader<'_> {
                     if f.sizes.len() < 64 {
                         f.sizes.push((f.instr.len(), props.size));
                     }
-                    f.instr.push_str(&k.text());
+                    let text = k.text();
+                    f.instr.push_str(&text);
+                    keep_code_xml(f, props, &text);
                 }
             }
             "w:tab" => self.emit_text(sc, pb, "\t", props),
@@ -293,7 +296,15 @@ impl Reader<'_> {
             "w:pgNum" => self.emit_obj(
                 sc,
                 pb,
-                InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+                InlineObject::Field {
+                    instr: "PAGE".into(),
+                    result: String::new(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                    code_xml: String::new(),
+                },
                 props,
             ),
             "w:ruby" => self.read_ruby(sc, pb, k, props),
@@ -384,6 +395,25 @@ impl Reader<'_> {
                 }
             }
             _ => pb.push_obj(o, props),
+        }
+    }
+}
+
+/// Adds a piece of field code to the field's nested-code XML, or gives the XML up when the piece
+/// is in another revision or the code grows too long.
+fn keep_code_xml(f: &mut FieldState, props: &CharProps, text: &str) {
+    if !same_rev(props, &f.props) {
+        // Code text in another revision: nesting is never kept for this field.
+        f.code_xml_lost = true;
+        f.code_xml = String::new();
+    } else if !f.code_xml.is_empty() && !f.code_xml_lost {
+        if f.code_xml.len() >= MAX_INSTR {
+            f.code_xml_lost = true;
+            f.code_xml = String::new();
+        } else {
+            let mut w = crate::xml::W::default();
+            run_xml(&mut w, props, "w:instrText", text);
+            f.code_xml.push_str(&w.s);
         }
     }
 }
