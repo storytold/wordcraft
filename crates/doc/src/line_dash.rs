@@ -27,6 +27,20 @@ pub enum LineDash {
 }
 
 impl LineDash {
+    /// This dash with a custom pattern cut to the stops a draw can use
+    /// ([`MAX_DASH_STOPS`]): a stored document can carry a far longer list than
+    /// any draw needs, and a floating picture is copied into every page's
+    /// layout, so the list is bounded where it enters, not where it is drawn.
+    pub fn bounded(self) -> Self {
+        match self {
+            Self::Custom(mut stops) => {
+                stops.truncate(MAX_DASH_STOPS);
+                Self::Custom(stops)
+            }
+            other => other,
+        }
+    }
+
     pub fn from_ooxml(value: &str) -> Self {
         match value {
             "dot" => Self::Dot,
@@ -166,6 +180,14 @@ fn dash_points(ratio: f32, width: f32) -> f32 {
     (ratio * width).clamp(MIN_DASH_POINTS, MAX_DASH_POINTS)
 }
 
+/// A [`LineDash`] read from a saved document, bounded by [`LineDash::bounded`].
+pub(crate) fn deserialize_bounded<'de, D>(deserializer: D) -> Result<LineDash, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    LineDash::deserialize(deserializer).map(LineDash::bounded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +198,17 @@ mod tests {
         assert_eq!(LineDash::Dash.pattern(2.0), [8.0, 6.0]);
         assert_eq!(LineDash::Custom(vec![(200_000, 150_000)]).pattern(2.0), [4.0, 3.0]);
         assert!(LineDash::Solid.pattern(2.0).is_empty());
+    }
+
+    #[test]
+    fn a_custom_dash_read_from_a_saved_document_is_bounded() {
+        let stops: Vec<[u32; 2]> = vec![[100_000, 50_000]; MAX_DASH_STOPS + 10];
+        let json = serde_json::json!({"type": "image", "media": "m", "w": 10.0, "h": 10.0,
+            "dash": {"custom": stops}});
+        let o: crate::para::InlineObject = serde_json::from_value(json).unwrap();
+        let crate::para::InlineObject::Image { dash, .. } = o else { panic!("not an image") };
+        let LineDash::Custom(stops) = dash else { panic!("not a custom dash") };
+        assert_eq!(stops.len(), MAX_DASH_STOPS, "a stored custom dash is cut to the stops a draw can use");
     }
 
     #[test]

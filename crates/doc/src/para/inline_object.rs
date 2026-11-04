@@ -35,7 +35,7 @@ pub enum InlineObject {
         #[serde(default, skip_serializing_if = "super::float::is_zero")]
         stroke_width: f32,
         /// The outline's dash pattern; absent in older saved documents means solid.
-        #[serde(default, skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
+        #[serde(default, deserialize_with = "crate::line_dash::deserialize_bounded", skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
         dash: crate::line_dash::LineDash,
         /// The outline's compound type (`a:ln/@cmpd`); absent means one line.
         #[serde(default, skip_serializing_if = "crate::line_dash::CompoundLine::is_single")]
