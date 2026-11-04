@@ -21,6 +21,17 @@ fn emphasis() {
     assert!(matches!(&s[0], Inline::Text(t, f) if t == "gone" && f.strike));
 }
 
+/// An empty `<a id>` or `<a name>` is an anchor whatever the case of its `</a>` (#3715).
+#[test]
+fn empty_html_anchor() {
+    let anchors = |s: &str| inl(s).into_iter().filter_map(|i| if let Inline::Anchor(a) = i { Some(a) } else { None }).collect::<Vec<_>>();
+    assert_eq!(anchors(r#"x <a id="n"></a> y"#), vec!["n"]);
+    assert_eq!(anchors(r#"x <a name="m"></A> y"#), vec!["m"]);
+    assert_eq!(anchors(r#"<A id="p"></a>"#), vec!["p"]);
+    assert!(anchors(r#"<a id="n">text</a>"#).is_empty());
+    assert!(anchors(r#"<a id="n"></"#).is_empty());
+}
+
 #[test]
 fn links_code_escapes() {
     let s = inl("see [the *site*](http://x.org \"T\") and `a*b*` \\*lit\\* &amp; <https://y.com>");

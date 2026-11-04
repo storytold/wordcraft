@@ -702,15 +702,17 @@ fn decorative_picture_exports_with_empty_alt_text() {
 }
 
 /// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
-/// took quadratic time: a few hundred KB froze the importer for tens of seconds.
+/// took quadratic time: a few hundred KB froze the importer for tens of seconds. Every `<a …>`
+/// tag also lower-cased a copy of the rest of its paragraph to look for `</a>` (#3715).
 #[test]
 fn hostile_importer_input_takes_linear_time() {
     use std::time::{Duration, Instant};
-    let cases: [(&str, String); 5] = [
+    let cases: [(&str, String); 6] = [
         ("md", "*[".repeat(50_000)),
         ("md", "![a](b".repeat(100_000)),
         ("md", "[a](".repeat(100_000)),
         ("md", "<a".repeat(200_000)),
+        ("md", "<a x>".repeat(200_000)),
         ("html", "&#".repeat(500_000)),
     ];
     for (ext, text) in cases {
