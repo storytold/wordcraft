@@ -46,7 +46,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let (flow, lang) = parse_lang(bytes)?;
     let mut doc = model::to_doc(&flow);
     if let Some(lang) = lang {
-        doc.styles.default_chr.lang = Some(lang);
+        std::sync::Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang);
     }
     Ok(doc)
 }
