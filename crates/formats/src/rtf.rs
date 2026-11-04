@@ -38,7 +38,7 @@ mod word;
 pub use date::{dttm_to_iso, iso_to_dttm};
 #[cfg(test)]
 use export::{Tables, Writer};
-pub use export::{esc, export};
+pub use export::{can_write_picture, esc, export};
 pub use parse::{import, parse};
 use reader::Reader;
 #[cfg(test)]
