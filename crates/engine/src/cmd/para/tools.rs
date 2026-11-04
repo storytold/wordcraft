@@ -100,7 +100,7 @@ fn apply_deletions(s: &mut Session, story: StoryRef, path: &Path, mut ranges: Ve
 /// Track Changes deleted text stays in `para.text`, so every scan that decides what to delete or
 /// count goes through this.
 fn live_chars(para: &wordcraft_doc::Paragraph) -> impl Iterator<Item = (usize, char)> + '_ {
-    para.text.char_indices().filter(|(i, _)| para.props_of_char(*i).del.is_none())
+    para.run_ranges().filter(|(_, c)| c.del.is_none()).flat_map(|(r, _)| para.text[r.clone()].char_indices().map(move |(i, c)| (r.start + i, c)))
 }
 
 /// The byte ranges of every manual line break in the paragraph that is not already deleted.

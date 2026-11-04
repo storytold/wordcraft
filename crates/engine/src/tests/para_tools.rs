@@ -412,6 +412,11 @@ fn first_indent(s: &Session) -> Option<f32> {
     s.doc.para(StoryRef::Body, &path).expect("paragraph").props.indent_first
 }
 
+fn first_deleted(s: &Session, off: usize) -> bool {
+    let path = s.doc.para_paths(StoryRef::Body)[0].clone();
+    s.doc.para(StoryRef::Body, &path).expect("paragraph").props_of_char(off).del.is_some()
+}
+
 #[test]
 fn remove_extra_spaces_skips_tracked_deleted_spaces() {
     let mut s = s();
@@ -422,6 +427,16 @@ fn remove_extra_spaces_skips_tracked_deleted_spaces() {
     run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
     run(&mut s, "review.acceptAll", json!({}));
     assert_eq!(text(&s), "a b", "the one live space survives");
+
+    // Three spaces, the middle one already deleted: of the two live ones the last is kept.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "a   b"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    track_delete_in_first(&mut s, 2, 3);
+    select_all(&mut s);
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+    assert!(first_deleted(&s, 1) && first_deleted(&s, 2), "the first and the already deleted space are deleted");
+    assert!(!first_deleted(&s, 3), "the last live space stays");
 }
 
 #[test]
@@ -439,12 +454,12 @@ fn spaces_to_indent_twice_does_not_count_deleted_spaces_again() {
 #[test]
 fn convert_breaks_leaves_a_tracked_deleted_break_alone() {
     let mut s = s();
-    type_breaks(&mut s, "a\nb");
+    type_breaks(&mut s, "a\nb\nc");
     run(&mut s, "review.trackChanges", json!({"value": true}));
     track_delete_in_first(&mut s, 1, 2);
     select_all(&mut s);
     run(&mut s, "para.convertBreaks", json!({"scope": "all"}));
-    assert_eq!(s.doc.para_paths(StoryRef::Body).len(), 1, "a deleted break is not turned into a paragraph break");
+    assert_eq!(s.doc.para_paths(StoryRef::Body).len(), 2, "only the live break becomes a paragraph break");
 }
 
 #[test]
