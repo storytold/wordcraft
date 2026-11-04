@@ -43,7 +43,7 @@ use import::Pages;
 use import::{Pictures, apply_page_layout, read_entry, read_meta};
 pub use import::{import, parse};
 #[cfg(test)]
-use limits::MAX_XML_DEPTH;
+use limits::{MAX_EXTRA_SPACES, MAX_XML_DEPTH};
 pub use package::export;
 use styles::Styles;
 #[cfg(test)]

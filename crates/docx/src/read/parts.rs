@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, Blocks, ContentTypes, DocxError, El, MAX_FONT_NAME, MAX_HF_DEPTH, MAX_PARTS, MAX_TABLE_FONTS, MAX_VBA_RELATED, PartKind, Reader, Rels,
+    Revision, RevisionKind, Rgb, StoryCtx, VBA_PROJECT_PART, VBA_RELATED, props, shape_style,
+};
 
 impl Reader<'_> {
     /// Keep the parts the VBA project at `project` relates to, with their relationship types and
@@ -141,7 +144,7 @@ impl Reader<'_> {
         sc.in_hf = true;
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
-        self.read_blocks(&mut sc, &root, &rels, &mut blocks, 0);
+        self.read_blocks(&mut sc, &root, &rels, &mut blocks, self.chunks.depth);
         self.hf_depth = self.hf_depth.saturating_sub(1);
         self.flush_pending(&mut sc, &mut blocks);
         if let Some(p) = self.doc.parts.get_mut(&id)

@@ -350,6 +350,26 @@ fn read_paper_replaces_the_page_background() {
     assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
 }
 
+/// The paper the canvas draws under a page before its raster: white, the reading paper, or
+/// the dark paper grey on a dark page, never the document's page color.
+#[test]
+fn blank_paper_is_the_reading_paper_or_white_on_screen() {
+    let mut d = Document::from_text("Hello");
+    d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+    let grey = Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER);
+    for (opts, paper) in [
+        (RenderOptions::default(), Rgb::WHITE),
+        (RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() }, SEPIA_PAPER),
+        (RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() }, grey),
+        (RenderOptions { dark: true, ..Default::default() }, grey),
+    ] {
+        assert_eq!(opts.blank_paper(), paper);
+        if opts.read_paper.is_some() {
+            assert_eq!(opts.paper_of(&d), paper, "the reading paper hides the page color");
+        }
+    }
+}
+
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
 /// the header parses), with no real pixel data.
 fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
@@ -532,7 +552,7 @@ fn dimmed_header_image_renders() {
 fn a_thick_rule_ends_flat_not_round() {
     let d = Document::new();
     let rule = |stroke| Draw::Line { x0: 10.0, y0: 10.0, x1: 30.0, y1: 10.0, width: 8.0, color: Rgb::BLACK, stroke, alpha: 1.0, text_bg: None };
-    let shot = |stroke| render_items(&d, &[rule(stroke)], 0.0, 0.0, 40.0, 20.0, 1.0, &RenderOptions::default());
+    let shot = |stroke| render_items(&d, &[rule(stroke)], wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 20.0), 1.0, &RenderOptions::default());
     let ink = |img: &Rendered, x: u32, y: u32| img.pixel(x, y)[3] > 128;
     // An 8 pt rule from x=10 to x=30 covers y 6..14, and nothing beyond either end.
     let img = shot(Stroke::Solid);
@@ -652,7 +672,7 @@ fn legacy_font_effects_are_drawn() {
         let cp = CharProps { size: Some(SIZE), bold: Some(true), ..c };
         d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("HHHH", cp))];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
-        render_area(&d, &l.pages[0], -offset, -offset, 400.0, 150.0, SCALE, &RenderOptions::default())
+        render_area(&d, &l.pages[0], wordcraft_geom::Rect::new(-offset, -offset, 400.0, 150.0), SCALE, &RenderOptions::default())
     };
     let counts = |img: &Rendered| {
         let (mut dark, mut grey) = (0usize, 0usize);
@@ -1232,12 +1252,14 @@ fn hostile_dash_patterns_draw_solid_and_finish() {
     };
     let start = std::time::Instant::now();
     for dash in [vec![1e-30, 1e-30], vec![1e-30], vec![-1.0, 2.0], vec![f32::NAN, 1.0], vec![f32::INFINITY, 1.0], vec![0.0, 0.0]] {
-        let img = render_items(&Document::new(), &[line(dash.clone())], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+        let img =
+            render_items(&Document::new(), &[line(dash.clone())], wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 40.0), 1.0, &RenderOptions::default());
         assert!(img.pixel(50, 20)[3] > 200, "{dash:?} draws solid");
     }
     // Milliseconds drawn solid; drawn as dashes they ran past 4 minutes without finishing.
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
-    let dashed = render_items(&Document::new(), &[line(vec![10.0, 10.0])], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+    let dashed =
+        render_items(&Document::new(), &[line(vec![10.0, 10.0])], wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 40.0), 1.0, &RenderOptions::default());
     assert!(dashed.pixel(15, 20)[3] > 200 && dashed.pixel(25, 20)[3] == 0, "a normal pattern dashes");
     assert!(safe_dashes([3.0, 1.0], 1000.0).len() == 2);
     assert!(safe_dashes([1e-3, 1e-3], 1000.0).is_empty(), "a million pieces");

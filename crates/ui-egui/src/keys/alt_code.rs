@@ -1,4 +1,4 @@
-use super::*;
+use super::{Key, Modifiers, Value, WordApp, json};
 
 /// Alt+numpad character codes are a Windows convention; on macOS Option+digit types its own
 /// characters (¡ ™ £…), so they're off there (also in a browser on a Mac).

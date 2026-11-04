@@ -773,6 +773,32 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     assert!(paths > 0, "its glyphs are drawn as outlines");
 }
 
+/// #3674: shaping gives 32-bit glyph ids (a format-12 cmap can map a character to any of them),
+/// but krilla takes 16-bit ones and panics on a larger id. That failed the export, and on wasm
+/// (`panic = "abort"`) lost the tab. A glyph id above 65535 is now written as .notdef.
+#[test]
+fn glyph_id_above_u16_exports() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("Wide glyph", CharProps { font: Some("Source Sans 3".into()), ..Default::default() }))];
+    let opts = PdfOptions { tagged: false, ..Default::default() };
+    let mut lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (want, _) = count_glyphs_and_paths(&export_layout(&d, &lay, &opts).unwrap());
+    assert!(want > 0);
+    let mut wide = 0;
+    for item in lay.pages.iter_mut().flat_map(|p| p.items.iter_mut()) {
+        if let Placed::Lines { para, .. } = item
+            && let Some(g) = Arc::make_mut(para).glyphs.first_mut()
+        {
+            g.gid = 70_000;
+            wide += 1;
+        }
+    }
+    assert_eq!(wide, 1, "one glyph id is out of range");
+    let bytes = export_layout(&d, &lay, &opts).expect("a glyph id above 65535 must not fail the export");
+    let (glyphs, _) = count_glyphs_and_paths(&bytes);
+    assert_eq!(glyphs, want, "every glyph is still drawn, the wide one as .notdef");
+}
+
 #[test]
 fn flat_lines_in_a_group_are_drawn() {
     // A horizontal divider inside a group has no height (`a:ext cy="0"`): it used to be left out
@@ -1365,6 +1391,35 @@ fn bookmark_destination_is_the_page_of_its_start() {
 
     // Whitespace in ISO date string is parsed successfully
     assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
+}
+
+#[test]
+fn only_web_and_mail_links_become_uri_actions() {
+    // A script, file, data or UNC target exports as plain text, as in the other exporters (#3717).
+    let links = [
+        ("web", "https://example.com/ok"),
+        ("mail", "mailto:a@example.com"),
+        ("script", "javascript:alert(1)"),
+        ("file", "file:///etc/passwd"),
+        ("data", "data:text/html,x"),
+        ("unc", r"\\host\share"),
+    ];
+    let mut p = Paragraph::with_text("Links:", CharProps::default());
+    for (text, link) in links {
+        let n = p.len();
+        p.insert_text(n, &format!(" {text}"), &CharProps { link: Some(link.into()), ..Default::default() }).unwrap();
+    }
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    // `/URI (target)` per link (an action also says `/S /URI`).
+    assert_eq!(raw.matches("/URI (").count() + raw.matches("/URI(").count(), 2);
+    assert!(raw.contains("example.com/ok") && raw.contains("a@example.com"));
+    for bad in ["javascript", "passwd", "text/html", "share"] {
+        assert!(!raw.contains(bad), "{bad}");
+    }
+    let all = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(all.contains("Links: web mail script file data unc"), "{all:?}");
 }
 
 #[test]
@@ -2407,12 +2462,13 @@ fn only_safe_link_targets_become_annotations() {
     use hayro_syntax::object::{Array, Dict, String as PdfString};
 
     let mut d = Document::new();
-    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
-        .into_iter()
-        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
-        .collect();
+    d.body =
+        ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", r"\\server\share\f.doc"]
+            .into_iter()
+            .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+            .collect();
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 6, "unlinked text stays");
     let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
     let uris: Vec<String> = pdf.pages()[0]
         .raw()

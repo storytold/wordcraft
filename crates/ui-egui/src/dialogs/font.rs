@@ -1,9 +1,23 @@
-use super::*;
+use super::{Dialog, Value, WordApp, json};
 
 /// The Font dialog preview's size: the Size box's points between 6 and 72, else 12. `"NaN"` and
 /// `"inf"` parse as floats too, and a NaN font size trips epaint's glyph assertion (#3663).
 pub(super) fn preview_size(size: &str) -> f32 {
     size.trim().parse::<f32>().ok().filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
+}
+
+/// One of the Font dialog's font boxes: type to find a font, with the missing-font warning
+/// `shown_as` (the families drawn instead of `current`, see [`WordApp::font_dialog_warning`]).
+pub(super) fn font_box(
+    ui: &mut egui::Ui,
+    (id, current): (&str, &str),
+    items: &[String],
+    preview: &dyn Fn(&mut egui::Ui, &str) -> egui::Response,
+    shown_as: Option<&str>,
+) -> Option<String> {
+    let options =
+        crate::widgets::FontComboOptions { id, width: 220.0, current, items, recent: &[], preview: Some(preview), tip: tl!("Font"), shown_as };
+    crate::widgets::font_combo_with_recent_hint(ui, options)
 }
 
 /// The character properties the Font dialog's fields stand for.
