@@ -84,6 +84,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Borders { .. } => "Borders and Shading",
         Dialog::Find { .. } => "Find and Replace",
         Dialog::InsertTable { .. } => "Insert Table",
+        Dialog::CreateTable { .. } => "Create Table",
         Dialog::PageSetup { .. } => "Page Setup",
         Dialog::Link { .. } => "Insert Hyperlink",
         Dialog::Bookmark { .. } => "Bookmark",

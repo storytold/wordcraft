@@ -19,7 +19,7 @@ pub use items::{DropCapState, drop_cap_state, format_date, format_date_parts};
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};
 use links::{bookmark, delete_bookmark, link, link_targets};
 pub use links::{bookmark_name_ok, bookmark_range, bookmark_span};
-pub use objects::{base64_decode, base64_encode};
+pub use objects::{base64_decode, base64_encode, caret_column_width};
 use objects::{icon, shape, table, text_box};
 pub(crate) use objects::{image_ext, picture};
 
@@ -38,7 +38,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page).params(r#"{"title"?: string, "subtitle"?: string, "author"?: string}"#),
-        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
+        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(
+            r#"{"rows": n, "cols": n, "style"?: string, "width"?: "column"|"paragraph"|pt (Hangul's Create Table: fit to the column, fit between the paragraph's indents, or a width), "rowHeight"?: pt (at least), "look"?: "hangul" (solid 0.12 mm lines, cells padded 1.8 mm × 0.5 mm)}"#,
+        ),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"id"?: string (omit to list the library), "color"?: "RRGGBB", "size"?: pt, "query"?: string, "category"?: string}"#),
