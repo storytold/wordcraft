@@ -6212,6 +6212,38 @@ fn a_note_mark_after_a_first_letter_stays_in_a_narrow_column() {
     assert!(narrow > 5, "{narrow} columns under 40 pt");
 }
 
+/// #5402: the break before a note mark is judged on the text line breaking reads. A mark behind a
+/// bookmark after a hyphen, or right after a soft hyphen, doesn't start a line; a hidden mark
+/// after a hyphen leaves the break after the hyphen in place.
+#[test]
+fn a_note_mark_after_a_hyphen_bookmark_or_soft_hyphen() {
+    let text = "Kilns burn wood. The ash- glazes ran, the soda\u{ad} washes dried, and the salt-glazes pitted.";
+    let mut d = Document::from_text(text);
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    // Back to front: a hidden note after "salt-", a note after the soft hyphen of "soda", and a
+    // bookmark then a note after "ash-". A line starting at the bookmark starts with the mark too.
+    let salt = text.find("salt-").unwrap() + 5;
+    footnote(&mut d, &Pos::body(0, salt), "Hidden.");
+    d.format_range(&Pos::body(0, salt), &Pos::body(0, salt + obj), &|c| c.hidden = Some(true)).unwrap();
+    let soda = text.find("soda").unwrap() + 4 + '\u{ad}'.len_utf8();
+    footnote(&mut d, &Pos::body(0, soda), "Soft hyphen.");
+    let ash = text.find("ash-").unwrap() + 4;
+    d.insert_object(&Pos::body(0, ash), InlineObject::BookmarkStart { name: "glaze".into() }, &Default::default()).unwrap();
+    footnote(&mut d, &Pos::body(0, ash + obj), "Bookmark.");
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let notes: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
+    let [ash_note, soda_note, salt_note] = notes[..] else { panic!("{notes:?}") };
+    let mut broke_after_salt = false;
+    for m in 100..=430 {
+        let starts = body_line_starts(&d, m as f32);
+        for (r, what) in [(ash_note, "behind a bookmark"), (soda_note, "after a soft hyphen")] {
+            assert!(!starts.contains(&r) && !starts.contains(&(r - obj)), "margin {m}: a line starts with the mark {what}: {starts:?}");
+        }
+        broke_after_salt |= starts.contains(&salt_note) || starts.contains(&(salt_note + obj));
+    }
+    assert!(broke_after_salt, "a hidden mark keeps the break after the hyphen");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.

@@ -461,12 +461,11 @@ impl<'a> BreakText<'a> {
     }
 }
 
-/// Mark the clusters a line may break after; never before the offsets in `no_break_before`.
-fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara, no_break_before: &[usize]) {
-    let mut opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for i in no_break_before {
-        opps.remove(i);
-    }
+/// Mark the clusters a line may break after; never at the offsets of the break text in
+/// `no_break` (sorted).
+fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara, no_break: &[usize]) {
+    let opps: std::collections::HashSet<usize> =
+        break_positions(&bt.text, rp).into_iter().filter(|i| no_break.binary_search(i).is_err()).filter_map(|i| bt.to_para(i)).collect();
     for c in clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
@@ -598,7 +597,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     skip.extend(sh.bare.iter().cloned());
     let glued = note_refs_glued(p);
     let bt = BreakText::new(&glued, skip);
-    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp, &note_refs_after_text(p));
+    let before_marks = breaks_before_marks(&bt.text);
+    mark_break_opportunities(&mut sh.b.clusters, &bt, &rp, &before_marks);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
@@ -630,7 +630,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         auto_space,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
-    pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
+    // Nor at a soft hyphen right before a note mark.
+    let to_para = |i: usize| if before_marks.binary_search(&i).is_ok() { None } else { bt.to_para(i) };
+    pl.hyph_after = hyphenation_points(&bt.text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
     // paragraph in the final text, or moved-away text marked Hidden) is gone: it takes no room.
     // So is one whose mark is hidden and whose text is empty or hidden too: Word shows nothing of
@@ -710,6 +712,22 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.borders = None;
 }
 
+/// What [`note_refs_glued`] reads a note reference as.
+const NOTE_GLUE: char = '\u{202f}';
+
+/// Where the break text has a note mark right after anything but whitespace: no line break there,
+/// before the mark (#5402). UAX #14 forbids one after text (LB12a) but not after a hyphen, a dash
+/// or a soft hyphen, so "ash-¹" could leave the mark to start the next line. Read in the break
+/// text, a hidden mark (left out of it) doesn't take the break after the hyphen away, and one
+/// behind a bookmark (left out too) still follows the hyphen. A real narrow no-break space after
+/// a hyphen is read the same way; it never starts a line either. Sorted.
+fn breaks_before_marks(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .filter(|&(i, c)| c == NOTE_GLUE && text.get(..i).and_then(|t| t.chars().next_back()).is_some_and(|b| !b.is_whitespace()))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// The paragraph's text for finding line breaks, with each note reference read as a narrow
 /// no-break space (U+202F): Word keeps a footnote or endnote mark with the text before it ("end.¹"
 /// never leaves "¹" alone at the start of the next line, #5402) and with punctuation after it. The
@@ -718,7 +736,7 @@ fn collapse(pl: &mut ParaLayout) {
 /// still breaks after it (LB18), which a word joiner would forbid (LB11). It takes as many bytes in
 /// UTF-8, so offsets are unchanged.
 fn note_refs_glued(p: &Paragraph) -> std::borrow::Cow<'_, str> {
-    const JOINER: char = '\u{202f}';
+    const JOINER: char = NOTE_GLUE;
     if JOINER.len_utf8() != OBJ.len_utf8() || !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) {
         return p.text.as_str().into();
     }
@@ -730,21 +748,6 @@ fn note_refs_glued(p: &Paragraph) -> std::borrow::Cow<'_, str> {
         }
     }
     text.into()
-}
-
-/// Where note references follow anything but a space: no line breaks before them (#5402). UAX #14
-/// still allows one before [`note_refs_glued`]'s no-break character after a hyphen or a dash
-/// (LB12a), so "ash-¹" could leave the mark to start the next line.
-fn note_refs_after_text(p: &Paragraph) -> Vec<usize> {
-    if !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) {
-        return Vec::new();
-    }
-    p.objects_with_offsets()
-        .filter(|(i, o)| {
-            matches!(o, InlineObject::NoteRef { .. }) && p.text.get(..*i).and_then(|t| t.chars().next_back()).is_some_and(|c| !c.is_whitespace())
-        })
-        .map(|(i, _)| i)
-        .collect()
 }
 
 fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::borrow::Cow<'a, str>, Vec<(usize, usize)>) {
