@@ -757,7 +757,7 @@ pub(crate) const SCALE: usize = 8;
 
 /// The CPU time `f` takes on this thread, in seconds. On Linux it is the scheduler's count of the
 /// time the thread actually ran, so the time it waits while other work on a busy machine has the
-/// CPU is left out; elsewhere, wall-clock time.
+/// CPU is left out. When the counter does not advance, or elsewhere, use wall-clock time.
 fn cpu_cost(f: &mut impl FnMut()) -> f64 {
     let ran = || {
         let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
@@ -766,7 +766,7 @@ fn cpu_cost(f: &mut impl FnMut()) -> f64 {
     let (t, before) = (std::time::Instant::now(), ran());
     f();
     match (before, ran()) {
-        (Some(a), Some(b)) => b.saturating_sub(a) as f64 * 1e-9,
+        (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
         _ => t.elapsed().as_secs_f64(),
     }
 }
