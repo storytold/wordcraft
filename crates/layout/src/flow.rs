@@ -948,7 +948,13 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     }
             }
         }
-        Some(Block::Table(_)) => 24.0,
+        Some(Block::Table(table)) => {
+            if super::table_flow::table_breaks_before(ctx.doc, table) {
+                0.0
+            } else {
+                24.0
+            }
+        }
         None => 0.0,
     }
 }

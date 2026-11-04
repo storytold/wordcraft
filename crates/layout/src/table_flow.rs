@@ -107,12 +107,18 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     table::split_row_keeping_cells(laid, room).is_some()
 }
 
+/// The explicit break that placement applies to an inline table's first paragraph.
+pub(super) fn table_breaks_before(doc: &wordcraft_doc::Document, table: &wordcraft_doc::Table) -> bool {
+    let first = table.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
+    table.props.float.is_none() && first.is_some_and(|p| doc.styles.resolve_para(&p.props).page_break_before)
+}
+
 /// Whether an inline table can begin in the space below a kept body paragraph. Probe the
 /// real cell geometry without advancing list/equation numbers or consuming text-box budgets.
 /// Floating tables retain their independent anchoring rules.
 pub(crate) fn kept_table_can_start(ctx: &mut Ctx, pb: &PageBuilder, block: usize, start: f32) -> Option<bool> {
     let super::Block::Table(table) = &**ctx.doc.body.get(block + 1)? else { return None };
-    if table.props.float.is_some() {
+    if table.props.float.is_some() || table_breaks_before(ctx.doc, table) {
         return None;
     }
     let counters = ctx.counters.clone();
@@ -152,8 +158,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     // A page break before the first row's paragraph moves the whole table to a new page, as
     // Word does (and as an ODT table starting a page opens). Before the table is laid out, so
     // its cells' fields (PAGE) are those of the page it lands on.
-    let first = t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.blocks.first()).and_then(|b| b.as_para());
-    if t.props.float.is_none() && !pb.at_top() && !pb.web && first.is_some_and(|p| ctx.doc.styles.resolve_para(&p.props).page_break_before) {
+    if !pb.at_top() && !pb.web && table_breaks_before(ctx.doc, t) {
         pb.new_page(block, body_top);
         ctx.fields.page = pb.number;
     }

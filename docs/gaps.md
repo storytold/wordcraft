@@ -162,7 +162,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | #19: ODT element audit; files from other applications checked |
-| 2026-11-04 | trivial | PR #5166: the kept-table probe includes finite positive capped table space-before at the projected table cursor, including a heading at a continuous-section top. Synthetic keep/disabled-keep, invalid-gap, page-top and continuous-section regressions; no new native Word comparison or readiness change. |
+| 2026-11-04 | trivial | PR #5166: the kept-table probe includes finite positive capped table space-before at the projected table cursor, including a heading at a continuous-section top. Explicit direct/style-inherited first-cell page breaks bypass both table-prefix and generic keep lookahead, avoiding an extra page. Synthetic keep/disabled-keep, invalid-gap, page-top, continuous-section and near-bottom break controls; no new native Word comparison or readiness change. |
 | 2026-11-01 | trivial | #19 narrowed: ODT read and written nearly whole on this branch (styles, tables, notes, comments, tracked changes including formatting, fields, indexes and marks, drawings, charts, embedded objects, forms, ruby, password protection, flat ODT), checked against LibreOffice; what's left listed; estimate 18–27 h → 10–16 h |
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |

@@ -210,3 +210,36 @@ fn kept_heading_counts_table_gap_at_continuous_section_start() {
     doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap().props.space_before = Some(50.0);
     assert_eq!(heading_page(&doc), 1);
 }
+
+/// An explicit break before the table remains stronger than the heading's keep request.
+#[test]
+fn explicit_table_page_break_does_not_move_the_heading_twice() {
+    for keep in [false, true] {
+        for gap in [0.0, 50.0, 150.0] {
+            for filler in [170.0, 260.0] {
+                for inherited in [false, true] {
+                    let mut doc = control(28.0, 40.0, true, 1, keep);
+                    doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.line_spacing = Some(LineSpacing::Exactly(filler));
+                    doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap().props.space_before = Some(gap);
+                    if inherited {
+                        Arc::make_mut(&mut doc.styles).styles.push(wordcraft_doc::Style {
+                            id: "SyntheticTableBreak".into(),
+                            para: ParaProps { page_break_before: Some(true), ..Default::default() },
+                            ..Default::default()
+                        });
+                    }
+                    let p = doc.para_mut(StoryRef::Body, &Path(vec![2, 0, 0, 0])).unwrap();
+                    if inherited {
+                        p.props.style = Some("SyntheticTableBreak".into());
+                    } else {
+                        p.props.page_break_before = Some(true);
+                    }
+                    let layout = lay(&doc);
+                    let heading = layout.caret(&Pos::body(1, 0)).unwrap().page;
+                    let table = layout.caret(&Pos { story: StoryRef::Body, path: Path(vec![2, 1, 0, 0]), off: 0 }).unwrap().page;
+                    assert_eq!([heading, table], [0, 1], "keep={keep}, gap={gap}, filler={filler}, inherited={inherited}");
+                }
+            }
+        }
+    }
+}
