@@ -7,6 +7,8 @@ use super::{Counters, NumFormat, Path, StoryRef};
 /// each label's template shows (`"%1.%2"` shows levels 0 and 1).
 #[derive(Clone, Debug, Default)]
 pub(super) struct ParaNumber {
+    /// Relative context is shared only within the same numbering instance.
+    list: u32,
     values: Vec<u32>,
     /// Whether each level has counted a paragraph yet: a level the list never used (an `(a)` item
     /// with no clause above it in its list) shows no number in a reference.
@@ -55,7 +57,7 @@ pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> std::collections::H
         let level = usize::from(n.level.min(8));
         let values = counters.values(&doc.numbering, n.num).unwrap_or_default();
         let started = counters.started(&doc.numbering, n.num).unwrap_or_default();
-        let mut num = ParaNumber::default();
+        let mut num = ParaNumber { list: n.num, ..Default::default() };
         for k in 0..=level {
             num.values.push(values.get(k).copied().unwrap_or(0));
             num.started.push(started.get(k).copied().unwrap_or(false));
@@ -73,30 +75,6 @@ fn ref_part(label: &str) -> &str {
     label.trim().trim_end_matches('.').trim_end()
 }
 
-/// One rendered level without already shared context, retaining cached values if its prefix is ambiguous.
-fn relative_part(t: &ParaNumber, level: usize, first: usize) -> Option<String> {
-    let mut out = ref_part(t.labels.get(level)?.as_deref()?).to_string();
-    let levels = t.shows.get(level).cloned().unwrap_or_default();
-    // Full templates such as %1.%2.%3 already contain the shared context. Remove one
-    // complete matching prefix; never strip successive labels (4.4.4 could lose its own 4).
-    let shared: Vec<_> = levels.iter().copied().take_while(|k| *k < first).collect();
-    if !shared.is_empty() {
-        let relative = (0..first).rev().find_map(|k| {
-            let prefix_levels = t.shows.get(k)?;
-            if !shared.iter().all(|n| prefix_levels.contains(n)) {
-                return None;
-            }
-            let prefix = ref_part(t.labels.get(k)?.as_deref()?);
-            out.strip_prefix(prefix)
-                .map(|rest| rest.trim_start_matches(|c: char| c == '.' || c.is_whitespace()).to_string())
-                .filter(|s| !s.is_empty())
-        });
-        // A differently decorated prefix cannot safely be guessed: retain its cached result.
-        out = relative?;
-    }
-    Some(out)
-}
-
 /// The number `REF \n`, `\r` or `\w` shows for the bookmarked paragraph `target` (ECMA-376 Part 1
 /// §17.16.5.51), as Word computes it:
 /// - `\n` (no context): the paragraph's own label.
@@ -104,9 +82,8 @@ fn relative_part(t: &ParaNumber, level: usize, first: usize) -> Option<String> {
 ///   no label already in the result shows that level: under `%1.` / `%1.%2` / `(%3)`, clause (a)
 ///   of 1.1 is `1.1(a)`, not `1.1.1(a)`.
 /// - `\r` (relative context): like `\w`, but leaving out the leading levels whose counters the
-///   field's own paragraph (`from`) shares with the target, compared level by level whichever list
-///   it is in. From inside clause 14, 14(a) is `(a)`; from clause 5 or an unnumbered paragraph it
-///   is `14(a)`.
+///   field's own paragraph (`from`) shares with the target, compared level by level within the same list. From inside clause 14, 14(a) is `(a)`; from clause 5 or an unnumbered paragraph it
+///   is `14(a)`. Context already displayed by the own or a needed ancestor label stays.
 ///
 /// A level above the target that its list never used adds nothing (Word shows `(a)` for an item
 /// whose list has no clause above it, not a made-up `1.1(a)`). `None` when the target paragraph
@@ -121,22 +98,25 @@ pub(super) fn ref_number(numbers: &std::collections::HashMap<Path, ParaNumber>, 
     }
     let used = |k: usize| t.started.get(k).copied().unwrap_or(false);
     let first = match (switch, from.and_then(|p| numbers.get(p))) {
-        ('r', Some(f)) => (0..level).take_while(|&k| !used(k) || (f.values.get(k).is_some() && f.values.get(k) == t.values.get(k))).count(),
+        ('r', Some(f)) if f.list == t.list => {
+            (0..level).take_while(|&k| !used(k) || (f.values.get(k).is_some() && f.values.get(k) == t.values.get(k))).count()
+        }
         _ => 0,
     };
-    out = relative_part(t, level, first)?;
+    // Relative context suppresses added ancestors, never text already rendered in a label.
+    // Word's measured legal-template cases retain 2.2.2 even when 2 or 2.2 is shared.
     let mut shown = t.shows.get(level).cloned().unwrap_or_default();
     for k in (first..level).rev() {
         if shown.contains(&k) || !used(k) {
             continue;
         }
         if t.labels.get(k).is_some_and(Option::is_some) {
-            let prefix = relative_part(t, k, first)?;
+            let prefix = ref_part(t.labels.get(k)?.as_deref()?);
             // Without a delimiter, joining separate numeric labels would invent a number.
             if prefix.chars().next_back().is_some_and(char::is_alphanumeric) && out.chars().next().is_some_and(char::is_alphanumeric) {
                 return None;
             }
-            out.insert_str(0, &prefix);
+            out.insert_str(0, prefix);
             shown.extend(t.shows.get(k).into_iter().flatten().copied());
         }
     }

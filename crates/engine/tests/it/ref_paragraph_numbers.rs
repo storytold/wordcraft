@@ -185,9 +185,9 @@ fn ref_number_switches_show_the_paragraph_number_as_word_does() {
     assert_eq!(got, want);
 }
 
-/// Relative REF drops shared levels even when the target's own template includes those levels.
+/// Word retains context already rendered by the target's own label for relative REF.
 #[test]
-fn relative_number_removes_context_already_in_the_target_label() {
+fn relative_number_keeps_context_already_in_the_target_label() {
     let body = [
         para(Some((2, 0)), &text("Root")),
         para(Some((2, 1)), &text("First section")),
@@ -201,7 +201,7 @@ fn relative_number_removes_context_already_in_the_target_label() {
     let mut s = open(&body);
     s.run("references.updateFields", &json!({"all": true})).unwrap();
     let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["1", "1.1", "1.1.1"]);
+    assert_eq!(got, ["1.1.1", "1.1.1", "1.1.1"]);
 }
 
 /// Cached values of unsupported switches, missing targets and locked fields are not replaced with paragraph text.
@@ -251,9 +251,9 @@ fn numeric_refs_survive_undo_redo_and_docx_round_trip() {
     assert_eq!(fields(&back), fields(&s));
 }
 
-/// Context is removed from a prefixed parent label as well as from a full own-level label.
+/// Context already displayed by a needed parent label is retained as Word measured it.
 #[test]
-fn relative_number_from_the_root_does_not_repeat_the_shared_root() {
+fn relative_number_from_the_root_keeps_the_parents_rendered_context() {
     let body = [
         para(Some((1, 0)), &field(r"REF _Target \r", "STALE")),
         para(Some((1, 1)), &text("Synthetic section")),
@@ -262,7 +262,7 @@ fn relative_number_from_the_root_does_not_repeat_the_shared_root() {
     .concat();
     let mut s = open(&body);
     s.run("references.updateFields", &json!({"all":true})).unwrap();
-    assert_eq!(fields(&s)[0].1, "1(a)");
+    assert_eq!(fields(&s)[0].1, "1.1(a)");
 }
 
 /// A header can reference a body list without inheriting the body caret's relative context.
@@ -363,4 +363,42 @@ fn full_context_keeps_the_actual_ancestor_instance_label() {
     numbering.nums.push(child);
     s.run("references.updateFields", &json!({"all":true})).unwrap();
     assert_eq!(fields(&s).into_iter().map(|(_, value)| value).collect::<Vec<_>>(), ["Clause 1(a)"]);
+}
+
+/// The six legal-list cases measured in Word for Windows by @pakiat:
+/// https://github.com/storytold/wordcraft/pull/4609#issuecomment-6557062456
+#[test]
+fn relative_refs_keep_the_legal_template_in_the_six_measured_contexts() {
+    let refs = || [field(r"REF _Leaf \r", "STALE"), field(r"REF _Mid \r", "STALE")].concat();
+    let body = [
+        para(Some((2, 0)), &text("Synthetic first root")),
+        para(Some((2, 0)), &refs()),
+        para(Some((2, 1)), &text("Synthetic first section")),
+        para(Some((2, 1)), &marked("_Mid", 90, "Synthetic target section")),
+        para(Some((2, 2)), &text("Synthetic first leaf")),
+        para(Some((2, 2)), &marked("_Leaf", 91, "Synthetic target leaf")),
+        para(Some((2, 2)), &refs()),
+        para(Some((2, 1)), &refs()),
+    ]
+    .concat();
+    let mut s = open(&body);
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    let got: Vec<_> = fields(&s).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["2.2.2", "2.2", "2.2.2", "2.2", "2.2.2", "2.2"]);
+}
+
+/// Equal counter values in another list do not provide shared relative context.
+#[test]
+fn relative_context_is_not_shared_by_different_lists() {
+    let mut s = open(
+        &[
+            para(Some((4, 0)), &text("Synthetic target root")),
+            para(Some((4, 1)), &marked("_OtherList", 92, "Synthetic target")),
+            para(Some((1, 0)), &text("Synthetic separate root")),
+            para(Some((1, 1)), &field(r"REF _OtherList \r", "STALE")),
+        ]
+        .concat(),
+    );
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    assert_eq!(fields(&s)[0].1, "1(a)");
 }

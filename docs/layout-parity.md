@@ -283,6 +283,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |
 | 2026-11-01 | trivial | SEQ, STYLEREF and REF fields show fresh results in output; readiness estimates unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery walks paragraph objects once (#3614); readiness estimates unchanged |

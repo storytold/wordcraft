@@ -768,6 +768,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-04 | trivial | Progress log: ODT element audit (gap 19) |
 | 2026-11-04 | trivial | Progress log: ODT checked against 220 files from other applications (gap 19) |
 | 2026-11-04 | trivial | Progress log: OpenDocument files shown in Microsoft Word style or LibreOffice style (gap 19) |
+| 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |

@@ -162,6 +162,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | #19: ODT element audit; files from other applications checked |
+| 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-01 | trivial | #19 narrowed: ODT read and written nearly whole on this branch (styles, tables, notes, comments, tracked changes including formatting, fields, indexes and marks, drawings, charts, embedded objects, forms, ruby, password protection, flat ODT), checked against LibreOffice; what's left listed; estimate 18–27 h → 10–16 h |
 | 2026-11-01 | trivial | #10 narrowed: text in a turned text box is drawn turned with it on screen and in PNG and PDF (upside down when flipped across, never mirrored); editing it still goes by its upright text; estimate unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery no longer repeats paragraph-prefix scans (#3614); readiness estimates unchanged |
