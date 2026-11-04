@@ -279,6 +279,9 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
 /// Custom tab stops from `sprmPChgTabsPapx` / `sprmPChgTabs` ([MS-DOC] PChgTabsPapxOperand,
 /// PChgTabsOperand): the stops removed become `Clear` stops (they hide inherited ones) and the
 /// stops added carry their alignment and leader (TBD: jc in bits 0–2, tlc in bits 3–5).
+///
+/// A paragraph keeps at most [`MAX_TABS`] stops, as Word does: a papx can carry any number of
+/// these sprms, and an uncapped list grew to tens of thousands of stops (#3707).
 fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     let op = prl.operand;
     let i16_at = |i: usize| op.get(i..i + 2).map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 20.0);
@@ -288,9 +291,11 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     let Some(&del) = op.get(at) else { return };
     let del = usize::from(del.min(64));
     at += 1;
-    let mut removed = Vec::with_capacity(del);
+    let mut removed: Vec<f32> = Vec::with_capacity(del);
     for k in 0..del {
-        if let Some(x) = i16_at(at + 2 * k) {
+        // A position removed twice leaves one `Clear` stop; positions a twip apart stay apart,
+        // since each removes the stops within its own 25 twips.
+        if let Some(x) = i16_at(at + 2 * k).filter(|x| !removed.iter().any(|r| r.to_bits() == x.to_bits())) {
             removed.push(x);
         }
     }
@@ -300,8 +305,15 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     at += 1;
     let mut tabs = p.tabs.take().unwrap_or_default();
     // Removed within 25 twips (1.25 pt), as the format says.
-    tabs.retain(|t| !removed.iter().any(|x| (t.pos - x).abs() <= 1.25));
+    let removes = |x: &f32, t: &TabStop| (t.pos - x).abs() <= 1.25;
+    // At the cap, the `Clear` stops of removals that hit a stop of this list come first: an
+    // unmatched removal must not take the slot of one that hides an inherited stop.
+    removed.sort_by_key(|x| !tabs.iter().any(|t| removes(x, t)));
+    tabs.retain(|t| !removed.iter().any(|x| removes(x, t)));
     for x in removed {
+        if tabs.len() >= MAX_TABS {
+            break;
+        }
         tabs.push(TabStop { pos: x, align: TabAlign::Clear, leader: TabLeader::None });
     }
     for k in 0..add {
@@ -321,11 +333,17 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
             _ => TabLeader::None,
         };
         tabs.retain(|t| (t.pos - pos).abs() > 0.05);
-        tabs.push(TabStop { pos, align, leader });
+        // A stop that replaces one at its position still fits.
+        if tabs.len() < MAX_TABS {
+            tabs.push(TabStop { pos, align, leader });
+        }
     }
     tabs.sort_by(|a, b| a.pos.total_cmp(&b.pos));
     p.tabs = Some(tabs);
 }
+
+/// Most tab stops a paragraph keeps (Word's own limit).
+const MAX_TABS: usize = 64;
 
 /// Apply a paragraph-property sprm.
 pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
@@ -441,6 +459,7 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standa
     if sheet.default_chr.size.is_none() {
         sheet.default_chr.size = Some(10.0);
     }
+    let mut resolved = vec![None; raw.len()];
     for (istd, st) in raw.iter().enumerate() {
         if st.name.is_empty() {
             continue;
@@ -453,13 +472,7 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standa
             _ => StyleKind::Paragraph,
         };
         let base = base_of(raw, istd).and_then(|i| raw.get(i)).map(|b| style_id(&b.name));
-        // Inherit: properties come from the base chain, root first, then our own grpprls.
-        let mut chr = CharProps::default();
-        let mut para = ParaProps::default();
-        for s in style_chain(raw, istd).into_iter().filter_map(|i| raw.get(i)) {
-            apply_chain(&mut chr, &s.chpx, fonts);
-            apply_chain_para(&mut para, &s.papx);
-        }
+        let (chr, mut para) = resolve(raw, istd, fonts, &mut resolved);
         if para.outline_level.is_none() && kind == StyleKind::Paragraph {
             let h = heading_level(&st.name);
             if h > 0 {
@@ -469,6 +482,33 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standa
         sheet.styles.push(Style { id, name: display_name(&st.name), kind, based_on: base, chr, para, ..Default::default() });
     }
     sheet
+}
+
+/// Style `istd`'s properties, inherited through its base chain: the chain's grpprls, root first,
+/// then its own. A style whose chain is its parent's chain plus itself starts from the parent's
+/// properties, kept in `memo`, so a base chain is applied once and not once per descendant
+/// (#3707). A chain cut by a cycle or by [`MAX_STYLE_DEPTH`] is applied whole, as before. The
+/// recursion follows the chain, so it is at most [`MAX_STYLE_DEPTH`] deep.
+fn resolve(raw: &[crate::stsh::RawStyle], istd: usize, fonts: &[String], memo: &mut [Option<(CharProps, ParaProps)>]) -> (CharProps, ParaProps) {
+    if let Some(Some(done)) = memo.get(istd) {
+        return done.clone();
+    }
+    let chain = style_chain(raw, istd);
+    let own = chain.len().saturating_sub(1);
+    let parent = own.checked_sub(1).and_then(|i| chain.get(i)).copied();
+    let start = parent.filter(|&b| chain.get(..own) == Some(style_chain(raw, b).as_slice())).map(|b| resolve(raw, b, fonts, memo));
+    let (from, (mut chr, mut para)) = match start {
+        Some(props) => (own, props),
+        None => (0, Default::default()),
+    };
+    for s in chain.get(from..).unwrap_or_default().iter().filter_map(|&i| raw.get(i)) {
+        apply_chain(&mut chr, &s.chpx, fonts);
+        apply_chain_para(&mut para, &s.papx);
+    }
+    if let Some(slot) = memo.get_mut(istd) {
+        *slot = Some((chr.clone(), para.clone()));
+    }
+    (chr, para)
 }
 
 /// Most `istdBase` links followed; a longer chain (or a cycle) in a corrupt file stops there.
