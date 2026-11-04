@@ -347,7 +347,6 @@ fn region_look(st: &TableStyleProps, region: Region) -> RegionLook {
 fn region_borders(parts: &[(TablePart, Borders)], rows: (usize, usize), edges: (bool, bool)) -> Borders {
     wordcraft_doc::styles::part_borders(parts, rows, edges)
 }
-}
 
 struct CellBox {
     items: Vec<Placed>,

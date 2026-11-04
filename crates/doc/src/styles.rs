@@ -975,11 +975,7 @@ mod tests {
     fn table_part_diagonal_borders_reach_the_cells() {
         let tl2br = Border::single(1.0);
         let tr2bl = Border::single(2.0);
-        let borders = Borders {
-            tl2br: Some(tl2br),
-            tr2bl: Some(tr2bl),
-            ..Default::default()
-        };
+        let borders = Borders { tl2br: Some(tl2br), tr2bl: Some(tr2bl), ..Default::default() };
         let mapped = part_borders(&[(TablePart::FirstRow, borders)], (0, 1), (true, true));
         assert_eq!((mapped.tl2br, mapped.tr2bl), (Some(tl2br), Some(tr2bl)));
     }
