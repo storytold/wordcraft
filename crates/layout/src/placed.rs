@@ -99,6 +99,8 @@ pub enum Placed {
         off: usize,
         /// The text box story it shows (`Document::parts` id).
         text_box: Option<u32>,
+        /// An editable text area inside a group; the object position still identifies the group.
+        group_text_box: bool,
         wrap: Wrap,
         /// Its paragraph's column left and top: where offsets relative to the column and the
         /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.

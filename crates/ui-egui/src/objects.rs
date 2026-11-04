@@ -157,7 +157,9 @@ pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
         return layout.object(&pos, hint).map(|o| (o, false));
     }
     match app.session.sel.focus.story {
-        StoryRef::Part(id) if crate::canvas::in_text_box(app) => layout.text_box(id, hint).map(|o| (o, true)),
+        StoryRef::Part(id) if crate::canvas::in_text_box(app) => {
+            layout.text_box(id, hint).and_then(|o| if o.group_text_box { layout.object(&o.pos(), hint) } else { Some(o) }).map(|o| (o, true))
+        }
         _ => None,
     }
 }
@@ -393,8 +395,11 @@ fn snap_targets(pg: &wordcraft_layout::Page, me: &ObjectHit) -> Vec<wordcraft_ge
         .chain(&pg.header)
         .chain(&pg.footer)
         .filter_map(|it| match it {
-            wordcraft_layout::Placed::Object { rect, spin, story, path, off, wrap, .. }
-                if *wrap != Wrap::Inline && !(*story == pos.story && *path == pos.path && *off == pos.off) && Some(*story) != own =>
+            wordcraft_layout::Placed::Object { rect, spin, story, path, off, wrap, group_text_box, .. }
+                if !group_text_box
+                    && *wrap != Wrap::Inline
+                    && !(*story == pos.story && *path == pos.path && *off == pos.off)
+                    && Some(*story) != own =>
             {
                 Some(spin.bounds(*rect))
             }
@@ -425,7 +430,7 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
         return;
     }
     let target = crate::canvas::page_at(pages, layout, scale, at).and_then(|(page, x, y)| {
-        layout.find_object(page, |o| o.page == page && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
+        layout.find_object(page, |o| o.page == page && !o.group_text_box && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
     });
     let Some(target) = target else {
         app.status(tl!("Not linked: click a text box"));
@@ -467,6 +472,9 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
     });
     handle.or_else(|| {
         let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+        if group_text_at(layout, page, x, y, EDGE / scale.max(0.01), story) {
+            return None;
+        }
         // A Behind Text picture is normally hit only where no body text is present, so text above
         // it remains easy to edit. Once the picture is selected (for example with the arrow keys
         // or the Selection Pane), let its own frame win inside the frame so the user can drag it
@@ -511,9 +519,13 @@ fn behind_drag_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
     let story = active_story(app, layout);
     let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
     let edge = EDGE / scale.max(0.01);
+    if group_text_at(layout, page, x, y, edge, story) {
+        return None;
+    }
     layout
         .find_object(page, |o| {
             o.page == page
+                && !o.group_text_box
                 && o.story == story
                 && o.behind()
                 && movable(app, o)
@@ -521,6 +533,18 @@ fn behind_drag_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
                 && o.rect.expand(edge).contains(o.unspin(x, y))
         })
         .map(|o| (o, Grab::Move))
+}
+
+/// An editable group member's interior, matching the layout's hit testing.
+fn group_text_at(layout: &DocLayout, page: usize, x: f32, y: f32, edge: f32, story: StoryRef) -> bool {
+    if layout.object_at_in(page, x, y, edge, story).is_some() {
+        return false;
+    }
+    let hit = layout.find_object(page, |o| o.page == page && o.story == story && o.group_text_box && o.rect.expand(-edge).contains(o.unspin(x, y)));
+    hit.is_some_and(|o| match story {
+        StoryRef::Body => layout.story_at(page, x, y) == o.text_box.map(StoryRef::Part),
+        StoryRef::Part(_) => layout.header_footer_text_box_at(page, x, y) == o.text_box,
+    })
 }
 
 /// Whether a drag shows the object's pixels rather than an outline. Resizing reflows a text
