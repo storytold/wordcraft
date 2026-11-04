@@ -344,7 +344,7 @@ fn caret_char(app: &WordApp) -> wordcraft_doc::resolve::ResolvedChar {
 }
 
 /// The language tag at the caret, resolved through the styles and the document default.
-fn caret_lang_tag(app: &WordApp) -> Option<String> {
+pub(crate) fn caret_lang_tag(app: &WordApp) -> Option<String> {
     caret_char(app).lang
 }
 

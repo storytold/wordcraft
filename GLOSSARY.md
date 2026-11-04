@@ -24,3 +24,27 @@ The proofing languages offered in Set Proofing Language, Review › Language and
 menu: the languages WordCraft names, plus those of every installed (and, in Set Proofing Language,
 every available) Language pack, each once.
 _Avoid_: Language menu (that is only one of the places it is shown)
+
+**Your languages**:
+The proofing languages Options › Language lists: each English variant in use (the default proofing
+language and any in the open document), every language with an installed
+Language pack, and every proofing language used in the open document.
+_Avoid_: Authoring languages, preferred languages
+
+**Default proofing language**:
+The proofing language new blank documents get, set with Set as default; without one, the interface
+language.
+_Avoid_: Preferred language
+
+**Proofing status**:
+Where a language's proofing comes from: built in, an installed Language pack, your own dictionary,
+a system dictionary, available to install, or not available.
+
+**Custom dictionary**:
+The words you added with Add to Dictionary, accepted in every language.
+_Avoid_: User dictionary (in the interface)
+
+**Dictionaries folder**:
+A folder of Hunspell dictionaries you supply, used before the system's (an installed Language pack
+comes after it).
+_Avoid_: Custom dictionaries
