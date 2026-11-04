@@ -264,6 +264,10 @@ fn locked_frame_anchor_survives_two_saves() {
         }
         let json = serde_json::to_vec(&document).unwrap();
         document = serde_json::from_slice(&json).unwrap();
+        if expected == Some(true) {
+            let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+            assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+        }
         for pass in 0..2 {
             let bytes = wordcraft_docx::write(&document).unwrap();
             let xml = text(&unzip(&bytes), "word/document.xml");
@@ -275,6 +279,10 @@ fn locked_frame_anchor_survives_two_saves() {
             assert_eq!(xml.contains(expected_xml), expected.is_some(), "lock changed on save {}: {xml}", pass + 1);
             document = wordcraft_docx::read(&bytes).unwrap();
             assert_eq!(paras(&document)[0].props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+            if expected == Some(true) {
+                let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+                assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+            }
         }
     }
 }
