@@ -77,11 +77,9 @@ pub(super) fn read_changes(xml: &[u8]) -> (String, String, u32) {
         },
     });
     let date = date.trim();
-    let date = if date.is_empty() || date.ends_with(['Z', 'z']) || date.contains('+') {
-        date.to_string()
-    } else {
-        format!("{}Z", date.split('.').next().unwrap_or(""))
-    };
+    // Zoned already: `Z`, or an offset (`+hh:mm`, or `-hh:mm` in the time part), as `read_meta`.
+    let zoned = date.ends_with(['Z', 'z']) || date.contains('+') || date.split_once('T').is_some_and(|(_, time)| time.contains('-'));
+    let date = if date.is_empty() || zoned { date.to_string() } else { format!("{}Z", date.split('.').next().unwrap_or("")) };
     (by.trim().to_string(), date, cycles.trim().parse::<u32>().unwrap_or(0))
 }
 
@@ -1243,8 +1241,11 @@ fn read_pages(xml: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Pages {
 /// page size and margins are its own (the first page's).
 fn first_pages(pages: &mut Pages) {
     let names: Vec<(String, String)> = pages.next.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+    // The masters as read: a master the loop has already changed (Left and Right pages naming each
+    // other) gives the next one its own headers, whatever order the map yields them in.
+    let read = pages.masters.clone();
     for (name, next) in names {
-        let Some(after) = pages.masters.get(&next).cloned() else { continue };
+        let Some(after) = read.get(&next).cloned() else { continue };
         let Some(sec) = pages.masters.get_mut(&name) else { continue };
         let (own_header, own_footer) = (sec.headers.default, sec.footers.default);
         sec.headers = after.headers;

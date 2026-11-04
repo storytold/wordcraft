@@ -73,11 +73,11 @@ const MAX_WRAPPED: usize = 10_000;
 /// it ends in. `None` for anything else (a TOC has its own update).
 fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize)> {
     let p = s.doc.body.get(i)?.as_para()?;
-    let (off, instr) = p.objects_with_offsets().find_map(|(off, o)| match o {
+    let (k, off, instr) = p.objects_with_offsets().enumerate().find_map(|(k, (off, o))| match o {
         InlineObject::FieldStart { instr, .. } => {
             let t = instr.trim_start();
             (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some())
-                .then(|| (off, t.to_string()))
+                .then(|| (k, off, t.to_string()))
         }
         _ => None,
     })?;
@@ -85,11 +85,12 @@ fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize)> {
     if !p.text.get(..off).is_some_and(|t| t.chars().all(|c| c.is_whitespace() || c == wordcraft_doc::para::OBJ)) {
         return None;
     }
-    // Where it ends: the field end that closes it, nested fields counted.
+    // Where it ends: the field end that closes it, nested fields counted from its own start (a
+    // field before it in its paragraph, an empty `PAGE`…, closes before it and isn't it).
     let mut depth = 0usize;
     for (j, b) in s.doc.body.iter().enumerate().skip(i).take(MAX_WRAPPED) {
         let Some(q) = b.as_para() else { continue };
-        for o in &q.objects {
+        for o in q.objects.iter().skip(if j == i { k } else { 0 }) {
             match o {
                 InlineObject::FieldStart { .. } => depth += 1,
                 InlineObject::FieldEnd => {
@@ -387,4 +388,28 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A field before a list's in its paragraph (an empty `PAGE`) closes first: the list still
+    /// ends at its own field end, paragraphs below, not in its first paragraph.
+    #[test]
+    fn a_wrapped_list_ends_at_its_own_field_end() {
+        let mut d = Document::from_text("Old one\nOld two\nAfter");
+        let props = CharProps::default();
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+        }
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(1)) {
+            let n = p.len();
+            p.insert_object(n, InlineObject::FieldEnd, &props).unwrap();
+        }
+        let s = Session::new(d);
+        assert_eq!(wrapped_list(&s, 0), Some(("BIBLIOGRAPHY".to_string(), 1)));
+    }
 }

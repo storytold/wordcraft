@@ -40,11 +40,14 @@ fn element<'a>(xml: &'a str, name: &str) -> &'a str {
     let close = format!("</{name}>");
     let mut depth = 0usize;
     let mut at = tag_end;
-    // Nesting is bounded like any XML here: deeper is malformed.
-    for _ in 0..super::limits::MAX_XML_DEPTH.saturating_mul(2) {
+    // Every step moves past a tag, so this ends; nesting is bounded like any XML here (deeper is
+    // malformed), however many elements of the name sit side by side within.
+    loop {
         let rest = xml.get(at..).unwrap_or("");
         let next_close = rest.find(&close);
-        let next_open = rest.match_indices(&open).map(|(i, _)| i).find(|&i| {
+        // Only opens before that close count (and only they are looked for).
+        let before = next_close.and_then(|c| rest.get(..c)).unwrap_or(rest);
+        let next_open = before.match_indices(&open).map(|(i, _)| i).find(|&i| {
             let after = rest.get(i + open.len()..).unwrap_or("");
             after.chars().next().is_some_and(|c| c == '>' || c == '/' || c.is_whitespace())
                 // Not self-closed.
@@ -53,6 +56,9 @@ fn element<'a>(xml: &'a str, name: &str) -> &'a str {
         match (next_open, next_close) {
             (Some(o), Some(c)) if o < c => {
                 depth += 1;
+                if depth > super::limits::MAX_XML_DEPTH {
+                    return xml.get(start..).unwrap_or("");
+                }
                 at += o + open.len();
             }
             (_, Some(c)) if depth > 0 => {
@@ -64,7 +70,6 @@ fn element<'a>(xml: &'a str, name: &str) -> &'a str {
             (_, None) => return xml.get(start..).unwrap_or(""),
         }
     }
-    xml.get(start..).unwrap_or("")
 }
 
 /// What is inside element `el` (an element string as [`element`] gives).
@@ -400,4 +405,23 @@ fn namespaces(xml: &str) -> Vec<&str> {
         rest = from.get(q1 + 1 + q2 + 1..).unwrap_or("");
     }
     out
+}
+
+#[cfg(test)]
+mod element_tests {
+    use super::element;
+
+    /// An element ends at its own close tag however many elements of its name it holds side by
+    /// side (inline objects' own `office:body`s), not after a count of tags.
+    #[test]
+    fn an_element_holding_many_of_its_name_ends_at_its_own_close() {
+        let inner = "<office:body><text:p>x</text:p></office:body>".repeat(1200);
+        let outer = format!("<office:body>{inner}</office:body>");
+        let xml = format!("<office:document>{outer}<office:settings/></office:document>");
+        assert_eq!(element(&xml, "office:body"), outer);
+        // Nested deeper than any XML here: malformed, to the end, as an unclosed one.
+        let deep = format!("{}{}", "<office:body>".repeat(600), "</office:body>".repeat(600));
+        assert_eq!(element(&deep, "office:body"), deep);
+        assert_eq!(element("<office:body><x/>", "office:body"), "<office:body><x/>");
+    }
 }

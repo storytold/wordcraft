@@ -324,6 +324,10 @@ impl KeptXml {
             if let Some(w) = self.twin_wraps.remove(&(*fp, *rev)) {
                 self.twin_wraps.entry((*nfp, *nrev)).or_insert(w);
             }
+            // Its group too: all a group's paragraphs are written as read, or none.
+            if let Some(g) = self.groups.remove(fp) {
+                self.groups.entry(*nfp).or_insert(g);
+            }
         }
         if let (Some(t), Some(nt)) = (before.table, after.table)
             && t != nt
@@ -658,5 +662,36 @@ mod tests {
         k.keep_pending(1, big.clone());
         k.keep_pending(2, big);
         assert_eq!(k.pending.len(), 1);
+    }
+
+    /// Filling in what objects show (`Document::fill_objects`, a chart drawn from its data)
+    /// doesn't change the document: a paragraph's group and a text box's story stay as read.
+    #[test]
+    fn filling_objects_keeps_groups_and_stories_as_read() {
+        use crate::para::InlineObject;
+        let field =
+            || InlineObject::Field { instr: "X".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+        let mut doc = crate::Document::from_text("Body");
+        let mut boxed = Paragraph::with_text("In the box", Default::default());
+        boxed.insert_object(0, field(), &Default::default()).unwrap();
+        let id = doc.add_part(crate::PartKind::TextBox, vec![crate::para_block(boxed)]);
+        doc.para_mut(crate::StoryRef::Body, &crate::Path::top(0)).unwrap().insert_object(0, field(), &Default::default()).unwrap();
+        let fp = fingerprint(doc.body[0].as_para().unwrap());
+        let mut k = KeptXml { format: "odt".into(), ..Default::default() };
+        k.paras.insert(fp, Arc::from("<text:p>Body</text:p>"));
+        k.groups.insert(fp, (1, 1));
+        k.story_fps.insert(id, story_fingerprint(&doc, id));
+        doc.kept = Kept::new(k);
+        doc.fill_objects(&|o| matches!(o, InlineObject::Field { result, .. } if result.is_empty()), &mut |o| {
+            if let InlineObject::Field { result, .. } = o {
+                *result = "filled".into();
+            }
+        });
+        let p = doc.body[0].as_para().unwrap();
+        assert_ne!(fingerprint(p), fp, "the paragraph's fingerprint moved");
+        let k = doc.kept.get().unwrap();
+        assert!(k.para(p).is_some());
+        assert_eq!(k.group(p), Some((1, 1)));
+        assert_eq!(k.story_fps.get(&id), Some(&story_fingerprint(&doc, id)));
     }
 }

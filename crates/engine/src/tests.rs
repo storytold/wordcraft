@@ -11812,10 +11812,18 @@ fn emphasis_marks_are_set_and_drawn() {
 fn odf_interpretation_is_an_option_files_follow() {
     use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
     let mut s = s();
-    assert_eq!(s.prefs.odf, OdfProfile::wordcraft(), "WordCraft's own is the default");
+    assert_eq!(s.prefs.odf, OdfProfile::word(), "Microsoft Word's style is the default");
     let r = run(&mut s, "file.options", json!({"odf": {"preset": "LibreOffice"}}));
     assert_eq!(r["odf"]["preset"], json!("libreoffice"));
     assert_eq!(s.prefs.odf.effective(), OdfProfile::libreoffice());
+    // The two display styles, back and forth; Word's by its earlier id too.
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "word"}}));
+    assert_eq!(r["odf"]["preset"], json!("word"));
+    assert_eq!(s.prefs.odf.effective(), OdfProfile::word());
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
+    assert_eq!(r["odf"]["preset"], json!("word"));
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
     run(&mut s, "file.options", json!({"odf": {"columnGap": 18.0}}));
     assert_eq!((s.prefs.odf.preset, s.prefs.odf.effective().column_gap), (OdfPreset::Custom, 18.0));
     for junk in [

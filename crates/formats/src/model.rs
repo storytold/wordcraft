@@ -31,6 +31,7 @@ pub use types::{
     Affix, BoxLook, CODE_STYLE, Cell, CellPic, Chain, Chart, Conn, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Group, Img, Inline,
     Kind, Label, ListInfo, MAX_DEPTH, MAX_FONT_NAME, MAX_GROUP_DEPTH, MAX_LINK, MONO_FONT, Member, Meta, OdfObject, Para, RUBY_BASE_SIZE, RevMark,
     Spacing, TableExtra, clean_text, equations_as_text, flatten_tables, kept_font, kept_link, ranged_anchors, ruby_as_text, ruby_object,
+    shows_nothing,
 };
 pub(crate) use types::{Dropped, begin_import, dropped};
 
@@ -44,6 +45,43 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ASK and SET show nothing (layout shows no result for them): no text export writes the
+    /// result they hold, from the document or from a flow with fields; ODT keeps it.
+    #[test]
+    fn ask_and_set_fields_export_no_text() {
+        let mut doc = wordcraft_doc::Document::from_text("Before after");
+        if let Ok(p) = doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)) {
+            for instr in ["SET name other", "ASK other \"Prompt\""] {
+                let field = wordcraft_doc::para::InlineObject::Field {
+                    instr: instr.into(),
+                    result: "SECRETVALUE".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                };
+                p.insert_object(7, field, &Default::default()).unwrap();
+            }
+        }
+        for (name, out) in [
+            ("markdown", crate::markdown::export(&doc)),
+            ("html", crate::html::export(&doc)),
+            ("latex", crate::latex::export(&doc)),
+            ("rtf", crate::rtf::export(&doc)),
+        ] {
+            assert!(out.contains("Before"), "{name}: {out}");
+            assert!(!out.contains("SECRETVALUE"), "{name}: {out}");
+        }
+        let flow = from_doc_with(&doc, FlowOpts { fields: true, ..Default::default() });
+        assert!(!crate::html::export_flow(&flow, "en").contains("SECRETVALUE"));
+        // The flow keeps the result for ODT.
+        let kept = flow
+            .blocks
+            .iter()
+            .any(|b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Field { result, .. } if result == "SECRETVALUE"))));
+        assert!(kept);
+    }
 
     #[test]
     fn percent_decode_requires_hex_digits() {

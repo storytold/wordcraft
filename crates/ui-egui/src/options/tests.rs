@@ -509,9 +509,10 @@ fn advanced_opendocument_presets_and_custom_cases() {
     let preset = |h: &egui_kittest::Harness<'static, WordApp>| {
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Where the standard leaves the look open, follow:").value()
     };
-    assert_eq!(preset(&h).as_deref(), Some("WordCraft"));
-    pick(&mut h, "LibreOffice");
-    assert_eq!(preset(&h).as_deref(), Some("LibreOffice"));
+    // Two display styles: Microsoft Word's (the default) and LibreOffice's.
+    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
+    pick(&mut h, "LibreOffice style");
+    assert_eq!(preset(&h).as_deref(), Some("LibreOffice style"));
     assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::libreoffice());
     pick(&mut h, "Custom");
     let odf = &h.state().session.prefs.odf;
@@ -520,6 +521,7 @@ fn advanced_opendocument_presets_and_custom_cases() {
     h.get_by_label("Tab stops are measured from the paragraph's indent").click();
     h.run_steps(4);
     assert!(!h.state().session.prefs.odf.effective().tabs_from_indent, "a case turned off");
-    pick(&mut h, "WordCraft");
-    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::wordcraft());
+    pick(&mut h, "Microsoft Word style");
+    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
+    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::word());
 }

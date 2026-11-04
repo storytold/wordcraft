@@ -62,12 +62,13 @@ pub(super) fn picture(parts: &[Part]) -> String {
             Part::AmPm => s.push_str("AM/PM"),
             Part::Text(t) => {
                 let t: String = t.chars().filter(|c| !matches!(c, '"' | '\\')).collect();
-                if t.chars().any(|c| c.is_alphabetic() || c == '\'') {
+                // Letters are quoted; an apostrophe is two, inside quoted text or out of it.
+                if t.chars().any(char::is_alphabetic) {
                     s.push('\'');
                     s.push_str(&t.replace('\'', "''"));
                     s.push('\'');
                 } else {
-                    s.push_str(&t);
+                    s.push_str(&t.replace('\'', "''"));
                 }
             }
         }
@@ -87,6 +88,12 @@ fn parts_of(pic: &str) -> Vec<Part> {
         }
     };
     while let Some(&c) = chars.get(i) {
+        // Two quotes outside quoted text are an apostrophe, as inside it.
+        if c == '\'' && chars.get(i + 1) == Some(&'\'') {
+            text.push('\'');
+            i += 2;
+            continue;
+        }
         if c == '\'' {
             i += 1;
             while let Some(&q) = chars.get(i) {
@@ -336,5 +343,18 @@ mod value_tests {
         assert_eq!(value_shown("dd/MM/yyyy", "45/11/2026"), None);
         assert_eq!(value_shown("dd/MM/yyyy", ""), None);
         assert_eq!(value_shown("", "anything"), None);
+    }
+
+    /// An apostrophe in a date style's text is two quotes in the picture, quoted or not, and
+    /// reads back as one.
+    #[test]
+    fn an_apostrophe_in_a_date_styles_text_round_trips() {
+        use super::{Part, parts_of, picture};
+        for text in ["'", "''", "o'clock", "'tis", " ' "] {
+            let parts = vec![Part::Text(text.to_string())];
+            let pic = picture(&parts);
+            assert_eq!(parts_of(&pic), parts, "{text:?} as {pic:?}");
+        }
+        assert_eq!(picture(&[Part::Text("'".into())]), "''");
     }
 }

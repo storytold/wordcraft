@@ -442,6 +442,14 @@ fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
 
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
+/// An object's text in the flow: ASK and SET show nothing, whatever result they hold.
+fn shown_text(o: &InlineObject) -> &str {
+    match o {
+        InlineObject::Field { instr, .. } if super::shows_nothing(instr) => "",
+        o => o.plain_text(),
+    }
+}
+
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
     flow_paras_in(doc, p, FlowOpts::default())
 }
@@ -599,7 +607,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     out.inlines.push(Inline::Anchor(name.clone()));
                 }
                 Some(o @ (InlineObject::ControlStart { .. } | InlineObject::ControlEnd)) if control.object(o, opts, &mut buf, &mut out, &f) => {}
-                Some(o) => buf.push_str(o.plain_text()),
+                Some(o) => buf.push_str(shown_text(o)),
                 None => {}
             }
             raise_drawings(&mut out.inlines, from, props.position.filter(|_| opts.paras));

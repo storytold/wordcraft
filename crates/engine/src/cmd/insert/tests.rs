@@ -341,6 +341,9 @@ fn date_pictures_keep_quoted_text() {
     assert_eq!(format_date_parts("'Day' d 'at' h", 2026, 10, 21, (17, 0, 0), 0), "Day 21 at 5");
     // An unclosed quote runs to the end.
     assert_eq!(format_date_parts("yyyy 'and so", 2026, 10, 21, (0, 0, 0), 0), "2026 and so");
+    // Two quotes outside quoted text are one too (an apostrophe), not an empty quoted text.
+    assert_eq!(format_date_parts("yyyy '' MM", 2026, 10, 21, (0, 0, 0), 0), "2026 ' 10");
+    assert_eq!(format_date_parts("d''MM", 2026, 10, 21, (0, 0, 0), 0), "21'10");
 }
 
 #[test]

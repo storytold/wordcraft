@@ -671,20 +671,21 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
 }
 
 /// How OpenDocument files opened from now on fill in what the standard leaves to the
-/// application (docs/odf-interpretation.md): WordCraft's choices, LibreOffice's, or the user's
-/// own, one setting per case.
+/// application (docs/odf-interpretation.md): in Microsoft Word's style, in LibreOffice's, or with
+/// the user's own choice for each case.
 fn odf_files(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_doc::odf_profile::{MAX_LENGTH, OdfPreset};
     let profile = app.session.prefs.odf.clone();
     // The preset as a drop-down, like the units and region above.
-    let presets = [(OdfPreset::WordCraft, "WordCraft"), (OdfPreset::LibreOffice, "LibreOffice"), (OdfPreset::Custom, "Custom")];
-    let shown = presets.iter().find(|(p, _)| *p == profile.preset).map_or("WordCraft", |(_, l)| l);
+    // The two display styles, then Custom for the user's own choices.
+    let presets = [OdfPreset::Word, OdfPreset::LibreOffice, OdfPreset::Custom];
+    let shown = profile.preset.label();
     let mut chosen = None;
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Where the standard leaves the look open, follow:"));
-        let combo = craft_ui::ComboBox::from_id_salt("options_odf_preset").selected_text(tl!(shown)).width(160.0).show_ui(ui, |ui| {
-            for (preset, name) in presets {
-                if ui.selectable_label(profile.preset == preset, tl!(name)).clicked() && profile.preset != preset {
+        let combo = craft_ui::ComboBox::from_id_salt("options_odf_preset").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
+            for preset in presets {
+                if ui.selectable_label(profile.preset == preset, tl!(preset.label())).clicked() && profile.preset != preset {
                     chosen = Some(preset);
                 }
             }

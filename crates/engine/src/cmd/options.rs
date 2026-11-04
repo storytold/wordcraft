@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string], "odf"?: {"preset"?: "wordcraft|libreoffice|custom", "pageMargin"?: pt, "headerMinHeight"?: pt, "headerHeightIncludesSpacing"?: bool, "dynamicSpacing"?: bool, "tabsFromIndent"?: bool, "columnGap"?: pt, "shapeFill"?: "RRGGBB", "shapeLine"?: "RRGGBB", "hairline"?: pt, "pageFrameParagraphIsPage"?: bool, "inlineInvalidRelationIsBaseline"?: bool, "pictureLinesFitPictures"?: bool, "balanceSectionColumns"?: bool, "sumParagraphSpacing"?: bool, "widowControl"?: bool} (how OpenDocument files opened from now on fill in what their standard leaves open, docs/odf-interpretation.md; a value without a preset makes it custom)} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string], "odf"?: {"preset"?: "word|libreoffice|custom" (word: Microsoft Word style, the default; libreoffice: LibreOffice style), "pageMargin"?: pt, "headerMinHeight"?: pt, "headerHeightIncludesSpacing"?: bool, "dynamicSpacing"?: bool, "tabsFromIndent"?: bool, "columnGap"?: pt, "shapeFill"?: "RRGGBB", "shapeLine"?: "RRGGBB", "hairline"?: pt, "pageFrameParagraphIsPage"?: bool, "inlineInvalidRelationIsBaseline"?: bool, "pictureLinesFitPictures"?: bool, "balanceSectionColumns"?: bool, "sumParagraphSpacing"?: bool, "widowControl"?: bool} (how OpenDocument files opened from now on fill in what their standard leaves open, docs/odf-interpretation.md; a value without a preset makes it custom)} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -250,7 +250,7 @@ pub fn current(s: &Session) -> Value {
     })
 }
 
-/// The `odf` setting: `{"preset"?: "wordcraft|libreoffice|custom", …case values}` over `current`.
+/// The `odf` setting: `{"preset"?: "word|libreoffice|custom" (word: Microsoft Word style, the default; libreoffice: LibreOffice style), …case values}` over `current`.
 /// A case value given without a preset makes the profile custom; the values are kept whatever
 /// the preset, so choosing custom again brings them back. Lengths are points, at most 22 inches;
 /// colours `RRGGBB`.
@@ -270,8 +270,7 @@ fn odf_param(v: &Value, current: &OdfProfile) -> Result<Option<OdfProfile>, CmdE
             return Err(CmdError::Params(format!("`odf.{k}`: a length from 0 to {} points", wordcraft_doc::odf_profile::MAX_LENGTH)));
         }
         let x = if k == "preset" {
-            let p =
-                x.as_str().and_then(OdfPreset::from_id).ok_or_else(|| CmdError::Params("`odf.preset`: wordcraft, libreoffice or custom".into()))?;
+            let p = x.as_str().and_then(OdfPreset::from_id).ok_or_else(|| CmdError::Params("`odf.preset`: word, libreoffice or custom".into()))?;
             json!(p)
         } else {
             values = true;

@@ -1269,10 +1269,16 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
     match pic.repeat {
         PictureRepeat::Stretch => vec![image(rect)],
         PictureRepeat::Tile if sized => {
-            let (cols, rows) = ((rect.w / w).ceil().clamp(1.0, 400.0) as usize, (rect.h / h).ceil().clamp(1.0, 400.0) as usize);
+            let (cols, rows) = ((rect.w / w).ceil().max(1.0), (rect.h / h).ceil().max(1.0));
+            // Too many tiles to draw (or a cell of no finite size): one picture stretched over
+            // the cell, as a page's picture is, so the cell is always covered.
+            let tiles = cols * rows;
+            if !tiles.is_finite() || tiles > MAX_TILES as f32 {
+                return vec![image(rect)];
+            }
+            let (cols, rows) = (cols as usize, rows as usize);
             (0..rows)
                 .flat_map(|r| (0..cols).map(move |c| (r, c)))
-                .take(MAX_TILES)
                 .map(|(r, c)| image(Rect::new(rect.x + c as f32 * w, rect.y + r as f32 * h, w, h)))
                 .collect()
         }

@@ -175,7 +175,7 @@ fn a_headers_spacing_stays_below_content_taller_than_it() {
     let grow = wordcraft_doc::odf_profile::OdfProfile {
         preset: wordcraft_doc::odf_profile::OdfPreset::Custom,
         dynamic_spacing: true,
-        ..wordcraft_doc::odf_profile::OdfProfile::wordcraft()
+        ..wordcraft_doc::odf_profile::OdfProfile::word()
     };
     let s = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&styles_with_header(hf))), &grow).last_section;
     assert_eq!((s.header_gap, s.footer_gap), (0.0, 0.0));
@@ -248,6 +248,32 @@ fn a_first_page_master_followed_by_another_is_a_different_first_page() {
     let s = crate::odt::tests::entry(&saved, "styles.xml");
     let first = s.split("<style:header-first>").nth(1).and_then(|r| r.split("</style:header-first>").next()).unwrap_or("missing");
     assert!(first.trim().starts_with("<text:p") && !first.contains("Running head") && s.contains("Running head"), "{s}");
+}
+
+#[test]
+fn master_pages_naming_each_other_take_the_next_ones_own_headers() {
+    // LibreOffice's Left Page and Right Page name each other as next: the pages after the first
+    // take the other master's own header, whatever order the masters are gone through in (each
+    // import hashes them afresh, so a few imports cover both orders).
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:style style:name="Opening" style:family="paragraph" style:master-page-name="Right_20_Page"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Left_20_Page" style:page-layout-name="pm1" style:next-style-name="Right_20_Page"><style:header><text:p>Left head</text:p></style:header></style:master-page><style:master-page style:name="Right_20_Page" style:page-layout-name="pm1" style:next-style-name="Left_20_Page"><style:header><text:p>Right head</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p text:style-name="Opening">Recto.</text:p><text:p>More.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let file = crate::odt::tests::package(&content, Some(&styles));
+    for _ in 0..24 {
+        let d = import(&file).unwrap();
+        let text = |id: Option<u32>| -> String {
+            id.and_then(|id| d.parts.get(&id))
+                .map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect())
+                .unwrap_or_default()
+        };
+        let sec = &d.last_section;
+        assert_eq!(text(sec.headers.first), "Right head", "the first page is the Right Page's own");
+        assert_eq!(text(sec.headers.default), "Left head", "the pages after it the Left Page's");
+    }
 }
 
 #[test]

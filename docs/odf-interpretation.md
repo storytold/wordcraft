@@ -17,8 +17,10 @@ knows of, so none gets lost.
    setting, with XSL's value as WordCraft's.
 2. **What the standard leaves open is a setting.** Each such case is one value of the ODF
    interpretation profile (`OdfProfile`, `crates/doc/src/odf_profile.rs`):
-   - **WordCraft**, the default: what WordCraft does for its own and Word documents.
-   - **LibreOffice**: what LibreOffice (and Collabora, which shares its engine) does. Measured
+   Two of them are the styles a document can be shown in:
+   - **Microsoft Word style** (`word`), the default: what WordCraft does for its own and Word
+     documents. (`wordcraft`, its earlier id, is still taken.)
+   - **LibreOffice style** (`libreoffice`): what LibreOffice (and Collabora, which shares its engine) does. Measured
      black-box in LibreOffice 24 where it isn't documented.
    - **Custom**: the user's own value for each case. It starts from the preset that was in use.
 3. **A value the file states is the file's.** A preset never replaces it: the profile only fills
@@ -39,13 +41,13 @@ Where to set it:
 | Interface | How |
 |---|---|
 | App | File › Options › Advanced › OpenDocument files |
-| Command | `file.options` `{"odf": {"preset": "libreoffice"}}`, or one case's value: `{"odf": {"columnGap": 18}}` (this makes the profile custom) |
+| Command | `file.options` `{"odf": {"preset": "word"}}` or `{"odf": {"preset": "libreoffice"}}`, or one case's value: `{"odf": {"columnGap": 18}}` (this makes the profile custom) |
 | MCP | the same command |
-| CLI | `WORDCRAFT_ODF=wordcraft\|libreoffice` |
+| CLI | `WORDCRAFT_ODF=word` (the default) or `WORDCRAFT_ODF=libreoffice` |
 
 ## Cases the standard leaves open (the profile)
 
-| Case | Standard | Setting (`file.options` `odf.*`) | WordCraft | LibreOffice |
+| Case | Standard | Setting (`file.options` `odf.*`) | Microsoft Word style | LibreOffice style |
 |---|---|---|---|---|
 | Page margins a page layout doesn't state | §20.206–20.209 refer to XSL §7.10 (initial value 0); whether that default comes with the reference is not said | `pageMargin` | 0 (XSL's initial value) | 2 cm (its own files always state theirs; some of its templates don't) |
 | Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | `headerMinHeight` | 0 (as tall as its text) | 0.5 cm |
@@ -167,7 +169,7 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
   Nothing in these files depends on the profile beyond what the LibreOffice preset covers.
 - **ONLYOFFICE** states page size and margins only. It has no header styles and no default
   graphic style. It writes tab stops with no `TabsRelativeToIndent` and means "from the margin"
-  (its documents come from Word's model), which is WordCraft's default.
+  (its documents come from Word's model), which is the Microsoft Word style, the default.
 
 So neither needs a preset of its own yet. If later files show cases where they differ, a preset is
 one more `OdfPreset` with its values, and the cases above stay the same.
@@ -176,6 +178,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-04 | The two presets are the two styles a document can be shown in: Microsoft Word style (`word`, the default; `wordcraft`, its earlier id, still taken) and LibreOffice style (`libreoffice`). The CLI's values listed one by one. |
 | 2026-11-03 | Deviations from the standard listed: unitless gradient and hatch angles in files older than ODF 1.3 are read as tenths of a degree, as their producers wrote them, out of necessity (in ODF 1.3 files, degrees, as the standard says). The ODF 1.2 → 1.3 changes checked. |
 | 2026-11-03 | More written as read (tables, pages, sections, properties, declarations); files saved as ODF 1.3 with older markup brought to 1.3's meaning; drawings state `style:flow-with-text`. |
 | 2026-11-03 | Unedited content written as read (see How WordCraft writes ODF). |

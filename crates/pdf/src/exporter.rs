@@ -3,7 +3,7 @@ use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_ri
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
-use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture};
+use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
     HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
@@ -223,8 +223,11 @@ impl Exporter<'_> {
                             // A rotated inline picture, or a rotated group holding pictures: turned as a
                             // whole, each picture tagged on its own (see `rotated_pictures`).
                             Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
-                            // A turned text box's line: still the paragraph's text.
-                            Draw::Rotated { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // A turned text box's line: still the paragraph's text. A rotated shape
+                            // without text falls to the artifacts below.
+                            Draw::Rotated { items, .. } if items.iter().any(holds_text) => {
+                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
+                            }
                             // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
                             Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                                 for d in inner {

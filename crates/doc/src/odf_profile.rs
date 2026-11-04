@@ -4,9 +4,9 @@
 //! is the rule and nothing here changes it. Where it doesn't (ODF 1.3 Part 3 §16.2: "in all
 //! remaining cases an implementation-dependent value is used"), each application chooses, and
 //! documents from one application can look different in another. An [`OdfProfile`] is that
-//! choice for every such case: WordCraft's own ([`OdfPreset::WordCraft`], the default), the
-//! choices LibreOffice makes ([`OdfPreset::LibreOffice`]), or the user's own
-//! ([`OdfPreset::Custom`]). `docs/odf-interpretation.md` lists every case.
+//! choice for every such case: Microsoft Word's style ([`OdfPreset::Word`], the default: as
+//! WordCraft lays out Word documents), LibreOffice's style ([`OdfPreset::LibreOffice`]), or the
+//! user's own ([`OdfPreset::Custom`]). `docs/odf-interpretation.md` lists every case.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +16,11 @@ use crate::props::Rgb;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OdfPreset {
-    /// WordCraft's own: the behaviour it has for its own and Word documents.
+    /// Microsoft Word's style: the behaviour WordCraft has for its own and Word documents.
+    /// (`wordcraft`, its earlier id, is still taken.)
     #[default]
-    WordCraft,
+    #[serde(alias = "wordcraft")]
+    Word,
     /// LibreOffice's (and Collabora's, which share its engine).
     LibreOffice,
     /// The user's own choice for each case ([`OdfProfile`]'s values).
@@ -26,18 +28,36 @@ pub enum OdfPreset {
 }
 
 impl OdfPreset {
-    pub const ALL: [OdfPreset; 3] = [OdfPreset::WordCraft, OdfPreset::LibreOffice, OdfPreset::Custom];
+    pub const ALL: [OdfPreset; 3] = [OdfPreset::Word, OdfPreset::LibreOffice, OdfPreset::Custom];
 
     pub fn id(self) -> &'static str {
         match self {
-            OdfPreset::WordCraft => "wordcraft",
+            OdfPreset::Word => "word",
             OdfPreset::LibreOffice => "libreoffice",
             OdfPreset::Custom => "custom",
         }
     }
 
+    /// The preset named `id` (any case): its id, or `wordcraft` / `msword` for Word's.
     pub fn from_id(id: &str) -> Option<OdfPreset> {
-        OdfPreset::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(id.trim()))
+        let id = id.trim();
+        if ["wordcraft", "msword", "ms-word"].iter().any(|a| a.eq_ignore_ascii_case(id)) {
+            return Some(OdfPreset::Word);
+        }
+        OdfPreset::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(id))
+    }
+
+    /// The two styles a document can be shown in, as the user chooses between them (Custom
+    /// aside).
+    pub const STYLES: [OdfPreset; 2] = [OdfPreset::Word, OdfPreset::LibreOffice];
+
+    /// Its name as the user sees it (File › Options, English; the UI translates it).
+    pub fn label(self) -> &'static str {
+        match self {
+            OdfPreset::Word => "Microsoft Word style",
+            OdfPreset::LibreOffice => "LibreOffice style",
+            OdfPreset::Custom => "Custom",
+        }
     }
 }
 
@@ -108,15 +128,15 @@ pub struct OdfProfile {
 
 impl Default for OdfProfile {
     fn default() -> Self {
-        OdfProfile::wordcraft()
+        OdfProfile::word()
     }
 }
 
 impl OdfProfile {
-    /// WordCraft's own choices: as it lays out its own and Word documents.
-    pub fn wordcraft() -> OdfProfile {
+    /// Microsoft Word's style: as WordCraft lays out its own and Word documents.
+    pub fn word() -> OdfProfile {
         OdfProfile {
-            preset: OdfPreset::WordCraft,
+            preset: OdfPreset::Word,
             page_margin: 0.0,
             header_min_height: 0.0,
             header_height_includes_spacing: false,
@@ -157,10 +177,10 @@ impl OdfProfile {
         }
     }
 
-    /// A preset's values (a custom profile starts from WordCraft's).
+    /// A preset's values (a custom profile starts from Word's style).
     pub fn of(preset: OdfPreset) -> OdfProfile {
         match preset {
-            OdfPreset::WordCraft | OdfPreset::Custom => OdfProfile { preset, ..OdfProfile::wordcraft() },
+            OdfPreset::Word | OdfPreset::Custom => OdfProfile { preset, ..OdfProfile::word() },
             OdfPreset::LibreOffice => OdfProfile::libreoffice(),
         }
     }
@@ -208,9 +228,16 @@ mod tests {
 
     #[test]
     fn presets_and_custom_values() {
-        assert_eq!(OdfProfile::default().preset, OdfPreset::WordCraft);
+        assert_eq!(OdfProfile::default().preset, OdfPreset::Word);
         assert_eq!(OdfPreset::from_id(" LibreOffice "), Some(OdfPreset::LibreOffice));
         assert_eq!(OdfPreset::from_id("google"), None);
+        // Word's style by its id, and by the id it had before.
+        for id in ["word", "Word", "wordcraft", "MSWord", "ms-word"] {
+            assert_eq!(OdfPreset::from_id(id), Some(OdfPreset::Word), "{id}");
+        }
+        assert_eq!(serde_json::from_value::<OdfPreset>(serde_json::json!("wordcraft")).unwrap(), OdfPreset::Word);
+        assert_eq!(serde_json::from_value::<OdfPreset>(serde_json::json!("word")).unwrap(), OdfPreset::Word);
+        assert_eq!(OdfPreset::STYLES.map(OdfPreset::label), ["Microsoft Word style", "LibreOffice style"]);
         // Saved and taken by `file.options` as its id.
         for p in OdfPreset::ALL {
             assert_eq!(serde_json::to_value(p).unwrap(), serde_json::json!(p.id()));
@@ -219,10 +246,10 @@ mod tests {
         let lo = OdfProfile { column_gap: 99.0, ..OdfProfile::libreoffice() };
         assert_eq!(lo.effective(), OdfProfile::libreoffice());
         // A custom profile's own, bounded.
-        let custom = OdfProfile { preset: OdfPreset::Custom, column_gap: f32::NAN, header_min_height: 1e9, ..OdfProfile::wordcraft() };
+        let custom = OdfProfile { preset: OdfPreset::Custom, column_gap: f32::NAN, header_min_height: 1e9, ..OdfProfile::word() };
         let e = custom.effective();
         assert_eq!((e.column_gap, e.header_min_height), (0.0, MAX_LENGTH));
         assert!(OdfProfile::libreoffice().layout().picture_lines_fit_pictures);
-        assert!(!OdfProfile::wordcraft().layout().picture_lines_fit_pictures);
+        assert!(!OdfProfile::word().layout().picture_lines_fit_pictures);
     }
 }

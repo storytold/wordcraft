@@ -145,6 +145,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             | Inline::FieldStart(_)
             | Inline::FieldEnd
             | Inline::AnchorEnd(_) => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
             Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
                 let (open, close) = fmt_tags(fmt);
                 let at_start = o.is_empty();

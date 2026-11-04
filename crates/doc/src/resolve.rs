@@ -182,8 +182,9 @@ pub struct ResolvedPara {
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
     pub borders: Option<Borders>,
-    /// Padding on the sides without a line (top, left, bottom, right), points: ODF's, which
-    /// ODF's (XSL's box model) keeps for documents opened from ODF (`Settings::odf`); Word drops it.
+    /// Padding on the sides without a line (top, left, bottom, right), points. ODF's box model
+    /// (XSL's) keeps it for documents opened from ODF (`Settings::odf`); Word drops it.
+    #[serde(default)]
     pub padding: [f32; 4],
     pub bidi: bool,
     pub drop_cap: u8,
@@ -576,5 +577,16 @@ mod tests {
         });
         assert_eq!(p.tabs.len(), 3);
         assert_eq!(p.tabs[0].pos, 100.0);
+    }
+
+    /// Resolved formatting saved before paragraph padding existed still reads: no padding.
+    #[test]
+    fn resolved_para_without_padding_reads() {
+        let p = StyleSheet::builtin().resolve_para(&ParaProps::default());
+        let mut v = serde_json::to_value(&p).unwrap();
+        v.as_object_mut().unwrap().remove("padding");
+        let back: ResolvedPara = serde_json::from_value(v).unwrap();
+        assert_eq!(back.padding, [0.0; 4]);
+        assert_eq!(back, ResolvedPara { padding: [0.0; 4], ..p });
     }
 }

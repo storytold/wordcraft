@@ -12903,6 +12903,21 @@ fn a_cells_background_picture_is_drawn_clipped_to_the_cell() {
     let (cell, images) = &c[0];
     let want = (cell.w / 30.0).ceil() as usize * (cell.h / 6.0).ceil() as usize;
     assert_eq!(images.len(), want, "{cell:?}");
+    // More tiles than are drawn (a small pattern in a big cell): stretched over the whole cell,
+    // not tiled over its top rows only.
+    let mut t = wordcraft_doc::Table::new(1, 1, 400.0);
+    t.rows[0].cells[0].props.picture =
+        Some(Box::new(CellPicture { media: media.clone(), size: [2.0, 1.0], repeat: PictureRepeat::Tile, align: [0.0, 0.0] }));
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+    let c = clips(&lay(&d));
+    let (cell, images) = &c[0];
+    assert!((cell.w / 2.0).ceil() * (cell.h / 1.0).ceil() > 400.0, "{cell:?}");
+    assert_eq!(images.len(), 1, "{cell:?}");
+    let i = images[0];
+    assert!(
+        (i.x - cell.x).abs() < 0.01 && (i.y - cell.y).abs() < 0.01 && (i.w - cell.w).abs() < 0.01 && (i.h - cell.h).abs() < 0.01,
+        "{i:?} in {cell:?}"
+    );
 }
 
 #[test]

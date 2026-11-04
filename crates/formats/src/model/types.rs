@@ -428,6 +428,14 @@ pub struct FComment {
     pub blocks: Vec<FBlock>,
 }
 
+/// A field that never shows its result: `ASK` and `SET` only assign text to a bookmark
+/// (ECMA-376 §17.16.5.4, §17.16.5.60), as layout shows them. Its stored result stays in the
+/// flow (ODT writes it back); text exports write nothing for it.
+pub fn shows_nothing(instr: &str) -> bool {
+    let name = instr.split_whitespace().next().unwrap_or("");
+    name.eq_ignore_ascii_case("ASK") || name.eq_ignore_ascii_case("SET")
+}
+
 /// What [`super::from_doc_with`] keeps besides text and formatting.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlowOpts {
@@ -769,6 +777,7 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
+                Inline::Field { instr, .. } if shows_nothing(instr) => {}
                 Inline::Equation { linear: t, .. }
                 | Inline::Ruby { base: t, .. }
                 | Inline::Field { result: t, .. }

@@ -69,9 +69,9 @@ the system region's paper (A4, or Letter in the US and other Letter regions), re
 LC_ALL / LC_PAPER / LANG or the platform. Set WORDCRAFT_REGION=en-US (or another tag) for the
 same output on every machine.
 
-OpenDocument (.odt, .ott, .fodt) files fill in what their standard leaves to the application with
-WordCraft's own choices; set WORDCRAFT_ODF=libreoffice for LibreOffice's (see
-docs/odf-interpretation.md).
+OpenDocument (.odt, .ott, .fodt) files fill in what their standard leaves to the application in
+Microsoft Word's style (WORDCRAFT_ODF=word, the default) or LibreOffice's
+(WORDCRAFT_ODF=libreoffice); see docs/odf-interpretation.md.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
@@ -177,14 +177,14 @@ fn session(doc: wordcraft_doc::Document) -> Session {
 }
 
 /// How OpenDocument files fill in what their standard leaves open: `WORDCRAFT_ODF` names a preset
-/// (`wordcraft`, the default, or `libreoffice`).
+/// (`word`, Microsoft Word's style and the default, or `libreoffice`; `wordcraft` is taken too).
 fn odf_profile() -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
     use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
     match std::env::var("WORDCRAFT_ODF").ok().filter(|v| !v.trim().is_empty()) {
         None => Ok(OdfProfile::default()),
         Some(v) => match OdfPreset::from_id(&v).filter(|p| *p != OdfPreset::Custom) {
             Some(p) => Ok(OdfProfile::of(p)),
-            None => Err(format!("WORDCRAFT_ODF={v}: one of wordcraft, libreoffice")),
+            None => Err(format!("WORDCRAFT_ODF={v}: one of word, libreoffice")),
         },
     }
 }

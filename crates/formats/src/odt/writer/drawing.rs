@@ -189,10 +189,11 @@ pub(in crate::odt) const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
 impl Writer {
     pub(in crate::odt) fn picture(&mut self, img: &model::Img) -> String {
         let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
-        // Not a name the file's own pictures, kept as read, have.
+        // Not a name the file's own pictures, kept as read, have, nor one an earlier picture
+        // took (after skipping a reserved name, the count is behind the names taken).
         let mut n = self.pictures.len() + 1;
         let mut name = format!("Pictures/{}image{n}.{ext}", self.prefix);
-        while self.reserved.contains(&name) && n < usize::MAX {
+        while (self.reserved.contains(&name) || self.pictures.iter().any(|(taken, _, _)| *taken == name)) && n < usize::MAX {
             n += 1;
             name = format!("Pictures/{}image{n}.{ext}", self.prefix);
         }
@@ -616,5 +617,31 @@ impl Writer {
             pt(w),
             pt(h)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_never_takes_a_name_an_earlier_one_took() {
+        // Re-saving a file WordCraft saved: its `wcimage1.png` is kept as read, so the first new
+        // picture skips to 2, and the second must not take 2 again (a duplicate zip entry fails
+        // the save).
+        let mut w = Writer::with_prefix("wc");
+        w.reserved = std::sync::Arc::new(std::iter::once("Pictures/wcimage1.png".to_string()).collect());
+        let img = model::Img {
+            data: std::sync::Arc::new(vec![1, 2, 3]),
+            ext: "png".into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: None,
+            object: None,
+            crop: [0.0; 4],
+        };
+        let names: Vec<String> = (0..3).map(|_| w.picture(&img)).collect();
+        assert_eq!(names, ["Pictures/wcimage2.png", "Pictures/wcimage3.png", "Pictures/wcimage4.png"]);
     }
 }

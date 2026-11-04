@@ -47,10 +47,10 @@ fn values_a_file_states_are_kept_under_every_preset() {
         shape_fill: Rgb(1, 2, 3),
         shape_line: Rgb(4, 5, 6),
         hairline: 9.0,
-        ..OdfProfile::wordcraft()
+        ..OdfProfile::word()
     };
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
-    for profile in [OdfProfile::wordcraft(), OdfProfile::libreoffice(), odd] {
+    for profile in [OdfProfile::word(), OdfProfile::libreoffice(), odd] {
         let d = import_as(&bytes, &profile);
         let s = &d.last_section;
         assert!(near(s.header_gap, cm(0.5)), "{:?}: the stated spacing, kept: {}", profile.preset, s.header_gap);
@@ -79,15 +79,15 @@ fn a_sections_column_balance_is_its_own_else_the_profiles_and_is_written() {
         crate::odt::tests::package(&content, None)
     };
     let balance = |props: &str, profile: &OdfProfile| import_as(&doc(props), profile).last_section.balance_columns;
-    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+    for p in [OdfProfile::word(), OdfProfile::libreoffice()] {
         assert_eq!(balance(r#"text:dont-balance-text-columns="true""#, &p), Some(false));
         assert_eq!(balance(r#"text:dont-balance-text-columns="false""#, &p), Some(true));
     }
     assert_eq!(balance("", &OdfProfile::libreoffice()), Some(true));
-    assert_eq!(balance("", &OdfProfile::wordcraft()), None);
+    assert_eq!(balance("", &OdfProfile::word()), None);
     // Written as WordCraft lays it out, so every reader balances it the same.
     for (props, written) in [("", "true"), (r#"text:dont-balance-text-columns="false""#, "false")] {
-        let d = import_as(&doc(props), &OdfProfile::wordcraft());
+        let d = import_as(&doc(props), &OdfProfile::word());
         let saved = crate::odt::export(&d).unwrap();
         let content = crate::odt::tests::entry(&saved, "content.xml");
         assert!(content.contains(&format!(r#"text:dont-balance-text-columns="{written}""#)), "{props}: {content}");
@@ -115,14 +115,14 @@ fn paragraph_spacing_adds_up_as_the_document_says_else_as_the_profile_does() {
         }
         z.finish().unwrap().into_inner()
     };
-    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+    for p in [OdfProfile::word(), OdfProfile::libreoffice()] {
         assert!(import_as(&with(Some(true)), &p).settings.sum_paragraph_spacing);
         assert!(!import_as(&with(Some(false)), &p).settings.sum_paragraph_spacing);
     }
     assert!(import_as(&with(None), &OdfProfile::libreoffice()).settings.sum_paragraph_spacing);
-    assert!(!import_as(&with(None), &OdfProfile::wordcraft()).settings.sum_paragraph_spacing);
+    assert!(!import_as(&with(None), &OdfProfile::word()).settings.sum_paragraph_spacing);
     for (add, written) in [(Some(true), "true"), (None, "false")] {
-        let d = import_as(&with(add), &OdfProfile::wordcraft());
+        let d = import_as(&with(add), &OdfProfile::word());
         let saved = crate::odt::export(&d).unwrap();
         let settings = crate::odt::tests::entry(&saved, "settings.xml");
         assert!(settings.contains(&format!(r#"config:name="AddParaTableSpacing" config:type="boolean">{written}<"#)), "{add:?}: {settings}");
@@ -148,14 +148,13 @@ fn widow_control_is_the_files_else_the_profiles() {
         crate::odt::tests::package(&content, Some(&styles))
     };
     let on = |bytes: &[u8], p: &OdfProfile| import_as(bytes, p).styles.resolve_para(&Default::default()).widow_control;
-    for p in [OdfProfile::wordcraft(), OdfProfile::libreoffice()] {
+    for p in [OdfProfile::word(), OdfProfile::libreoffice()] {
         assert!(on(&doc(r#"fo:widows="2" fo:orphans="2""#), &p));
         assert!(!on(&doc(r#"fo:widows="0" fo:orphans="0""#), &p));
     }
-    assert!(on(&doc(""), &OdfProfile::wordcraft()));
+    assert!(on(&doc(""), &OdfProfile::word()));
     assert!(!on(&doc(""), &OdfProfile::libreoffice()));
-    for (p, written) in [(OdfProfile::wordcraft(), r#"fo:widows="2" fo:orphans="2""#), (OdfProfile::libreoffice(), r#"fo:widows="0" fo:orphans="0""#)]
-    {
+    for (p, written) in [(OdfProfile::word(), r#"fo:widows="2" fo:orphans="2""#), (OdfProfile::libreoffice(), r#"fo:widows="0" fo:orphans="0""#)] {
         let saved = crate::odt::tests::export_model(&import_as(&doc(""), &p)).unwrap();
         let styles = crate::odt::tests::entry(&saved, "styles.xml");
         assert!(styles.contains(written), "{:?}: {styles}", p.preset);

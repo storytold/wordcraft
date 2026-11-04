@@ -154,7 +154,7 @@ fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
     };
     let f = paragraph(wordcraft_doc::odf_profile::OdfProfile::libreoffice());
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Page, Anchor::Page));
-    let f = paragraph(wordcraft_doc::odf_profile::OdfProfile::wordcraft());
+    let f = paragraph(wordcraft_doc::odf_profile::OdfProfile::word());
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Margin));
     let content = |profile| {
         float(&open_as(
@@ -165,7 +165,7 @@ fn a_page_anchored_frames_paragraph_relations_are_the_pages() {
     };
     let f = content(wordcraft_doc::odf_profile::OdfProfile::libreoffice());
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Page));
-    let f = content(wordcraft_doc::odf_profile::OdfProfile::wordcraft());
+    let f = content(wordcraft_doc::odf_profile::OdfProfile::word());
     assert_eq!((f.h_rel, f.v_rel), (Anchor::Margin, Anchor::Margin));
     // Anchored to a paragraph, they stay the paragraph's.
     let f = float(&open(r#"style:horizontal-rel="paragraph-content" style:vertical-rel="char""#, r#"text:anchor-type="char""#));

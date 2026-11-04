@@ -361,8 +361,10 @@ impl<'a> Shaped<'a> {
             let [el, et, er, eb] = float.effect_extent();
             let (px, py) = float.spin_pad(w * s, h * s);
             let tall = h * s + et + eb + 2.0 * py;
-            // Lowered at most until its top is on the baseline.
-            let raise = if raise.is_finite() { raise.clamp(-tall, 1584.0) } else { 0.0 };
+            // Lowered at most until its top is on the baseline. The bound is made finite and
+            // not above `clamp`'s top whatever the extents give (`clamp` panics otherwise).
+            let floor = if tall.is_finite() { -tall.max(0.0) } else { 0.0 };
+            let raise = if raise.is_finite() { raise.clamp(floor, 1584.0) } else { 0.0 };
             self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);

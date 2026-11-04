@@ -399,6 +399,8 @@ impl Writer {
                 }
                 // RTF keeps no ruby yet: its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
+                // ASK and SET show nothing (see `model::shows_nothing`).
+                Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
                 Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => self.run(result, fmt, out),
                 Inline::Figure(_)
                 | Inline::Chart(_)

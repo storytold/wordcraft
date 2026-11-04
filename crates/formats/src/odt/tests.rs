@@ -1313,3 +1313,15 @@ fn a_paragraph_starting_a_column_starts_with_a_column_break() {
     assert!(out.contains(r#"fo:break-before="column""#) && !out.contains('\u{e}'), "{out}");
     assert_eq!(text(&import(&export(&doc).unwrap()).unwrap()), ["Side", "\u{e}Education"]);
 }
+
+#[test]
+fn meta_modified_date_keeps_a_negative_offset() {
+    let meta = |date: &str| format!("<office:document-meta><office:meta><dc:date>{date}</dc:date></office:meta></office:document-meta>");
+    // A `-hh:mm` offset is a zone: no `Z` after it (an invalid xsd:dateTime written back on save).
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00-05:00").as_bytes()).1, "2024-03-05T13:45:00-05:00");
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00+01:00").as_bytes()).1, "2024-03-05T13:45:00+01:00");
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00Z").as_bytes()).1, "2024-03-05T13:45:00Z");
+    // Zoneless (the date's own `-`s are not an offset): UTC, fraction dropped.
+    assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00.25").as_bytes()).1, "2024-03-05T13:45:00Z");
+    assert_eq!(super::import::read_changes(meta("").as_bytes()).1, "");
+}

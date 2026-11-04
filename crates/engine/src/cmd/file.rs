@@ -346,7 +346,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         };
         if !crate::io::can_encrypt(&path.to_string_lossy()) {
             return Err(CmdError::Params(
-                "only Word documents (.docx, .docm, .dotx, .dotm) and ODT documents (.odt) can be saved with a password".into(),
+                "only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password".into(),
             ));
         }
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;

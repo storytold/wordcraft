@@ -136,6 +136,8 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt)))))
             }
             Inline::Equation { .. } => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
             Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => pieces.push((result.clone(), fmt.clone(), None)),
             Inline::Note { .. }
             | Inline::Comment { .. }

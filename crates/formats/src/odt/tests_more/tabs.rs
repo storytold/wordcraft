@@ -67,12 +67,12 @@ fn tabs_relative_to_the_indent_move_with_it() {
         let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), relative), profile);
         tabs(&d).first().map(|t| t.pos)
     };
-    for profile in [OdfProfile::libreoffice(), OdfProfile::wordcraft()] {
+    for profile in [OdfProfile::libreoffice(), OdfProfile::word()] {
         assert_eq!(first(Some(true), &profile), Some(108.0));
         assert_eq!(first(Some(false), &profile), Some(72.0));
     }
     assert_eq!(first(None, &OdfProfile::libreoffice()), Some(108.0));
-    assert_eq!(first(None, &OdfProfile::wordcraft()), Some(72.0));
+    assert_eq!(first(None, &OdfProfile::word()), Some(72.0));
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn tabs_measured_from_the_indent_are_written_so() {
     // A file measuring tabs from the indent (LibreOffice's own) is written back so, its stops
     // from the indent again: LibreOffice's default stops then count from the indent as before
     // (measured: with the setting false they moved to the margin's grid).
-    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true)), &OdfProfile::wordcraft());
+    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true)), &OdfProfile::word());
     assert!(d.settings.odf.is_some_and(|o| o.tabs_from_indent));
     let saved = export(&d).unwrap();
     let s = crate::odt::tests::entry(&saved, "settings.xml");
@@ -173,7 +173,7 @@ fn tabs_measured_from_the_indent_are_written_so() {
     let back = import(&saved).unwrap();
     assert_eq!(tabs(&back).first().map(|t| t.pos), Some(108.0));
     // One measuring them from the margin stays so.
-    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false)), &OdfProfile::wordcraft());
+    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false)), &OdfProfile::word());
     let s = crate::odt::tests::entry(&export(&d).unwrap(), "settings.xml");
     assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">false<"#), "{s}");
 }
