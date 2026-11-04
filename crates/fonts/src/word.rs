@@ -379,13 +379,17 @@ pub fn missing_metric_fonts() -> Vec<(&'static str, String)> {
         .iter()
         .filter_map(|(word, twins)| {
             let resolved = resolve(word, false, false);
-            if db.has_family(word) || twins.iter().any(|twin| resolved.face.family.eq_ignore_ascii_case(twin)) {
+            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) {
                 None
             } else {
                 Some((*word, resolved.face.family.clone()))
             }
         })
         .collect()
+}
+
+fn has_metric_resolution(installed_word_font: bool, twins: &[&str], resolved_family: &str) -> bool {
+    installed_word_font || twins.iter().any(|twin| resolved_family.eq_ignore_ascii_case(twin))
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
@@ -730,12 +734,18 @@ mod tests {
         for (word, twins) in METRIC_TWINS {
             let reported = missing.iter().any(|(w, _)| w == word);
             let drawn = resolve(word, false, false).face.family.clone();
-            let has_metric_match = db.has_family(word) || twins.iter().any(|twin| drawn.eq_ignore_ascii_case(twin));
+            let has_metric_match = has_metric_resolution(db.has_family(word), twins, &drawn);
             assert_eq!(reported, !has_metric_match, "{word}: {drawn}");
             if reported {
                 assert_eq!(missing.iter().find(|(name, _)| name == word).map(|(_, used)| used), Some(&drawn));
             }
         }
         assert!(missing.iter().all(|(_, used)| db.has_family(used)));
+    }
+
+    #[test]
+    fn a_listed_but_uninstalled_carlito_does_not_hide_the_chosen_fallback() {
+        assert!(!has_metric_resolution(false, &["Carlito"], "DejaVu Sans"));
+        assert!(has_metric_resolution(false, &["Carlito"], "Carlito"));
     }
 }

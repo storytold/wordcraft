@@ -414,7 +414,9 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
 
 fn report_missing_metric_fonts() {
     for (word, used) in wordcraft_fonts::word::missing_metric_fonts() {
-        eprintln!(
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
             "note: {word} and its metric-compatible twins aren't installed; the primary family is {used}, so lines and pages may not match Word's; uncovered characters may use glyph fallback"
         );
     }
@@ -767,6 +769,12 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {
