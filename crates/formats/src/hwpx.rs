@@ -44,6 +44,7 @@ type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 /// Is this a HWPX package (a ZIP whose `mimetype` is `application/hwp+zip`)?
 pub fn is_hwpx(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04")
+        && wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).is_ok()
         && zip::ZipArchive::new(Cursor::new(bytes)).ok().and_then(|mut z| mimetype(&mut z)).is_some_and(|m| m.trim_ascii() == MIME.as_bytes())
 }
 
@@ -413,6 +414,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
 
 /// Read a HWPX document, building no more from its XML than `budget` allows.
 pub(crate) fn import_within(bytes: &[u8], mut budget: Budget) -> Result<Document, String> {
+    wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(|e| format!("HWPX: {e}"))?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("HWPX: not a Hangul document ({e})"))?;
     let mime = mimetype(&mut z);
     if mime.as_deref().is_some_and(|m| m.trim_ascii() != MIME.as_bytes()) {

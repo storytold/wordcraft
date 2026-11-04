@@ -83,6 +83,11 @@ fn refused_documents_say_why() {
     assert!(hwpx::import(b"not a document").is_err());
     assert!(hwpx::import(b"PK\x03\x04junk").is_err());
     assert!(!hwpx::is_hwpx(b"not") && !hwpx::is_hwpx(b"PK\x03\x04"));
+    // A package declaring more entries than any reader takes is refused before `zip` parses them
+    // (#3660), also by the content probe every opened ZIP goes through.
+    let bomb = wordcraft_doc::zip_guard::zip64_entry_count_sample(crate::MAX_ZIP_ENTRIES + 1);
+    assert!(hwpx::import(&bomb).is_err_and(|e| e.contains("declares")));
+    assert!(!hwpx::is_hwpx(&bomb));
 }
 
 /// Every truncation and many bit flips of the samples read or fail cleanly.
