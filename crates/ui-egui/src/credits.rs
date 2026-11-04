@@ -441,7 +441,10 @@ pub fn models_ui(ui: &mut egui::Ui) {
             ]
         })
         .collect();
-    if crate::rtl::on() {
+    let rtl = crate::rtl::on();
+    // The reversed columns keep their own widths and scroll position: egui remembers both by id.
+    let id = if rtl { "credits_models_rtl" } else { "credits_models" };
+    if rtl {
         titles.reverse();
         right.reverse();
         grow.reverse();
@@ -457,8 +460,8 @@ pub fn models_ui(ui: &mut egui::Ui) {
     crate::rtl::island(ui, |ui| {
         ui.allocate_ui(egui::vec2(ui.available_width(), 360.0), |ui| {
             ui.set_max_height(360.0);
-            egui::ScrollArea::horizontal().id_salt("credits_models").auto_shrink([false, false]).show(ui, |ui| {
-                fitted_table(ui, "credits_models", &widths, &grow)
+            egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
+                fitted_table(ui, id, &widths, &grow)
                     .header(h + 4.0, |mut header| {
                         for (title, r) in titles.into_iter().zip(right) {
                             header.col(|ui| {
