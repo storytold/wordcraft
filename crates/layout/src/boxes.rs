@@ -18,6 +18,8 @@ pub(crate) enum BoxContext<'a> {
         text: Option<&'a para::CellText>,
         left: f32,
         right: f32,
+        /// False for a turned text frame: its x axis becomes page y after rotation.
+        clamp: bool,
     },
 }
 
@@ -37,7 +39,7 @@ impl<'a> BoxInput<'a> {
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
-        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width }, depth, frame: None }
+        Self { story, blocks, prefix, width, context: BoxContext::Cell { text: cell, left: 0.0, right: width, clamp: false }, depth, frame: None }
     }
 }
 
@@ -196,11 +198,10 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
-    let (table, cell_edges) = match context {
-        BoxContext::Other => (None, None),
-        BoxContext::Cell { text, left, right } => (Some(text.unwrap_or(&empty_cell)), Some((left, right))),
+    let (in_cell, table, cell_edges) = match context {
+        BoxContext::Other => (false, None, None),
+        BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
-    let in_cell = cell_edges.is_some();
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);

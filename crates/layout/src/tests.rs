@@ -13069,3 +13069,29 @@ fn header_margin_table_area() {
 }
 
 mod shape_alpha;
+
+/// Cell confinement must not change page-vertical placement through the rotated text axis.
+#[test]
+fn turned_cell_float_keeps_its_along_text_offset() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let place = |direction, outside_cell| {
+        let mut doc = Document::from_text("Synthetic body");
+        let mut table = Table::new(1, 2, 468.0);
+        table.rows[0].props.height = Some(100.0);
+        table.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        table.rows[0].cells[0].props.text_direction = direction;
+        let mut para = Paragraph::with_text("Synthetic cell", Default::default());
+        let float = Float { wrap: Wrap::Tight, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 150.0, outside_cell, ..Default::default() };
+        para.insert_object(0, rect_shape(20.0, 10.0, float), &Default::default()).unwrap();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+        doc.insert_block(StoryRef::Body, &Path::top(1), Block::Table(table)).unwrap();
+        let objects = shapes(&lay(&doc).pages[0].items);
+        assert_eq!(objects.len(), 1);
+        objects[0]
+    };
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let confined = place(direction, false);
+        let reference = place(direction, true);
+        assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
+    }
+}

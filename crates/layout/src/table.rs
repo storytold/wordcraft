@@ -654,7 +654,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
                     ctx,
                     BoxInput {
-                        context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1] },
+                        context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
                         ..BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth)
                     },
                 );
