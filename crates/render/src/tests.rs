@@ -545,6 +545,8 @@ fn dimmed_header_image_renders() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
@@ -577,6 +579,8 @@ fn picture_brightness_contrast_transparency() {
         crop: [0.0; 4],
         fx,
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let mut p = wordcraft_doc::Paragraph::new();
     p.insert_object(0, pic(PicFx::default(), 100.0), &Default::default()).unwrap();
@@ -603,6 +607,86 @@ fn picture_brightness_contrast_transparency() {
     let top: Vec<[u8; 4]> = (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).map(|(x, y)| img.pixel(x, y)).collect();
     assert!(top.iter().filter(|p| p[0].abs_diff(244) <= 2 && p[0] == p[2]).count() > 1000);
     assert!(!top.iter().any(|p| p[0] == 100));
+}
+
+/// A document of one red picture, `w` × `h`, placed by `float`, with the outline `stroke` 6 pt wide.
+fn outlined_picture(w: f32, h: f32, float: wordcraft_doc::para::Float, stroke: Option<Rgb>) -> Document {
+    let mut d = Document::new();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let media = d.add_media(png, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let stroke_width = if stroke.is_some() { 6.0 } else { 0.0 };
+    let obj = wordcraft_doc::para::InlineObject::Image { media, w, h, alt: String::new(), float, crop: [0.0; 4], fx: Default::default(), ole: None, stroke, stroke_width };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+/// #5544: a picture's outline (Picture Border) is stroked on its frame, half outside it and half
+/// over the picture; a picture with no outline has none.
+#[test]
+fn a_picture_outline_is_stroked_on_its_frame() {
+    let green = Rgb(0x00, 0xB0, 0x50);
+    for stroke in [Some(green), None] {
+        let d = outlined_picture(70.0, 70.0, Default::default(), stroke);
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        let y = (rect.y + rect.h / 2.0) as u32;
+        let middle = img.pixel((rect.x + rect.w / 2.0) as u32, y);
+        assert!(middle[0] > 150 && middle[1] < 60, "the picture is drawn: {middle:?}");
+        // The 6 pt outline covers 3 pt either side of the frame's left edge.
+        let edge = img.pixel((rect.x + 1.0) as u32, y);
+        let outside = img.pixel((rect.x - 2.0) as u32, y);
+        if stroke.is_some() {
+            assert!(edge[0] < 60 && edge[1] > 140, "the outline is drawn over the picture's edge: {edge:?}");
+            assert!(outside[0] < 60 && outside[1] > 140, "and outside it: {outside:?}");
+        } else {
+            assert!(edge[0] > 150 && edge[1] < 60, "no outline: the picture's own edge: {edge:?}");
+            assert!(outside[..3].iter().all(|c| *c > 200), "no outline: paper beside it: {outside:?}");
+        }
+    }
+}
+
+/// #5544: a turned picture's outline turns with it, as the certificate's frame (a picture turned
+/// 90°) does: a 100 × 40 picture turned 90° has its outline 50 pt above and below its centre, and
+/// none 50 pt left or right of it, where the unturned frame's would be.
+#[test]
+fn a_turned_picture_outline_turns_with_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    fn turned(items: &[Draw]) -> Option<(f32, f32, &[Draw])> {
+        items.iter().find_map(|i| match i {
+            Draw::Rotated { cx, cy, items, .. } => Some((*cx, *cy, items.as_slice())),
+            Draw::Figure { draws, .. } => turned(draws),
+            Draw::Clip { items, .. } => turned(items),
+            _ => None,
+        })
+    }
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 200.0, y: 200.0, rot: 90.0, ..Default::default() };
+    let d = outlined_picture(100.0, 40.0, float, Some(green));
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let items = page_display(&d, &l.pages[0], &opts.display);
+    let (cx, cy, inner) = turned(&items).expect("a turned picture");
+    assert!(
+        matches!(inner, [Draw::Image { .. }, Draw::Shape { stroke: Some(c), stroke_width, fill: None, .. }] if *c == green && *stroke_width == 6.0),
+        "the outline is drawn in the picture's turn: {inner:?}"
+    );
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    for (dx, dy, want) in [(0.0, -49.0, true), (0.0, 49.0, true), (-49.0, 0.0, false), (49.0, 0.0, false)] {
+        let p = img.pixel((cx + dx) as u32, (cy + dy) as u32);
+        assert_eq!(is_green(p), want, "outline at ({dx}, {dy}) from the centre: {p:?}");
+    }
 }
 
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
@@ -956,6 +1040,8 @@ fn metafile_picture_is_drawn_as_vectors() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1000,6 +1086,8 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
                 crop,
                 fx: Default::default(),
                 ole: None,
+                stroke: None,
+                stroke_width: 0.0,
             };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
@@ -1038,6 +1126,8 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1085,6 +1175,8 @@ fn metafile_text_records_are_painted() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1132,6 +1224,8 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1171,6 +1265,8 @@ fn unreadable_metafile_keeps_the_grey_box() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];

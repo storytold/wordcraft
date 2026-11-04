@@ -27,6 +27,14 @@ pub enum InlineObject {
         /// [`crate::graphic::Embedded`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
+        /// The picture's outline (Picture Format › Picture Border, DrawingML's `a:ln` in
+        /// `pic:spPr`): its colour, `None` for no outline. A compound or dashed outline is kept
+        /// as one solid line of its colour and total width.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stroke: Option<crate::props::Rgb>,
+        /// Outline width, points.
+        #[serde(default, skip_serializing_if = "super::float::is_zero")]
+        stroke_width: f32,
     },
     /// A chart or SmartArt diagram (see [`crate::graphic`]).
     Graphic {

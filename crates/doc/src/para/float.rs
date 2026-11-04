@@ -219,7 +219,7 @@ pub fn cap_alt(s: &str) -> String {
     s.chars().take(MAX_ALT_TEXT).collect()
 }
 
-fn is_zero(v: &f32) -> bool {
+pub(crate) fn is_zero(v: &f32) -> bool {
     *v == 0.0
 }
 

@@ -1,6 +1,6 @@
 use super::glyphs::{Authors, upright_east_asian};
 use super::lines::{LineRender, lines};
-use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
+use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, picture_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
 use super::{
@@ -457,14 +457,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, spin, fx, .. } => {
+        Placed::Image { rect, media, crop, spin, fx, stroke, stroke_width, .. } => {
             let alpha = alpha * fx.opacity();
-            spun(
-                *spin,
-                *rect,
-                vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx: *fx, decorative: false }],
-                out,
-            )
+            let image = Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx: *fx, decorative: false };
+            spun(*spin, *rect, picture_draws(*rect, image, *stroke, *stroke_width), out)
         }
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
             let mut items = Vec::new();

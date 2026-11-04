@@ -15,7 +15,7 @@ pub(super) struct DrawingInfo<'a> {
 impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, stroke, stroke_width, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -54,6 +54,14 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        // Its outline (Picture Border); none is no `a:ln`.
+        if let Some(c) = stroke {
+            w.open("a:ln", &[("w", &emu(wordcraft_geom::finite(*stroke_width).clamp(0.0, 100.0)))]);
+            w.open("a:solidFill", &[]);
+            w.empty("a:srgbClr", &[("val", &c.hex())]);
+            w.close("a:solidFill");
+            w.close("a:ln");
+        }
         w.close("pic:spPr");
         w.close("pic:pic");
     }

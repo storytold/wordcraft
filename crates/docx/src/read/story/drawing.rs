@@ -263,7 +263,11 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None })
+        // Its outline (Picture Border): the `a:ln` of `pic:spPr`, read as a shape's is. A
+        // compound or dashed line is one solid line of its colour and total width.
+        let paint = shape_paint(pic.find("pic:spPr"), pic.find("pic:style"), &self.doc.settings.theme_colors, &self.theme_fills, None);
+        let stroke_width = if paint.stroke.is_some() { paint.stroke_width } else { 0.0 };
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None, stroke: paint.stroke, stroke_width })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups

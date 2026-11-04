@@ -74,6 +74,8 @@ fn sample() -> Document {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )
@@ -697,7 +699,18 @@ fn decorative_picture_exports_with_empty_alt_text() {
         let mut d = Document::new();
         let media = d.add_media(png(), "png");
         let float = Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
-        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
+        let pic = InlineObject::Image {
+            media,
+            w: 40.0,
+            h: 20.0,
+            alt: "Blue bar".into(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        };
         let mut p = Paragraph::with_text("Logo: ", CharProps::default());
         let n = p.len();
         p.insert_object(n, pic, &CharProps::default()).unwrap();
@@ -909,6 +922,8 @@ fn hidden_drawings_are_left_out_of_exports() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         };
         d.insert_object(&wordcraft_doc::Pos::body(0, 0), image, &Default::default()).unwrap();
     }

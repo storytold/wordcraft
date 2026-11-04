@@ -137,7 +137,7 @@ impl Reader<'_> {
             // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
             let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
             let fx = wordcraft_doc::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None, stroke: None, stroke_width: 0.0 });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.

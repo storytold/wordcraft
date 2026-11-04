@@ -529,6 +529,8 @@ fn reset_never_borrows_another_pictures_corrections() {
             crop: [0.0; 4],
             fx,
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         };
         p.insert_object(0, pic, &Default::default()).unwrap();
     }

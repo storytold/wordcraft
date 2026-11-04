@@ -433,6 +433,8 @@ fn images_round_trip() {
         crop: [0.1, 0.0, 0.25, 0.05],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let floating = InlineObject::Image {
         media: key.clone(),
@@ -443,6 +445,8 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let aligned = InlineObject::Image {
         media: key.clone(),
@@ -463,6 +467,8 @@ fn images_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
@@ -475,6 +481,8 @@ fn images_round_trip() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         });
     }
     let mut p = Paragraph::with_text("pic: ", CharProps::default());
@@ -491,6 +499,63 @@ fn images_round_trip() {
     assert_eq!(got.objects, expect);
     assert_eq!(r.media.get(&key).map(|b| b.as_slice()), Some(png.as_slice()));
     assert_eq!(r.media.len(), 1);
+}
+
+/// #5544: a picture's outline (Picture Border, `a:ln` in `pic:spPr`) is read and written back.
+/// The issue's certificate frame is a 6 pt green compound (`thickThin`) outline: it comes in as
+/// one line of its colour and total width. An outline with no fill, and no `a:ln`, is none.
+#[test]
+fn picture_outline_round_trips() {
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = |alt: &str| InlineObject::Image {
+        media: key.clone(),
+        w: 60.0,
+        h: 40.0,
+        alt: alt.into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
+    let mut p = Paragraph::new();
+    for alt in ["framed", "no fill", "plain"] {
+        let end = p.len();
+        p.insert_object(end, pic(alt), &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert_eq!(xml.matches("</pic:spPr>").count(), 3, "{xml}");
+    assert!(!xml.contains("<a:ln"), "a picture with no outline writes none: {xml}");
+    // Give the first picture Word's frame and the second an outline with no fill.
+    let framed = r#"<a:ln w="76200" cmpd="thickThin"><a:solidFill><a:srgbClr val="00B050"/></a:solidFill></a:ln></pic:spPr>"#;
+    let unfilled = r#"<a:ln w="12700"><a:noFill/></a:ln></pic:spPr>"#;
+    let xml = xml.replacen("</pic:spPr>", framed, 1);
+    let at = xml.rfind("</a:ln></pic:spPr>").unwrap() + "</a:ln></pic:spPr>".len();
+    let (head, tail) = xml.split_at(at);
+    let xml = format!("{head}{}", tail.replacen("</pic:spPr>", unfilled, 1));
+    let read = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", xml.as_bytes())).unwrap();
+    let outlines = |doc: &Document| -> Vec<(String, Option<Rgb>, f32)> {
+        paras(doc)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Image { alt, stroke, stroke_width, .. } => Some((alt.clone(), *stroke, *stroke_width)),
+                _ => None,
+            })
+            .collect()
+    };
+    let want = vec![("framed".to_string(), Some(Rgb(0x00, 0xB0, 0x50)), 6.0), ("no fill".to_string(), None, 0.0), ("plain".to_string(), None, 0.0)];
+    assert_eq!(outlines(&read), want);
+    // Saved, the frame is written back into the picture's `pic:spPr`, and read the same again.
+    let saved = wordcraft_docx::write(&read).unwrap();
+    let xml = document_xml(&saved);
+    assert_eq!(xml.matches("<a:ln").count(), 1, "{xml}");
+    assert!(xml.contains(r#"<a:ln w="76200"><a:solidFill><a:srgbClr val="00B050"/></a:solidFill></a:ln></pic:spPr>"#), "{xml}");
+    assert_eq!(outlines(&wordcraft_docx::read(&saved).unwrap()), want);
 }
 
 #[test]
@@ -1205,6 +1270,8 @@ fn groups_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
@@ -1301,6 +1368,8 @@ fn drawing_canvas_round_trips() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -1768,6 +1837,8 @@ fn kitchen_sink() -> Document {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )
@@ -1865,6 +1936,8 @@ fn hostile_model_values_still_write() {
             crop: [f32::NAN; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )
@@ -2136,6 +2209,8 @@ fn rotation_and_flips_round_trip() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let shape = |kind, float| InlineObject::Shape {
         kind,
@@ -2637,6 +2712,8 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        stroke: None,
+        stroke_width: 0.0,
     };
     let shape = |alt: AltText| InlineObject::Shape {
         kind: ShapeKind::Ellipse,

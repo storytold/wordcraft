@@ -1295,6 +1295,8 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
         off: usize::MAX,
         spin: wordcraft_geom::Spin::default(),
         fx: Default::default(),
+        stroke: None,
+        stroke_width: 0.0,
     };
     let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
     match pic.repeat {

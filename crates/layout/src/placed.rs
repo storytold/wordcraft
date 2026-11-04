@@ -38,6 +38,9 @@ pub enum Placed {
         spin: Spin,
         /// Brightness, contrast and transparency (see [`wordcraft_doc::picfx`]).
         fx: wordcraft_doc::picfx::PicFx,
+        /// Its outline (Picture Border) and the outline's width, points.
+        stroke: Option<Rgb>,
+        stroke_width: f32,
     },
     Shape {
         rect: Rect,
