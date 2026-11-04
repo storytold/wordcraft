@@ -115,6 +115,10 @@ fn read_manifest(xml: &[u8]) -> Vec<(String, Params)> {
 
 /// Does this package hold encrypted files?
 pub fn is_encrypted(bytes: &[u8]) -> bool {
+    // A package with too many entries isn't parsed here: opening it refuses it (`zip_guard`).
+    if wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).is_err() {
+        return false;
+    }
     let Ok(mut z) = zip::ZipArchive::new(Cursor::new(bytes)) else { return false };
     super::import::read_entry(&mut z, "META-INF/manifest.xml").is_some_and(|m| !read_manifest(&m).is_empty())
 }
@@ -241,6 +245,7 @@ fn plain_manifest(xml: &str) -> String {
 /// A password-protected package decrypted into a plain one.
 pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
     let broken = |e: zip::result::ZipError| CryptError::Unsupported(format!("not a valid package ({e})"));
+    wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(CryptError::Unsupported)?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(broken)?;
     let manifest = super::import::read_entry(&mut z, "META-INF/manifest.xml").unwrap_or_default();
     let encrypted = read_manifest(&manifest);

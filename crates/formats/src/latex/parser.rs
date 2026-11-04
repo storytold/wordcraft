@@ -485,7 +485,11 @@ impl<'a> Parser<'a> {
 
     fn command(&mut self, name: &str) {
         if let Some(sym) = text_symbol(name) {
-            if name == "item" {
+            if name == " " {
+                // A control space is never collapsed into the space before it.
+                let f = self.fmt();
+                self.para.push_text(sym, &f);
+            } else if name == "item" {
                 self.item();
             } else if matches!(name, "centering" | "raggedleft" | "raggedright") {
                 let a = match name {

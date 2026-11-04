@@ -96,12 +96,15 @@ pub(super) fn contour_polygon(a: &Attrs) -> Option<std::sync::Arc<wordcraft_doc:
     let nums: Vec<f64> = get(a, "draw:points")?.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
     // Points well outside the view box mean another coordinate system than the frame's (as
     // LibreOffice writes for some pictures): the outline is then worked out from the object.
-    let outside = nums.chunks_exact(2).any(|p| p[0] < x0 - vw * 0.1 || p[0] > x0 + vw * 1.1 || p[1] < y0 - vh * 0.1 || p[1] > y0 + vh * 1.1);
+    let outside =
+        nums.as_chunks::<2>().0.iter().any(|p| p[0] < x0 - vw * 0.1 || p[0] > x0 + vw * 1.1 || p[1] < y0 - vh * 0.1 || p[1] > y0 + vh * 1.1);
     if outside {
         return None;
     }
     let points = nums
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .take(wordcraft_doc::wrap::MAX_WRAP_POINTS)
         .filter(|p| p.iter().all(|v| v.is_finite()))
         .map(|p| (((p[0] - x0) / vw * space).round() as i64, ((p[1] - y0) / vh * space).round() as i64));

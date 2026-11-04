@@ -52,7 +52,7 @@ fn freeform(paths: Vec<FreePath>, vb: Option<[f32; 4]>) -> Option<Freeform> {
 /// A polygon's or polyline's points (`draw:points`: "x,y x,y …"), closed or not.
 pub(super) fn points(v: &str, closed: bool, vb: Option<[f32; 4]>) -> Option<Freeform> {
     let n: Vec<f32> = numbers(v).collect();
-    let pts = n.chunks_exact(2).map(|c| [c[0], c[1]]).take(MAX_POINTS).collect();
+    let pts = n.as_chunks::<2>().0.iter().map(|c| [c[0], c[1]]).take(MAX_POINTS).collect();
     freeform(vec![FreePath { pts, closed }], vb)
 }
 

@@ -681,6 +681,7 @@ fn default_paper() -> (f32, f32) {
 /// [`parse_full`], plus what the document holds outside the flow. A page layout that states no
 /// size (§20.215 `fo:page-width` is optional) is `paper` (width, height) in size.
 fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Result<Parsed, String> {
+    wordcraft_doc::zip_guard::check(bytes, crate::MAX_ZIP_ENTRIES).map_err(|e| format!("ODT: {e}"))?;
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);

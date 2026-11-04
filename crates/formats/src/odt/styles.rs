@@ -1208,6 +1208,7 @@ impl Styles {
             left: Some(0.0),
             right: Some(0.0),
             first: Some(0.0),
+            ..Default::default()
         };
         overlay_spacing(&mut sp, &self.default_spacing);
         if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {

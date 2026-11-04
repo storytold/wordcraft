@@ -54,6 +54,7 @@ fn kind_styles(doc: &Document) -> String {
             left: pp.indent_left.filter(|v| *v != 0.0),
             right: pp.indent_right.filter(|v| *v != 0.0),
             first: pp.indent_first.filter(|v| *v != 0.0),
+            ..Default::default()
         });
         para.push_str(align_attr(pp.align));
         if pp.keep_next == Some(true) {
@@ -117,6 +118,7 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
             left: pp.indent_left,
             right: pp.indent_right,
             first: pp.indent_first,
+            ..Default::default()
         });
         attrs.push_str(align_attr(pp.align));
         if pp.keep_next == Some(true) {
@@ -335,6 +337,7 @@ fn styles_xml(
         left: Some(normal.indent_left),
         right: Some(normal.indent_right),
         first: Some(normal.indent_first),
+        ..Default::default()
     };
     let kern = doc.styles.default_chr.kern.is_some_and(|k| k > 0.0);
     // Normal's font size (Standard, written empty, takes the default style's).

@@ -635,6 +635,9 @@ pub struct Spacing {
     pub right: Option<f32>,
     /// First-line indent; negative = hanging.
     pub first: Option<f32>,
+    /// HTML's automatic space before / after (see `ParaProps::space_before_auto`).
+    pub before_auto: bool,
+    pub after_auto: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -665,7 +668,8 @@ pub struct Para {
     /// The paragraph mark's direct formatting (its size sets an empty paragraph's height), for
     /// formats that keep it (ODT): only flows asked for paragraph formatting
     /// ([`FlowOpts::paras`]) hold it, and only for paragraphs without text ([`Para::textless`]),
-    /// whose drawings' runs take it too.
+    /// whose drawings' runs take it too. A reader whose source gives it sets it too (HTML's
+    /// `<p>&nbsp;</p>`).
     pub mark: Option<Box<wordcraft_doc::props::CharProps>>,
     /// The paragraph's markup in the file it came from, while it still is what was read
     /// ([`wordcraft_doc::kept`]): a format that keeps it (ODT) writes it as it was.
@@ -837,6 +841,9 @@ pub struct Cell {
     pub direction: wordcraft_doc::props::TextDirection,
     /// A picture behind its content (ODT).
     pub picture: Option<Box<CellPic>>,
+    /// The width, points, the source gives a cell spanning one column (HTML): see
+    /// [`FTable::widths_from_cells`].
+    pub width: Option<f32>,
 }
 
 /// A cell's background picture: the picture at its own size, how it fills the cell, and where an
@@ -862,6 +869,7 @@ impl Default for Cell {
             margins: None,
             direction: Default::default(),
             picture: None,
+            width: None,
         }
     }
 }
@@ -922,6 +930,22 @@ impl FTable {
     pub fn cols(&self) -> usize {
         self.rows.iter().map(|r| r.iter().map(|c| c.colspan.clamp(1, 63) as usize).sum::<usize>()).max().unwrap_or(0)
     }
+    /// Grid column widths from the cells that give one (after [`Self::insert_covered`], so a
+    /// cell's column counts those spanned from rows above), when every column has one.
+    pub fn widths_from_cells(&mut self) {
+        let mut widths = vec![None; self.cols()];
+        for row in &self.rows {
+            let mut g = 0;
+            for c in row {
+                if let (Some(w), Some(slot)) = (c.width, widths.get_mut(g)) {
+                    slot.get_or_insert(w);
+                }
+                g += c.colspan.clamp(1, 63) as usize;
+            }
+        }
+        self.widths = widths.into_iter().collect::<Option<Vec<f32>>>().unwrap_or_default();
+    }
+
     /// After an importer that gives `rowspan` but no placeholder cells (HTML): insert covered
     /// cells into the rows below each spanning cell.
     pub fn insert_covered(&mut self) {

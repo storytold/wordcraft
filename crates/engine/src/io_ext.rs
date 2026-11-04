@@ -11,7 +11,7 @@ pub fn open(
     odf: &wordcraft_doc::odf_profile::OdfProfile,
 ) -> Option<Result<Document, String>> {
     match ext {
-        "docx" | "docm" | "dotx" | "dotm" => Some(wordcraft_docx::read(bytes).map_err(|e| e.to_string())),
+        "docx" | "docm" | "dotx" | "dotm" => Some(crate::io::read_docx(bytes, None).map_err(|e| e.to_string())),
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),

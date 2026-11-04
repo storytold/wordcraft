@@ -152,6 +152,12 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     out.indent_left = sp.left;
     out.indent_right = sp.right;
     out.indent_first = sp.first;
+    if sp.before_auto {
+        out.space_before_auto = Some(true);
+    }
+    if sp.after_auto {
+        out.space_after_auto = Some(true);
+    }
     if p.page_break {
         out.page_break_before = Some(true);
     }

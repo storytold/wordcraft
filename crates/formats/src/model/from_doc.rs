@@ -429,7 +429,15 @@ fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) 
 
 /// The spacing and indents a paragraph sets itself (its style's are not included).
 fn direct_spacing(p: &wordcraft_doc::props::ParaProps) -> Spacing {
-    Spacing { before: p.space_before, after: p.space_after, line: p.line_spacing, left: p.indent_left, right: p.indent_right, first: p.indent_first }
+    Spacing {
+        before: p.space_before,
+        after: p.space_after,
+        line: p.line_spacing,
+        left: p.indent_left,
+        right: p.indent_right,
+        first: p.indent_first,
+        ..Default::default()
+    }
 }
 
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
@@ -1079,6 +1087,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     };
                     Some(Box::new(crate::model::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
+                width: None,
             });
         }
         rows.push(cells);
