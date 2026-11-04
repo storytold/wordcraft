@@ -12,10 +12,11 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use wordcraft_doc::props::VMerge;
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::table::{Cell, Row, Table};
-use wordcraft_doc::{Block, Blocks, Document, Paragraph, Revision, RevisionKind};
+use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
 
 use crate::Session;
 
@@ -30,6 +31,12 @@ fn records(id: &str) -> bool {
 
 /// Tables nested deeper than this aren't compared (hostile documents).
 const MAX_DEPTH: usize = 16;
+
+/// A paragraph's, table's or cell's tracked formatting change, if it carries one.
+type Slot<T> = Option<Box<PropChange<T>>>;
+
+/// What a [`Slot`] should become (which may be no change at all).
+struct Replacement<T>(Slot<T>);
 
 struct Recorder<'a> {
     author: String,
@@ -63,14 +70,7 @@ impl Recorder<'_> {
 
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
-    #[allow(clippy::type_complexity, clippy::option_option)]
-    fn change<T: Clone + PartialEq>(
-        &mut self,
-        before: &T,
-        after: &T,
-        f: fn(&T) -> T,
-        get: fn(&T) -> &Option<Box<PropChange<T>>>,
-    ) -> Option<Option<Box<PropChange<T>>>> {
+    fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
         let want = if fb == fa {
@@ -91,7 +91,7 @@ impl Recorder<'_> {
                 PropChange::boxed(rev, old)
             }
         };
-        (want != *has).then_some(want)
+        (want != *has).then_some(Replacement(want))
     }
 
     /// Record the formatting changes between `b` and `a` (the same text) into `a`.
@@ -107,7 +107,7 @@ impl Recorder<'_> {
                 && !own_insert
                 && let Some(want) = self.change(*pb, *pa, CharProps::formatting, |c| &c.fmt_change)
             {
-                runs.push((from, to, want));
+                runs.push((from, to, want.0));
             }
             if x.end <= y.end {
                 i += 1;
@@ -124,10 +124,10 @@ impl Recorder<'_> {
         for (from, to, want) in runs {
             let _ = a.format(from, to, &|c| c.fmt_change = want.clone());
         }
-        if let Some(m) = mark {
+        if let Some(Replacement(m)) = mark {
             a.mark.fmt_change = m;
         }
-        if let Some(p) = props {
+        if let Some(Replacement(p)) = props {
             a.props.fmt_change = p;
         }
         a.normalize();
@@ -146,15 +146,30 @@ impl Recorder<'_> {
                 (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text => {
                     if let Block::Para(pa) = Arc::make_mut(a) {
                         self.para(pb, pa);
+                        // The section's properties on the paragraph (`w:sectPrChange`).
+                        let (Some(b), Some(x)) = (pb.section.as_deref(), pa.section.as_deref_mut()) else { continue };
+                        if let Some(Replacement(w)) = self.change(b, x, strip_section, |s| &s.fmt_change) {
+                            x.fmt_change = w;
+                        }
                     }
                 }
-                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() => {
+                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
                     let Block::Table(ta) = Arc::make_mut(a) else { continue };
+                    if let Some(Replacement(w)) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
+                        ta.props.fmt_change = w;
+                    }
                     for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
+                        if let Some(Replacement(w)) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
+                            ra.props.fmt_change = w;
+                        }
                         if rb.cells.len() != ra.cells.len() {
                             continue;
                         }
                         for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
+                            // Merges are structure, not formatting: span and vertical merge stay out.
+                            if let Some(Replacement(w)) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
+                                ca.props.fmt_change = w;
+                            }
                             self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);
                         }
                     }
@@ -163,6 +178,21 @@ impl Recorder<'_> {
             }
         }
     }
+}
+
+/// The formatting-comparison strips: what isn't formatting in these properties. A cell's merge
+/// is structure, a section's headers and footers are content.
+fn strip_table(t: &TableProps) -> TableProps {
+    TableProps { fmt_change: None, ..t.clone() }
+}
+fn strip_row(r: &RowProps) -> RowProps {
+    RowProps { fmt_change: None, ..r.clone() }
+}
+fn strip_cell(c: &CellProps) -> CellProps {
+    CellProps { fmt_change: None, span: 0, vmerge: VMerge::None, ..c.clone() }
+}
+fn strip_section(s: &SectionProps) -> SectionProps {
+    SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() }
 }
 
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as
@@ -180,6 +210,25 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
             r.blocks(&pb.blocks, &mut pa.blocks, 0);
         }
     }
+}
+
+/// Record the paragraph formatting a command changed on the paragraph at `path` whose text it also
+/// changed, which [`record`] doesn't compare: `before` is the paragraph's properties before the
+/// command. As in [`record`], the author's own earlier change keeps the formatting before it and
+/// another author's is superseded.
+pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, before: &ParaProps) -> Result<(), crate::CmdError> {
+    if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
+        return Ok(());
+    }
+    let Some(after) = s.doc.para(story, path).map(|p| p.props.clone()) else { return Ok(()) };
+    let revisions = s.doc.revisions.clone();
+    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &revisions, revisions: &mut s.doc.revisions, rid: None };
+    if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
+        let p = s.doc.para_mut(story, path)?;
+        p.props.fmt_change = want;
+        p.touch();
+    }
+    Ok(())
 }
 
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted

@@ -260,7 +260,7 @@ pub fn parse(b: &[u8]) -> Option<MathTable> {
 pub fn table(face: &FontFace) -> Option<Arc<MathTable>> {
     static CACHE: OnceLock<Mutex<HashMap<u32, Option<Arc<MathTable>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(t) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&face.id()) {
+    if let Some(t) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&face.id()) {
         return t.clone();
     }
     let t = face
@@ -268,7 +268,7 @@ pub fn table(face: &FontFace) -> Option<Arc<MathTable>> {
         .and_then(|f| f.table_data(skrifa::raw::types::Tag::new(b"MATH")).map(|d| d.as_bytes().to_vec()))
         .and_then(|bytes| parse(&bytes))
         .map(Arc::new);
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(face.id(), t.clone());
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(face.id(), t.clone());
     t
 }
 
@@ -299,15 +299,35 @@ pub const MATH_SUBSTITUTES: &[&str] = &[
     "Noto Sans Math",
 ];
 
+const MATH_CACHE_MAX: usize = 1024;
+
+/// Math names longer than this (bytes) are resolved but never remembered.
+const MATH_KEY_MAX: usize = 256;
+
+/// Resolutions tagged with the [`FontDb::generation`] they were made at.
+type MathMemo = (u64, HashMap<String, (FaceRef, Option<Arc<MathTable>>)>);
+
+fn math_cache() -> &'static Mutex<MathMemo> {
+    static CACHE: OnceLock<Mutex<MathMemo>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new((0, HashMap::new())))
+}
+
 /// The face to set math in: `family` when installed and it has a `MATH` table, else the first
 /// installed substitute that has one, else `family` (or its text substitute) without one.
+/// Remembered until user fonts are added or removed ([`FontDb::generation`]).
 pub fn resolve_math(family: &str) -> (FaceRef, Option<Arc<MathTable>>) {
-    static CACHE: OnceLock<Mutex<HashMap<String, (FaceRef, Option<Arc<MathTable>>)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(v) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(family) {
-        return v.clone();
-    }
+    let cache = math_cache();
     let db = FontDb::global();
+    let generation = db.generation();
+    {
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if c.0 != generation {
+            *c = (generation, HashMap::new());
+        }
+        if let Some(v) = c.1.get(family) {
+            return v.clone();
+        }
+    }
     let mut found = None;
     for fam in std::iter::once(family).chain(MATH_SUBSTITUTES.iter().copied()) {
         if !db.has_family(fam) {
@@ -322,13 +342,88 @@ pub fn resolve_math(family: &str) -> (FaceRef, Option<Arc<MathTable>>) {
         }
     }
     let v = found.unwrap_or_else(|| (crate::word::resolve(family, false, false).face, None));
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(family.to_string(), v.clone());
+    if family.len() <= MATH_KEY_MAX {
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if c.0 == generation {
+            if c.1.len() >= MATH_CACHE_MAX {
+                c.1.clear();
+            }
+            c.1.insert(family.to_string(), v.clone());
+        }
+    }
     v
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cached(family: &str) -> bool {
+        math_cache().lock().unwrap_or_else(|e| e.into_inner()).1.contains_key(family)
+    }
+
+    /// `font` (an sfnt) with a minimal valid `MATH` table added: enough for `parse` to accept.
+    fn with_math_table(font: &[u8]) -> Vec<u8> {
+        let n = u16::from_be_bytes([font[4], font[5]]) as usize;
+        let mut dir: Vec<[u8; 16]> = (0..n).map(|i| font[12 + i * 16..28 + i * 16].try_into().unwrap()).collect();
+        let mut math = vec![0u8, 1, 0, 0, 0, 10, 0, 0, 0, 0];
+        math.resize(10 + 8 + VALUE_COUNT * 4 + 2, 0);
+        let data_start = 12 + (n + 1) * 16;
+        let end = font.len() + 16;
+        for e in &mut dir {
+            let off = u32::from_be_bytes([e[8], e[9], e[10], e[11]]) + 16;
+            e[8..12].copy_from_slice(&off.to_be_bytes());
+        }
+        let mut entry = [0u8; 16];
+        entry[..4].copy_from_slice(b"MATH");
+        entry[8..12].copy_from_slice(&(end as u32).to_be_bytes());
+        entry[12..16].copy_from_slice(&(math.len() as u32).to_be_bytes());
+        let at = dir.iter().position(|e| e[..4] > entry[..4]).unwrap_or(dir.len());
+        dir.insert(at, entry);
+        let mut out = font[..12].to_vec();
+        out[4..6].copy_from_slice(&((n + 1) as u16).to_be_bytes());
+        // Search fields are only hints for lookups; skrifa binary-searches the directory, so
+        // keep them consistent.
+        let entry_selector = (usize::BITS - 1 - (n + 1).leading_zeros()) as u16;
+        let search_range = (1u16 << entry_selector) * 16;
+        out[6..8].copy_from_slice(&search_range.to_be_bytes());
+        out[8..10].copy_from_slice(&entry_selector.to_be_bytes());
+        out[10..12].copy_from_slice(&(((n + 1) as u16) * 16 - search_range).to_be_bytes());
+        for e in &dir {
+            out.extend_from_slice(e);
+        }
+        debug_assert_eq!(out.len(), data_start);
+        out.extend_from_slice(&font[12 + n * 16..]);
+        out.extend_from_slice(&math);
+        out
+    }
+
+    #[test]
+    fn math_resolution_follows_installed_and_removed_fonts() {
+        use crate::fontdb::user::tests::renamed;
+        // 13 characters, as `renamed` requires.
+        let fam = "Zz Math Gen 1";
+        let db = FontDb::global();
+        assert_ne!(resolve_math(fam).0.family, fam);
+        let font = with_math_table(&renamed("SourceSans3-Regular.ttf", fam));
+        db.install_font("ZzMathGen.ttf", &font).unwrap();
+        let (face, table) = resolve_math(fam);
+        assert_eq!(face.family, fam, "a math font added after the first lookup must be used");
+        assert!(table.is_some());
+        db.remove_user_font(fam).unwrap();
+        assert_ne!(resolve_math(fam).0.family, fam, "a removed font must stop being used");
+    }
+
+    #[test]
+    fn math_cache_stays_bounded() {
+        for i in 0..(MATH_CACHE_MAX + 50) {
+            let _ = resolve_math(&format!("Zz Bound Probe {i}"));
+        }
+        assert!(math_cache().lock().unwrap_or_else(|e| e.into_inner()).1.len() <= MATH_CACHE_MAX);
+        let long = "L".repeat(10_000);
+        let _ = resolve_math(&long);
+        assert!(!cached(&long), "absurdly long names must not be cached");
+    }
 
     #[test]
     fn garbage_tables_never_panic() {

@@ -4,7 +4,10 @@
 //! between its ends; a closed one is an ellipse when its points sit on the ellipse inscribed in
 //! its bounds (low RMS of the normalised radius), else a polygon from its corners (the closed
 //! path simplified with Ramer–Douglas–Peucker, near-straight and crowded corners merged) when
-//! that polygon stays close to every point. Anything else (scribbles, curves, letters) stays ink.
+//! that polygon stays close to every point. An arrow is a line-like shaft plus a head drawn in the
+//! same stroke (shaft first or head first): two barbs, or a small closed triangle round the tip.
+//! [`pair_arrow`] makes one arrow of two strokes: a line, and a head (an open V or a small closed
+//! triangle) whose apex sits at one of its ends. Anything else (scribbles, curves, letters) stays ink.
 
 use wordcraft_doc::freeform::MAX_POINTS;
 
@@ -13,6 +16,9 @@ use wordcraft_doc::freeform::MAX_POINTS;
 pub enum InkShape {
     /// A straight line from `a` to `b`.
     Line { a: [f32; 2], b: [f32; 2] },
+    /// A straight arrow from the tail `a` to the tip `b`; the heads are the `head_at_*` flags
+    /// (recognised strokes have one, at `b`).
+    Arrow { a: [f32; 2], b: [f32; 2], head_at_end: bool, head_at_start: bool },
     /// An upright rectangle: top-left and size (equal sides when drawn nearly square).
     Rectangle { x: f32, y: f32, w: f32, h: f32 },
     /// An upright ellipse in this box (a circle when drawn nearly round).
@@ -26,6 +32,7 @@ impl InkShape {
     pub fn name(&self) -> &'static str {
         match self {
             InkShape::Line { .. } => "line",
+            InkShape::Arrow { .. } => "arrow",
             InkShape::Rectangle { w, h, .. } if w == h => "square",
             InkShape::Rectangle { .. } => "rectangle",
             InkShape::Ellipse { w, h, .. } if w == h => "circle",
@@ -39,7 +46,7 @@ impl InkShape {
     pub fn bounds(&self) -> [f32; 4] {
         match self {
             InkShape::Rectangle { x, y, w, h } | InkShape::Ellipse { x, y, w, h } => [*x, *y, *w, *h],
-            InkShape::Line { a, b } => bbox(&[*a, *b]),
+            InkShape::Line { a, b } | InkShape::Arrow { a, b, .. } => bbox(&[*a, *b]),
             InkShape::Polygon(c) => bbox(c),
         }
     }
@@ -50,15 +57,17 @@ const MIN_SIZE: f32 = 6.0;
 /// Most corners a polygon may have.
 pub const MAX_CORNERS: usize = 8;
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`recognise`] ran on this thread (tests check the work stays bounded).
+    pub static RECOGNISED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The shape `pts` draws, if it is one.
 pub fn recognise(pts: &[[f32; 2]]) -> Option<InkShape> {
-    // Finite points only, without repeats.
-    let mut p: Vec<[f32; 2]> = Vec::with_capacity(pts.len().min(MAX_POINTS));
-    for q in pts.iter().take(MAX_POINTS).filter(|[x, y]| x.is_finite() && y.is_finite() && x.abs() < 1e6 && y.abs() < 1e6) {
-        if p.last() != Some(q) {
-            p.push(*q);
-        }
-    }
+    #[cfg(test)]
+    RECOGNISED.with(|c| c.set(c.get().saturating_add(1)));
+    let p = clean(pts);
     let (first, last) = (*p.first()?, *p.last()?);
     if p.len() < 2 {
         return None;
@@ -77,6 +86,12 @@ pub fn recognise(pts: &[[f32; 2]]) -> Option<InkShape> {
         if off <= (0.06 * gap).max(1.5) {
             return Some(InkShape::Line { a: first, b: last });
         }
+    }
+    // An arrow: a shaft and a head (both barbs, or a closed triangle), drawn in one stroke
+    // (either end first).
+    let rev: Vec<[f32; 2]> = p.iter().rev().copied().collect();
+    if let Some(arrow) = arrow(&p).or_else(|| arrow(&rev)).or_else(|| closed_arrow(&p)).or_else(|| closed_arrow(&rev)) {
+        return Some(arrow);
     }
     // Other shapes are closed: the stroke ends near where it began and goes around.
     if gap > 0.2 * size || length < 2.0 * size {
@@ -104,6 +119,205 @@ pub fn recognise(pts: &[[f32; 2]]) -> Option<InkShape> {
         let (x, y, w, h) = snap_square(x0, y0, w, h);
         InkShape::Ellipse { x, y, w, h }
     })
+}
+
+/// Barb length limits, as a fraction of the shaft, and the angle each barb makes with the shaft
+/// (degrees).
+const BARB_LEN: (f32, f32) = (0.05, 0.5);
+const BARB_ANGLE: (f32, f32) = (15.0, 75.0);
+
+/// An arrow drawn shaft first: the shaft runs from the start to the tip (the point farthest from
+/// the start) and stays near its chord like a line does; then the pen draws one barb, comes back
+/// to the tip and draws the other. The barbs must leave the tip on opposite sides of the shaft at
+/// similar angles and lengths. (A stroke drawn head first is tried reversed by the caller.)
+fn arrow(p: &[[f32; 2]]) -> Option<InkShape> {
+    let tail = *p.first()?;
+    let (ti, tip, shaft) = shaft_tip(p)?;
+    // The head: the stroke after the tip leaves it twice, once for each barb.
+    let head = p.get(ti..)?;
+    let reach = head.iter().map(|q| dist(tip, *q)).fold(0.0, f32::max);
+    let (mut barbs, mut out, mut gap): (Vec<(f32, [f32; 2])>, bool, f32) = (Vec::new(), false, f32::INFINITY);
+    for q in head {
+        let d = dist(tip, *q);
+        if d > 0.25 * reach {
+            if !out {
+                if barbs.len() == 2 {
+                    return None;
+                }
+                barbs.push((d, *q));
+                out = true;
+            } else if let Some(b) = barbs.last_mut().filter(|b| d > b.0) {
+                *b = (d, *q);
+            }
+        } else {
+            out = false;
+            if barbs.len() == 1 {
+                gap = gap.min(d);
+            }
+        }
+    }
+    let &[(l1, b1), (l2, b2)] = barbs.as_slice() else { return None };
+    // The pen returns to the tip between the barbs.
+    if gap > 0.35 * l1.min(l2) || shaft <= 0.0 {
+        return None;
+    }
+    head_fits(tail, tip, tip, b1, b2).then_some(InkShape::Arrow { a: tail, b: tip, head_at_end: true, head_at_start: false })
+}
+
+/// An arrow with a closed triangle head, drawn shaft first: the shaft runs from the start to the
+/// tip like [`arrow`]'s, then the pen goes round a small triangle (tip, one barb end, the other)
+/// and ends back at the tip. (Drawn head first, the caller tries it reversed.)
+fn closed_arrow(p: &[[f32; 2]]) -> Option<InkShape> {
+    let tail = *p.first()?;
+    let (ti, tip, _) = shaft_tip(p)?;
+    let head = p.get(ti..)?;
+    // The corners: the point farthest from the tip, then the one farthest from that side.
+    let b1 = head.iter().copied().fold(tip, |m, q| if dist(tip, q) > dist(tip, m) { q } else { m });
+    let b2 = head.iter().copied().fold(tip, |m, q| if seg_distance(tip, b1, q) > seg_distance(tip, b1, m) { q } else { m });
+    let (l1, l2) = (dist(tip, b1), dist(tip, b2));
+    if l1.min(l2) <= 0.0 || dist(*head.last()?, tip) > 0.35 * l1.min(l2) {
+        return None;
+    }
+    // Every point of the head is on the triangle.
+    let tri = [tip, b1, b2];
+    if head.iter().any(|q| polygon_distance(&tri, *q) > (0.15 * l1).max(1.5)) {
+        return None;
+    }
+    head_fits(tail, tip, tip, b1, b2).then_some(InkShape::Arrow { a: tail, b: tip, head_at_end: true, head_at_start: false })
+}
+
+/// Whether a head whose barbs run from `apex` to `b1` and `b2` fits a shaft from `tail` to `tip`:
+/// barbs 5–50 % of the shaft, each 15–75° off the way back along it, on opposite sides of it,
+/// and of similar length and angle.
+fn head_fits(tail: [f32; 2], tip: [f32; 2], apex: [f32; 2], b1: [f32; 2], b2: [f32; 2]) -> bool {
+    let shaft = dist(tail, tip);
+    let (l1, l2) = (dist(apex, b1), dist(apex, b2));
+    if !(shaft > 0.0 && l1 > 0.0 && l2 > 0.0) {
+        return false;
+    }
+    // Each barb as a vector from the apex, against the direction back along the shaft.
+    let back = [tail[0] - tip[0], tail[1] - tip[1]];
+    let angle_side = |e: [f32; 2], len: f32| {
+        let u = [e[0] - apex[0], e[1] - apex[1]];
+        let angle = ((back[0] * u[0] + back[1] * u[1]) / (shaft * len)).clamp(-1.0, 1.0).acos().to_degrees();
+        (angle, back[0] * u[1] - back[1] * u[0])
+    };
+    let ((a1, s1), (a2, s2)) = (angle_side(b1, l1), angle_side(b2, l2));
+    let ok = |l: f32, a: f32| (BARB_LEN.0 * shaft..=BARB_LEN.1 * shaft).contains(&l) && (BARB_ANGLE.0..=BARB_ANGLE.1).contains(&a);
+    let similar = l1.max(l2) <= 2.5 * l1.min(l2) && (a1 - a2).abs() <= 35.0;
+    ok(l1, a1) && ok(l2, a2) && s1 * s2 < 0.0 && similar
+}
+
+/// How far a two-stroke arrow's head apex may sit from the line's end, as a fraction of the line.
+const PAIR_REACH: f32 = 0.12;
+
+/// What a stroke can be in a two-stroke arrow, worked out once (one recognition): the ends of the
+/// straight line it is, if it is one, and the ways it can be an arrowhead on its own.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArrowParts {
+    pub line: Option<([f32; 2], [f32; 2])>,
+    pub heads: Vec<[[f32; 2]; 3]>,
+}
+
+/// `pts` as a possible half of a two-stroke arrow (see [`pair_parts`]).
+pub fn arrow_parts(pts: &[[f32; 2]]) -> ArrowParts {
+    let p = clean(pts);
+    let found = recognise(&p);
+    let line = match found {
+        Some(InkShape::Line { a, b }) => Some((a, b)),
+        _ => None,
+    };
+    ArrowParts { line, heads: heads(&p, found.as_ref()) }
+}
+
+/// One arrow from two strokes: `line`, a straight stroke, and `head`, an open V (one barb end,
+/// the apex, the other end) or a small closed triangle, whose apex is at one end of the line and
+/// whose barbs point back along it (the single-stroke head limits). The arrow runs from the
+/// line's other end to that end; `None` when they don't make one.
+pub fn pair_arrow(line: &[[f32; 2]], head: &[[f32; 2]]) -> Option<InkShape> {
+    pair_parts(&arrow_parts(line), &arrow_parts(head))
+}
+
+/// [`pair_arrow`] on strokes already recognised by [`arrow_parts`]: cheap geometry only.
+pub fn pair_parts(line: &ArrowParts, head: &ArrowParts) -> Option<InkShape> {
+    let (a, b) = line.line?;
+    let mut best: Option<(f32, InkShape)> = None;
+    for &[apex, b1, b2] in &head.heads {
+        for (tail, tip) in [(a, b), (b, a)] {
+            let off = dist(apex, tip);
+            let near = off <= (PAIR_REACH * dist(tail, tip)).max(3.0);
+            if near && best.as_ref().is_none_or(|(d, _)| off < *d) && head_fits(tail, tip, apex, b1, b2) {
+                best = Some((off, InkShape::Arrow { a: tail, b: tip, head_at_end: true, head_at_start: false }));
+            }
+        }
+    }
+    best.map(|(_, arrow)| arrow)
+}
+
+/// The ways the cleaned points `p` (which recognise as `found`) can be an arrowhead on their own,
+/// as `[apex, barb end, barb end]`: each corner of a closed triangle, or the corner of an open V
+/// whose two arms are straight.
+fn heads(p: &[[f32; 2]], found: Option<&InkShape>) -> Vec<[[f32; 2]; 3]> {
+    if let Some(InkShape::Polygon(c)) = found
+        && let &[x, y, z] = c.as_slice()
+    {
+        return vec![[x, y, z], [y, z, x], [z, x, y]];
+    }
+    let (Some(&f), Some(&l)) = (p.first(), p.last()) else { return Vec::new() };
+    // The apex: the point farthest from the chord between the ends.
+    let Some((ai, apex)) = p.iter().copied().enumerate().fold(None, |m: Option<(usize, [f32; 2])>, (i, q)| match m {
+        Some((_, b)) if seg_distance(f, l, b) >= seg_distance(f, l, q) => m,
+        _ => Some((i, q)),
+    }) else {
+        return Vec::new();
+    };
+    let straight = |a: [f32; 2], b: [f32; 2], arm: Option<&[[f32; 2]]>| {
+        let len = dist(a, b);
+        len >= 1.0 && arm.is_some_and(|arm| arm.iter().all(|q| seg_distance(a, b, *q) <= (0.12 * len).max(1.5)))
+    };
+    if ai == 0 || ai + 1 >= p.len() || !straight(f, apex, p.get(..=ai)) || !straight(apex, l, p.get(ai..)) {
+        return Vec::new();
+    }
+    vec![[apex, f, l]]
+}
+
+/// Finite, not absurdly far points only (at most [`MAX_POINTS`]), without repeats.
+fn clean(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let mut p: Vec<[f32; 2]> = Vec::with_capacity(pts.len().min(MAX_POINTS));
+    for q in pts.iter().take(MAX_POINTS).filter(|[x, y]| x.is_finite() && y.is_finite() && x.abs() < 1e6 && y.abs() < 1e6) {
+        if p.last() != Some(q) {
+            p.push(*q);
+        }
+    }
+    p
+}
+
+/// A shaft drawn from the start of `p`: the index of its tip, the tip and the shaft's length;
+/// `None` when it is too short or not straight.
+fn shaft_tip(p: &[[f32; 2]]) -> Option<(usize, [f32; 2], f32)> {
+    let tail = *p.first()?;
+    // The tip: start at the first point about as far from the start as any (a return that
+    // overshoots it by a point or two must not move it), then follow the stroke on while it still
+    // moves away from the start (densely sampled strokes have shaft points inside that window).
+    // The first barb heads back, so the walk stops at the real tip and never reaches an overshoot;
+    // jitter of under half a point doesn't stop it early.
+    let dmax = p.iter().map(|q| dist(tail, *q)).fold(0.0, f32::max);
+    let mut ti = p.iter().position(|q| dist(tail, *q) >= dmax - (0.03 * dmax).max(2.0))?;
+    let mut best = dist(tail, *p.get(ti)?);
+    for (i, q) in p.iter().enumerate().skip(ti + 1) {
+        let d = dist(tail, *q);
+        if d >= best {
+            (ti, best) = (i, d);
+        } else if d < best - 0.5 {
+            break;
+        }
+    }
+    let tip = *p.get(ti)?;
+    let shaft = dist(tail, tip);
+    if shaft < MIN_SIZE || p.get(..=ti)?.iter().any(|q| seg_distance(tail, tip, *q) > (0.06 * shaft).max(1.5)) {
+        return None;
+    }
+    Some((ti, tip, shaft))
 }
 
 /// Left, top, width and height of `pts` (zero for none).
@@ -252,74 +466,4 @@ fn upright(c: &[[f32; 2]]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Points along a closed polygon, `per` to a side, with a little deterministic hand wobble.
-    fn around(corners: &[[f32; 2]], per: usize) -> Vec<[f32; 2]> {
-        let mut out = Vec::new();
-        for (i, a) in corners.iter().enumerate() {
-            let b = corners[(i + 1) % corners.len()];
-            for k in 0..per {
-                let t = k as f32 / per as f32;
-                let wob = (out.len() as f32 * 1.7).sin() * 0.6;
-                out.push([a[0] + (b[0] - a[0]) * t + wob, a[1] + (b[1] - a[1]) * t - wob]);
-            }
-        }
-        out.push(corners[0]);
-        out
-    }
-
-    #[test]
-    fn rectangles_ellipses_lines_and_triangles_are_recognised() {
-        // A rectangle, started mid-side as people often do.
-        let rect = around(&[[50.0, 10.0], [110.0, 10.0], [110.0, 70.0 + 0.0], [10.0, 70.0], [10.0, 10.0]], 12);
-        let Some(InkShape::Rectangle { x, y, w, h }) = recognise(&rect) else { panic!("{:?}", recognise(&rect)) };
-        assert!((x - 10.0).abs() < 2.0 && (y - 10.0).abs() < 2.0 && (w - 100.0).abs() < 3.0 && (h - 60.0).abs() < 3.0, "{x} {y} {w} {h}");
-        // Nearly square: a square.
-        assert_eq!(recognise(&around(&[[0.0, 0.0], [60.0, 0.0], [60.0, 57.0], [0.0, 57.0]], 10)).map(|s| s.name()), Some("square"));
-        // An ellipse and a circle.
-        let ring = |rx: f32, ry: f32| {
-            (0..=64).map(|i| (i as f32 / 64.0) * std::f32::consts::TAU).map(|a| [100.0 + rx * a.cos(), 80.0 + ry * a.sin()]).collect::<Vec<_>>()
-        };
-        let Some(InkShape::Ellipse { x, w, h, .. }) = recognise(&ring(40.0, 25.0)) else { panic!() };
-        assert!((x - 60.0).abs() < 0.5 && (w - 80.0).abs() < 0.5 && (h - 50.0).abs() < 0.5);
-        assert_eq!(recognise(&ring(30.0, 29.0)).map(|s| s.name()), Some("circle"));
-        // A slightly shaky line keeps its ends.
-        let line: Vec<[f32; 2]> = (0..=40).map(|i| i as f32).map(|t| [10.0 + t * 3.0, 20.0 + t + (t * 2.1).sin() * 0.8]).collect();
-        assert_eq!(recognise(&line), Some(InkShape::Line { a: line[0], b: line[40] }));
-        // A triangle and a pentagon.
-        let tri = around(&[[0.0, 80.0], [45.0, 0.0], [90.0, 80.0]], 15);
-        let Some(InkShape::Polygon(c)) = recognise(&tri) else { panic!("{:?}", recognise(&tri)) };
-        assert_eq!(c.len(), 3);
-        let penta: Vec<[f32; 2]> = (0..5)
-            .map(|i| (i as f32 / 5.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2)
-            .map(|a| [60.0 + 50.0 * a.cos(), 60.0 + 50.0 * a.sin()])
-            .collect();
-        assert_eq!(recognise(&around(&penta, 12)).map(|s| s.name()), Some("polygon"));
-    }
-
-    #[test]
-    fn scribbles_ticks_and_hostile_points_stay_ink() {
-        // An open zigzag, a hook, a tap and a tiny tick.
-        let zigzag: Vec<[f32; 2]> = (0..20).map(|i| [i as f32 * 8.0, if i % 2 == 0 { 0.0 } else { 30.0 }]).collect();
-        assert_eq!(recognise(&zigzag), None);
-        assert_eq!(recognise(&[[0.0, 0.0], [50.0, 0.0], [50.0, 50.0]]), None);
-        assert_eq!(recognise(&[[5.0, 5.0]]), None);
-        assert_eq!(recognise(&[[0.0, 0.0], [2.0, 3.0]]), None);
-        // A closed scribble with many spikes: not a polygon of eight or fewer corners, not round.
-        let star: Vec<[f32; 2]> = (0..=24)
-            .map(|i| {
-                let a = i as f32 / 24.0 * std::f32::consts::TAU;
-                let r = if i % 2 == 0 { 60.0 } else { 20.0 };
-                [80.0 + r * a.cos(), 80.0 + r * a.sin()]
-            })
-            .collect();
-        assert_eq!(recognise(&star), None);
-        // NaN, infinities and a flood of points never panic.
-        let mut junk = vec![[f32::NAN, 1.0], [f32::INFINITY, 2.0], [3.0, f32::NEG_INFINITY]];
-        junk.extend(std::iter::repeat_n([1.0, 1.0], MAX_POINTS * 3));
-        assert_eq!(recognise(&junk), None);
-        assert_eq!(recognise(&[]), None);
-    }
-}
+mod tests;

@@ -65,17 +65,55 @@ const MAX_FACES: u32 = 64;
 const MAX_ASSETS: usize = 8192;
 /// Characters a face's coverage is measured on.
 const MAX_NEEDED: usize = 4096;
+/// The tables skrifa reads glyph outlines from: TrueType, CFF, CFF2 and VARC. A face with
+/// outlines only in Apple's `hvgl` table has none of them, and the interface draws its characters
+/// as blank space.
+pub(crate) const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
 
-/// A character only a font for the language has: a simplified-only hanzi, or kana.
-fn probe(hans: bool) -> char {
-    if hans { '页' } else { 'の' }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Region {
+    Hans,
+    Hant,
+    Other,
 }
 
-/// Font files to look for, relative to a font folder (or absolute), best first. Chinese faces
-/// cover kana too, so the Japanese list ends with the Chinese one.
-fn candidates(hans: bool) -> Vec<&'static str> {
-    let (zh, ja): (&[&str], &[&str]) = if cfg!(windows) {
-        (&["Deng.ttf", "msyh.ttc", "simhei.ttf", "simsun.ttc", "NotoSansSC-VF.ttf"], &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"])
+impl Region {
+    fn from_hans(hans: bool) -> Region {
+        if hans { Region::Hans } else { Region::Other }
+    }
+
+    fn rank(self, family: &str) -> u8 {
+        match self {
+            Region::Hans => u8::from(family.ends_with(" SC") || family.ends_with(" GB") || family.contains("YaHei")),
+            Region::Hant => {
+                let taiwan =
+                    [" TC", " TW"].iter().any(|s| family.ends_with(s)) || ["JhengHei", "CNS", "LiHei", "MingLiU"].iter().any(|s| family.contains(s));
+                if taiwan { 2 } else { u8::from(family.ends_with(" HK")) }
+            }
+            Region::Other => 1,
+        }
+    }
+}
+
+/// A character only a font for the language has: a simplified-only hanzi, kana, or Hangul.
+fn probe(hans: bool, korean: bool) -> char {
+    if korean {
+        '한'
+    } else if hans {
+        '页'
+    } else {
+        'の'
+    }
+}
+
+/// Font files to look for, relative to a font folder (or absolute), best first.
+fn candidates(hans: bool, korean: bool) -> Vec<&'static str> {
+    let (zh, ja, ko): (&[&str], &[&str], &[&str]) = if cfg!(windows) {
+        (
+            &["Deng.ttf", "msyh.ttc", "simhei.ttf", "simsun.ttc", "NotoSansSC-VF.ttf"],
+            &["YuGothR.ttc", "meiryo.ttc", "msgothic.ttc"],
+            &["malgun.ttf", "malgunsl.ttf", "gulim.ttc", "batang.ttc"],
+        )
     } else if cfg!(target_os = "macos") {
         (
             &[
@@ -88,6 +126,7 @@ fn candidates(hans: bool) -> Vec<&'static str> {
                 "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc",
             ],
             &["ヒラギノ角ゴシック W3.ttc", "Hiragino Sans W3.ttc"],
+            &["/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/AppleGothic.ttf"],
         )
     } else {
         (
@@ -106,18 +145,107 @@ fn candidates(hans: bool) -> Vec<&'static str> {
                 "truetype/droid/DroidSansFallbackFull.ttf",
             ],
             &["noto-cjk/NotoSansCJKjp-Regular.otf", "opentype/noto/NotoSansCJKjp-Regular.otf"],
+            &[
+                "noto-cjk/NotoSansCJKkr-Regular.otf",
+                "opentype/noto/NotoSansCJKkr-Regular.otf",
+                "google-noto-sans-cjk-fonts/NotoSansCJKkr-Regular.otf",
+                "adobe-source-han-sans/SourceHanSansK-Regular.otf",
+                "opentype/adobe-source-han-sans/SourceHanSansK-Regular.otf",
+                "truetype/nanum/NanumGothic.ttf",
+            ],
         )
     };
-    if hans { zh.to_vec() } else { ja.iter().chain(zh).copied().collect() }
+    if korean {
+        ko.iter().chain(ja).chain(zh).copied().collect()
+    } else if hans {
+        zh.to_vec()
+    } else {
+        ja.iter().chain(zh).copied().collect()
+    }
+}
+
+fn hant_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["msjh.ttc", "msjh.ttf", "mingliu.ttc"]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "PingFang.ttc",
+            "Hiragino Sans CNS.ttc",
+            "LiHeiPro.ttf",
+            "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc",
+        ]
+    } else {
+        &[
+            "noto-cjk/NotoSansCJK-Regular.ttc",
+            "opentype/noto/NotoSansCJK-Regular.ttc",
+            "google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
+            "google-noto-cjk/NotoSansCJK-Regular.ttc",
+            "noto-cjk/NotoSansCJKtc-Regular.otf",
+            "opentype/noto/NotoSansCJKtc-Regular.otf",
+            "google-noto-cjk/NotoSansCJKtc-Regular.otf",
+            "adobe-source-han-sans/SourceHanSansTW-Regular.otf",
+            "adobe-source-han-sans/SourceHanSansTC-Regular.otf",
+            "opentype/adobe-source-han-sans/SourceHanSansTW-Regular.otf",
+            "NotoSansCJK-Regular.ttc",
+            "NotoSansCJKtc-Regular.otf",
+            "SourceHanSansTW-Regular.otf",
+            "SourceHanSansTC-Regular.otf",
+        ]
+    }
+}
+
+pub fn system_hant_ui_font(needed: &[char]) -> Option<SystemUiFont> {
+    let probe = ['體'];
+    let needed = if needed.is_empty() { &probe[..] } else { needed.get(..MAX_NEEDED).unwrap_or(needed) };
+    hant_font_in(&with_asset_data(crate::system_font_dirs()), needed)
+}
+
+fn hant_font_in(dirs: &[std::path::PathBuf], needed: &[char]) -> Option<SystemUiFont> {
+    find_ui_font(dirs, hant_candidates(), needed, Region::Hant).filter(|f| Region::Hant.rank(&f.family) > 0)
 }
 
 /// The installed CJK font for a Chinese (`hans`) or other interface that best covers `needed`
 /// (the characters the embedded faces lack; empty: a character typical of the language), if one
 /// is found. Never panics on damaged files.
 pub fn system_cjk_ui_font(hans: bool, needed: &[char]) -> Option<SystemUiFont> {
-    let probe = [probe(hans)];
+    system_cjk_ui_font_for(hans, false, needed)
+}
+
+/// The installed CJK font for a Chinese, Korean or Japanese interface.
+pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Option<SystemUiFont> {
+    let probe = [probe(hans, korean)];
     let needed = if needed.is_empty() { &probe[..] } else { needed.get(..MAX_NEEDED).unwrap_or(needed) };
-    find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans), needed, hans)
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, Region::from_hans(hans))
+}
+
+/// Arabic font files to look for, relative to a font folder, best first.
+fn arabic_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["segoeui.ttf", "tahoma.ttf", "arial.ttf"]
+    } else if cfg!(target_os = "macos") {
+        &["SFArabic.ttf", "GeezaPro.ttc", "Supplemental/GeezaPro.ttc", "Supplemental/Arial Unicode.ttf", "Supplemental/Arial.ttf"]
+    } else {
+        &[
+            "noto/NotoSansArabic-Regular.ttf",
+            "truetype/noto/NotoSansArabic-Regular.ttf",
+            "google-noto/NotoSansArabic-Regular.ttf",
+            "google-noto-sans-arabic-vf-fonts/NotoSansArabic[wght].ttf",
+            "noto/NotoNaskhArabic-Regular.ttf",
+            "truetype/noto/NotoNaskhArabic-Regular.ttf",
+            "google-noto/NotoNaskhArabic-Regular.ttf",
+            "vazirmatn/Vazirmatn-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "TTF/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// An installed font with Arabic letters, for an Arabic interface in a build whose craft-fonts
+/// input has no Arabic face. Reads at most one font file per candidate; never panics on damaged
+/// files.
+pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
+    find_ui_font(&crate::system_font_dirs(), arabic_candidates(), &['ع'], Region::Other)
 }
 
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
@@ -142,25 +270,27 @@ pub(crate) fn with_asset_data(dirs: Vec<std::path::PathBuf>) -> Vec<std::path::P
 /// The font file among `names` (tried in order, each in every folder of `dirs`) whose best face
 /// maps all of `needed`, or failing that the one mapping the most of them (the earliest on a
 /// tie). A file that maps none of them is never chosen.
-pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: &[char], hans: bool) -> Option<SystemUiFont> {
+pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: &[char], region: Region) -> Option<SystemUiFont> {
     let mut tried = std::collections::HashSet::new();
-    let mut best: Option<(usize, SystemUiFont)> = None;
+    let mut best: Option<((u8, usize), SystemUiFont)> = None;
     for path in names.iter().flat_map(|n| dirs.iter().map(move |d| d.join(n))) {
         if !tried.insert(path.clone()) {
             continue;
         }
-        let Some(size) = std::fs::metadata(&path).ok().filter(|m| m.is_file()).map(|m| m.len()) else { continue };
+        let Some(size) = std::fs::metadata(&path).ok().filter(std::fs::Metadata::is_file).map(|m| m.len()) else { continue };
         if size > MAX_FILE {
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let Some((index, family, covered)) = pick_face(&bytes, needed, hans) else { continue };
-        if best.as_ref().is_some_and(|(b, _)| *b >= covered) {
+        let Some((index, family, covered)) = pick_face(&bytes, needed, region) else { continue };
+        let fit = if region == Region::Hant { region.rank(&family) } else { 0 };
+        if best.as_ref().is_some_and(|(b, _)| *b >= (fit, covered)) {
             continue;
         }
         log::debug!("interface CJK fallback: {family} ({}), {covered} of {} characters", path.display(), needed.len());
-        best = Some((covered, SystemUiFont { family, bytes, index }));
-        if covered >= needed.len() {
+        let done = covered >= needed.len() && (region != Region::Hant || fit == 2);
+        best = Some(((fit, covered), SystemUiFont { family, bytes, index }));
+        if done {
             break;
         }
     }
@@ -169,9 +299,10 @@ pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: 
 
 /// The face of a font file (or collection) to use and how many of `needed` it maps: the one
 /// mapping the most, then preferring a Regular style and, for Chinese, a Simplified Chinese
-/// family (`… SC`, `… GB`, as in a pan-CJK collection). `None` if the header isn't a font's or
-/// no face maps any of `needed`.
-pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32, String, usize)> {
+/// family (`… SC`, `… GB`, as in a pan-CJK collection). Faces with none of the
+/// [`OUTLINE_TABLES`] are skipped. `None` if the header isn't a font's or no face with outlines
+/// maps any of `needed`.
+pub(crate) fn pick_face(data: &[u8], needed: &[char], region: Region) -> Option<(u32, String, usize)> {
     let magic = data.get(..4)?;
     if ![&[0, 1, 0, 0][..], b"OTTO", b"ttcf"].contains(&magic) {
         return None;
@@ -180,27 +311,98 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
         FileRef::Font(_) => 1,
         FileRef::Collection(c) => c.len().min(MAX_FACES),
     };
-    let mut best: Option<((usize, bool, bool), u32, String)> = None;
+    let mut best: Option<((u8, usize, bool, u8), u32, String)> = None;
     for i in 0..count {
         let Ok(f) = skrifa::FontRef::from_index(data, i) else { continue };
+        if !OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()) {
+            continue;
+        }
         let charmap = f.charmap();
         let covered = needed.iter().filter(|c| charmap.map(**c).is_some()).count();
         if covered == 0 {
             continue;
         }
         let Some((family, style, _)) = crate::fontdb::face_names(&f) else { continue };
-        let regional = !hans || family.ends_with(" SC") || family.ends_with(" GB") || family.contains("YaHei");
-        let score = (covered, style.eq_ignore_ascii_case("Regular"), regional);
+        let rank = region.rank(&family);
+        let first = if region == Region::Hant { rank } else { 0 };
+        let score = (first, covered, style.eq_ignore_ascii_case("Regular"), rank);
         if best.as_ref().is_none_or(|(s, ..)| score > *s) {
             best = Some((score, i, family));
         }
     }
-    best.map(|((covered, ..), i, family)| (i, family, covered))
+    best.map(|((_, covered, ..), i, family)| (i, family, covered))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_interface_uses_korean_first_system_font_candidates() {
+        let names = candidates(false, true);
+        assert_eq!(
+            names.first(),
+            Some(&if cfg!(windows) {
+                "malgun.ttf"
+            } else if cfg!(target_os = "macos") {
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc"
+            } else {
+                "noto-cjk/NotoSansCJKkr-Regular.otf"
+            })
+        );
+        assert_eq!(probe(false, true), '한');
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn traditional_chinese_interface_picks_the_taiwan_face() {
+        use crate::fontdb::tests::sysfonts::{collection, renamed_to};
+        assert_eq!(
+            hant_candidates().first(),
+            Some(&if cfg!(windows) {
+                "msjh.ttc"
+            } else if cfg!(target_os = "macos") {
+                "PingFang.ttc"
+            } else {
+                "noto-cjk/NotoSansCJK-Regular.ttc"
+            })
+        );
+        let face = |family| renamed_to("SourceSans3-Regular.ttf", family);
+        let pan = collection(&[face("Probe Sans JP"), face("Probe Sans KR"), face("Probe Sans SC"), face("Probe Sans TC"), face("Probe Sans HK")]);
+        assert_eq!(pick_face(&pan, &['A'], Region::Hant), Some((3, "Probe Sans TC".to_string(), 1)));
+        assert_eq!(pick_face(&pan, &['A'], Region::Hans), Some((2, "Probe Sans SC".to_string(), 1)));
+        assert_eq!(pick_face(&pan, &['A'], Region::Other), Some((0, "Probe Sans JP".to_string(), 1)));
+        let hk = collection(&[face("Probe Sans SC"), face("Probe Sans HK")]);
+        assert_eq!(pick_face(&hk, &['A'], Region::Hant).map(|f| f.0), Some(1));
+        assert_eq!(Region::Hant.rank("Microsoft JhengHei"), 2);
+        assert_eq!(Region::Hant.rank("Microsoft YaHei"), 0);
+        let dir = std::env::temp_dir().join(format!("wc-uifallback-hant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = ["missing.ttc", "damaged.ttc", "sc.ttc", "pan.ttc"];
+        std::fs::write(dir.join("damaged.ttc"), b"ttcf\0\x01\0\0\xff\xff\xff\xff").unwrap();
+        std::fs::write(dir.join("sc.ttc"), collection(&[face("Probe Sans SC"), face("Probe Sans JP")])).unwrap();
+        std::fs::write(dir.join("pan.ttc"), &pan).unwrap();
+        let found = find_ui_font(std::slice::from_ref(&dir), &names, &['A'], Region::Hant).unwrap();
+        assert_eq!((found.family.as_str(), found.index), ("Probe Sans TC", 3));
+        assert_eq!(find_ui_font(std::slice::from_ref(&dir), &names, &['A'], Region::Hans).unwrap().family, "Probe Sans SC");
+        let only_sc = dir.join("only-sc");
+        std::fs::create_dir_all(only_sc.join("noto-cjk")).unwrap();
+        std::fs::write(only_sc.join("noto-cjk/NotoSansCJK-Regular.ttc"), collection(&[face("Probe Sans SC")])).unwrap();
+        assert!(hant_font_in(std::slice::from_ref(&only_sc), &['A']).is_none());
+        std::fs::write(only_sc.join("noto-cjk/NotoSansCJK-Regular.ttc"), &pan).unwrap();
+        if !cfg!(windows) && !cfg!(target_os = "macos") {
+            assert_eq!(hant_font_in(std::slice::from_ref(&only_sc), &['A']).map(|f| f.index), Some(3));
+        }
+        assert!(hant_font_in(std::slice::from_ref(&only_sc), &['體']).is_none());
+        let user = dir.join("user-fonts");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(user.join("NotoSansCJKtc-Regular.otf"), face("Probe Sans TC")).unwrap();
+        if !cfg!(windows) && !cfg!(target_os = "macos") {
+            assert_eq!(hant_font_in(std::slice::from_ref(&user), &['A']).map(|f| f.family), Some("Probe Sans TC".to_string()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn needs_system_cjk_when_an_embedded_face_lacks_an_interface_character() {
@@ -236,22 +438,49 @@ mod tests {
         std::fs::write(dir.join("msyh.ttc"), b"<html>not a font</html>").unwrap();
         std::fs::write(dir.join("sub/good.ttf"), sans).unwrap();
         let names = ["missing.ttf", "Deng.ttf", "msyh.ttc", "sub/good.ttf"];
-        let found = find_ui_font(std::slice::from_ref(&dir), &names, &['A'], true).unwrap();
+        let found = find_ui_font(std::slice::from_ref(&dir), &names, &['A'], Region::Hans).unwrap();
         assert_eq!((found.family.as_str(), found.index, found.bytes.len()), ("Source Sans 3", 0, sans.len()));
         // No candidate maps a CJK character: nothing is chosen.
-        assert!(find_ui_font(std::slice::from_ref(&dir), &names, &['页'], true).is_none());
-        assert!(pick_face(b"OTT", &['A'], false).is_none());
+        assert!(find_ui_font(std::slice::from_ref(&dir), &names, &['页'], Region::Hans).is_none());
+        assert!(pick_face(b"OTT", &['A'], Region::Other).is_none());
         // macOS 12 keeps PingFang in `AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData`.
         std::fs::write(assets.join("0a1b.asset/AssetData/PingFang.ttc"), sans).unwrap();
         std::fs::write(assets.join("not-an-asset/AssetData/Hidden.ttc"), sans).unwrap();
         let dirs = with_asset_data(vec![dir.clone(), assets.clone()]);
         assert_eq!(dirs, [dir.clone(), assets.join("0a1b.asset/AssetData"), assets.clone()]);
-        let found = find_ui_font(&dirs, &["PingFang.ttc"], &['A'], true).unwrap();
+        let found = find_ui_font(&dirs, &["PingFang.ttc"], &['A'], Region::Hans).unwrap();
         assert_eq!(found.family, "Source Sans 3");
-        assert!(find_ui_font(&dirs, &["Hidden.ttc"], &['A'], true).is_none());
+        assert!(find_ui_font(&dirs, &["Hidden.ttc"], &['A'], Region::Hans).is_none());
         // No file maps every needed character: the one mapping the most is used.
-        let found = find_ui_font(&dirs, &["sub/good.ttf", "PingFang.ttc"], &['A', '页'], true).unwrap();
+        let found = find_ui_font(&dirs, &["sub/good.ttf", "PingFang.ttc"], &['A', '页'], Region::Hans).unwrap();
         assert_eq!(found.family, "Source Sans 3");
+        // The bundled Latin face has no Arabic letters, so it is never taken for an Arabic interface.
+        assert!(find_ui_font(std::slice::from_ref(&dir), &names, &['ع'], Region::Other).is_none());
+        assert!(!arabic_candidates().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_faces_without_outlines() {
+        // Renaming the `glyf` table to `hvgl` gives a face like those of `PingFangUI.ttc` on
+        // macOS 27.0.1. Its cmap maps characters, and skrifa reads no outlines from it.
+        let sans = crate::bundled()[0];
+        let mut hvgl = sans.to_vec();
+        let tables = u16::from_be_bytes([hvgl[4], hvgl[5]]) as usize;
+        let glyf = (0..tables).map(|r| 12 + r * 16).find(|&at| &hvgl[at..at + 4] == b"glyf").unwrap();
+        hvgl[glyf..glyf + 4].copy_from_slice(b"hvgl");
+        assert!(skrifa::FontRef::new(&hvgl).unwrap().charmap().map('A').is_some());
+        assert!(pick_face(&hvgl, &['A'], Region::Hans).is_none());
+        assert_eq!(pick_face(sans, &['A'], Region::Hans), Some((0, "Source Sans 3".to_string(), 1)));
+        // `find_ui_font` uses the next file, and returns `None` when no other file is listed.
+        let dir = std::env::temp_dir().join(format!("wc-uifallback-outlines-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hvgl.ttf"), &hvgl).unwrap();
+        std::fs::write(dir.join("glyf.ttf"), sans).unwrap();
+        let found = find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf", "glyf.ttf"], &['A'], Region::Hans).unwrap();
+        assert!(found.bytes == sans);
+        assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], Region::Hans).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

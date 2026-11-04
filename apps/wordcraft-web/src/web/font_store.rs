@@ -36,7 +36,7 @@ async fn open() -> Result<IdbDatabase, String> {
     let req = factory.open_with_u32(DB_NAME, 1).map_err(js)?;
     let upgrade_req = req.clone();
     let upgrade = Closure::<dyn FnMut()>::new(move || {
-        if let Ok(db) = upgrade_req.result().and_then(|r| r.dyn_into::<IdbDatabase>().map_err(JsValue::from))
+        if let Ok(db) = upgrade_req.result().and_then(|r| r.dyn_into::<IdbDatabase>())
             && !db.object_store_names().contains(STORE)
             && let Err(e) = db.create_object_store(STORE)
         {

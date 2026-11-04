@@ -10,11 +10,21 @@ workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
+wordcraft-metafile = { workspace = true }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
+cfb = { workspace = true }
+encoding_rs = { workspace = true }
+chardetng = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser clock (`SystemTime::now()` panics on wasm32-unknown-unknown): ODT change dates.
+js-sys = "0.3"
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }

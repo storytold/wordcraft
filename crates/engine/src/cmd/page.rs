@@ -1,8 +1,9 @@
 //! Layout tab: page setup (margins, orientation, size, columns), breaks, line numbers, hyphenation.
 
 use serde_json::{Value, json};
+use wordcraft_doc::props::{Border, Borders};
 use wordcraft_doc::section::{
-    Columns, DocGrid, DocGridType, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, MIN_GRID_PITCH, SectionProps, SectionStart,
+    Columns, DocGrid, DocGridType, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, MAX_NOTE_START, MIN_GRID_PITCH, SectionProps, SectionStart,
 };
 use wordcraft_doc::{Block, Pos, StoryRef};
 
@@ -12,7 +13,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
-            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt}"#,
+            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
         ),
         CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", |s, v| {
             let land = match p::str(v, "value") {
@@ -23,10 +24,10 @@ pub fn specs() -> Vec<CommandSpec> {
             with_sect(s, |x| x.set_landscape(land))
         })
         .params(r#"{"value": "portrait|landscape"}"#),
-        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
-                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward"}"#,
+                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
             ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
@@ -40,21 +41,19 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("layout.pageSetup", "Page Setup", "Layout › Page Setup", |s, v| {
             if let Some(props) = v.get("section") {
-                let new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+                let mut new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+                validate_section(&mut new)?;
                 return with_sect(s, |x| *x = new.clone());
             }
-            s.ui_requests.push(json!({"open": "pageSetup"}));
+            s.push_ui_request(json!({"open": "pageSetup"}));
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })
-        .params(r#"{"section"?: SectionProps}"#),
+        .params(r#"{"section"?: SectionProps} (replaces the whole section, headers and footers included; checked like Size, Margins, Columns, Line Numbers, Footnotes and Page Borders: non-finite numbers and margins that leave no room for text are refused; page sides 7.2–1584 pt, 1–12 columns with 0–300 pt gaps, header/footer/gutter 0–1584 pt, page border width 0.25–6 pt and distance 0–31 pt, note start 1–32767, line numbers start 1–32767, countBy 1–100, distance 0–1584 pt are clamped)"#),
         CommandSpec::new("layout.verticalAlign", "Vertical Alignment", "Layout › Page Setup › Layout", |s, v| {
-            let va = match p::str(v, "value") {
-                Some("center") => wordcraft_doc::props::VAlign::Center,
-                Some("bottom") => wordcraft_doc::props::VAlign::Bottom,
-                _ => wordcraft_doc::props::VAlign::Top,
-            };
+            let va = wordcraft_doc::section::PageVAlign::parse(p::str(v, "value").unwrap_or_default());
             with_sect(s, |x| x.valign = va)
-        }),
+        })
+        .params(r#"{"value": "top|center|justify|bottom"} (also both|justified; anything else is top). Justified shares each page's spare room between its paragraphs and tables"#),
         CommandSpec::new("layout.sectionRtl", "Right-to-Left Section", "Layout › Page Setup", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).rtl);
             with_sect(s, |x| x.rtl = on)
@@ -73,15 +72,21 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
-            let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
                 }
-                x.page_num_start = start;
+                // Left out entirely: the numbering keeps its start. Given as null: the pages
+                // number on from the section before (the dialog's "Continue from previous
+                // section"). A number: numbering starts there.
+                if v.get("start").is_some() {
+                    x.page_num_start = p::u64(v, "start").map(|n| n.min(100_000) as u32);
+                }
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(
+            r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n | null} ("start" left out: the numbering keeps its start; null: the pages number on from the section before; a number: numbering starts there)"#,
+        ),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
         ),
@@ -216,24 +221,54 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
-fn block_of(s: &Session) -> usize {
-    s.sel.focus.path.0.first().copied().unwrap_or(0) as usize
+fn section_of_part(s: &Session, id: u32) -> usize {
+    let sections = s.doc.sections();
+    for (i, (_, sp)) in sections.iter().enumerate() {
+        if [sp.headers.default, sp.headers.first, sp.headers.even, sp.footers.default, sp.footers.first, sp.footers.even].contains(&Some(id)) {
+            return i;
+        }
+    }
+    for (bi, block) in s.doc.body.iter().enumerate() {
+        if let wordcraft_doc::Block::Para(p) = &**block {
+            for o in &p.objects {
+                if matches!(o, wordcraft_doc::para::InlineObject::NoteRef { id: nid, .. } if *nid == id) {
+                    return s.doc.section_index_of(bi);
+                }
+            }
+        }
+    }
+    0
+}
+
+pub fn section_index_of_focus(s: &Session) -> usize {
+    match s.sel.focus.story {
+        wordcraft_doc::StoryRef::Body => s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize),
+        wordcraft_doc::StoryRef::Part(id) => section_of_part(s, id),
+    }
 }
 
 pub fn sect(s: &Session) -> SectionProps {
-    let i = s.doc.section_index_of(block_of(s));
+    let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()
+}
+
+/// The last block of each section of the selection.
+fn selected_section_ends(s: &Session) -> Vec<usize> {
+    let (a, b) = s.sel.ordered();
+    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    if a.story != wordcraft_doc::StoryRef::Body || b.story != wordcraft_doc::StoryRef::Body {
+        let i = section_index_of_focus(s);
+        return vec![ends.get(i).copied().unwrap_or(0)];
+    }
+    let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
+    let first = ends.iter().position(|e| i0 <= *e).unwrap_or(0);
+    let last = ends.iter().position(|e| i1 <= *e).unwrap_or(first);
+    (first..=last).map(|k| ends.get(k).copied().unwrap_or(0)).collect()
 }
 
 /// Apply to the section(s) of the selection.
 pub(crate) fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
-    let (a, b) = s.sel.ordered();
-    let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
-    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
-    let first = ends.iter().position(|e| i0 <= *e).unwrap_or(0);
-    let last = ends.iter().position(|e| i1 <= *e).unwrap_or(first);
-    for k in first..=last {
-        let block = ends.get(k).copied().unwrap_or(0);
+    for block in selected_section_ends(s) {
         f(s.doc.section_mut(block));
     }
     Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
@@ -333,16 +368,134 @@ fn document_grid(s: &mut Session, v: &Value) -> CmdResult {
     Ok(grid_result(&sect(s), size))
 }
 
+/// Layout › Margins presets: id and top, bottom, left, right in points.
+pub const MARGIN_PRESETS: [(&str, [f32; 4]); 6] = [
+    ("normal", [72.0, 72.0, 72.0, 72.0]),
+    ("narrow", [36.0, 36.0, 36.0, 36.0]),
+    ("moderate", [72.0, 72.0, 54.0, 54.0]),
+    ("wide", [72.0, 72.0, 144.0, 144.0]),
+    ("mirrored", [72.0, 72.0, 90.0, 72.0]),
+    ("office2003", [72.0, 72.0, 90.0, 90.0]),
+];
+
+/// The Margins preset the caret's section is set to, if any (Mirrored only with mirror margins
+/// on, the others only with it off), so the menu can mark it.
+pub fn margins_preset_at(s: &Session) -> Option<&'static str> {
+    let x = sect(s);
+    let m = [x.margin_top, x.margin_bottom, x.margin_left, x.margin_right];
+    MARGIN_PRESETS
+        .iter()
+        .find(|(id, p)| (*id == "mirrored") == s.doc.settings.mirror_margins && p.iter().zip(m).all(|(a, b)| (a - b).abs() < 0.5))
+        .map(|(id, _)| *id)
+}
+
+/// The Columns preset the caret's section matches: `one`, `two`, `three` (equal columns), or
+/// `left` / `right` (two columns, the narrower one on that side).
+pub fn columns_preset_at(s: &Session) -> Option<&'static str> {
+    let c = sect(s).columns;
+    let first = c.widths.first().map(|w| w.0);
+    let equal = c.widths.iter().all(|w| first.is_some_and(|f| (w.0 - f).abs() < 0.5));
+    match (c.count, c.widths.as_slice()) {
+        (1, _) => Some("one"),
+        (2, [a, b]) if a.0 < b.0 - 0.5 => Some("left"),
+        (2, [a, b]) if a.0 > b.0 + 0.5 => Some("right"),
+        (2, _) if equal => Some("two"),
+        (3, _) if equal => Some("three"),
+        _ => None,
+    }
+}
+
+/// Checks a whole section handed to `layout.pageSetup` by the rules of Size, Margins, Columns,
+/// Line Numbers, Footnotes and Page Borders: a non-finite number or margins that leave no room
+/// for text is an error; the rest is clamped to the ranges those commands use.
+fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
+    let bad = |what: &str| CmdError::Params(format!("section: {what} must be a finite number"));
+    let finite = [x.page_w, x.page_h, x.margin_top, x.margin_bottom, x.margin_left, x.margin_right, x.header, x.footer, x.gutter, x.columns.space];
+    if finite.iter().any(|n| !n.is_finite()) {
+        return Err(bad("sizes, margins, distances and column gaps"));
+    }
+    if x.columns.widths.iter().any(|(w, sp)| !w.is_finite() || !sp.is_finite()) {
+        return Err(bad("column widths"));
+    }
+    if x.line_numbers.as_ref().is_some_and(|l| !l.distance.is_finite()) {
+        return Err(bad("the line number distance"));
+    }
+    if x.doc_grid.as_ref().is_some_and(|g| !g.line_pitch.is_finite()) {
+        return Err(bad("the grid pitch"));
+    }
+    if x.page_borders.as_ref().is_some_and(|b| border_sides(b).any(|d| !d.width.is_finite() || !d.space.is_finite())) {
+        return Err(bad("page border widths and distances"));
+    }
+    x.page_w = x.page_w.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE);
+    x.page_h = x.page_h.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE);
+    // Like Size, the orientation follows the sides.
+    if x.page_w != x.page_h {
+        x.landscape = x.page_w > x.page_h;
+    }
+    x.margin_top = x.margin_top.max(0.0);
+    x.margin_bottom = x.margin_bottom.max(0.0);
+    x.margin_left = x.margin_left.max(0.0);
+    x.margin_right = x.margin_right.max(0.0);
+    x.header = x.header.clamp(0.0, x.page_h);
+    x.footer = x.footer.clamp(0.0, x.page_h);
+    x.gutter = x.gutter.clamp(0.0, MAX_PAGE_SIDE);
+    // A page narrower than the usual text room (the smallest is 0.1") needs only margins that
+    // leave the whole of it: zero margins, gutter included.
+    let room = |side: f32| MIN_TEXT_ROOM.min(side);
+    if x.margin_left + x.margin_right + x.gutter > x.page_w - room(x.page_w) || x.margin_top + x.margin_bottom > x.page_h - room(x.page_h) {
+        return Err(CmdError::Params("margins leave no room for text".into()));
+    }
+    x.columns.space = x.columns.space.clamp(0.0, 300.0);
+    x.columns.widths.truncate(12);
+    for (w, sp) in &mut x.columns.widths {
+        *w = w.clamp(18.0, MAX_PAGE_SIDE);
+        *sp = sp.clamp(0.0, 300.0);
+    }
+    // As in Columns: custom widths set the count; a single width is no custom layout.
+    if x.columns.widths.len() > 1 {
+        x.columns.count = x.columns.widths.len() as u32;
+    } else {
+        x.columns.widths.clear();
+        x.columns.count = x.columns.count.clamp(1, 12);
+    }
+    if let Some(l) = &mut x.line_numbers {
+        l.start = l.start.clamp(1, 32_767);
+        l.count_by = l.count_by.clamp(1, 100);
+        l.distance = l.distance.clamp(0.0, 1584.0);
+    }
+    if let Some(g) = &mut x.doc_grid {
+        g.line_pitch = g.line_pitch.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH);
+        g.char_space = g.char_space.clamp(-MAX_CHAR_SPACE, MAX_CHAR_SPACE);
+    }
+    x.page_num_start = x.page_num_start.map(|n| n.min(100_000));
+    for n in [&mut x.footnote_pr, &mut x.endnote_pr] {
+        n.num_start = n.num_start.map(|v| v.clamp(1, MAX_NOTE_START));
+    }
+    // Page Borders: width 0.25–6 pt, distance from the text 0–31 pt.
+    if let Some(b) = &mut x.page_borders {
+        for d in border_sides_mut(b) {
+            d.width = d.width.clamp(0.25, 6.0);
+            d.space = d.space.clamp(0.0, 31.0);
+        }
+    }
+    Ok(())
+}
+
+fn border_sides(b: &Borders) -> impl Iterator<Item = &Border> {
+    [&b.top, &b.left, &b.bottom, &b.right, &b.between, &b.inside_v].into_iter().flatten()
+}
+
+fn border_sides_mut(b: &mut Borders) -> impl Iterator<Item = &mut Border> {
+    [&mut b.top, &mut b.left, &mut b.bottom, &mut b.right, &mut b.between, &mut b.inside_v].into_iter().flatten()
+}
+
 fn margins(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
     let (t, b, l, r) = match preset {
-        Some("normal") => (72.0, 72.0, 72.0, 72.0),
-        Some("narrow") => (36.0, 36.0, 36.0, 36.0),
-        Some("moderate") => (72.0, 72.0, 54.0, 54.0),
-        Some("wide") => (72.0, 72.0, 144.0, 144.0),
-        Some("mirrored") => (72.0, 72.0, 90.0, 72.0),
-        Some("office2003") => (72.0, 72.0, 90.0, 90.0),
-        Some(x) => return Err(CmdError::Params(format!("unknown preset `{x}`"))),
+        Some(x) => match MARGIN_PRESETS.iter().find(|(id, _)| *id == x) {
+            Some((_, [t, b, l, r])) => (*t, *b, *l, *r),
+            None => return Err(CmdError::Params(format!("unknown preset `{x}`"))),
+        },
         None => {
             let c = sect(s);
             (
@@ -353,25 +506,45 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
             )
         }
     };
-    let gutter = p::f32(v, "gutter");
+    // Negative margins count as zero before the fit check, so one can't offset another.
+    let (t, b, l, r) = (t.max(0.0), b.max(0.0), l.max(0.0), r.max(0.0));
+    let gutter = p::f32(v, "gutter").map(|g| g.max(0.0));
     let cur = sect(s);
-    if l + r + gutter.unwrap_or(cur.gutter) > cur.page_w - 36.0 || t + b > cur.page_h - 36.0 {
+    if !margins_fit((cur.page_w, cur.page_h), (t, b, l, r), gutter.unwrap_or(cur.gutter)) {
         return Err(CmdError::Params("margins leave no room for text".into()));
     }
-    // A preset picks mirrored or not; plain numbers (a ruler drag, an agent) keep the setting.
-    if preset.is_some() {
-        s.doc.settings.mirror_margins = preset == Some("mirrored");
+    // A preset picks mirrored or not, as does `mirror` (Page Setup's Multiple pages); plain numbers
+    // alone (a ruler drag, an agent) keep the setting.
+    if let Some(on) = p::bool(v, "mirror").or(preset.map(|k| k == "mirrored")) {
+        s.doc.settings.mirror_margins = on;
     }
     with_sect(s, |x| {
-        x.margin_top = t.max(0.0);
-        x.margin_bottom = b.max(0.0);
-        x.margin_left = l.max(0.0);
-        x.margin_right = r.max(0.0);
+        x.margin_top = t;
+        x.margin_bottom = b;
+        x.margin_left = l;
+        x.margin_right = r;
         if let Some(g) = gutter {
-            x.gutter = g.max(0.0);
+            x.gutter = g;
         }
     })
 }
+
+/// Why `layout.size` refuses a page its margins don't fit.
+pub const MARGINS_DONT_FIT: &str = "The margins don't fit on a page this size; make the margins smaller first.";
+
+/// Text room the margins must leave on a page, each way, points.
+pub const MIN_TEXT_ROOM: f32 = 36.0;
+
+/// Whether margins (top, bottom, left, right) and a gutter leave text room on a page (width,
+/// height), all in points: the rule `layout.margins` and `layout.size` both apply, and Page
+/// Setup checks before it runs either.
+pub fn margins_fit(page: (f32, f32), (t, b, l, r): (f32, f32, f32, f32), gutter: f32) -> bool {
+    l + r + gutter <= page.0 - MIN_TEXT_ROOM && t + b <= page.1 - MIN_TEXT_ROOM
+}
+
+/// The smallest and largest page side, points (0.1" and 22", as Word allows).
+pub const MIN_PAGE_SIDE: f32 = 7.2;
+pub const MAX_PAGE_SIDE: f32 = 1584.0;
 
 fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = if let Some(n) = p::str(v, "name") {
@@ -383,14 +556,21 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         (p::req_f32(v, "width")?, p::req_f32(v, "height")?)
     };
-    if !(72.0..=1584.0).contains(&w) || !(72.0..=1584.0).contains(&h) {
-        return Err(CmdError::Params("page size must be 1\"–22\"".into()));
+    // Word's range per side is 0.1"–22" (#1433); `p::f32` already refused NaN and infinities.
+    let (w, h) = (w.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE), h.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE));
+    // Each section keeps its orientation: the long side across in landscape, down in portrait.
+    let oriented = |x: &SectionProps| if x.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
+    let sections = s.doc.sections();
+    let fits = |block: usize| {
+        sections
+            .iter()
+            .find(|(e, _)| *e == block)
+            .is_none_or(|(_, x)| margins_fit(oriented(x), (x.margin_top, x.margin_bottom, x.margin_left, x.margin_right), x.gutter))
+    };
+    if !selected_section_ends(s).into_iter().all(fits) {
+        return Err(CmdError::Params(MARGINS_DONT_FIT.into()));
     }
-    with_sect(s, |x| {
-        let (pw, ph) = if x.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
-        x.page_w = pw;
-        x.page_h = ph;
-    })
+    with_sect(s, |x| (x.page_w, x.page_h) = oriented(x))
 }
 
 fn columns(s: &mut Session, v: &Value) -> CmdResult {
@@ -423,7 +603,9 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
     // Equal columns keep one spacing; unequal ones remember the first gap for a later switch back.
     let space = widths.first().map(|w| w.1).unwrap_or(space);
     let cols = Columns { count: count as u32, space, separator: sep, widths };
-    match p::str(v, "apply").unwrap_or("section") {
+    // With text selected the gallery works on that text, as in Word (#2024).
+    let default = if selection_sectionable(s) { "selection" } else { "section" };
+    match p::str(v, "apply").unwrap_or(default) {
         "section" => with_sect(s, |x| x.columns = cols.clone()),
         "document" => {
             let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
@@ -439,8 +621,59 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
             breaks(s, &json!({"kind": "continuous"}))?;
             with_sect(s, |x| x.columns = cols.clone())
         }
-        x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document or forward)"))),
+        "selection" => {
+            selection_to_sections(s)?;
+            with_sect(s, |x| x.columns = cols.clone())
+        }
+        x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document, forward or selection)"))),
     }
+}
+
+/// Whether the selection can become sections of its own: text selected in the main text, outside
+/// tables.
+pub fn selection_sectionable(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    !s.sel.is_collapsed() && [a, b].iter().all(|p| p.story == StoryRef::Body && p.path.depth() == 0)
+}
+
+/// Columns for the selected text (#2024), as Word does it: a continuous section break where the
+/// selection starts and one where it ends, splitting paragraphs there, unless that end already
+/// meets a section boundary (the document's start or end, or a section break). The selection keeps
+/// its text, which is then the section(s) between.
+fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
+    if !selection_sectionable(s) {
+        return Err(CmdError::Params("selected text in the main text, outside tables, is needed".into()));
+    }
+    let old = s.sel.clone();
+    let (a, mut b) = old.ordered();
+    let block = |p: &Pos| p.path.0.first().copied().unwrap_or(0) as usize;
+    let len = |s: &Session, p: &Pos| s.doc.para_at(p).map(|q| q.len()).unwrap_or(0);
+    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    let after_break = |i: usize| i.checked_sub(1).is_some_and(|j| ends.contains(&j));
+    // A selection that took a section break with it ends before that break.
+    if b.off == 0 && block(&b) > block(&a) && after_break(block(&b)) {
+        let prev = Pos { path: wordcraft_doc::Path::top(block(&b) - 1), off: 0, ..b.clone() };
+        b = Pos { off: len(s, &prev), ..prev };
+    }
+    let last_block = s.doc.body.len().saturating_sub(1);
+    let end_break = !(b.off == len(s, &b) && (ends.contains(&block(&b)) || block(&b) == last_block));
+    let start_break = !(a.off == 0 && (block(&a) == 0 || after_break(block(&a))));
+    // The end first: the start's position doesn't move.
+    if end_break {
+        s.sel = Selection::caret(b.clone());
+        breaks(s, &json!({"kind": "continuous"}))?;
+    }
+    let (first, last) = if start_break {
+        s.sel = Selection::caret(a.clone());
+        breaks(s, &json!({"kind": "continuous"}))?;
+        let first = s.sel.focus.clone();
+        let last = shifted_by_split(&b, &a, &first);
+        (first, last)
+    } else {
+        (a, b)
+    };
+    s.sel = if old.anchor <= old.focus { Selection { anchor: first, focus: last } } else { Selection { anchor: last, focus: first } };
+    Ok(())
 }
 
 /// `[[width, space after], …]` in points: 1–12 columns, each at least 0.25", that fit the text
@@ -533,173 +766,4 @@ fn shifted_by_split(p: &Pos, at: &Pos, new: &Pos) -> Pos {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn doc() -> Session {
-        Session::new(wordcraft_doc::Document::from_text("one\ntwo\nthree"))
-    }
-
-    /// Layout › Text Direction turns the section, or the table cell the caret is in; one undo step.
-    #[test]
-    fn text_direction_turns_the_section_or_the_cell() {
-        use wordcraft_doc::props::TextDirection;
-        let mut s = doc();
-        s.run("layout.textDirection", &json!({"value": "down"})).unwrap();
-        assert_eq!(sect(&s).text_direction, TextDirection::Down);
-        assert_eq!(text_direction_at(&s), TextDirection::Down);
-        // Without a value: the next one, like Word's button.
-        s.run("layout.textDirection", &json!({})).unwrap();
-        assert_eq!(sect(&s).text_direction, TextDirection::Up);
-        s.run("edit.undo", &json!({})).unwrap();
-        assert_eq!(sect(&s).text_direction, TextDirection::Down);
-        assert!(s.run("layout.textDirection", &json!({"value": "diagonal"})).is_err());
-        assert_eq!(sect(&s).text_direction, TextDirection::Down);
-        // In a table cell it turns the cell, not the section.
-        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
-        assert!(s.sel.focus.path.cell().is_some());
-        s.run("layout.textDirection", &json!({"value": "btLr"})).unwrap();
-        assert_eq!(text_direction_at(&s), TextDirection::Up);
-        assert_eq!(sect(&s).text_direction, TextDirection::Down);
-    }
-
-    /// #852: a continuous section break with text selected goes before the selection and keeps
-    /// it, as in Word; it used to delete the text, so the first section came out empty. Saved and
-    /// opened again, both sections' text lays out on page 1, the second below the first.
-    #[test]
-    fn section_break_keeps_the_selected_text() {
-        let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
-        s.run("select.text", &json!({"text": "one"})).unwrap();
-        s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
-        assert_eq!(s.selected_text(), "one");
-        assert_eq!(s.doc.sections().len(), 2);
-        let texts = |d: &wordcraft_doc::Document| -> Vec<String> {
-            d.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.plain_text().to_string()) } else { None }).collect()
-        };
-        assert_eq!(texts(&s.doc), ["", "one", "two"]);
-        // A backward selection in the middle of a paragraph keeps its text and direction too.
-        let mut s = Session::new(wordcraft_doc::Document::from_text("alpha beta\ngamma"));
-        let p = |off| Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off };
-        s.sel = Selection { anchor: p(10), focus: p(6) };
-        s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
-        assert_eq!(s.selected_text(), "beta");
-        assert!(s.sel.anchor > s.sel.focus);
-        assert_eq!(texts(&s.doc), ["alpha ", "beta", "gamma"]);
-
-        // The issue's document: "one", a continuous break, "two" — both on page 1 after a round trip.
-        let mut s = Session::new(wordcraft_doc::Document::from_text("one\ntwo"));
-        s.run("select.text", &json!({"text": "one"})).unwrap();
-        s.run("caret.end", &json!({})).unwrap();
-        s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
-        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
-        assert_eq!(back.sections().len(), 2);
-        assert_eq!(back.last_section.start, SectionStart::Continuous);
-        let mut s = Session::new(back);
-        let l = s.layout();
-        assert_eq!(l.pages.len(), 1);
-        let mut lines: Vec<(String, f32)> = l.pages[0]
-            .items
-            .iter()
-            .filter_map(|it| match it {
-                crate::layout::Placed::Lines { path, y, .. } => {
-                    let Some(Block::Para(p)) = s.doc.body.get(path.last()).map(|b| &**b) else { return None };
-                    (!p.plain_text().is_empty()).then(|| (p.plain_text().to_string(), *y))
-                }
-                _ => None,
-            })
-            .collect();
-        lines.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let order: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
-        assert_eq!(order, ["one", "two"]);
-    }
-
-    /// More Columns: unequal widths with a line between, as one undo step.
-    #[test]
-    fn unequal_columns_with_a_line_between() {
-        let mut s = doc();
-        let tw = sect(&s).text_width();
-        s.run("layout.columns", &json!({"widths": [[150.0, 24.0], [tw - 174.0, 0.0]], "separator": true})).unwrap();
-        let c = sect(&s).columns;
-        assert_eq!((c.count, c.separator, c.widths.len()), (2, true, 2));
-        assert_eq!(c.widths.first(), Some(&(150.0, 24.0)));
-        s.run("edit.undo", &json!({})).unwrap();
-        assert_eq!(sect(&s).columns, Columns::default());
-        // Too wide, too narrow, too many, or nonsense: refused.
-        for bad in [json!([[tw, 36.0], [100.0, 0.0]]), json!([[5.0, 0.0], [100.0, 0.0]]), json!(vec![[40.0, 0.0]; 13]), json!("x")] {
-            assert!(s.run("layout.columns", &json!({"widths": bad})).is_err(), "{bad}");
-        }
-    }
-
-    /// Apply to: the whole document, or from the caret on (a continuous section break first).
-    #[test]
-    fn columns_apply_to_the_document_or_from_the_caret_on() {
-        let mut s = doc();
-        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
-        s.run("layout.columns", &json!({"count": 3, "apply": "document"})).unwrap();
-        assert!(s.doc.sections().iter().all(|(_, x)| x.columns.count == 3));
-        let mut s = doc();
-        s.run("caret.docEnd", &json!({})).unwrap();
-        s.run("layout.columns", &json!({"count": 2, "apply": "forward"})).unwrap();
-        let counts: Vec<u32> = s.doc.sections().iter().map(|(_, x)| x.columns.count).collect();
-        assert_eq!(counts, vec![1, 2]);
-        assert_eq!(s.doc.last_section.start, SectionStart::Continuous);
-        assert!(s.run("layout.columns", &json!({"count": 2, "apply": "elsewhere"})).is_err());
-    }
-
-    /// #407 Line Numbers options: start, count by, distance and restart; options alone keep the
-    /// restart mode, `none` turns numbering off.
-    #[test]
-    fn line_numbering_options() {
-        use wordcraft_doc::section::LineNumberRestart;
-        let mut s = Session::new(wordcraft_doc::Document::from_text("One\nTwo"));
-        s.run("layout.lineNumbers", &json!({"value": "restartSection", "start": 5, "countBy": 2, "distance": 18})).unwrap();
-        let l = s.doc.last_section.line_numbers.clone().unwrap();
-        assert_eq!((l.start, l.count_by, l.distance, l.restart), (5, 2, 18.0, LineNumberRestart::Section));
-        s.run("layout.lineNumbers", &json!({"countBy": 1e9, "start": -3})).unwrap();
-        let l = s.doc.last_section.line_numbers.clone().unwrap();
-        assert_eq!((l.start, l.count_by, l.restart), (5, 100, LineNumberRestart::Section), "clamped, mode kept");
-        s.run("layout.lineNumbers", &json!({"value": "none"})).unwrap();
-        assert!(s.doc.last_section.line_numbers.is_none());
-        assert!(s.run("layout.lineNumbers", &json!({"value": "sometimes"})).is_err());
-    }
-
-    /// #407 Hyphenation Options: options don't toggle automatic hyphenation; Manual finds a
-    /// word at a line start that would fit hyphenated on the line above, and an optional hyphen
-    /// there breaks the word.
-    #[test]
-    fn hyphenation_options_and_manual_hyphenation() {
-        let mut s = Session::new(wordcraft_doc::Document::from_text(
-            &"a extraordinarily be uncharacteristic of responsibilities the considerations ".repeat(12),
-        ));
-        let r = s.run("layout.hyphenation", &json!({"zone": 36, "caps": false, "limit": 3})).unwrap();
-        assert_eq!(r, json!({"value": false, "zone": 36.0, "caps": false, "limit": 3}));
-        s.run("layout.hyphenation", &json!({})).unwrap();
-        assert!(s.doc.settings.auto_hyphenation, "nothing given toggles");
-        s.run("layout.hyphenation", &json!({"value": false})).unwrap();
-        // Accept every candidate (which words they are depends on the fonts).
-        let mut found = 0;
-        let mut from = json!(null);
-        while found < 5 {
-            let c = s.run("layout.manualHyphenation", &json!({"from": from})).unwrap();
-            if c["done"] == true {
-                break;
-            }
-            let word = c["word"].as_str().unwrap().to_string();
-            let pts = c["points"].as_array().unwrap();
-            assert!(!pts.is_empty() && pts.contains(&c["suggest"]), "{c}");
-            let at = c["suggest"].as_u64().unwrap() as usize;
-            let mut pos = c["pos"].clone();
-            let off = pos["off"].as_u64().unwrap() as usize + word.char_indices().nth(at).unwrap().0;
-            pos["off"] = json!(off);
-            s.run("caret.set", &json!({"pos": pos})).unwrap();
-            s.run("text.optionalHyphen", &json!({})).unwrap();
-            pos["off"] = json!(off + word.len());
-            from = pos;
-            found += 1;
-        }
-        // Some line of thirty or so starts with a long word that fits hyphenated above, whatever the font.
-        assert!(found > 0, "no candidates");
-        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).matches('\u{ad}').count(), found);
-        assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
-    }
-}
+mod tests;
