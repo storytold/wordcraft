@@ -9446,6 +9446,40 @@ fn smart_art_hostile_params_are_capped() {
     let _ = s.layout();
 }
 
+/// #3648: a SmartArt model in a `.json` document skips the limits that commands and the DOCX
+/// reader apply. Saved as DOCX it was written whole (150 items in data1.xml) and reopened as a
+/// plain diagram; the save cuts it to the limits, and it reopens editable.
+#[test]
+fn smart_art_past_the_limits_in_json_saves_to_docx_within_them() {
+    use std::io::Read;
+    use std::sync::Arc;
+    use wordcraft_doc::graphic::{Graphic, GraphicKind};
+    use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, SmartArtItem, SmartArtLayout, SmartArtSpec};
+    let past = SmartArtSpec {
+        layout: SmartArtLayout::Hierarchy,
+        items: (0..MAX_ITEMS + 50).map(|i| SmartArtItem::new(format!("Item {i}"), u8::MAX)).collect(),
+        ..Default::default()
+    };
+    let mut doc = wordcraft_doc::Document::new();
+    let graphic = Graphic { kind: GraphicKind::Diagram, w: 300.0, h: 200.0, smart_art: Some(Arc::new(past.clone())), ..Default::default() };
+    let o = wordcraft_doc::InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    doc.insert_object(&Pos::body(0, 0), o, &wordcraft_doc::CharProps::default()).unwrap();
+    let json = crate::io::save_bytes("sa.json", &doc).unwrap();
+    let docx = crate::io::save_bytes("sa.docx", &crate::io::open_bytes("sa.json", &json).unwrap()).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&docx)).unwrap();
+    let mut data = String::new();
+    zip.by_name("word/diagrams/data1.xml").unwrap().read_to_string(&mut data).unwrap();
+    // Item points are the `dgm:pt` elements without a `type` (the others are the document point
+    // and the connections' transitions).
+    let items = data.match_indices("<dgm:pt ").filter(|(i, _)| !data[*i..].split('>').next().unwrap_or_default().contains(" type=")).count();
+    assert_eq!(items, MAX_ITEMS, "data1.xml holds the items the limits keep");
+    let mut s = Session::new(crate::io::open_bytes("sa.docx", &docx).unwrap());
+    select_graphic(&mut s);
+    let back = cmd::smart_art::selected_smart_art(&s).expect("reopens editable");
+    assert!(back.items.iter().all(|i| i.level <= MAX_LEVEL));
+    assert_eq!(*back, past.sanitized());
+}
+
 /// Outline view of: Heading 1 "One", body "a", Heading 2 "Two", body "b", Heading 1 "Three", body "c".
 fn outline_doc() -> Session {
     let mut s = s();
