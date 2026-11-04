@@ -23,6 +23,12 @@ pub use inline_kinds::{NoteKind, PTabAlign, PTabBase, RubyAlign, ShapeKind, ruby
 pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDREN};
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
+/// Whether adjacent runs with these properties retain a meaningful DOCX boundary.
+/// Fit-text runs without a group id are independent regions and must remain separate.
+pub fn runs_can_merge(left: &CharProps, right: &CharProps) -> bool {
+    left == right && !left.fit_text.as_ref().is_some_and(|fit| fit.id.is_none())
+}
+
 /// A paragraph.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Paragraph {
@@ -326,7 +332,7 @@ impl Paragraph {
                 continue;
             }
             match out.last_mut() {
-                Some(l) if l.props == r.props => l.len += e - end,
+                Some(l) if runs_can_merge(&l.props, &r.props) => l.len += e - end,
                 _ => out.push(Run { len: e - end, props: r.props }),
             }
             end = e;
@@ -501,9 +507,8 @@ impl Paragraph {
     pub fn next_boundary(&self, off: usize) -> usize {
         crate::cluster::next_cluster(&self.text, self.clamp(off))
     }
-    /// Where Backspace at `off` deletes from: the previous character in the Brahmic scripts
-    /// (Myanmar, Khmer, Devanagari, Thai…), where it removes one vowel sign or stacked consonant
-    /// at a time, otherwise the previous caret stop.
+    /// Where Backspace at `off` deletes from: one Arabic combining mark or one character in the
+    /// Brahmic scripts (Myanmar, Khmer, Devanagari, Thai…), otherwise the previous caret stop.
     pub fn backspace_from(&self, off: usize) -> usize {
         let off = self.clamp(off);
         match self.text.get(..off).and_then(|t| t.char_indices().next_back()) {
@@ -621,6 +626,15 @@ impl Paragraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_merge_keeps_ungrouped_fit_text_regions_separate() {
+        let ungrouped = CharProps { fit_text: Some(crate::props::FitText { width: Some(720), id: None }), ..Default::default() };
+        assert!(!runs_can_merge(&ungrouped, &ungrouped));
+        let grouped = CharProps { fit_text: Some(crate::props::FitText { width: Some(720), id: Some(1) }), ..Default::default() };
+        assert!(runs_can_merge(&grouped, &grouped));
+        assert!(runs_can_merge(&CharProps::default(), &CharProps::default()));
+    }
 
     #[test]
     fn sentence_at_sentence_start() {
