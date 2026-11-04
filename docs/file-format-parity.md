@@ -300,7 +300,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | PDF export can write fillable form fields as an option (`formFields`, `--form-fields`): legacy form fields and editable content controls become AcroForm fields, added after the export; none on a page drawn scaled or moved. |
+| 2026-11-02 | trivial | PDF export can write fillable form fields as an option (`formFields`, `--form-fields`): legacy form fields and editable content controls become AcroForm fields, added after the export; none on a page drawn scaled or moved, or on a job's several-to-a-sheet sheets or copies. |
 | 2026-11-04 | trivial | REF context update: 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change. |
 | 2026-11-04 | trivial | PR #4609: relative REF keeps context already displayed by the own or a needed ancestor label; six synthetic legal-template cases and separate-list context follow the Word for Windows measurements reported by @pakiat in PR discussion. Existing unknown-switch/cache boundaries and readiness estimates unchanged; no new native Word run. |
 | 2026-11-04 | trivial | Picture brightness, contrast and transparency: DrawingML `a:lum` and `a:alphaModFix`, VML `gain`/`blacklevel` (Washout watermarks) read, drawn on screen and in PDF as Word does (PDF test reads the embedded pixels back), and written as DrawingML; Word 2003 XML writes brightness and contrast as `gain`/`blacklevel` (#1711, #1766) |
