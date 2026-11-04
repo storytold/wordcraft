@@ -22,6 +22,18 @@ pub fn drop_cap_size(size: f32, lines: u8) -> f32 {
     (((lines as f32 - 1.0) * line_h + size * 0.7) / 0.7).min(1000.0).max(size)
 }
 
+/// The letter size [`drop_cap_size`] draws at `big` points, so a size read from a file comes out
+/// the same when drawn and saved. A whole or half point size is preferred when it does. A letter
+/// at the 1000 pt cap has no inverse and stays as it is.
+pub fn drop_cap_letter_size(big: f32, lines: u8) -> f32 {
+    if big >= 1000.0 {
+        return big;
+    }
+    let exact = big * 0.7 / ((lines.max(1) as f32 - 1.0) * 1.2 + 0.7);
+    let half = (exact * 2.0).round() / 2.0;
+    if half > 0.0 && (drop_cap_size(half, lines) * 2.0).round() == (big * 2.0).round() { half } else { exact }
+}
+
 /// Concrete character formatting.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -2824,6 +2824,44 @@ fn a_drop_cap_past_ten_lines_is_saved_at_ten_lines_size() {
     assert!(xml.contains(r#"w:sz w:val="394""#) && !xml.contains(r#"w:val="435""#), "the letter's size is 10 lines': {xml}");
 }
 
+/// #3000: a letter with a size of its own survives saving and reopening: 20 pt over 3 lines is
+/// saved at the 88.5 pt it is drawn at and maps back to 20 pt, while the text keeps inheriting. At
+/// the 1000 pt cap the frame's size can't be mapped back, so the letter stays at the cap.
+#[test]
+fn a_drop_caps_own_size_round_trips() {
+    let sized = |letter: f32| {
+        let mut p = Paragraph::with_text("Before we start", CharProps::default());
+        p.props.drop_cap = Some(3);
+        let rest = p.text.len() - 1;
+        p.runs = vec![
+            wordcraft_doc::para::Run { len: 1, props: CharProps { size: Some(letter), ..Default::default() } },
+            wordcraft_doc::para::Run { len: rest, props: CharProps::default() },
+        ];
+        p
+    };
+    let round_trip = |d: &wordcraft_doc::Document| {
+        let bytes = wordcraft_docx::write(d).expect("write");
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+        (xml, wordcraft_docx::read(&bytes).expect("read"))
+    };
+    let (xml, r) = round_trip(&doc_with(vec![sized(20.0)]));
+    assert!(xml.contains(r#"<w:sz w:val="177"/>"#), "the drawn size on the letter's run: {xml}");
+    let got = paras(&r);
+    assert_eq!(got.len(), 1);
+    let sizes: Vec<_> = got[0].runs.iter().map(|r| (r.props.size, r.props.size_cs)).collect();
+    // The letter's unset complex-script size resolves to its own 20 pt, so it is saved and read that way.
+    assert_eq!(sizes, vec![(Some(20.0), Some(20.0)), (None, None)]);
+    let (xml, r) = round_trip(&r);
+    assert!(xml.contains(r#"<w:sz w:val="177"/>"#), "a second save writes the same size: {xml}");
+    assert_eq!(paras(&r)[0].runs[0].props.size, Some(20.0));
+
+    let (xml, r) = round_trip(&doc_with(vec![sized(300.0)]));
+    assert!(xml.contains(r#"<w:sz w:val="2000"/>"#), "{xml}");
+    assert_eq!(paras(&r)[0].runs[0].props.size, Some(1000.0));
+}
+
 /// #3000: a drop cap whose text inherits its complex-script size from the document defaults is
 /// saved with that size enlarged too — `w:szCs` beside `w:sz` — or an Arabic letter would stay at
 /// the text's size. Differing Latin and complex-script sizes each grow from their own: 3 lines of
