@@ -1,8 +1,8 @@
 use super::import::Pages;
-use super::limits::{MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
+use super::limits::{MAX_EXTRA_SPACES, MAX_INFO_CHARS, MAX_OPEN_INSERTIONS, MAX_REGIONS, MAX_SECTIONS, MAX_XML_DEPTH};
 use super::styles::Styles;
 use super::xml::{Attrs, Ev, events, get, length, local};
-use super::*;
+use super::{Cell, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, RevMark, RevisionKind, SectionProps, SectionStart, make_img, model};
 
 /// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
 /// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
@@ -116,6 +116,8 @@ pub(super) struct Body<'a> {
     para: Option<Para>,
     /// The text read last ended in a space collapsed from XML whitespace (not a `text:s`).
     xml_space_end: bool,
+    /// What is left of [`MAX_EXTRA_SPACES`].
+    pub(super) spaces_left: usize,
     para_cont: bool,
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
@@ -169,6 +171,7 @@ impl<'a> Body<'a> {
             fmt: Vec::new(),
             para: None,
             xml_space_end: false,
+            spaces_left: MAX_EXTRA_SPACES,
             para_cont: false,
             lists: Vec::new(),
             lists_saved: Vec::new(),
@@ -488,27 +491,11 @@ impl Body<'_> {
             };
             return;
         }
-        if self.in_tc {
-            if self.del.is_none() {
-                self.tracked_start(q, a);
-                return;
-            }
-            // Inside deleted content: only insertions (text inserted, then deleted) nest.
-            if matches!(local(q), "change-start" | "change-end") {
-                let regions = &self.regions;
-                if let Some(d) = &mut self.del {
-                    change_mark(regions, &mut d.ins, local(q) == "change-start", a);
-                }
-                return;
-            }
-            if matches!(local(q), "tracked-changes" | "changed-region" | "insertion" | "deletion" | "format-change" | "change") {
-                self.skip = 1;
-                return;
-            }
-            if local(q) == "change-info" && self.region.is_some() {
-                self.info_at = Some(self.depth);
-                return;
-            }
+        if self.tracked_context(q, a) {
+            return;
+        }
+        if self.start_inline(q, a) {
+            return;
         }
         match local(q) {
             "tracked-changes" => {
@@ -552,40 +539,6 @@ impl Body<'_> {
                 let h =
                     if local(q) == "h" { Some(get(a, "text:outline-level").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1)) } else { None };
                 self.start_para(get(a, "text:style-name"), h);
-            }
-            "span" => {
-                let base = self.cur_fmt();
-                let f = match get(a, "text:style-name") {
-                    Some(s) => self.styles.text_fmt(s, &base),
-                    None => base,
-                };
-                self.fmt.push(f);
-            }
-            "a" => {
-                let mut f = self.cur_fmt();
-                if let Some(h) = get(a, "xlink:href").filter(|h| !h.is_empty()) {
-                    f.link = model::kept_link(h);
-                }
-                if let Some(s) = get(a, "text:style-name") {
-                    f = self.styles.text_fmt(s, &f);
-                }
-                self.fmt.push(f);
-            }
-            "s" => {
-                let n = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
-                self.push_text(&" ".repeat(n));
-            }
-            "tab" => self.push_text("\t"),
-            "line-break" => self.push_text("\n"),
-            "bookmark" | "bookmark-start" => {
-                if let Some(n) = get(a, "text:name") {
-                    if self.para.is_none() {
-                        self.start_para(None, None);
-                    }
-                    if let Some(p) = &mut self.para {
-                        p.inlines.push(Inline::Anchor(n.to_string()));
-                    }
-                }
             }
             "list" => {
                 self.end_para();
@@ -825,6 +778,78 @@ impl Body<'_> {
             }
         }
         self.para = Some(rest);
+    }
+
+    fn tracked_context(&mut self, q: &str, a: &Attrs) -> bool {
+        if !self.in_tc {
+            return false;
+        }
+        if self.del.is_none() {
+            self.tracked_start(q, a);
+            return true;
+        }
+        // Inside deleted content: only insertions (text inserted, then deleted) nest.
+        if matches!(local(q), "change-start" | "change-end") {
+            let regions = &self.regions;
+            if let Some(d) = &mut self.del {
+                change_mark(regions, &mut d.ins, local(q) == "change-start", a);
+            }
+            return true;
+        }
+        if matches!(local(q), "tracked-changes" | "changed-region" | "insertion" | "deletion" | "format-change" | "change") {
+            self.skip = 1;
+            return true;
+        }
+        if local(q) == "change-info" && self.region.is_some() {
+            self.info_at = Some(self.depth);
+            return true;
+        }
+        false
+    }
+
+    fn start_inline(&mut self, q: &str, a: &Attrs) -> bool {
+        match local(q) {
+            "span" => {
+                let base = self.cur_fmt();
+                let fmt = get(a, "text:style-name").map_or_else(|| base.clone(), |s| self.styles.text_fmt(s, &base));
+                self.fmt.push(fmt);
+            }
+            "a" => {
+                let mut fmt = self.cur_fmt();
+                if let Some(href) = get(a, "xlink:href").filter(|href| !href.is_empty()) {
+                    fmt.link = model::kept_link(href);
+                }
+                if let Some(style) = get(a, "text:style-name") {
+                    fmt = self.styles.text_fmt(style, &fmt);
+                }
+                self.fmt.push(fmt);
+            }
+            // Outside a paragraph `push_text` drops spaces, so they cost no budget.
+            "s" if self.para.is_some() => {
+                let count = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
+                let want = count.saturating_sub(1);
+                let extra = want.min(self.spaces_left);
+                if extra < want {
+                    model::dropped(model::Dropped::Spaces);
+                }
+                self.spaces_left -= extra;
+                self.push_text(&" ".repeat(1 + extra));
+            }
+            "tab" => self.push_text("\t"),
+            "line-break" => self.push_text("\n"),
+            "bookmark" | "bookmark-start" => {
+                if let Some(name) = get(a, "text:name") {
+                    if self.para.is_none() {
+                        self.start_para(None, None);
+                    }
+                    if let Some(p) = &mut self.para {
+                        p.inlines.push(Inline::Anchor(name.to_string()));
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn end(&mut self, q: &str) {

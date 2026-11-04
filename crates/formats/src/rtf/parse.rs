@@ -1,6 +1,7 @@
 use super::reader::Reader;
 use super::state::{Dest, HeaderFooter, HfPages, MAX_PICT, PageGeom};
-use super::*;
+use super::{Cell, Document, FBlock, Flow, Para, model};
+use std::sync::Arc;
 
 /// Parse RTF bytes into the flow model.
 pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
@@ -196,6 +197,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
             }
         }
     }
+    Ok(finalize(r))
+}
+
+fn finalize(mut r: Reader) -> Parsed {
     // A header or footer left open by a truncated file ends here, and so does a multibyte run.
     r.finish_multibyte();
     r.end_header_footer();
@@ -224,7 +229,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
+    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -301,12 +306,12 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     }
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
-    let dp = &mut doc.styles.default_para;
+    let dp = &mut Arc::make_mut(&mut doc.styles).default_para;
     dp.space_before = Some(0.0);
     dp.space_after = Some(0.0);
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
-        doc.styles.default_chr.font = default_font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = default_font;
     }
     Ok(doc)
 }

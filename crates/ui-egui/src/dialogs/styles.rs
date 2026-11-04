@@ -1,5 +1,5 @@
 use super::chrome::close_button;
-use super::*;
+use super::{Dialog, Tokens, Ui, Value, WordApp, json, vec2};
 
 /// Manage Styles' body. Reads the list from `styles.manage`'s data (never re-running the command,
 /// which would ask to open this dialog again) and acts through commands.

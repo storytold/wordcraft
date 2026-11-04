@@ -1,4 +1,4 @@
-use super::*;
+use super::{Rect, Rgb};
 
 /// How an area is painted: one colour or a gradient (page points), opacities 0..1.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +30,16 @@ impl Paint {
             Paint::Solid(c, x) => Paint::Solid(*c, x * a),
             Paint::Linear { p0, p1, stops } => Paint::Linear { p0: *p0, p1: *p1, stops: fade(stops) },
             Paint::Radial { c, r, stops } => Paint::Radial { c: *c, r: *r, stops: fade(stops) },
+        }
+    }
+    /// Inset soft-edge paints. Solid bands composite to the fill's target opacity.
+    pub fn soft_bands(&self, radius: f32) -> Vec<(f32, Paint)> {
+        match self {
+            Paint::Solid(color, alpha) => {
+                let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+                wordcraft_doc::effects::bands(-radius, 0.0, alpha).into_iter().map(|(grow, band)| (grow, Paint::Solid(*color, band))).collect()
+            }
+            _ => wordcraft_doc::effects::bands(-radius, 0.0, 1.0).into_iter().map(|(grow, alpha)| (grow, self.faded(alpha))).collect(),
         }
     }
     /// The colour and opacity this paint gives the point (`x`, `y`): stops blended, padded past

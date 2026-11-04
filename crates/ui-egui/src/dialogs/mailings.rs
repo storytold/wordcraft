@@ -1,5 +1,5 @@
 use super::chrome::buttons;
-use super::*;
+use super::{Dialog, FilterOp, FilterRule, Sense, Serialize, SortKey, Tokens, Ui, Value, WordApp, json, vec2};
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
 pub const ADDRESS_PARTS: [(&str, &str); 9] = [
@@ -261,8 +261,7 @@ pub(crate) fn recipient_list(
     if !editing {
         filter.editing = None;
     }
-    let merged_only = egui::Checkbox::new(&mut filter.only_merged, tl!("Show only records that will be merged"));
-    ui.add_enabled(order.is_some(), merged_only);
+    ui.add_enabled_ui(order.is_some(), |ui| ui.checkbox(&mut filter.only_merged, tl!("Show only records that will be merged")));
     let visible = ui
         .horizontal(|ui| {
             ui.label(tl!("Find in list:"));
@@ -283,60 +282,66 @@ pub(crate) fn recipient_list(
     let mut remove_row = None;
     let mut x_w = X_W;
     let mut focused = None;
-    egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                for (i, f) in fields.iter_mut().enumerate() {
-                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")))
-                        .accessible_name(format!("{} {}", tl!("Field name"), i + 1));
-                    let x = ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
-                    x_w = x.rect.width();
-                    if x.clicked() {
-                        remove_field = Some(i);
+    crate::rtl::island(ui, |ui| {
+        egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
+            crate::rtl::vertical(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
+                    for (i, f) in fields.iter_mut().enumerate() {
+                        ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")))
+                            .accessible_name(format!("{} {}", tl!("Field name"), i + 1));
+                        let x =
+                            ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
+                        x_w = x.rect.width();
+                        if x.clicked() {
+                            remove_field = Some(i);
+                        }
                     }
-                }
-            });
-            ui.separator();
-            egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
-                for k in range {
-                    let Some(&r) = visible.get(k) else { continue };
-                    let Some(row) = rows.get_mut(r) else { continue };
-                    // Striped rows, like a data grid: painted under the row once its size is known.
-                    let stripe = ui.painter().add(egui::Shape::Noop);
-                    let line = ui.horizontal(|ui| {
-                        // The record's number in the merge, a dash when the filter leaves it out.
-                        let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
-                            None => ((r + 1).to_string(), true),
-                            Some(Some(n)) => (n.to_string(), true),
-                            Some(None) => ("–".to_string(), false),
-                        };
-                        let num = egui::RichText::new(num).weak();
-                        let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
-                        ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
-                        for (j, c) in row.iter_mut().enumerate() {
-                            // Keyed on the record, not its place in the grid: when the view hides
-                            // or moves rows, the keyboard can't land in another record (#1576).
-                            let field_name = fields.get(j).map_or("", String::as_str);
-                            let cell = ui
-                                .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
-                                .accessible_name(crate::i18n::fmt(tl!("{field}, record {n}"), &[("field", field_name), ("n", &(r + 1).to_string())]));
-                            if cell.has_focus() {
-                                focused = Some(cell.id);
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
+                    for k in range {
+                        let Some(&r) = visible.get(k) else { continue };
+                        let Some(row) = rows.get_mut(r) else { continue };
+                        // Striped rows, like a data grid: painted under the row once its size is known.
+                        let stripe = ui.painter().add(egui::Shape::Noop);
+                        let line = ui.horizontal(|ui| {
+                            // The record's number in the merge, a dash when the filter leaves it out.
+                            let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
+                                None => ((r + 1).to_string(), true),
+                                Some(Some(n)) => (n.to_string(), true),
+                                Some(None) => ("–".to_string(), false),
+                            };
+                            let num = egui::RichText::new(num).weak();
+                            let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
+                            ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
+                            for (j, c) in row.iter_mut().enumerate() {
+                                // Keyed on the record, not its place in the grid: when the view hides
+                                // or moves rows, the keyboard can't land in another record (#1576).
+                                let field_name = fields.get(j).map_or("", String::as_str);
+                                let cell = ui
+                                    .add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)))
+                                    .accessible_name(crate::i18n::fmt(
+                                        tl!("{field}, record {n}"),
+                                        &[("field", field_name), ("n", &(r + 1).to_string())],
+                                    ));
+                                if cell.has_focus() {
+                                    focused = Some(cell.id);
+                                }
+                                // Under the field's remove button.
+                                ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
                             }
-                            // Under the field's remove button.
-                            ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
+                            if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
+                                remove_row = Some(r);
+                            }
+                        });
+                        if k % 2 == 1 {
+                            let half = ui.spacing().item_spacing.y / 2.0;
+                            let rect = line.response.rect.expand2(vec2(0.0, half));
+                            ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
                         }
-                        if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
-                            remove_row = Some(r);
-                        }
-                    });
-                    if k % 2 == 1 {
-                        let half = ui.spacing().item_spacing.y / 2.0;
-                        let rect = line.response.rect.expand2(vec2(0.0, half));
-                        ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
                     }
-                }
+                });
             });
         });
     });
@@ -424,32 +429,43 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
         });
     };
     let mut remove = None;
-    egui::Grid::new("recipient_filter").num_columns(5).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
-        ui.label("");
-        ui.label(egui::RichText::new(tl!("Field")).weak());
-        ui.label(egui::RichText::new(tl!("Comparison")).weak());
-        ui.label(egui::RichText::new(tl!("Compare to")).weak());
-        ui.end_row();
-        for (i, r) in filter.rules.iter_mut().enumerate() {
-            if i == 0 {
-                ui.label("");
-            } else {
-                craft_ui::ComboBox::from_id_salt(("rf_join", i)).width(60.0).selected_text(tl!(if r.or { "Or" } else { "And" })).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut r.or, false, tl!("And"));
-                    ui.selectable_value(&mut r.or, true, tl!("Or"));
+    crate::rtl::Table::new("recipient_filter").columns(5).spacing(vec2(6.0, 4.0)).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(""));
+            r.cell(|ui| ui.label(egui::RichText::new(tl!("Field")).weak()));
+            r.cell(|ui| ui.label(egui::RichText::new(tl!("Comparison")).weak()));
+            r.cell(|ui| ui.label(egui::RichText::new(tl!("Compare to")).weak()));
+        });
+        for (i, rule) in filter.rules.iter_mut().enumerate() {
+            t.row(|r| {
+                r.cell(|ui| {
+                    if i == 0 {
+                        ui.label("");
+                    } else {
+                        craft_ui::ComboBox::from_id_salt(("rf_join", i)).width(60.0).selected_text(tl!(if rule.or { "Or" } else { "And" })).show_ui(
+                            ui,
+                            |ui| {
+                                ui.selectable_value(&mut rule.or, false, tl!("And"));
+                                ui.selectable_value(&mut rule.or, true, tl!("Or"));
+                            },
+                        );
+                    }
                 });
-            }
-            field_combo(ui, ("rf_field", i), &mut r.field, false);
-            craft_ui::ComboBox::from_id_salt(("rf_op", i)).width(150.0).selected_text(tl!(r.op.label())).show_ui(ui, |ui| {
-                for op in FilterOp::ALL {
-                    ui.selectable_value(&mut r.op, op, tl!(op.label()));
-                }
+                r.cell(|ui| field_combo(ui, ("rf_field", i), &mut rule.field, false));
+                r.cell(|ui| {
+                    craft_ui::ComboBox::from_id_salt(("rf_op", i)).width(150.0).selected_text(tl!(rule.op.label())).show_ui(ui, |ui| {
+                        for op in FilterOp::ALL {
+                            ui.selectable_value(&mut rule.op, op, tl!(op.label()));
+                        }
+                    });
+                });
+                r.cell(|ui| ui.add_enabled(rule.op.has_value(), egui::TextEdit::singleline(&mut rule.value).desired_width(130.0)));
+                r.cell(|ui| {
+                    if ui.add(egui::Button::new("×").small()).on_hover_text(tl!("Remove condition")).clicked() {
+                        remove = Some(i);
+                    }
+                });
             });
-            ui.add_enabled(r.op.has_value(), egui::TextEdit::singleline(&mut r.value).desired_width(130.0));
-            if ui.add(egui::Button::new("×").small()).on_hover_text(tl!("Remove condition")).clicked() {
-                remove = Some(i);
-            }
-            ui.end_row();
         }
     });
     if let Some(i) = remove.filter(|i| *i < filter.rules.len()) {
@@ -466,20 +482,23 @@ fn recipient_filter(ui: &mut Ui, fields: &[String], filter: &mut RecipientFilter
         }
     });
     ui.add_space(4.0);
-    egui::Grid::new("recipient_sort").num_columns(3).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+    crate::rtl::Table::new("recipient_sort").columns(3).spacing(vec2(6.0, 4.0)).show(ui, |t| {
         for (i, (field, desc)) in filter.sort.iter_mut().enumerate() {
-            ui.label(tl!(if i == 0 { "Sort by" } else { "Then by" }));
-            field_combo(ui, ("rs_field", i), field, true);
-            ui.add_enabled_ui(!field.is_empty(), |ui| {
-                craft_ui::ComboBox::from_id_salt(("rs_dir", i))
-                    .width(110.0)
-                    .selected_text(tl!(if *desc { "Descending" } else { "Ascending" }))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(desc, false, tl!("Ascending"));
-                        ui.selectable_value(desc, true, tl!("Descending"));
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!(if i == 0 { "Sort by" } else { "Then by" })));
+                r.cell(|ui| field_combo(ui, ("rs_field", i), field, true));
+                r.cell(|ui| {
+                    ui.add_enabled_ui(!field.is_empty(), |ui| {
+                        craft_ui::ComboBox::from_id_salt(("rs_dir", i))
+                            .width(110.0)
+                            .selected_text(tl!(if *desc { "Descending" } else { "Ascending" }))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(desc, false, tl!("Ascending"));
+                                ui.selectable_value(desc, true, tl!("Descending"));
+                            });
                     });
+                });
             });
-            ui.end_row();
         }
     });
 }
