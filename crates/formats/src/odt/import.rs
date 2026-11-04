@@ -144,7 +144,10 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
     let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch, &mut spaces_left)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
     body.spaces_left = spaces_left;
-    events(&content, |ev| body.feed(ev));
+    let complete = events(&content, |ev| body.feed(ev));
+    if !complete {
+        return Err("ODT: content.xml is not well-formed (the document is truncated or corrupt)".into());
+    }
     let mut blocks = body.take_blocks();
     // An open section with nothing in it (after a column section at the end) isn't one: the
     // section before it ends the document.

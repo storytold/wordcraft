@@ -13,9 +13,9 @@ pub(super) struct Rel {
 }
 
 /// The relationships of a part in `dir` (targets resolved to package paths).
-pub(super) fn relationships(xml: &[u8], dir: &str) -> Vec<Rel> {
+pub(super) fn relationships(xml: &[u8], dir: &str) -> Result<Vec<Rel>, String> {
     let mut v = Vec::new();
-    walk(xml, |ev| {
+    let complete = walk(xml, |ev| {
         if let Ev::Start(e) = ev
             && e.local_name().as_ref() == b"Relationship"
             && v.len() < MAX_SHEETS * 2
@@ -27,7 +27,10 @@ pub(super) fn relationships(xml: &[u8], dir: &str) -> Vec<Rel> {
             v.push(Rel { id: attr(e, b"Id").unwrap_or_default(), kind: attr(e, b"Type").unwrap_or_default(), target: join(dir, &target) });
         }
     });
-    v
+    if !complete {
+        return Err("the relationships part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(v)
 }
 
 /// A relative part name resolved against `dir` (`/` = package root).
@@ -69,12 +72,13 @@ struct Workbook {
 }
 
 fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
-    let path = pkg.workbook_path().ok_or("the workbook part is missing")?;
+    let path = pkg.workbook_path()?.ok_or("the workbook part is missing")?;
     let xml = pkg.read(&path)?;
-    let rels = pkg.read(&rels_of(&path)).map(|r| relationships(&r, dir_of(&path))).unwrap_or_default();
+    let rel_path = rels_of(&path);
+    let rels = if pkg.has(&rel_path) { relationships(&pkg.read(&rel_path)?, dir_of(&path))? } else { Vec::new() };
     let mut listed: Vec<(String, String)> = Vec::new();
     let mut date1904 = false;
-    walk(&xml, |ev| {
+    let complete = walk(&xml, |ev| {
         if let Ev::Start(e) = ev {
             match e.local_name().as_ref() {
                 b"sheet" if listed.len() < MAX_SHEETS => listed.push((attr(e, b"name").unwrap_or_default(), attr(e, b"id").unwrap_or_default())),
@@ -83,6 +87,9 @@ fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
             }
         }
     });
+    if !complete {
+        return Err("the workbook part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     let sheets = listed
         .into_iter()
         .filter_map(|(name, id)| {
@@ -101,11 +108,11 @@ pub(super) fn xlsx_sheets(pkg: &mut Package<'_>) -> Result<Vec<SheetRef>, String
 
 /// The shared string table (§18.4): each `si`'s text, rich-text runs joined, phonetic runs
 /// (`rPh`) left out.
-fn shared_strings(xml: &[u8]) -> Vec<String> {
+fn shared_strings(xml: &[u8]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut cur: Option<String> = None;
     let (mut in_t, mut phonetic) = (false, 0usize);
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"si" => cur = Some(String::new()),
             b"t" => in_t = true,
@@ -133,15 +140,18 @@ fn shared_strings(xml: &[u8]) -> Vec<String> {
             }
         }
     });
-    out
+    if !complete {
+        return Err("the shared strings part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(out)
 }
 
 /// Each cell format's (`cellXfs/xf`, by `s` index) date kind.
-fn cell_formats(xml: &[u8]) -> Vec<Option<DateKind>> {
+fn cell_formats(xml: &[u8]) -> Result<Vec<Option<DateKind>>, String> {
     let mut custom: HashMap<u32, Option<DateKind>> = HashMap::new();
     let mut xfs: Vec<u32> = Vec::new();
     let mut in_xfs = false;
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"numFmt" if custom.len() < MAX_XFS => {
                 if let Some(id) = attr(e, b"numFmtId").and_then(|v| v.trim().parse().ok()) {
@@ -155,7 +165,10 @@ fn cell_formats(xml: &[u8]) -> Vec<Option<DateKind>> {
         Ev::End(n) if n.as_slice() == b"cellXfs" => in_xfs = false,
         _ => {}
     });
-    xfs.into_iter().map(|id| custom.get(&id).copied().unwrap_or_else(|| builtin_date(id))).collect()
+    if !complete {
+        return Err("the styles part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(xfs.into_iter().map(|id| custom.get(&id).copied().unwrap_or_else(|| builtin_date(id))).collect())
 }
 
 /// A cell reference's 0-based column (`C5` → 2); `None` when it isn't one.
@@ -188,11 +201,11 @@ struct XCell {
 pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, String> {
     let wb = workbook(pkg)?;
     let shared = match wb.shared.as_deref().or(pkg.has("xl/sharedStrings.xml").then_some("xl/sharedStrings.xml")).map(str::to_string) {
-        Some(p) => shared_strings(&pkg.read(&p)?),
+        Some(p) => shared_strings(&pkg.read(&p)?)?,
         None => Vec::new(),
     };
     let formats = match wb.styles.as_deref().or(pkg.has("xl/styles.xml").then_some("xl/styles.xml")).map(str::to_string) {
-        Some(p) => cell_formats(&pkg.read(&p)?),
+        Some(p) => cell_formats(&pkg.read(&p)?)?,
         None => Vec::new(),
     };
     let xml = pkg.read(path)?;
@@ -203,7 +216,7 @@ pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<Str
     let (mut in_data, mut row_no, mut next_col) = (false, 0u64, 0usize);
     let mut cell: Option<XCell> = None;
     let (mut in_v, mut in_is_t, mut phonetic) = (false, false, 0usize);
-    walk(&xml, |ev| match ev {
+    let complete = walk(&xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"sheetData" => in_data = true,
             b"row" if in_data => {
@@ -267,6 +280,9 @@ pub(super) fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<Str
             _ => {}
         },
     });
+    if !complete {
+        return Err("the sheet's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     let mut grid = Grid::default();
     for (_, r) in rows {
         grid.push(r, 1);
