@@ -81,6 +81,8 @@ pub fn update(app: &mut WordApp, ctx: &egui::Context, menu: Option<Rect>, viewpo
     show(app, ctx, bar);
 }
 
+/// Paints the floating Style / Fill / Outline bar at `bar` and tracks whether one of its popups is
+/// open.
 fn show(app: &mut WordApp, ctx: &egui::Context, bar: Rect) {
     let t = Tokens::get(ctx);
     let area = egui::Area::new(Id::unique("wc_shape_bar")).order(Order::Foreground).interactable(true).fixed_pos(bar.min);
@@ -218,10 +220,12 @@ fn outline_menu(ui: &mut Ui, app: &mut WordApp) {
 mod tests {
     use super::*;
 
+    /// Sample viewport rect used by placement tests.
     fn vp() -> Rect {
         Rect::from_min_size(pos2(100.0, 100.0), vec2(1000.0, 700.0))
     }
 
+    /// Places the shape bar above the context menu when there is room and below it when near the top.
     #[test]
     fn sits_above_the_menu_when_there_is_room_and_below_when_not() {
         let menu = Rect::from_min_size(pos2(400.0, 400.0), vec2(220.0, 300.0));
@@ -233,6 +237,7 @@ mod tests {
         assert!((bar.min.y - (high.max.y + GAP)).abs() < 1e-3, "below a menu at the top: {bar:?}");
     }
 
+    /// Clamps the shape bar inside the viewport and returns `None` for non-finite or empty rects.
     #[test]
     fn stays_inside_the_viewport_and_refuses_nonsense() {
         for x in [-500.0, 90.0, 1090.0, 5000.0] {

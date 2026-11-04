@@ -2247,6 +2247,8 @@ fn right_click_on_a_picture_offers_wrap_text() {
     assert_eq!(o.frame().unwrap().2.wrap, wordcraft_doc::para::Wrap::Square);
 }
 
+/// Right-clicking a shape opens the Style/Fill/Outline bar and the shape context menu, and Add Text
+/// enters the shape's text box.
 #[test]
 fn right_click_on_a_shape_shows_style_fill_outline_bar_and_shape_menu() {
     use egui_kittest::kittest::Queryable;

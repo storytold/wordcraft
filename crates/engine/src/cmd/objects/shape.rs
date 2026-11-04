@@ -52,10 +52,12 @@ pub fn shape_style(style: &str, color: &str, theme: &[Rgb]) -> Option<ShapeStyle
     })
 }
 
+/// Comma-separated list of valid shape style ids for error messages.
 pub(super) fn style_ids() -> String {
     SHAPE_STYLES.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")
 }
 
+/// Comma-separated list of valid shape style theme colour ids for error messages.
 pub(super) fn color_ids() -> String {
     SHAPE_STYLE_COLORS.iter().map(|(id, _)| *id).collect::<Vec<_>>().join(", ")
 }

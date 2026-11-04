@@ -1152,6 +1152,8 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// Updates scroll, focus, pointer input, context menu, shape bar, rulers and Read Mode chrome
+/// after the canvas scroll area has been drawn.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
     let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out);

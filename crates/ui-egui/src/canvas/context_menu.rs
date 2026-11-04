@@ -59,6 +59,8 @@ pub(crate) fn issue_heading(issue: &serde_json::Value) -> String {
     tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).to_string()
 }
 
+/// Adds a context menu button for command `id` with its shortcut and enabled state, running it and
+/// closing the menu when clicked.
 fn menu_item(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let on = crate::widgets::enabled(app, id);
@@ -68,6 +70,8 @@ fn menu_item(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serd
     }
 }
 
+/// Context menu for a selected shape, text box or group: clipboard, Add/Edit Text, Group,
+/// Bring to Front / Send to Back, Insert Caption, Wrap Text, Alt Text and Format Shape.
 fn shape_menu(app: &mut WordApp, ui: &mut Ui) {
     menu_item(ui, app, "Cut", "edit.cut", json!({}));
     menu_item(ui, app, "Copy", "edit.copy", json!({}));
@@ -115,6 +119,8 @@ fn shape_menu(app: &mut WordApp, ui: &mut Ui) {
     menu_item(ui, app, "Format Shape…", "view.formatShapePane", json!({"value": true}));
 }
 
+/// Attaches a text box story to the selected shape (if it doesn't already have one) and moves the
+/// caret inside it.
 fn add_shape_text(app: &mut WordApp) {
     if crate::objects::enter_text_box(app) {
         return;
@@ -136,6 +142,8 @@ fn add_shape_text(app: &mut WordApp) {
     let _ = app.run("caret.set", json!({"pos": end}));
 }
 
+/// Draws the right-click context menu for the current canvas selection (equation, shape, picture,
+/// table or text).
 pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);

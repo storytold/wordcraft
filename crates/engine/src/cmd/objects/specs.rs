@@ -10,6 +10,7 @@ use super::shape::{
 };
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 
+/// Command specifications for Picture Format, Shape Format and Arrange commands on inline objects.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("picture.size", "Size", "Picture Format › Size", size)
