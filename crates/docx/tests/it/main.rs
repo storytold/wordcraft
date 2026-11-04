@@ -32,6 +32,7 @@ mod section_page_number_type;
 mod section_text_direction;
 mod section_valign;
 mod settings_merge;
+mod table_cell_spacing;
 mod text_boxes;
 mod toc_ranges;
 mod undefined_style;

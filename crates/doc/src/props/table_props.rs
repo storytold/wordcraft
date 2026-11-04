@@ -136,6 +136,10 @@ pub struct TableProps {
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,
+    /// Space between cells (`w:tblCellSpacing`), points. Kept for the file (not laid out yet);
+    /// Word draws each cell apart by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_spacing: Option<f32>,
     /// Fixed column widths (no auto-fit).
     pub fixed: bool,
     /// Table style options ("look"): header row, total row, banded rows, first column, last
@@ -245,6 +249,14 @@ pub struct RowProps {
     pub grid_after: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub w_after: Option<f32>,
+    /// The row's own space between cells (`w:tblCellSpacing` in `w:trPr`), points; kept for
+    /// the file, like the table's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell_spacing: Option<f32>,
+    /// The row's own alignment (`w:jc` in `w:trPr`); kept for the file (the table's alignment
+    /// places the rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align: Option<Align>,
     /// Tracked formatting change (`w:trPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<RowProps>>>,
