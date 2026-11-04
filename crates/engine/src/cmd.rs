@@ -501,8 +501,9 @@ fn write_fill(s: &mut Session, at: &Pos, text: String, caret: usize) -> Result<(
 /// length) and the field, with its `w:ffData`, stays (#5525). The field stays selected and the
 /// next keystrokes go on inside its result ([`FormFill`]), the maximum length capping the whole
 /// result. Returns `None`, changing nothing, when the selection isn't exactly one such field or
-/// changes are tracked; `Some` with neither change set when a separator-only insert is
-/// handled without writing anything, so the caller does not report a change that never happened.
+/// changes are tracked; `Some` with neither change set when an insert adds nothing (a
+/// separator-only insert, or a fill already at the field's maximum length) and is handled
+/// without writing anything, so the caller does not report a change that never happened.
 fn fill_text_form_field(s: &mut Session, text: &str) -> Result<Option<InsertEffect>, CmdError> {
     let active = active_fill(s);
     if s.doc.settings.track_changes {
@@ -514,6 +515,12 @@ fn fill_text_form_field(s: &mut Session, text: &str) -> Result<Option<InsertEffe
     let (filled, caret) = match active {
         Some(fill) => {
             let added: String = typed.take(limit.saturating_sub(result.chars().count())).collect();
+            if added.is_empty() {
+                // Nothing to add (separators only, or the result is already at the maximum
+                // length): keep the fill and report no change (#5525).
+                s.form_fill = Some(fill);
+                return Ok(Some(InsertEffect::default()));
+            }
             let mut filled = result;
             filled.insert_str(char_byte(&filled, fill.caret), &added);
             (filled, fill.caret.saturating_add(added.chars().count()))
