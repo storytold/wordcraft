@@ -25,6 +25,13 @@ pub struct ControlUi {
     popup: Option<Popup>,
 }
 
+impl ControlUi {
+    /// Whether a control's list or calendar is open.
+    pub(crate) fn popup_open(&self) -> bool {
+        self.popup.is_some()
+    }
+}
+
 struct Popup {
     /// Content start of the control it belongs to.
     at: Pos,
@@ -163,7 +170,7 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let at_json = serde_json::to_value(&at).unwrap_or_default();
     let mut close = false;
-    let area = egui::Area::new(egui::Id::new("content_control_popup"))
+    let area = egui::Area::new(egui::Id::unique("content_control_popup"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(anchor.max.x - 180.0, anchor.max.y + 2.0));
     let shown = area.show(ctx, |ui| {
@@ -223,7 +230,7 @@ fn calendar(ui: &mut Ui, t: &Tokens, month: &mut (i64, u32)) -> Option<u32> {
     // 1970-01-01 was a Thursday: Monday-first column of the 1st.
     let lead = (first + 3).rem_euclid(7) as u32;
     let days = wordcraft_engine::cmd::controls::days_in_month(y, m);
-    egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("cc_calendar").spacing(vec2(2.0, 2.0)), |ui| {
         for cell in 0..(lead + days) {
             if cell < lead {
                 ui.label("");

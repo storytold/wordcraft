@@ -260,7 +260,7 @@ pub fn parse(b: &[u8]) -> Option<MathTable> {
 pub fn table(face: &FontFace) -> Option<Arc<MathTable>> {
     static CACHE: OnceLock<Mutex<HashMap<u32, Option<Arc<MathTable>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(t) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&face.id()) {
+    if let Some(t) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&face.id()) {
         return t.clone();
     }
     let t = face
@@ -268,7 +268,7 @@ pub fn table(face: &FontFace) -> Option<Arc<MathTable>> {
         .and_then(|f| f.table_data(skrifa::raw::types::Tag::new(b"MATH")).map(|d| d.as_bytes().to_vec()))
         .and_then(|bytes| parse(&bytes))
         .map(Arc::new);
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(face.id(), t.clone());
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(face.id(), t.clone());
     t
 }
 
