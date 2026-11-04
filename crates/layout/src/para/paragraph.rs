@@ -113,8 +113,11 @@ fn odf_padding(rp: &mut ResolvedPara) {
     let [top, left, bottom, right] = rp.padding;
     rp.space_before += top;
     rp.space_after += bottom;
-    rp.indent_left += left;
-    rp.indent_right += right;
+    // Padding is on a physical side, the indents on a logical one: in a right-to-left paragraph
+    // the left padding is at its end.
+    let (start, end) = if rp.bidi { (right, left) } else { (left, right) };
+    rp.indent_left += start;
+    rp.indent_right += end;
 }
 
 /// List level indents apply unless the paragraph sets its own, or, for a list from the style,
@@ -799,4 +802,26 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
+}
+
+#[cfg(test)]
+mod padding_tests {
+    /// ODF padding is physical: a right-to-left paragraph's left padding widens its end indent
+    /// (the indents being logical), a left-to-right one's its start indent.
+    #[test]
+    fn a_right_to_left_paragraphs_left_padding_is_at_its_end() {
+        let doc = wordcraft_doc::Document::new();
+        let mut rp = doc.styles.resolve_para(&wordcraft_doc::props::ParaProps::default());
+        rp.padding = [1.0, 10.0, 2.0, 3.0];
+        let (left, right) = (rp.indent_left, rp.indent_right);
+        let mut ltr = rp.clone();
+        super::odf_padding(&mut ltr);
+        assert_eq!((ltr.indent_left - left, ltr.indent_right - right), (10.0, 3.0));
+        rp.bidi = true;
+        super::odf_padding(&mut rp);
+        assert_eq!((rp.indent_left - left, rp.indent_right - right), (3.0, 10.0));
+        // Shown on the page: the left padding still on the left.
+        assert_eq!(rp.visual_indents(), (right + 10.0, left + 3.0));
+        assert_eq!((rp.space_before, rp.space_after), (ltr.space_before, ltr.space_after));
+    }
 }

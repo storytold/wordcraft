@@ -221,9 +221,16 @@ impl Writer {
     /// A picture (ODF 1.3 §10.4.4 `draw:image` in a `draw:frame`) at `place`: a floating one or a
     /// group's in a graphic style that places and wraps it.
     /// The next object's number and name (`Object 3`, `Object M3` in headers and footers).
+    /// Not a name the file's own objects, kept as read, have (`Object wc1/content.xml`).
     pub(in crate::odt) fn object_name(&mut self) -> (usize, String) {
-        self.object_names += 1;
-        (self.object_names, format!("Object {}{}", self.prefix, self.object_names))
+        loop {
+            self.object_names = self.object_names.saturating_add(1);
+            let name = format!("Object {}{}", self.prefix, self.object_names);
+            let dir = format!("{name}/");
+            if self.object_names == usize::MAX || !self.reserved.iter().any(|r| *r == name || r.starts_with(&dir)) {
+                return (self.object_names, name);
+            }
+        }
     }
 
     /// Object `o`'s files in the package under `name`, and the link to it with its replacement
@@ -623,6 +630,20 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_object_never_takes_a_kept_objects_name() {
+        // Re-saving a file WordCraft saved: its `Object wc1` is kept as read, so a new object
+        // (an edited paragraph's chart or formula) takes `Object wc2`, not the kept one's files.
+        let mut w = Writer::with_prefix("wc");
+        w.reserved = std::sync::Arc::new(["Object wc1/content.xml".to_string(), "Object wc3".to_string()].into_iter().collect());
+        assert_eq!(w.object_name(), (2, "Object wc2".to_string()));
+        assert_eq!(w.object_name(), (4, "Object wc4".to_string()));
+        // Not `Object wc10` for `Object wc1`'s files: only the name itself or its folder.
+        let mut w = Writer::with_prefix("wc");
+        w.reserved = std::sync::Arc::new(std::iter::once("Object wc10/content.xml".to_string()).collect());
+        assert_eq!(w.object_name().1, "Object wc1");
+    }
 
     #[test]
     fn a_picture_never_takes_a_name_an_earlier_one_took() {

@@ -13263,3 +13263,56 @@ fn header_margin_table_area() {
 }
 
 mod shape_alpha;
+
+/// A row with a background picture split over two pages: each part draws its own piece of the
+/// picture inside its own part of the cell, and the text moving on starts at the continuation's
+/// top (the picture is the cell's background, not content moving on with the text).
+#[test]
+fn a_split_cells_background_picture_is_drawn_on_both_parts() {
+    use wordcraft_doc::props::{CellPicture, PictureRepeat};
+    let mut d = Document::new();
+    let mut t = wordcraft_doc::Table::new(1, 1, 200.0);
+    let media = d.add_media(vec![0u8; 8], "png");
+    t.rows[0].cells[0].props.picture = Some(Box::new(CellPicture { media, size: [30.0, 6.0], repeat: PictureRepeat::Tile, align: [0.0, 0.0] }));
+    t.rows[0].cells[0].blocks =
+        (0..90).map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Line {i}"), Default::default()))).collect();
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2, "the row splits");
+    for (n, page) in l.pages.iter().take(2).enumerate() {
+        let clips: Vec<Rect> = page.items.iter().filter_map(|it| if let Placed::Clip { rect, .. } = it { Some(*rect) } else { None }).collect();
+        assert_eq!(clips.len(), 1, "page {n}: {clips:?}");
+        let clip = clips[0];
+        let cells: Vec<Rect> = page.items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
+        assert!(cells.iter().any(|c| (c.y - clip.y).abs() < 0.01 && (c.h - clip.h).abs() < 0.01), "page {n}: {clip:?} is its cell part {cells:?}");
+        assert!(clip.y >= 0.0 && clip.bottom() <= page.h + 0.01, "page {n}: {clip:?}");
+        // The text starts near the top of its part of the cell.
+        let first = page.items.iter().find_map(|it| if let Placed::Lines { y, .. } = it { Some(*y) } else { None }).unwrap_or(f32::MAX);
+        assert!(first - clip.y < 20.0, "page {n}: text at {first}, cell at {clip:?}");
+    }
+}
+
+/// A table moved to a new page by a page break before its first paragraph shows the number of
+/// the page it lands on in that cell's PAGE field, not the page it was laid out for.
+#[test]
+fn a_table_moved_by_a_page_break_shows_its_new_page_number() {
+    let mut d = Document::from_text("Before the table.");
+    let mut table = Table::new(1, 1, 468.0);
+    let mut first = wordcraft_doc::Paragraph::with_text("Page ", Default::default());
+    first.props.page_break_before = Some(true);
+    let page = InlineObject::Field { instr: "PAGE".into(), result: "9".into(), locked: false, dirty: true, code: false, form: String::new() };
+    first.insert_object(first.len(), page, &Default::default()).unwrap();
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(first)];
+    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    let shown: Vec<String> = l.pages[1]
+        .items
+        .iter()
+        .flat_map(|it| match it {
+            Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(shown, ["2"]);
+}

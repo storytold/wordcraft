@@ -212,7 +212,7 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
         }
         // `STYLEREF "Heading 2"` or `STYLEREF 2`: the chapter of that level.
         "STYLEREF" => {
-            let target = instr.get(code.len()..)?.trim_start();
+            let target = instr.trim_start().get(code.len()..)?.trim_start();
             let target = target.strip_prefix('"').and_then(|t| t.split('"').next()).unwrap_or_else(|| target.split_whitespace().next().unwrap_or(""));
             let level = target.trim().strip_prefix("Heading").unwrap_or(target).trim().parse::<u32>().ok().filter(|l| (1..=10).contains(l))?;
             let number = [" \\n", " \\r", " \\w"].iter().any(|s| instr.contains(s));
@@ -232,7 +232,7 @@ pub(super) fn element(instr: &str, result: &str, data_style: Option<&str>) -> Op
         }
         // An index entry: a mark at its place, its first levels the keys (§8.1.10).
         "XE" => {
-            let entry = instr.get(code.len()..)?.trim_start();
+            let entry = instr.trim_start().get(code.len()..)?.trim_start();
             let entry = entry.strip_prefix('"').and_then(|t| t.split('"').next())?;
             let mut levels: Vec<&str> = entry.split(':').map(str::trim).filter(|l| !l.is_empty()).collect();
             let value = levels.pop()?;
@@ -526,4 +526,18 @@ pub(super) fn set_of(instr: &str) -> Option<(&str, String)> {
         None => value.to_string(),
     };
     Some((name, value))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Word writes field codes with a leading space (` STYLEREF 2 `); the argument is read after
+    /// the code all the same.
+    #[test]
+    fn a_field_code_with_leading_space_keeps_its_argument() {
+        let chapter = super::element(" STYLEREF \"Heading 2\" ", "Intro", None).unwrap_or_default();
+        assert!(chapter.contains("text:outline-level=\"2\""), "{chapter}");
+        assert_eq!(super::element("STYLEREF 2", "Intro", None), super::element("  STYLEREF 2", "Intro", None));
+        assert_eq!(super::element(" XE \"Apple\" ", "", None), super::element("XE \"Apple\"", "", None));
+        assert!(super::element(" XE \"Apple\" ", "", None).is_some_and(|e| e.contains("Apple")));
+    }
 }

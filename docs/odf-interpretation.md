@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -97,9 +97,11 @@ a save that doesn't touch it:
 - named sections around unedited paragraphs, the document properties WordCraft doesn't model,
   the declarations opening the text and the document's scripts.
 
-Paragraphs and tables holding drawings, comments, tracked changes or ranged marks are written from
-the model, as is everything edited. `odt::tests_more::lossless` saves samples without edits and
-fails on anything lost.
+Paragraphs and tables holding drawings, comments, tracked changes, notes or marks are written as
+read too while those are unchanged; paragraphs tied together (a comment, change or mark reaching
+into another, linked text boxes) are kept as a group. What is edited is written from the model, as
+are the cases listed under "Left" in [odt-element-audit.md](odt-element-audit.md).
+`odt::tests_more::lossless` saves samples without edits and fails on anything lost.
 
 Files are saved as ODF 1.3, whatever version they were read as (as LibreOffice does). The changes
 from ODF 1.2 (ODF 1.3 Part 3, Appendix G, with their OASIS issues) were checked: none gives a
@@ -178,6 +180,7 @@ one more `OdfPreset` with its values, and the cases above stay the same.
 
 | Date | Change |
 |---|---|
+| 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |
 | 2026-11-04 | The two presets are the two styles a document can be shown in: Microsoft Word style (`word`, the default; `wordcraft`, its earlier id, still taken) and LibreOffice style (`libreoffice`). The CLI's values listed one by one. |
 | 2026-11-03 | Deviations from the standard listed: unitless gradient and hatch angles in files older than ODF 1.3 are read as tenths of a degree, as their producers wrote them, out of necessity (in ODF 1.3 files, degrees, as the standard says). The ODF 1.2 → 1.3 changes checked. |
 | 2026-11-03 | More written as read (tables, pages, sections, properties, declarations); files saved as ODF 1.3 with older markup brought to 1.3's meaning; drawings state `style:flow-with-text`. |

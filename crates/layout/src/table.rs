@@ -901,6 +901,11 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let fits = |bottom: f32| bottom <= limit + 0.01;
+    // A cell's background picture (a clip as big as the cell's area): split with the area like
+    // shading, not moved on like a picture in the text.
+    let areas: Vec<Rect> =
+        row.items.iter().filter_map(|it| if let Placed::Cell { rect, covered: false, .. } = it { Some(*rect) } else { None }).collect();
+    let background = |it: &Placed| matches!(it, Placed::Clip { rect, .. } if areas.contains(rect));
     // Each cell's items: every item of a row is in one of its cells.
     let (mut cells, mut ends, realign) = cells_from_top(row, limit);
     // A nested table's cell is deeper than the row's own.
@@ -950,6 +955,9 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let mut cut_through = vec![false; cells.len()];
     for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
         for (it, &split) in items.iter().zip(splits) {
+            if background(it) {
+                continue;
+            }
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let top = if let Some(r) = it.turned_bounds() {
                 // Turned text moves as a whole, like a picture.
@@ -1024,6 +1032,22 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
         let start = b.len();
         for (it, &split) in items.iter().zip(splits) {
+            // A background picture: the part above the cut stays, and the continuation's area
+            // shows the rest of it, from the cut down.
+            if let Placed::Clip { rect, spin, items: pictures } = it
+                && background(it)
+            {
+                let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
+                a.extend(above.map(|rect| Placed::Clip { rect, spin: *spin, items: pictures.clone() }));
+                b.extend(below.map(|r| {
+                    let mut pictures = pictures.clone();
+                    for p in &mut pictures {
+                        p.translate(0.0, r.y - rect.y.max(cut));
+                    }
+                    Placed::Clip { rect: r, spin: *spin, items: pictures }
+                }));
+                continue;
+            }
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -1292,7 +1316,7 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
     }
 }
 
-/// The parts of `r` above `cut` and below it/// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
+/// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
 /// continuation of a row split at `cut`).
 fn split_rect(r: Rect, cut: f32, shift: f32) -> (Option<Rect>, Option<Rect>) {
     let above = (r.y < cut).then(|| Rect::new(r.x, r.y, r.w, (r.bottom().min(cut) - r.y).max(0.0)));

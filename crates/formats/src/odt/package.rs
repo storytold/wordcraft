@@ -625,7 +625,14 @@ fn with_setting(own: &str, name: &str, on: bool, item: &str) -> Option<String> {
     let key = format!("config:name=\"{name}\"");
     if let Some(at) = own.find(&key) {
         let rest = own.get(at..)?;
-        let (gt, lt) = (rest.find('>')?, rest.find("</config:config-item>")?);
+        let gt = rest.find('>')?;
+        // A self-closed item (another application's, or a hand-edited file's) is replaced whole:
+        // its close tag would be the next item's.
+        if rest.get(..gt).is_some_and(|t| t.ends_with('/')) {
+            let start = own.get(..at)?.rfind('<')?;
+            return Some(format!("{}{item}{}", own.get(..start).unwrap_or(""), own.get(at + gt + 1..).unwrap_or("")));
+        }
+        let lt = rest.find("</config:config-item>")?;
         return (gt < lt).then(|| format!("{}{on}{}", own.get(..at + gt + 1).unwrap_or(""), own.get(at + lt..).unwrap_or("")));
     }
     let set = "config:name=\"ooo:configuration-settings\"";
@@ -1056,6 +1063,8 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         super::kept::merge_forms(kept.and_then(|k| k.defs.get("forms")).map(|d| &**d), super::forms::forms_xml(&w.forms, &hidden_controls(doc)))
     );
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
+    // Headers' and footers' new pictures and objects skip the kept files' names too.
+    hw.reserved = std::sync::Arc::clone(&w.reserved);
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -1409,4 +1418,19 @@ fn font_kind(family: &str) -> (&'static str, &'static str) {
         return ("roman", "variable");
     }
     ("swiss", "variable")
+}
+
+#[cfg(test)]
+mod setting_tests {
+    /// A self-closed setting is replaced whole, leaving the item after it as it was.
+    #[test]
+    fn a_self_closed_setting_is_replaced_whole() {
+        let item = "<config:config-item config:name=\"A\" config:type=\"boolean\">true</config:config-item>";
+        let own = "<s><config:config-item config:name=\"A\" config:type=\"boolean\"/><config:config-item config:name=\"B\" config:type=\"boolean\">false</config:config-item></s>";
+        let out = super::with_setting(own, "A", true, item).unwrap_or_default();
+        assert_eq!(out, format!("<s>{item}<config:config-item config:name=\"B\" config:type=\"boolean\">false</config:config-item></s>"));
+        // An item with a value has just its value changed.
+        let own = "<s><config:config-item config:name=\"A\" config:type=\"boolean\">false</config:config-item></s>";
+        assert_eq!(super::with_setting(own, "A", true, item).as_deref(), Some(format!("<s>{item}</s>").as_str()));
+    }
 }
