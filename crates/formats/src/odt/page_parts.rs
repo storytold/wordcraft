@@ -58,8 +58,9 @@ pub(super) struct Parts {
 
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
 /// page's section as part id 1, 2, … in order, so the sections the body starts carry them.
-/// [`add`] puts those parts into the document.
-pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Parts {
+/// [`add`] puts those parts into the document. `spaces_left` is the document's
+/// [`MAX_EXTRA_SPACES`] budget, which the body read after them goes on with.
+pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>, spaces_left: &mut usize) -> Parts {
     let mut found: Vec<(String, Slot, Vec<Ev>)> = Vec::new();
     let mut master: Option<String> = None;
     // The slot being read, its nesting depth and whether it is kept.
@@ -109,9 +110,11 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
     for (name, kind, evs) in found {
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
+        reader.spaces_left = *spaces_left;
         for ev in evs {
             reader.feed(ev);
         }
+        *spaces_left = reader.spaces_left;
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);
