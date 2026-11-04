@@ -233,7 +233,18 @@ fn note_and_comment_refs(doc: &Document) -> (BTreeSet<u32>, BTreeSet<u32>) {
 /// original's would be left over, listed but anchored nowhere.
 fn drop_unshown(doc: &mut Document, before: &(BTreeSet<u32>, BTreeSet<u32>)) {
     let (notes, comments) = note_and_comment_refs(doc);
-    for id in before.1.difference(&comments) {
+    // Replies to a dropped comment go with it; left behind, the parent clearing below would
+    // surface them as unrelated top-level comments.
+    let mut gone: BTreeSet<u32> = before.1.difference(&comments).copied().collect();
+    loop {
+        let more: Vec<u32> =
+            doc.comments.iter().filter(|(id, c)| !gone.contains(id) && c.parent.is_some_and(|p| gone.contains(&p))).map(|(id, _)| *id).collect();
+        if more.is_empty() {
+            break;
+        }
+        gone.extend(more);
+    }
+    for id in &gone {
         if let Some(c) = doc.comments.remove(id) {
             doc.parts.remove(&c.part);
         }

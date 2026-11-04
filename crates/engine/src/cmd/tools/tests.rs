@@ -367,6 +367,41 @@ fn compare_adopts_the_revised_documents_comments() {
 }
 
 #[test]
+fn compare_keeps_a_styles_list_when_only_its_definition_changed() {
+    use wordcraft_doc::styles::{Style, StyleKind};
+    // Both documents define the style "Listy" numbering by list 1; only the definition behind
+    // that list differs (bullets in the original, numbers in the revised). The style reference
+    // alone compares equal, so the definition has to be what renames it.
+    let build = |list: &str| {
+        let mut s = Session::new(Document::from_text("Styled.\nItem."));
+        s.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+        s.run(list, &json!({})).unwrap();
+        let num = s.doc.para(StoryRef::Body, &Pos::body(1, 0).path).unwrap().props.numbering.expect("the list paragraph is numbered");
+        Arc::make_mut(&mut s.doc.styles).upsert(Style {
+            id: "Listy".into(),
+            name: "Listy".into(),
+            kind: StyleKind::Paragraph,
+            para: wordcraft_doc::ParaProps { numbering: Some(num), ..Default::default() },
+            ..Default::default()
+        });
+        s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.style = Some("Listy".into());
+        s.doc
+    };
+    let s = compare_files("stylelist", &build("para.bullets"), &build("para.numbering"));
+    let para0 = s.doc.para(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    let style_id = para0.props.style.as_deref().expect("the styled paragraph keeps its style");
+    assert_ne!(style_id, "Listy", "the adopted paragraph's style is renamed: its list definition differs");
+    let style = s.doc.styles.get(style_id).expect("the renamed style is in the result");
+    let num = style.para.numbering.as_ref().expect("the renamed style keeps its numbering");
+    let level = s.doc.numbering.level(num.num, num.level).expect("its list is in the result");
+    assert!(level.text.contains("%1"), "the revised list numbers: {:?}", level.text);
+    let orig_style = s.doc.styles.get("Listy").expect("the original's style stays");
+    let onum = orig_style.para.numbering.as_ref().unwrap();
+    let olevel = s.doc.numbering.level(onum.num, onum.level).unwrap();
+    assert!(!olevel.text.contains("%1"), "the original's list stays bullets: {:?}", olevel.text);
+}
+
+#[test]
 fn compare_shows_each_documents_own_notes() {
     // Both documents' first footnote is on "One." (the same story id when read), with different
     // text; the revised one adds a note on a new paragraph.

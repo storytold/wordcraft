@@ -407,13 +407,41 @@ enum Adopt {
 /// default flag aside), or is based on (or linked to) one that does. Only styles its content uses
 /// (directly, by their lists or through the styles those are based on, linked to or followed by)
 /// come along: the rest would be unused copies.
-fn compare_renames(ours: &crate::styles::StyleSheet, src: &Document) -> std::collections::HashSet<String> {
+fn compare_renames(
+    ours: &crate::styles::StyleSheet,
+    our_numbering: &crate::numbering::Numbering,
+    src: &Document,
+) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let looks_same = |a: &crate::styles::Style, b: &crate::styles::Style| {
         a.kind == b.kind && a.based_on == b.based_on && a.linked == b.linked && a.para == b.para && a.chr == b.chr && a.table == b.table
     };
-    let mut differ: HashSet<String> =
-        src.styles.styles.iter().filter(|st| ours.get(&st.id).is_some_and(|o| !looks_same(o, st))).map(|st| st.id.clone()).collect();
+    // A style's numbering reference alone compares equal when both documents number it by the
+    // same id; the definition behind that id is part of how the style looks, so resolve it in
+    // each document's own numbering before calling the styles the same.
+    fn resolved<'a>(
+        n: &'a crate::numbering::Numbering,
+        r: &crate::props::NumRef,
+    ) -> Option<(&'a crate::numbering::Num, &'a crate::numbering::AbstractNum)> {
+        let num = n.nums.iter().find(|x| x.id == r.num)?;
+        let abs = n.abstracts.iter().find(|x| x.id == num.abstract_id)?;
+        Some((num, abs))
+    }
+    let mut differ: HashSet<String> = src
+        .styles
+        .styles
+        .iter()
+        .filter(|st| {
+            ours.get(&st.id).is_some_and(|o| {
+                !looks_same(o, st)
+                    || match (&o.para.numbering, &st.para.numbering) {
+                        (Some(a), Some(b)) => resolved(our_numbering, a) != resolved(&src.numbering, b),
+                        _ => false,
+                    }
+            })
+        })
+        .map(|st| st.id.clone())
+        .collect();
     if differ.is_empty() {
         return differ;
     }
@@ -1160,7 +1188,7 @@ impl Document {
         let rename: std::collections::HashSet<String> = if keep_styles {
             src.styles.styles.iter().filter(|st| self.styles.get(&st.id).is_some()).map(|st| st.id.clone()).collect()
         } else if compare {
-            compare_renames(&self.styles, &src)
+            compare_renames(&self.styles, &self.numbering, &src)
         } else {
             Default::default()
         };
