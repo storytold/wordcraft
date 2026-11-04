@@ -183,6 +183,11 @@ impl Borders {
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
+    /// A side is drawn, or a paragraph side without a line holds padding (ODF's, which keeps
+    /// its room in LibreOffice's layout).
+    pub fn takes_room(&self) -> bool {
+        self.any_visible() || [self.top, self.left, self.bottom, self.right].iter().flatten().any(|b| b.space.is_finite() && b.space > 0.0)
+    }
     /// Apply every `Some` side of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &Borders) {
         if patch.top.is_some() {
