@@ -21,6 +21,7 @@ pub(super) enum ElKind {
     List(bool),
     Li,
     Table,
+    RowGroup,
     Tr,
     Cell,
     Head,
@@ -48,8 +49,35 @@ struct El {
 struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Option<Vec<Cell>>,
+    /// First row of the current explicit or implicit row group.
+    group_start: usize,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+}
+
+impl TableB {
+    fn finish_row(&mut self) {
+        if let Some(row) = self.row.take() {
+            self.rows.push(row);
+        }
+    }
+
+    fn finish_group(&mut self) {
+        self.finish_row();
+        let mut remaining = 0u32;
+        for row in self.rows.iter_mut().skip(self.group_start).rev() {
+            // Empty rows are discarded before building the document table.
+            if !row.is_empty() {
+                remaining = remaining.saturating_add(1);
+            }
+            for cell in row.iter_mut().filter(|c| c.rowspan == 0) {
+                // HTML zero spans grow to the end of this group, within the same
+                // bound as positive spans. Resolve before inserting covered cells.
+                cell.rowspan = remaining.clamp(1, 1000);
+            }
+        }
+        self.group_start = self.rows.len();
+    }
 }
 
 struct ElementStyle {
@@ -175,8 +203,7 @@ fn is_void(n: &str) -> bool {
 pub(super) fn block_kind(n: &str) -> Option<ElKind> {
     Some(match n {
         "p" | "div" | "section" | "article" | "header" | "footer" | "main" | "nav" | "aside" | "figure" | "figcaption" | "address" | "dl" | "dt"
-        | "dd" | "center" | "form" | "fieldset" | "body" | "html" | "caption" | "thead" | "tbody" | "tfoot" | "details" | "summary" | "legend"
-        | "hgroup" => ElKind::Block,
+        | "dd" | "center" | "form" | "fieldset" | "body" | "html" | "caption" | "details" | "summary" | "legend" | "hgroup" => ElKind::Block,
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => ElKind::Heading(n.get(1..2).and_then(|d| d.parse().ok()).unwrap_or(1)),
         "blockquote" => ElKind::Quote,
         "pre" | "listing" | "xmp" | "plaintext" => ElKind::Pre,
@@ -184,6 +211,7 @@ pub(super) fn block_kind(n: &str) -> Option<ElKind> {
         "ol" => ElKind::List(true),
         "li" => ElKind::Li,
         "table" => ElKind::Table,
+        "thead" | "tbody" | "tfoot" => ElKind::RowGroup,
         "tr" => ElKind::Tr,
         "td" | "th" => ElKind::Cell,
         "head" => ElKind::Head,
@@ -836,17 +864,18 @@ impl<'r> Builder<'r> {
                 }
             }
             ElKind::Tr => {
-                if let Some(t) = self.tables.last_mut()
-                    && let Some(r) = t.row.take()
-                {
-                    t.rows.push(r);
+                if let Some(t) = self.tables.last_mut() {
+                    t.finish_row();
+                }
+            }
+            ElKind::RowGroup => {
+                if let Some(t) = self.tables.last_mut() {
+                    t.finish_group();
                 }
             }
             ElKind::Table => {
                 if let Some(mut t) = self.tables.pop() {
-                    if let Some(r) = t.row.take() {
-                        t.rows.push(r);
-                    }
+                    t.finish_group();
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
@@ -913,6 +942,17 @@ impl<'r> Builder<'r> {
     }
 
     fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
+        if matches!(name, "thead" | "tbody" | "tfoot") && !self.tables.is_empty() {
+            // Row-group end tags, like row and cell end tags, can be omitted.
+            // A table flattened at the depth limit still owns its row-group tags.
+            let open = self
+                .find_open(|e| e.kind == ElKind::RowGroup, |e| e.name == "table")
+                .or_else(|| self.find_open(|e| e.kind == ElKind::Tr, |e| e.name == "table"))
+                .or_else(|| self.find_open(|e| e.kind == ElKind::Cell, |e| e.name == "table"));
+            if let Some(k) = open {
+                self.pop_to(k);
+            }
+        }
         if closes_p(name)
             && let Some(k) = self.find_open(|e| e.name == "p", |e| matches!(e.kind, ElKind::Cell | ElKind::Table | ElKind::Li | ElKind::Quote))
         {
@@ -1079,10 +1119,10 @@ impl<'r> Builder<'r> {
             return;
         }
         let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
-        if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+        if matches!(kind, ElKind::Table | ElKind::RowGroup | ElKind::Tr | ElKind::Cell) && !in_table {
             kind = ElKind::Block;
         }
-        if matches!(kind, ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
+        if matches!(kind, ElKind::RowGroup | ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
             kind = ElKind::Block;
         }
         if kind != ElKind::Inline {
@@ -1091,7 +1131,12 @@ impl<'r> Builder<'r> {
         let css = self.css_of(name, attrs);
         let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, &css, true) }),
+            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, group_start: 0, bordered: declares_border(attrs, &css, true) }),
+            ElKind::RowGroup => {
+                if let Some(t) = self.tables.last_mut() {
+                    t.finish_group();
+                }
+            }
             ElKind::Tr => {
                 if let Some(t) = self.tables.last_mut()
                     && let Some(r) = t.row.take()
@@ -1133,7 +1178,7 @@ impl<'r> Builder<'r> {
                 self.cells.push(Cell {
                     blocks: Vec::new(),
                     colspan,
-                    rowspan: attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1),
+                    rowspan: attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.min(1000)).unwrap_or(1),
                     covered: false,
                     header: name == "th",
                     shading,
@@ -1165,6 +1210,8 @@ impl<'r> Builder<'r> {
             self.find_open(|e| e.kind == ElKind::Cell, |e| e.kind == ElKind::Table)
         } else if name == "tr" {
             self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table)
+        } else if matches!(name, "thead" | "tbody" | "tfoot") {
+            self.find_open(|e| e.name == name, |e| e.name == "table")
         } else {
             self.find_open(|e| e.name == name, |e| !crosses && matches!(e.kind, ElKind::Table | ElKind::Cell))
         };
