@@ -661,7 +661,7 @@ impl<'r> Builder<'r> {
                 p.spacing.line = Some(LineSpacing::Multiple(1.0));
             }
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
-                p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8, start: 1 });
+                p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8, start: 1, ..Default::default() });
                 self.para_cont = self.stack.get(li).is_some_and(|e| e.used);
                 if let Some(e) = self.stack.get_mut(li) {
                     e.used = true;
@@ -702,7 +702,7 @@ impl<'r> Builder<'r> {
             // `<p>&nbsp;</p>`: an empty paragraph on purpose, whose line is as high as the
             // space's formatting makes it.
             if let Some(Inline::Text(_, f)) = p.inlines.first() {
-                p.mark = Some(Box::new(f.clone()));
+                p.mark = Some(Box::new(crate::model::char_props(f)));
             }
             p.inlines.clear();
             self.para_cont = false;
@@ -872,7 +872,7 @@ impl<'r> Builder<'r> {
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
                     let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
-                    let mut ft = FTable { rows, widths: Vec::new(), borderless };
+                    let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         // Columns keep the widths their cells give when every column has one.
@@ -1170,6 +1170,9 @@ impl<'r> Builder<'r> {
                     shading,
                     borders: cell_borders(&css),
                     valign,
+                    margins: None,
+                    direction: Default::default(),
+                    picture: None,
                     width: if colspan == 1 { cell_width(&css, attrs) } else { None },
                 });
                 fmt.background = None;
