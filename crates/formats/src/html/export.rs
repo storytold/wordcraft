@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align, Document, FBlock, FTable, Flow, Fmt, Inline, Kind, Para, VAlign, base64_encode, mime_of, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -16,6 +16,24 @@ pub fn esc(s: &str) -> String {
             _ => o.push(c),
         }
     }
+    o
+}
+
+/// A font name as a quoted CSS string. Quotes, `\` and control characters would end the string,
+/// and `;` and `,` the declaration or the family list for a reader that splits on them, so all of
+/// these are written as hex escapes ([`css_unescape`] reads them back).
+fn css_font_name(name: &str) -> String {
+    let mut o = String::with_capacity(name.len() + 2);
+    o.push('\'');
+    for c in name.chars() {
+        match c {
+            '\0' => o.push('\u{FFFD}'),
+            '\'' | '"' | '\\' | ';' | ',' => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c if c.is_control() => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c => o.push(c),
+        }
+    }
+    o.push('\'');
     o
 }
 
@@ -92,7 +110,7 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
         css.push(format!("font-size:{}pt", trim_num(s)));
     }
     if let Some(fam) = &f.font {
-        css.push(format!("font-family:'{}'", esc(&fam.replace('\'', ""))));
+        css.push(format!("font-family:{}", esc(&css_font_name(fam))));
     }
     if !css.is_empty() {
         open.push_str(&format!("<span style=\"{}\">", css.join(";")));
@@ -137,8 +155,27 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd
+            | Inline::AnchorEnd(_) => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                let (open, close) = fmt_tags(fmt);
+                let at_start = o.is_empty();
+                o.push_str(&open);
+                o.push_str(&text_html(result, at_start));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
             // No picture to show: the browser shows the alt text in its place.
-            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
         }

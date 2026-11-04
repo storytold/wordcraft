@@ -307,3 +307,106 @@ fn clicking_the_autosave_label_toggles_autosave() {
     assert!(h.state().autosaves(), "and clicking it again turns it back on");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_font_box_warns_where_the_status_bar_does_and_before_typing() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let missing = "Wordcraft Nowhere Face";
+    // An empty paragraph in a missing font: no letters show it yet, still worth a warning.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": missing})).unwrap();
+    assert!(a.font_box_warning(missing).is_some(), "an empty paragraph warns");
+    // Text in it: the status bar's list decides.
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    let l = a.session.layout();
+    let (list, _) = a.cached_missing_fonts(&l);
+    assert!(list.iter().any(|f| f.font == missing), "{list:?}");
+    assert!(a.font_box_warning(missing).is_some());
+    // A missing font just picked at the end of text in an installed one: the next letter will be
+    // drawn in a substitute, so the box warns before it is typed.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    a.session.run("caret.docEnd", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Just Picked"})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Just Picked").is_some(), "picked at the caret");
+    // Over a selection the box shows the selected text's font, which the list decides.
+    a.session.run("select.all", &json!({})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Half Typed").is_none());
+}
+
+#[test]
+fn the_east_asian_font_box_names_the_face_its_text_is_drawn_in() {
+    // MS Mincho is roman in many font tables; the run's font is drawn in Cambria then, but CJK
+    // text never is: it goes to the run's font or a fallback face.
+    let mincho = "Wordcraft Mincho Gone";
+    let mut doc = wordcraft_doc::Document::new();
+    doc.settings.roman_fonts = vec![mincho.into()];
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, mincho, "JetBrains Mono");
+    assert!(want.is_some(), "not installed");
+    assert_eq!(a.east_asian_font_box_warning(mincho, "JetBrains Mono"), want, "an empty paragraph warns");
+}
+
+#[test]
+fn a_screen_reader_hears_the_font_box_warning() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Nowhere Face"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let described = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.accesskit_node().description())
+        .any(|d| d.contains("Wordcraft Nowhere Face") && d.contains("isn't installed"));
+    assert!(described, "the font box describes its warning");
+}
+
+#[test]
+fn the_font_dialog_warns_for_a_missing_font_over_a_selection() {
+    // Selected Latin text: no East Asian text shows the Asian font, and none shows a font just
+    // typed into the dialog, so the list has neither; OK would apply them all the same.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    assert!(a.east_asian_font_box_warning("Wordcraft Mincho Gone", "JetBrains Mono").is_some(), "the Asian box");
+    assert!(a.font_dialog_warning("Wordcraft Dialog Gone").is_some(), "the Latin box");
+    assert!(a.font_dialog_warning("JetBrains Mono").is_none(), "an installed font");
+    // The ribbon's box over the selection shows the selected text's font: the list decides.
+    assert!(a.font_box_warning("Wordcraft Dialog Gone").is_none());
+}
+
+#[test]
+fn the_asian_box_names_the_face_cjk_text_gets_even_for_a_font_latin_text_uses() {
+    // The status bar lists the font with the face its Latin text is drawn in; Chinese, Japanese
+    // and Korean text in it would go to the Latin text font or a fallback face instead.
+    let gone = "Wordcraft Both Ways Gone";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": gone})).unwrap();
+    assert!(a.font_box_warning(gone).is_some(), "listed for its Latin text");
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, gone, "JetBrains Mono");
+    assert!(want.is_some());
+    assert_eq!(a.east_asian_font_box_warning(gone, "JetBrains Mono"), want);
+}
+
+/// The AutoSave knob is at the right when the switch is on and at the left when it is off; a
+/// right-to-left interface mirrors that.
+#[test]
+fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
+    let track = Rect::from_min_max(egui::pos2(100.0, 0.0), egui::pos2(130.0, 16.0));
+    assert_eq!(autosave_knob_x(false, true, track), 122.0, "left to right, on: right");
+    assert_eq!(autosave_knob_x(false, false, track), 108.0, "left to right, off: left");
+    assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
+    assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
+}

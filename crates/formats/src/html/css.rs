@@ -1,4 +1,6 @@
-use super::*;
+use super::builder::decls;
+use super::import::PAGE_FONT;
+use super::{Align, Fmt, model, parse_color};
 
 /// A CSS length (or font-size keyword) in points; `None` when it is not one.
 pub fn css_len_pt(v: &str) -> Option<f32> {
@@ -33,7 +35,7 @@ pub fn css_len_pt(v: &str) -> Option<f32> {
     }
 }
 
-fn strip_important(v: &str) -> &str {
+pub(super) fn strip_important(v: &str) -> &str {
     let s = v.trim();
     if let Some(pos) = s.rfind('!') {
         let after = s[pos + 1..].trim();
@@ -42,6 +44,48 @@ fn strip_important(v: &str) -> &str {
         }
     }
     s
+}
+
+/// Decode CSS escapes (CSS Syntax §4.3.7): `\` and one to six hex digits, with one whitespace
+/// after them, is that code point; `\` and any other character is that character. CR LF, CR and
+/// form feed count as one newline, as CSS reads them (§3.3).
+pub(super) fn css_unescape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    // Takes a newline (CR LF as one) or other whitespace off the front, if there is one.
+    let skip_space = |it: &mut std::iter::Peekable<std::str::Chars>| match it.peek() {
+        Some('\r') => {
+            it.next();
+            it.next_if_eq(&'\n');
+        }
+        Some(' ' | '\t' | '\n' | '\u{C}') => {
+            it.next();
+        }
+        _ => {}
+    };
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            o.push(c);
+            continue;
+        }
+        let mut hex = String::new();
+        while hex.len() < 6 && it.peek().is_some_and(char::is_ascii_hexdigit) {
+            hex.extend(it.next());
+        }
+        if hex.is_empty() {
+            // Before a newline it continues the line; at the end it is dropped.
+            match it.peek() {
+                Some('\r' | '\n' | '\u{C}') => skip_space(&mut it),
+                Some(_) => o.extend(it.next()),
+                None => {}
+            }
+            continue;
+        }
+        skip_space(&mut it);
+        let cp = u32::from_str_radix(&hex, 16).unwrap_or(0);
+        o.push(char::from_u32(cp).filter(|c| *c != '\0').unwrap_or('\u{FFFD}'));
+    }
+    o
 }
 
 /// Apply a `style` attribute to formatting / block properties.
@@ -53,10 +97,7 @@ pub(super) fn apply_style(
     page_break: &mut bool,
     page_break_after: &mut bool,
 ) {
-    for decl in css.split(';').take(64) {
-        let Some((k, v)) = decl.split_once(':') else { continue };
-        let k = k.trim().to_ascii_lowercase();
-        let v = strip_important(v);
+    for (k, v) in decls(css) {
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -89,11 +130,19 @@ pub(super) fn apply_style(
                 }
             }
             "font-family" => {
-                let fam = v.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
+                let fam = css_unescape(v.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']));
                 if model::is_mono(&fam) || fam.eq_ignore_ascii_case("monospace") {
                     f.code = true;
                 } else if !fam.is_empty() && !matches!(fam.to_ascii_lowercase().as_str(), "serif" | "sans-serif" | "inherit" | "initial") {
                     f.font = model::kept_font(&fam).or(f.font.take());
+                } else if f.font.is_some() {
+                    // A generic family replaces a face the text has (a page's Times New Roman);
+                    // text without one keeps the document's font.
+                    match fam.to_ascii_lowercase().as_str() {
+                        "serif" => f.font = Some(PAGE_FONT.into()),
+                        "sans-serif" => f.font = Some("Arial".into()),
+                        _ => {}
+                    }
                 }
             }
             "vertical-align" => {
