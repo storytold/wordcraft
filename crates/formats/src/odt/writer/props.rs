@@ -208,7 +208,14 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
         }
     }
     if let Some(e) = extra {
-        p.push_str(&extra_props(e, f.size));
+        if (f.sup || f.sub) && e.position.is_some() {
+            // One `style:text-position` only (a repeated attribute isn't well-formed XML):
+            // superscript or subscript, written below, wins over a raised or lowered position.
+            let e = wordcraft_doc::props::CharProps { position: None, ..e.clone() };
+            p.push_str(&extra_props(&e, f.size));
+        } else {
+            p.push_str(&extra_props(e, f.size));
+        }
     }
     // A border around the text (Word's `w:bdr`): LibreOffice's text border, which ODF 1.3 has no
     // attribute of its own for (`loext:border`, `loext:padding`).
@@ -376,4 +383,31 @@ pub(in crate::odt) fn generating_style(odt: &str) -> Option<(String, String)> {
         ("Figure_20_Index_20_1", _) => ("TableofFigures".into(), "Table of Figures".into()),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn superscript_raised_text_has_one_text_position() {
+        for (sup, sub) in [(true, false), (false, true)] {
+            let f = Fmt {
+                sup,
+                sub,
+                size: Some(12.0),
+                extra: Some(Box::new(wordcraft_doc::props::CharProps { position: Some(3.0), ..Default::default() })),
+                ..Default::default()
+            };
+            let p = text_props(&f);
+            assert_eq!(p.matches("style:text-position=").count(), 1, "{p}");
+        }
+        // Without superscript or subscript the position is still written.
+        let f = Fmt {
+            size: Some(12.0),
+            extra: Some(Box::new(wordcraft_doc::props::CharProps { position: Some(3.0), ..Default::default() })),
+            ..Default::default()
+        };
+        assert!(text_props(&f).contains("style:text-position=\"25% 100%\""), "{}", text_props(&f));
+    }
 }
