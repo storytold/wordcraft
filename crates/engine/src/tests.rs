@@ -8191,8 +8191,16 @@ fn convert_text_to_table_keeps_inline_content() {
         p.format(0, 4, &|c| c.bold = Some(true)).unwrap();
         p.format(6, 10, &|c| c.link = Some("https://example.com".into())).unwrap();
         p.format(11, 14, &|c| c.del = Some(1)).unwrap();
-        let img =
-            InlineObject::Image { media: "pic".into(), w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let img = InlineObject::Image {
+            media: "pic".into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         p.insert_object(5, img, &Default::default()).unwrap();
     }
     run(&mut s, "select.all", json!({}));
@@ -12031,54 +12039,14 @@ fn emphasis_marks_are_set_and_drawn() {
     assert!(s.run("format.emphasisMark", &json!({"mark": "sparkles"})).is_err());
 }
 
-/// File › Options › Advanced › OpenDocument files: a preset, or one case's value (which makes the
-/// profile custom); junk is refused; files opened afterwards follow it.
+/// Preferences saved while OpenDocument files had their own settings still read, without them,
+/// as does a document saved with what those settings kept for its layout.
 #[test]
-fn odf_interpretation_is_an_option_files_follow() {
-    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
-    let mut s = s();
-    assert_eq!(s.prefs.odf, OdfProfile::word(), "Microsoft Word's style is the default");
-    let r = run(&mut s, "file.options", json!({"odf": {"preset": "LibreOffice"}}));
-    assert_eq!(r["odf"]["preset"], json!("libreoffice"));
-    assert_eq!(s.prefs.odf.effective(), OdfProfile::libreoffice());
-    // The two display styles, back and forth; Word's by its earlier id too.
-    let r = run(&mut s, "file.options", json!({"odf": {"preset": "word"}}));
-    assert_eq!(r["odf"]["preset"], json!("word"));
-    assert_eq!(s.prefs.odf.effective(), OdfProfile::word());
-    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
-    let r = run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
-    assert_eq!(r["odf"]["preset"], json!("word"));
-    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
-    run(&mut s, "file.options", json!({"odf": {"columnGap": 18.0}}));
-    assert_eq!((s.prefs.odf.preset, s.prefs.odf.effective().column_gap), (OdfPreset::Custom, 18.0));
-    for junk in [
-        json!({"odf": {"nope": 1}}),
-        json!({"odf": {"columnGap": -1}}),
-        json!({"odf": {"hairline": 1e9}}),
-        json!({"odf": 3}),
-        json!({"odf": {"preset": "google"}}),
-    ] {
-        assert!(s.run("file.options", &junk).is_err(), "{junk}");
-    }
-    assert_eq!(s.prefs.odf.effective().column_gap, 18.0, "a refused change leaves it");
-
-    // A tab stop in an indented paragraph of a file that doesn't say how tabs are measured.
-    let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in"><style:tab-stops><style:tab-stop style:position="1in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a</text:p></office:text></office:body></office:document-content>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
-        z.start_file(name, o).unwrap();
-        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
-    }
-    let bytes = z.finish().unwrap().into_inner();
-    let tab = |s: &Session| {
-        let (d, _) = crate::io::open_bytes_in("t.odt", &bytes, None, &s.region(), &s.prefs.odf).unwrap();
-        d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default().first().map(|t| t.pos)
-    };
-    run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
-    assert_eq!(tab(&s), Some(72.0), "WordCraft: from the margin");
-    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
-    assert_eq!(tab(&s), Some(108.0), "LibreOffice: from the indent");
+fn what_the_opendocument_settings_saved_still_reads() {
+    let prefs: crate::Prefs = serde_json::from_value(json!({"countNotes": false, "odf": {"preset": "libreoffice", "columnGap": 0.0}})).unwrap();
+    assert!(!prefs.count_notes);
+    let layout: wordcraft_doc::OdfLayout = serde_json::from_value(json!({"pictureLinesFitPictures": true, "tabsFromIndent": true})).unwrap();
+    assert!(layout.tabs_from_indent);
 }
 
 #[test]
@@ -12191,8 +12159,16 @@ fn text_from_file_brings_the_files_pictures() {
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering =
         Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
     let key = src.doc.add_media(tiny_png(), "png");
-    let image =
-        wordcraft_doc::InlineObject::Image { media: key, w: 20.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = wordcraft_doc::InlineObject::Image {
+        media: key,
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, image, &Default::default()).unwrap();
     let path = dir.join("pictures.docx");
     std::fs::write(&path, wordcraft_docx::write(&src.doc).unwrap()).unwrap();
