@@ -287,7 +287,6 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 ## Revision history
 
 > 2026-11-03 · Paragraph `w:textboxTightWrap` is written in schema order after `w:jc` and before `w:outlineLvl`; rendering remains unimplemented.
->
 
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 
