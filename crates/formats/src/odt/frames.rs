@@ -10,13 +10,24 @@ use super::xml::{Attrs, get, length};
 use crate::model::{BoxLook, parse_color};
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::line_dash::LineDash;
-use wordcraft_doc::odf_profile::OdfProfile;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::props::Rgb;
 
 /// Largest offset or distance read, points (22 inches).
 const MAX_LEN: f32 = 1584.0;
+
+/// A drawing shape's fill colour when no style gives one (§20.119 `draw:fill-color` has no
+/// default): WordCraft's shape blue.
+const SHAPE_FILL: Rgb = Rgb(0x15, 0x60, 0x82);
+
+/// A drawing shape's line colour when no style gives one (§20.408 `svg:stroke-color` has no
+/// default).
+const SHAPE_LINE: Rgb = Rgb(0x0E, 0x40, 0x5A);
+
+/// A drawing shape's line width when no style gives one (§20.410 `svg:stroke-width` has no
+/// default), and what a stated width of 0 (a hairline) draws at, points.
+const HAIRLINE: f32 = 0.25;
 
 /// The placement a graphic style states; each part `None` where it says nothing (its parent's
 /// then counts).
@@ -244,24 +255,23 @@ impl Graphic {
     }
 
     /// The look of drawing shape `kind` in this style: a solid fill and line where the styles
-    /// say nothing (the standard gives `draw:fill` and `draw:stroke` no default), in the
-    /// profile's colours and line width (nor do `draw:fill-color`, `svg:stroke-color` and
+    /// say nothing (the standard gives `draw:fill` and `draw:stroke` no default), in WordCraft's
+    /// colours and line width (nor do `draw:fill-color`, `svg:stroke-color` and
     /// `svg:stroke-width` have defaults); a line has no fill.
     pub(super) fn shape_look(&self, kind: ShapeKind, defs: &Defs) -> BoxLook {
-        let profile = &defs.profile;
         let fill = if kind == ShapeKind::Line {
             None
         } else {
             let mut g = self.clone();
-            g.fill_color = g.fill_color.or(Some(profile.shape_fill));
+            g.fill_color = g.fill_color.or(Some(SHAPE_FILL));
             g.fill_with(Some("solid"), defs)
         };
         let line = match self.stroke.as_deref() {
             Some("none") => None,
-            _ => Some((self.stroke_color.unwrap_or(profile.shape_line), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(profile.hairline))),
+            _ => Some((self.stroke_color.unwrap_or(SHAPE_LINE), self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE))),
         };
         // Only a shape that says it grows to its text does: WordCraft's fit shrinks it too.
-        let (dash, arrows) = self.stroke_extra(line.map_or(profile.hairline, |l| l.1), defs);
+        let (dash, arrows) = self.stroke_extra(line.map_or(HAIRLINE, |l| l.1), defs);
         BoxLook {
             fill,
             line,
@@ -283,8 +293,8 @@ impl Graphic {
         // (`draw:stroke`, as LibreOffice's letter logo box has), a 0 width a hairline.
         let stroke = || {
             matches!(self.stroke.as_deref(), Some("solid" | "dash")).then(|| {
-                let width = self.stroke_width.filter(|w| *w > 0.0).unwrap_or(defs.profile.hairline);
-                (self.stroke_color.unwrap_or(defs.profile.shape_line), width)
+                let width = self.stroke_width.filter(|w| *w > 0.0).unwrap_or(HAIRLINE);
+                (self.stroke_color.unwrap_or(SHAPE_LINE), width)
             })
         };
         BoxLook {
@@ -308,7 +318,7 @@ impl Graphic {
 /// The [`Float`] of a frame anchored as `anchor` (`text:anchor-type`) at `x`, `y` (`svg:x`,
 /// `svg:y`) with graphic style placement `g`. A frame in line with the text (`as-char`, or no
 /// anchor stated) doesn't float.
-pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g: &Graphic, profile: &OdfProfile) -> Float {
+pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g: &Graphic) -> Float {
     // What the frame leaves unsaid, its style says.
     let anchor = anchor.or(g.anchor.as_deref()).map(str::trim);
     let (x, y) = (x.or(g.x.as_deref()), y.or(g.y.as_deref()));
@@ -339,12 +349,12 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("page-start-margin") => Anchor::LeftMargin,
         Some("page-end-margin") => Anchor::RightMargin,
         Some("page-content") => Anchor::Margin,
-        // A page has no paragraph (§20.299: no such combination): its content relations are the
-        // page's text area, its own the page or the text area as the profile says.
+        // A page has no paragraph (§20.299: no such combination): relations to one are the
+        // page's text area.
         Some("paragraph-content") if page => Anchor::Margin,
         Some("paragraph-start-margin") if page => Anchor::LeftMargin,
         Some("paragraph-end-margin") if page => Anchor::RightMargin,
-        Some("paragraph" | "char") if page && !profile.page_frame_paragraph_is_page => Anchor::Margin,
+        Some("paragraph" | "char") if page => Anchor::Margin,
         Some("paragraph-content") => Anchor::Column,
         Some("char") if !page => Anchor::Character,
         Some(_) | None if page => Anchor::Page,
@@ -355,7 +365,7 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
         Some("page") => Anchor::Page,
         Some("page-content") => Anchor::Margin,
         Some("paragraph-content") if page => Anchor::Margin,
-        Some("paragraph" | "char" | "text" | "line" | "baseline") if page && !profile.page_frame_paragraph_is_page => Anchor::Margin,
+        Some("paragraph" | "char" | "text" | "line" | "baseline") if page => Anchor::Margin,
         Some("line") | Some("char") | Some("text") | Some("baseline") if !page => Anchor::Line,
         Some(_) | None if page => Anchor::Page,
         Some(_) => Anchor::Paragraph,
@@ -396,19 +406,19 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
 /// Where a frame or shape `w` × `h` (points) sits: anchored as its `text:anchor-type` says, at
 /// its `svg:x`/`svg:y`, or turned and moved by its `draw:transform`, in graphic style `g`, in
 /// text `size` points tall.
-pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32, profile: &OdfProfile) -> Float {
+pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float {
     let turned = get(a, "draw:transform").and_then(|t| transform(t, w, h));
     let (x, y) = match turned {
         Some((x, y, _)) => (Some(pt(x)), Some(pt(y))),
         None => (get(a, "svg:x").map(String::from), get(a, "svg:y").map(String::from)),
     };
-    let mut f = float_of(get(a, "text:anchor-type"), x.as_deref(), y.as_deref(), g, profile);
+    let mut f = float_of(get(a, "text:anchor-type"), x.as_deref(), y.as_deref(), g);
     if let Some((.., rot)) = turned {
         f.rot = rot;
     }
     f.z = z_of(a);
     if f.wrap == Wrap::Inline {
-        f.y = inline_raise(g, y.as_deref().and_then(length), h, size, profile);
+        f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
     }
     f
 }
@@ -433,7 +443,7 @@ pub(crate) fn z_index(float: Option<&Float>) -> u32 {
 /// its descent to its ascent (a serif face's, as LibreOffice's templates use): `middle` centred
 /// on it (measured in LibreOffice), `top` at its top, `bottom` at its bottom. Placement relative
 /// to the line stays on the baseline.
-fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32, profile: &OdfProfile) -> f32 {
+fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32) -> f32 {
     if !h.is_finite() || g.vrel.as_deref() == Some("line") {
         return 0.0;
     }
@@ -449,9 +459,8 @@ fn inline_raise(g: &Graphic, y: Option<f32>, h: f32, size: f32, profile: &OdfPro
         return raise.clamp(-MAX_RAISE, MAX_RAISE);
     }
     // A relation an in-line frame can't have (§20.398 Table 23: a paragraph's or a page's, from
-    // a parent style for anchored frames): against the baseline, or standing on it, as the
-    // profile says.
-    if !matches!(g.vrel.as_deref(), None | Some("baseline")) && !profile.inline_invalid_relation_is_baseline {
+    // a parent style for anchored frames): it stands on the baseline.
+    if !matches!(g.vrel.as_deref(), None | Some("baseline")) {
         return 0.0;
     }
     let raise = match g.vpos.as_deref() {
