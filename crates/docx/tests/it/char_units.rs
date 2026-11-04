@@ -96,11 +96,7 @@ fn adjust_right_indent_is_preserved() {
         assert!(xml.contains(r#"<w:adjustRightInd w:val="0""#), "explicit false was lost: {xml}");
         assert!(xml.contains("<w:adjustRightInd/>"), "explicit true was lost: {xml}");
         let tags = ["<w:adjustRightInd", "<w:snapToGrid", "<w:spacing", "<w:ind"];
-        let pprs = xml
-            .split("<w:pPr>")
-            .skip(1)
-            .filter_map(|rest| rest.split("</w:pPr>").next())
-            .collect::<Vec<_>>();
+        let pprs = xml.split("<w:pPr>").skip(1).filter_map(|rest| rest.split("</w:pPr>").next()).collect::<Vec<_>>();
         let first = pprs.first().expect("paragraph properties must be present");
         for &tag in &tags {
             assert!(first.contains(tag), "{tag} missing: {xml}");
