@@ -108,13 +108,18 @@ fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize, usize)> 
 }
 
 fn list_kind(p: &Paragraph) -> Option<String> {
-    p.objects.iter().find_map(|o| match o {
+    p.objects.iter().find_map(list_field)
+}
+
+/// The field code of `o` when it is a generated list's field.
+fn list_field(o: &InlineObject) -> Option<String> {
+    match o {
         InlineObject::Field { instr, .. } => {
             let t = instr.trim_start();
             (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some()).then(|| t.to_string())
         }
         _ => None,
-    })
+    }
 }
 
 /// The caption label (SEQ identifier) a table-of-figures field lists, `\c` or `\a`.
@@ -233,6 +238,15 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
             if p.len() > field {
                 let rest = p.split_off(field)?;
                 s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(rest))?;
+            }
+            // Another list's field before it would be the paragraph's list on later updates (and
+            // have its shown list cleared with this one's): the list gets a paragraph of its own,
+            // after it, and each is rebuilt in its turn.
+            let p = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+            if p.objects_with_offsets().any(|(off, o)| off < start && list_field(o).is_some()) {
+                let list = p.split_off(start)?;
+                s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(list))?;
+                converted = None;
             }
         }
         let kind = converted.or_else(|| s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind));
@@ -534,8 +548,13 @@ mod tests {
         if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
             p.insert_object(0, index, &CharProps::default()).unwrap();
         }
-        update_generated(&mut s).unwrap();
-        let t = texts(&s);
-        assert!(t.iter().any(|t| t.contains("Listed Source")), "the bibliography was rebuilt: {t:?}");
+        // Updated again, each list stays itself.
+        for _ in 0..2 {
+            update_generated(&mut s).unwrap();
+            let t = texts(&s);
+            assert_eq!(t.iter().filter(|t| t.contains("Listed Source")).count(), 1, "the bibliography was rebuilt: {t:?}");
+            let lists: Vec<Option<String>> = s.doc.body.iter().filter_map(|b| b.as_para()).filter_map(list_kind).map(Some).collect();
+            assert_eq!(lists, [Some("INDEX".to_string()), Some("BIBLIOGRAPHY".to_string())]);
+        }
     }
 }
