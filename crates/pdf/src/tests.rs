@@ -280,6 +280,37 @@ fn tracked_deletions_are_left_out_without_markup() {
     assert_eq!(text, "Keep DELETEDTEXT INSERTED");
 }
 
+/// #5232: the Track Changes Options colours (blue insertions, red deletions) reach the PDF instead
+/// of every revision taking its author's colour.
+#[test]
+fn markup_takes_the_track_changes_option_colours() {
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+    let tokens = |revisions: MarkupOptions| {
+        let bytes = export(&d, &PdfOptions { include_markup: true, compress: false, revisions, ..Default::default() }).unwrap();
+        String::from_utf8_lossy(&bytes).split_ascii_whitespace().map(str::to_string).collect::<Vec<_>>()
+    };
+    let has = |t: &[String], op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        t.windows(want.len()).any(|w| w.iter().zip(&want).all(|(a, b)| a == b))
+    };
+    // By author: both take Ada's colour, no pure blue or red.
+    let by_author = tokens(MarkupOptions::default());
+    assert!(!has(&by_author, "0 0 1 rg") && !has(&by_author, "1 0 0 rg"));
+    let coloured = tokens(MarkupOptions { insert_color: Some(Rgb(0, 0, 255)), delete_color: Some(Rgb(255, 0, 0)), ..Default::default() });
+    assert!(has(&coloured, "0 0 1 rg"), "no blue insertion");
+    assert!(has(&coloured, "1 0 0 rg"), "no red deletion");
+}
+
 #[test]
 fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
     use wordcraft_doc::{Revision, RevisionKind};

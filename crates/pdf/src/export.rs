@@ -12,7 +12,14 @@ use super::{
 /// markup area with the comment balloons.
 pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     write::guard(|| {
-        let lo = LayoutOptions { hide_deleted: !opts.include_markup, comment_balloons: opts.comments, numeral: opts.numeral, ..Default::default() };
+        let lo = LayoutOptions {
+            hide_deleted: !opts.include_markup,
+            // Deletions Track Changes Options mark Hidden take no space, as on screen.
+            hide_marked: opts.revisions.hidden_deletions(),
+            comment_balloons: opts.comments,
+            numeral: opts.numeral,
+            ..Default::default()
+        };
         let lay = layout(doc, &mut LayoutCache::new(), &lo);
         export_layout_inner(doc, &lay, opts)
     })
