@@ -1635,6 +1635,39 @@ fn shape(pen: &Pen, kind: &str) -> bool {
                 .collect();
             pen.closed(&pts, c);
         }
+        "hexagon" | "octagon" | "pentagon" | "decagon" => {
+            let n = match kind {
+                "hexagon" => 6,
+                "octagon" => 8,
+                "pentagon" => 5,
+                _ => 10,
+            };
+            let off = if n == 5 || n == 10 { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::PI / n as f32 };
+            let pts: Vec<(f32, f32)> = (0..n)
+                .map(|i| {
+                    let ang = off + i as f32 * std::f32::consts::TAU / n as f32;
+                    (10.0 + 7.5 * ang.cos(), 10.0 + 7.5 * ang.sin())
+                })
+                .collect();
+            solid(&pts);
+        }
+        "parallelogram" => solid(&[(7.0, 4.5), (17.0, 4.5), (13.0, 15.5), (3.0, 15.5)]),
+        "trapezoid" => solid(&[(6.5, 4.5), (13.5, 4.5), (17.0, 15.5), (3.0, 15.5)]),
+        "plus" => solid(&[
+            (7.5, 3.5),
+            (12.5, 3.5),
+            (12.5, 7.5),
+            (16.5, 7.5),
+            (16.5, 12.5),
+            (12.5, 12.5),
+            (12.5, 16.5),
+            (7.5, 16.5),
+            (7.5, 12.5),
+            (3.5, 12.5),
+            (3.5, 7.5),
+            (7.5, 7.5),
+        ]),
+        "chevron" => solid(&[(3.5, 4.5), (11.5, 4.5), (16.5, 10.0), (11.5, 15.5), (3.5, 15.5), (8.5, 10.0)]),
         "straightConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], false),
         "straightArrowConnector" => ends(&[(4.0, 15.0), (16.0, 5.0)], true),
         "elbowConnector" => ends(&[(4.0, 15.0), (10.0, 15.0), (10.0, 5.0), (16.0, 5.0)], false),

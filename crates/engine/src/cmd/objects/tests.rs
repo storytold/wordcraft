@@ -1274,3 +1274,82 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// #1534: Insert › Shapes has the hexagon, octagon, pentagon, parallelogram, trapezoid,
+/// plus, chevron and decagon; an unknown kind is an error.
+#[test]
+fn new_preset_shapes_insert() {
+    use wordcraft_doc::para::ShapeKind;
+    for (name, kind) in [
+        ("hexagon", ShapeKind::Hexagon),
+        ("octagon", ShapeKind::Octagon),
+        ("pentagon", ShapeKind::Pentagon),
+        ("parallelogram", ShapeKind::Parallelogram),
+        ("trapezoid", ShapeKind::Trapezoid),
+        ("plus", ShapeKind::Plus),
+        ("chevron", ShapeKind::Chevron),
+        ("decagon", ShapeKind::Decagon),
+    ] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": name})).unwrap();
+        let Some((_, InlineObject::Shape { kind: k, fill, .. })) = selected(&s) else { panic!("{name}: no shape") };
+        assert_eq!(k, kind, "{name}");
+        assert!(fill.is_some(), "{name} is filled");
+        // It lays out and draws.
+        assert!(object_area(&mut s).rect.w > 0.0, "{name}");
+    }
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    assert!(s.run("insert.shape", &json!({"kind": "dodecahedron"})).is_err());
+    assert!(s.run("insert.shape", &json!({"kind": 7})).is_err());
+}
+
+/// #1534: Shape Fill › Picture fills the selected shape with a picture, one undo step; a
+/// colour or No Color takes it off; junk is an error that leaves the shape (and the
+/// document's pictures) as they were.
+#[test]
+fn shape_fill_takes_a_picture() {
+    let picture = |s: &Session| match selected(s) {
+        Some((_, InlineObject::Shape { fill, extra, .. })) => (fill, extra.picture),
+        _ => panic!("no shape selected"),
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "hexagon"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("shape.fill", &json!({"picture": {"data": data}})).unwrap();
+    let (fill, pic) = picture(&s);
+    let key = pic.expect("a picture fill");
+    assert!(fill.is_none(), "the picture replaces the colour");
+    assert!(s.doc.media.contains_key(&key), "the picture is kept with the document");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(picture(&s), (Some(wordcraft_doc::fill::Fill::solid(Rgb(0x15, 0x60, 0x82))), None), "undo restores the colour");
+    s.run("edit.redo", &json!({})).unwrap();
+    assert!(picture(&s).1.is_some());
+    s.run("shape.fill", &json!({"color": "FF0000"})).unwrap();
+    assert_eq!(picture(&s), (Some(wordcraft_doc::fill::Fill::solid(Rgb(0xFF, 0, 0))), None), "a colour takes the picture off");
+    s.run("shape.fill", &json!({"picture": {"data": data}})).unwrap();
+    s.run("shape.fill", &json!({"color": null})).unwrap();
+    assert_eq!(picture(&s), (None, None), "No Color takes the picture off");
+    // Junk: bad base64, bytes that aren't a picture, a missing file, a wrong type.
+    let media = s.doc.media.len();
+    for bad in [
+        json!({"picture": {"data": "!!!"}}),
+        json!({"picture": {"data": super::super::insert::base64_encode(b"not a picture at all")}}),
+        json!({"picture": {"path": "/no/such/picture.png"}}),
+        json!({"picture": 42}),
+        json!({"picture": {"data": 42}}),
+    ] {
+        assert!(s.run("shape.fill", &bad).is_err(), "{bad}");
+        assert_eq!(picture(&s), (None, None), "{bad}");
+        assert_eq!(s.doc.media.len(), media, "{bad}: no picture held");
+    }
+    // Without a picture, the app is asked to pick one; nothing changes yet.
+    s.ui_requests.clear();
+    s.run("shape.fill", &json!({"picture": {}})).unwrap();
+    assert_eq!(picture(&s), (None, None));
+    assert!(s.ui_requests.iter().any(|r| r["open"] == "shapeFillPicture"), "{:?}", s.ui_requests);
+    // A picture can't fill a picture.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    assert!(s.run("shape.fill", &json!({"picture": {"data": data}})).is_err());
+}
