@@ -2626,7 +2626,10 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
             for _ in 0..3 {
                 h.step();
             }
-            assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "a click still selects text");
+            // In the header the picture lies over the body area, clear of the header's own text, so a
+            // click on it selects it (Word); in the body a click still reaches the text behind it.
+            let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_some();
+            assert_eq!(picked, header, "a click selects the header's picture, but only edits the body's text");
             if preselect {
                 let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
                 h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
@@ -4932,6 +4935,96 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
         );
         assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
     }
+}
+
+/// A Behind Text header picture: while editing the header a click on it selects it wherever no
+/// header text covers it (far down over the body, or in the band clear of the text), as in Word;
+/// over the header text the click edits the text. From the body a click there is body text.
+#[test]
+fn header_picture_clear_of_header_text_is_selected_while_editing_the_header() {
+    // Far down the page, over the body.
+    header_picture_click(200.0, 400.0, Some((300.0, f32::MAX)), true);
+    // In the header band, below the header's text line.
+    header_picture_click(300.0, 56.0, Some((50.0, 72.0)), true);
+    // Over the header's text, at its start: the click goes to the text.
+    header_picture_click(72.0, 36.0, None, false);
+}
+
+/// Puts a Behind Text header picture at (`x`, `y`), checks its top lies within `band` (when
+/// given), clicks near its top-left corner from the body and then while editing the header, and checks the
+/// second click selects it (`selects`) or leaves the caret in the header's text.
+fn header_picture_click(x: f32, y: f32, band: Option<(f32, f32)>, selects: bool) {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.editHeader", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Header"})).unwrap();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
+    let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    a.run("arrange.bounds", json!({"x": x, "y": y})).unwrap();
+    a.run("arrange.wrap", json!({"wrap": "behindText"})).unwrap();
+    let rect = a.session.layout().object(&pos, 0).unwrap().rect;
+    if let Some((lo, hi)) = band {
+        assert!(rect.y >= lo && rect.y < hi, "the picture sits where the case wants it: {rect:?}");
+    }
+    a.run("insert.closeHeader", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let page = h.state().canvas.page_rects[0];
+    let scale = h.state().canvas.scale;
+    let frame = crate::frame::to_screen(page, scale, rect);
+    // Near its top-left corner: on the header text line when the picture is placed over it.
+    let at = frame.min + egui::vec2(10.0, 6.0) * scale;
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.event(Event::PointerMoved(at));
+        h.event(button(true));
+        h.step();
+        h.event(button(false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    click(&mut h);
+    assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "from the body the header picture isn't selectable");
+    assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+    h.state_mut().run("insert.editHeader", json!({"page": 0})).unwrap();
+    for _ in 0..6 {
+        h.step();
+    }
+    click(&mut h);
+    let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+    if selects {
+        assert_eq!(picked, Some(pos.clone()), "while editing the header a click on its picture selects it ({x}, {y})");
+    } else {
+        assert_eq!(picked, None, "over the header's text the click edits the text ({x}, {y})");
+        assert!(matches!(h.state().session.sel.focus.story, StoryRef::Part(_)), "still in the header");
+    }
+    // A right-click does the same, so the context menu (Reset Picture, Wrap Text) acts on it.
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos { off: 0, ..pos.clone() });
+    let right = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Default::default() };
+    h.event(Event::PointerMoved(at));
+    h.event(right(true));
+    h.step();
+    h.event(right(false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+    assert_eq!(picked, selects.then(|| pos.clone()), "a right-click picks the picture only where a click does ({x}, {y})");
+    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.step();
 }
 
 /// #1961 review: what a picture draws must be in its page's fingerprint itself. Reset Picture on
