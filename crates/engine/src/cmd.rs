@@ -368,8 +368,8 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
     }
-    if fill_text_form_field(s, text)? {
-        return Ok(InsertEffect { content_changed: true, state_changed: true });
+    if let Some(effect) = fill_text_form_field(s, text)? {
+        return Ok(effect);
     }
     // Content controls: a placeholder is replaced, locked ones refuse.
     let prepared = controls::prepare_edit(s)?;
@@ -495,14 +495,15 @@ fn write_fill(s: &mut Session, at: &Pos, text: String, caret: usize) -> Result<(
 /// in, as in Word: the text becomes the field's result (one line, cut to the field's maximum
 /// length) and the field, with its `w:ffData`, stays (#5525). The field stays selected and the
 /// next keystrokes go on inside its result ([`FormFill`]), the maximum length capping the whole
-/// result. Returns `false`, changing nothing, when the selection isn't exactly one such field or
-/// changes are tracked.
-fn fill_text_form_field(s: &mut Session, text: &str) -> Result<bool, CmdError> {
+/// result. Returns `None`, changing nothing, when the selection isn't exactly one such field or
+/// changes are tracked; `Some` with neither change set when a separator-only insert is
+/// handled without writing anything, so the caller does not report a change that never happened.
+fn fill_text_form_field(s: &mut Session, text: &str) -> Result<Option<InsertEffect>, CmdError> {
     let active = active_fill(s);
     if s.doc.settings.track_changes {
-        return Ok(false);
+        return Ok(None);
     }
-    let Some((a, b, limit, result)) = selected_text_form_field(s) else { return Ok(false) };
+    let Some((a, b, limit, result)) = selected_text_form_field(s) else { return Ok(None) };
     controls::check_edit(s, &a, &b)?;
     let typed = text.chars().filter(|c| !matches!(c, '\r' | '\n' | '\u{000B}' | '\u{2029}'));
     let (filled, caret) = match active {
@@ -518,14 +519,14 @@ fn fill_text_form_field(s: &mut Session, text: &str) -> Result<bool, CmdError> {
             // nothing to write: leave the existing result alone instead of erasing
             // it with an empty one (#5525).
             if filled.is_empty() {
-                return Ok(true);
+                return Ok(Some(InsertEffect::default()));
             }
             let n = filled.chars().count();
             (filled, n)
         }
     };
     write_fill(s, &a, filled, caret)?;
-    Ok(true)
+    Ok(Some(InsertEffect { content_changed: true, state_changed: true }))
 }
 
 /// Backspace (or, `forward`, Delete) while a form field is being filled ([`FormFill`]): removes

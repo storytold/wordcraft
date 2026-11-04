@@ -674,6 +674,18 @@ mod tests {
         assert_eq!(s.undo_depth(), depth, "nothing changed, so no undo step is kept");
     }
 
+    /// #5525: a separator-only insert over a selected field reports no change:
+    /// the IME outcome must not claim content or state changed when the
+    /// result was left alone.
+    #[test]
+    fn separator_only_insert_reports_no_change() {
+        let mut s = form_field_session(FF);
+        let effect = crate::cmd::type_text_effect(&mut s, "\n").unwrap();
+        assert!(!effect.content_changed);
+        assert!(!effect.state_changed);
+        assert_eq!(form_fields(&s), [("XXXXX".to_string(), FF.to_string())]);
+    }
+
     /// #5525: restoring a version ends a fill: typing after the restore starts a
     /// new fill instead of appending to the replaced document's fill.
     #[test]
