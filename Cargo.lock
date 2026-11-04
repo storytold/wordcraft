@@ -6917,6 +6917,7 @@ dependencies = [
  "wordcraft-formats",
  "wordcraft-geom",
  "wordcraft-layout",
+ "wordcraft-metafile",
  "wordcraft-pdf",
  "wordcraft-render",
  "zeroize",

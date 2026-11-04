@@ -13,7 +13,11 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
     c[3] = c[3].min(0.95 - c[1]);
     let size = |k: &str| p::f32(v, k).map(|x| x.clamp(1.0, 4000.0));
     let (nw, nh) = (size("width"), size("height"));
-    with_obj(s, |o| {
+    let before = match selected(s) {
+        Some((_, InlineObject::Image { crop, .. })) => Some(crop),
+        _ => None,
+    };
+    let out = with_obj(s, |o| {
         if let InlineObject::Image { crop, w, h, float, .. } = o {
             // The source's full size at the new display size (the visible part is 1-lo-hi of it).
             let full = |len: f32, lo: f32, hi: f32| len / (1.0 - lo - hi).max(0.05);
@@ -33,7 +37,13 @@ pub(super) fn crop(s: &mut Session, v: &Value) -> CmdResult {
             }
             *crop = c;
         }
-    })
+    })?;
+    // A border drawn on the bitmap is drawn again along what the new crop leaves (#5298). A
+    // picture too large to draw on is still cropped.
+    match look(s) {
+        Some(l) if l.border.is_some() && before != Some(c) => relook(s, |_| {}).or(Ok(out)),
+        _ => Ok(out),
+    }
 }
 
 /// A picture's original size: its image's pixels at 96 ppi (the size Insert › Pictures gives it)
@@ -221,18 +231,20 @@ pub struct PictureLook {
     pub drawn: std::sync::Arc<Vec<u8>>,
 }
 
+/// The look drawn on the selected picture's bitmap, if it has one.
+fn look(s: &Session) -> Option<PictureLook> {
+    let (_, InlineObject::Image { media, .. }) = selected(s)? else { return None };
+    let cur = s.doc.media.get(&media)?;
+    s.picture_looks.get(&media).filter(|l| std::sync::Arc::ptr_eq(cur, &l.drawn) && s.doc.media.contains_key(&l.base)).cloned()
+}
+
 /// Change the selected picture's effect, style or border and draw it again from the bitmap
-/// under them (effect, then style, then border).
+/// under them (effect, then style, then border). The border goes round what the picture's crop
+/// leaves visible, as well as round the whole bitmap.
 pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
-    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
-    let cur = s.doc.media.get(&media).cloned();
-    let mut look = s
-        .picture_looks
-        .get(&media)
-        .filter(|l| cur.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(c, &l.drawn)) && s.doc.media.contains_key(&l.base))
-        .cloned()
-        .unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
+    let InlineObject::Image { media, crop, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    let mut look = look(s).unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
     change(&mut look);
     if look.effect.is_none() && look.style.is_none() && look.border.is_none() {
         // Nothing left on it: the bitmap as it was.
@@ -253,7 +265,7 @@ pub(super) fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> 
             img = picture_style(img, st)?;
         }
         if let Some((c, w)) = l.border {
-            img = frame(img, w, [c.0, c.1, c.2, 255])?;
+            img = outline_crop(frame(img, w, [c.0, c.1, c.2, 255])?, crop, w, [c.0, c.1, c.2, 255]);
         }
         Ok(img)
     })?;
@@ -425,6 +437,45 @@ fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image:
     let mut out = canvas(w, h, color)?;
     image::imageops::overlay(&mut out, &img.to_rgba8(), border as i64, border as i64);
     Ok(image::DynamicImage::ImageRgba8(out))
+}
+
+/// `img` with a `border` pixels wide line of `color` just inside the part of it that `crop` (left,
+/// top, right, bottom fractions) leaves visible, the window the renderer and PDF export draw
+/// ([`wordcraft_metafile::crop_window`]), so a cropped picture keeps its border. A pixel an edge of
+/// the window cuts through counts as visible, so the line shows at least `border` wide. An
+/// uncropped picture is returned as it is: its border is the frame round the bitmap.
+pub(super) fn outline_crop(img: image::DynamicImage, crop: [f32; 4], border: u32, color: [u8; 4]) -> image::DynamicImage {
+    let [x, y, vis_w, vis_h] = wordcraft_metafile::crop_window(crop);
+    if x <= 0.0 && y <= 0.0 && vis_w >= 1.0 && vis_h >= 1.0 {
+        return img;
+    }
+    let mut rgba = img.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    // Along a side `n` pixels long, the window from `lo` (a fraction) `len` long: its first and
+    // last pixel rows (columns) plus one, and where the line inside each of its edges ends. An
+    // edge a rounding error off a pixel boundary (0.6 as f32 is 60.0000024 of 100) is on it.
+    let span = |n: u32, lo: f64, len: f64| {
+        let n = f64::from(n);
+        let px = |f: f64, round: fn(f64) -> f64| {
+            let at = n * f;
+            let at = if (at - at.round()).abs() < 1e-4 { at.round() } else { round(at) };
+            at.clamp(0.0, n) as u32
+        };
+        let (a, b) = (px(lo, f64::floor), px(lo + len, f64::ceil));
+        let a_in = px(lo, f64::ceil).saturating_add(border).min(b);
+        let b_in = px(lo + len, f64::floor).saturating_sub(border).max(a);
+        (a, a_in, b_in, b)
+    };
+    let ((x0, x0_in, x1_in, x1), (y0, y0_in, y1_in, y1)) = (span(w, x, vis_w), span(h, y, vis_h));
+    let paint = image::Rgba(color);
+    for (xs, ys) in [(x0..x1, y0..y0_in), (x0..x1, y1_in..y1), (x0..x0_in, y0..y1), (x1_in..x1, y0..y1)] {
+        for py in ys {
+            for px in xs.clone() {
+                rgba.put_pixel(px, py, paint);
+            }
+        }
+    }
+    image::DynamicImage::ImageRgba8(rgba)
 }
 
 pub(super) fn picture_style(img: image::DynamicImage, style: &str) -> Result<image::DynamicImage, CmdError> {
