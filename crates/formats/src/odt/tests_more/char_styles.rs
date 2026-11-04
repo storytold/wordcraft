@@ -71,3 +71,21 @@ fn what_a_character_style_turns_off_stays_off() {
     let plain = s.split(r#"style:name="Plain""#).nth(1).and_then(|r| r.split("</style:style>").next()).unwrap_or("missing");
     assert!(plain.contains(r#"fo:font-weight="normal""#) && plain.contains(r#"fo:font-style="normal""#), "{plain}");
 }
+
+#[test]
+fn a_character_style_based_on_a_missing_one_keeps_its_own_look() {
+    // "Orphan" names a parent the file doesn't define; "Tilted" comes after it.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Orphan" style:family="text" style:parent-style-name="Nowhere"><style:text-properties fo:font-weight="bold"/></style:style><style:style style:name="Tilted" style:family="text"><style:text-properties fo:font-style="italic"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:span text:style-name="Orphan">aa</text:span> <text:span text:style-name="Tilted">bb</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let r = runs(&d);
+    assert_eq!(
+        r.iter().map(|x| (x.0.as_str(), x.1.as_deref(), x.2, x.3)).collect::<Vec<_>>(),
+        [("aa", Some("Orphan"), true, false), ("bb", Some("Tilted"), false, true)]
+    );
+    assert!(d.styles.get("Nowhere").is_none(), "no style for the missing parent");
+}
