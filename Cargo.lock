@@ -1103,7 +1103,7 @@ dependencies = [
 [[package]]
 name = "craft-proof"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=47c9f62530db72bc5c3831c86653b47b20c640be#47c9f62530db72bc5c3831c86653b47b20c640be"
+source = "git+https://github.com/storytold/craft-libs?rev=01315d9c92b5b0e69082d35ca56099461a1efd45#01315d9c92b5b0e69082d35ca56099461a1efd45"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
@@ -1521,6 +1521,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_extras"
+version = "0.37.0"
+source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
+dependencies = [
+ "ahash",
+ "egui",
+ "enum-map",
+ "itertools",
+ "log",
+ "profiling",
+]
+
+[[package]]
 name = "egui_glow"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
@@ -1586,6 +1599,26 @@ name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
+
+[[package]]
+name = "enum-map"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4532960034c15ba2f55e9eee631040ecc473c32e6c4b200828c759840f13a06"
+dependencies = [
+ "enum-map-derive",
+]
+
+[[package]]
+name = "enum-map-derive"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7127272f64b3e098f7d81f350d672081b879bff896d219c42370dc858b1af9ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
 
 [[package]]
 name = "enumflags2"
@@ -6752,7 +6785,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "arboard",
  "chrono",
@@ -6787,7 +6820,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-cli"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "serde_json",
  "sys-locale",
@@ -6800,11 +6833,11 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-control-key"
-version = "0.15.0"
+version = "0.15.1"
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -6818,7 +6851,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "cfb",
  "chrono",
@@ -6835,7 +6868,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "aes",
  "base64 0.23.1",
@@ -6859,7 +6892,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-engine"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "cfb",
  "chrono",
@@ -6892,7 +6925,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "brotli-decompressor",
  "harfrust 0.13.3",
@@ -6906,7 +6939,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "cfb",
  "chardetng",
@@ -6925,7 +6958,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "image",
  "serde",
@@ -6933,7 +6966,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "craft-proof",
  "image",
@@ -6953,7 +6986,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-mcp"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "log",
  "serde_json",
@@ -6965,7 +6998,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -6973,7 +7006,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-pdf"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "chrono",
  "craft-pdf",
@@ -6994,7 +7027,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "image",
  "log",
@@ -7008,7 +7041,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-ui-egui"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "cfb",
  "chrono",
@@ -7017,6 +7050,7 @@ dependencies = [
  "craft-update",
  "craft-window",
  "egui",
+ "egui_extras",
  "egui_kittest",
  "image",
  "js-sys",
@@ -7039,7 +7073,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-web"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "eframe",
  "egui",
@@ -7058,7 +7092,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-zotero"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "log",
  "proptest",
@@ -7221,7 +7255,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "serde_json",
 ]
@@ -7577,11 +7611,6 @@ dependencies = [
 
 [[patch.unused]]
 name = "egui_demo_lib"
-version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
-
-[[patch.unused]]
-name = "egui_extras"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 
