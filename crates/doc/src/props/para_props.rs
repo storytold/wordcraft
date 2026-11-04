@@ -11,14 +11,16 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
-    /// Word's Thai Distributed alignment: distribute additional width across Thai and Khmer clusters.
+    /// Word's "Thai Distributed" (`w:jc="thaiDistribute"`): the extra space of a wrapped line is
+    /// spread evenly between the character clusters of Thai and Khmer text, which has no spaces.
     ThaiDistribute,
-    /// Khmer Justify: stretch spaces, word boundaries, then orthographic syllables.
+    /// WordCraft's Khmer Justify: phrase spaces first, then word boundaries, then orthographic
+    /// syllables, never inside one. Saved as `thaiDistribute` plus a `wc:khmer` mark.
     KhmerJustify,
 }
 
 impl Align {
-    /// Whether this alignment expands wrapped lines to both margins.
+    /// Does this alignment stretch the lines of a wrapped paragraph to both margins?
     pub fn stretches(self) -> bool {
         matches!(self, Align::Justify | Align::Distribute | Align::ThaiDistribute | Align::KhmerJustify)
     }

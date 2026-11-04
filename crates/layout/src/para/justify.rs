@@ -134,10 +134,16 @@ pub(super) fn hyphenation_points(
     out
 }
 
+/// A mark that joins the letter before it (accents, variation selectors), so no room goes before it.
+fn is_combining(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE00..=0xFE0F | 0xFE20..=0xFE2F)
+}
+
 /// The gap after each cluster for Thai Distributed and Khmer Justify. A zero-width space is a
 /// cluster of its own with no width: the gap after it is the word boundary it marks, and the
-/// cluster before it has none.
-pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster]) -> Vec<wordcraft_doc::khmer::Gap> {
+/// cluster before it has none. With `every_gap` (Thai Distributed) text in other scripts, digits
+/// and punctuation get a gap between clusters too, as in Word; Khmer Justify leaves it tight.
+pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster], every_gap: bool) -> Vec<wordcraft_doc::khmer::Gap> {
     use wordcraft_doc::khmer::{self, Gap};
     let slice = |c: &Cluster| text.get(c.start..c.end).unwrap_or("");
     let mut out = vec![Gap::None; clusters.len()];
@@ -174,6 +180,7 @@ pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster]) -> Vec<wordcraft_do
                 (true, _) => khmer::gap_between(before, after, zwsp),
                 (false, true) => wordcraft_doc::thai::gap_between(before, after),
                 _ if zwsp => Gap::Word,
+                _ if every_gap && !is_combining(after) => Gap::Syllable,
                 _ => Gap::None,
             };
         // The gap sits after the last cluster before `next` (the zero-width space, if any).

@@ -7,10 +7,9 @@ use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use super::{
-    Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, ParaLayout,
-    Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
+    Align, Arc, COLUMN_BREAK, CharProps, Document, FIELD_SHADING, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase,
+    ParaLayout, Paragraph, ResolvedChar, ResolvedPara, TabLeader, field_code_text, field_text_on, reference_link,
 };
-use wordcraft_doc::props::Align;
 
 /// A run's formatting resolved in the paragraph's style and table.
 struct Resolver<'a> {
@@ -604,8 +603,6 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
-    let gaps =
-        if matches!(rp.align, Align::ThaiDistribute | Align::KhmerJustify) { super::justify::cluster_gaps(&p.text, &b.clusters) } else { Vec::new() };
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,
@@ -631,10 +628,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
-        gaps,
+        gaps: Vec::new(),
     };
     if matches!(pl.rp.align, Align::ThaiDistribute | Align::KhmerJustify) {
-        pl.gaps = cluster_gaps(&p.text, &pl.clusters);
+        pl.gaps = cluster_gaps(&p.text, &pl.clusters, pl.rp.align == Align::ThaiDistribute);
     }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);

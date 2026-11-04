@@ -151,6 +151,22 @@ fn latin_text_in_a_khmer_justify_paragraph_is_stretched_at_its_spaces() {
 }
 
 #[test]
+fn thai_distributed_spaces_latin_letters_and_digits_but_khmer_justify_does_not() {
+    let text = "Windows Server 2569 information ".repeat(10);
+    let l = lay(&doc(&text, Align::ThaiDistribute));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1);
+    let line = &pl.lines[0];
+    let grown = extras(pl, 0).into_iter().enumerate().filter(|(i, e)| *e > 1e-3 && pl.gaps[line.c0 + i] != Gap::Space).count();
+    assert!(grown > 5, "letters and digits get room: {grown}");
+    let k = lay(&doc(&text, Align::KhmerJustify));
+    let kp = para_layout(&k, 0);
+    for (i, e) in extras(kp, 0).into_iter().enumerate() {
+        assert!(kp.gaps[kp.lines[0].c0 + i] == Gap::Space || e.abs() < 1e-3);
+    }
+}
+
+#[test]
 fn plain_justify_and_left_leave_khmer_alone() {
     for align in [Align::Left, Align::Justify] {
         let l = lay(&doc(&khmer_text(""), align));
@@ -175,9 +191,9 @@ fn an_anchor_between_two_syllables_does_not_hide_their_gap() {
     // ក | (bookmark anchor, no text) | ខ : the gap sits after the anchor, as it does without one.
     let text = "កខ";
     let k = "ក".len();
-    let with = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, k, ClKind::Marker), cl(k, text.len(), ClKind::Text)]);
+    let with = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, k, ClKind::Marker), cl(k, text.len(), ClKind::Text)], false);
     assert_eq!(with, vec![Gap::None, Gap::Syllable, Gap::None]);
-    let without = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, text.len(), ClKind::Text)]);
+    let without = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, text.len(), ClKind::Text)], false);
     assert_eq!(without, vec![Gap::Syllable, Gap::None]);
 }
 
@@ -185,7 +201,7 @@ fn an_anchor_between_two_syllables_does_not_hide_their_gap() {
 fn a_full_stop_after_khmer_is_not_a_gap() {
     let text = "ក.";
     let k = "ក".len();
-    let gaps = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, k + 1, ClKind::Text)]);
+    let gaps = crate::para::cluster_gaps(text, &[cl(0, k, ClKind::Text), cl(k, k + 1, ClKind::Text)], false);
     assert_eq!(gaps, vec![Gap::None, Gap::None]);
 }
 
@@ -196,6 +212,7 @@ fn zero_width_space_between_anchors_still_marks_a_word() {
     let gaps = crate::para::cluster_gaps(
         text,
         &[cl(0, k, ClKind::Text), cl(k, k, ClKind::Marker), cl(k, k + z, ClKind::Marker), cl(k + z, text.len(), ClKind::Text)],
+        false,
     );
     assert_eq!(gaps, vec![Gap::None, Gap::None, Gap::Word, Gap::None]);
 }

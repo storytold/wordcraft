@@ -542,41 +542,44 @@ impl<'e> Breaker<'e> {
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 && khmer_mode {
-            // Thai and Khmer do not use ordinary spaces between words; distribute slack between
-            // text clusters by script-specific gap weights, preserving leading/trailing blanks.
+            // Space goes between the clusters of Thai and Khmer text, which has no spaces to
+            // stretch: all alike (Thai Distributed) or by rank (Khmer Justify). Not after the
+            // line's last cluster, nor after a space that hangs past the edge, nor in the spaces that
+            // start the line.
             let mode = if rp.align == Align::KhmerJustify { crate::khmer_just::Mode::Tiered } else { crate::khmer_just::Mode::Even };
+            // The spaces before the first character (a Thai letter indents a paragraph with a run
+            // of them) keep their width, as in Word; so do anchors and empty objects around them.
             let blank = |k: usize| {
                 pl.clusters.get(k).is_some_and(|c| {
-                    matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak)
-                        || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
+                    matches!(c.kind, ClKind::Space | ClKind::Marker) || (matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0)
                 })
             };
             let first = (align_from..c1).find(|k| !blank(*k)).unwrap_or(c1);
             let last = (align_from..c1).rev().find(|k| !blank(*k));
             let slots: Vec<usize> = match last {
-                Some(last) if last > first => (first..last).collect(),
+                Some(l) if l > first => (first..l).collect(),
                 _ => Vec::new(),
             };
             let gaps: Vec<(wordcraft_doc::khmer::Gap, f32)> = slots
                 .iter()
                 .map(|&k| {
-                    let em = pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(12.0, |style| style.size);
+                    let em = pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)).map_or(12.0, |s| s.size);
                     (pl.gaps.get(k).copied().unwrap_or(wordcraft_doc::khmer::Gap::None), em)
                 })
                 .collect();
             let adds = crate::khmer_just::distribute(mode, slack, &gaps);
             let mut add = 0.0;
-            let mut slots = slots.iter().zip(adds.iter()).peekable();
+            let mut it = slots.iter().zip(adds.iter()).peekable();
             for k in align_from..c1 {
-                if let Some(x) = sc.xs.get_mut(k - c0) {
-                    *x += add;
+                if let Some(v) = sc.xs.get_mut(k - c0) {
+                    *v += add;
                 }
-                if let Some((_, amount)) = slots.next_if(|(slot, _)| **slot == k) {
-                    add += *amount;
+                if let Some((_, a)) = it.next_if(|(s, _)| **s == k) {
+                    add += *a;
                 }
             }
-            if let Some(x) = sc.xs.last_mut() {
-                *x += add;
+            if let Some(v) = sc.xs.last_mut() {
+                *v += add;
             }
         } else if justify && slack > 0.0 {
             justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);

@@ -283,7 +283,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:mirrorIndents", p.mirror_indents);
     if let Some(a) = p.align {
         if a == Align::KhmerJustify {
-            // Word reads this as Thai Distributed; the ignorable mark preserves Khmer Justify here.
+            // Word reads this as Thai Distributed; the mark (ignorable) keeps it Khmer Justify here.
             w.empty("w:jc", &[("w:val", align_val(a)), ("wc:khmer", "1")]);
         } else {
             w.val("w:jc", align_val(a));

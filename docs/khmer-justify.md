@@ -87,6 +87,8 @@ Each cluster carries the kind of gap after it (`ParaLayout::gaps`, from
 orthographic syllables) > `None` (inside a syllable, before a vowel/sign/coeng/ៗ, inside a Latin
 word).
 
+Thai Distributed (Even) goes further, as Word does (measured by pakiat in Word 365 on Thai memos with Latin text): Latin letters, digits and punctuation get a gap between clusters too, and a Latin-only paragraph is letter-spaced, not justified at its spaces. Only combining marks stay with their letter. Khmer Justify keeps Latin words tight.
+
 *Khmer Justify* fills tiers in order, each gap up to a cap, water-filling when font sizes differ:
 
 | Tier | Cap per gap |

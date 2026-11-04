@@ -1,4 +1,6 @@
-use super::actions::{customize_keyboard, customize_ribbon, hf_nav, language, macros, quick_parts, search_commands, select_similar};
+use super::actions::{
+    customize_keyboard, customize_ribbon, hf_nav, language, macros, preferred_language, quick_parts, search_commands, select_similar,
+};
 use super::autocorrect::autocorrect_options;
 use super::compare::{COMPARE_PARAMS, compare};
 use super::inspect::{accessibility, inspect_doc};
@@ -339,6 +341,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
             r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
         ),
+        CommandSpec::new("review.language.preferred", "Set as Default Language", "File › Options › Language", preferred_language)
+            .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
+            .pure(),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();
