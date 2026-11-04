@@ -471,6 +471,8 @@ pub struct WordApp {
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
+    /// The pass the Print page was last drawn in: a gap means it has just been opened.
+    print_page_pass: Option<u64>,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,

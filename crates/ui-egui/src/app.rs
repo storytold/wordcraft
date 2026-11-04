@@ -100,6 +100,7 @@ impl WordApp {
             services,
             printing: Default::default(),
             print_feedback_seen: None,
+            print_page_pass: None,
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
