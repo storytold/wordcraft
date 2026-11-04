@@ -229,6 +229,21 @@ mod tests {
         assert_eq!(packs::pack_for_tag("pt-PT", &packs).map(|p| p.locale.as_str()), Some("pt-pt"));
         assert_eq!(packs::pack_for_tag("pt_BR", &packs).map(|p| p.locale.as_str()), Some("pt"));
         assert_eq!(packs::pack_for_tag("nl-BE", &packs).map(|p| p.locale.as_str()), Some("nl"));
+        // A script-qualified tag finds its script's pack before the language's (CP4.3: Serbian
+        // (Latin) chosen in the Language dialog is proofed by `sr-latn`, not the Cyrillic `sr`).
+        packs.push(Pack { locale: "sr".into(), ..packs[0].clone() });
+        packs.push(Pack { locale: "sr-latn".into(), ..packs[0].clone() });
+        assert_eq!(packs::pack_for_tag("sr-Latn-RS", &packs).map(|p| p.locale.as_str()), Some("sr-latn"));
+        assert_eq!(packs::pack_for_tag("sr-Cyrl-RS", &packs).map(|p| p.locale.as_str()), Some("sr"));
+        assert_eq!(packs::pack_for_tag("sr-latn", &packs).map(|p| p.locale.as_str()), Some("sr-latn"));
+        assert_eq!(packs::pack_for_tag("-", &packs), None);
+        assert_eq!(packs::pack_for_tag("nl--", &packs).map(|p| p.locale.as_str()), Some("nl"));
+        // A variant after the region is its language-and-variant pack's; the region alone isn't.
+        packs.push(Pack { locale: "ca-valencia".into(), ..packs[0].clone() });
+        assert_eq!(packs::pack_for_tag("ca-ES-valencia", &packs).map(|p| p.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca_es_VALENCIA", &packs).map(|p| p.locale.as_str()), Some("ca-valencia"));
+        assert_eq!(packs::pack_for_tag("ca-ES", &packs).map(|p| p.locale.as_str()), Some("ca"));
+        assert_eq!(packs::pack_for_tag("ca", &packs).map(|p| p.locale.as_str()), Some("ca"));
         assert_eq!(packs::pack_for_tag("en-GB", &packs), None);
         assert_eq!(packs::pack_for_tag("", &packs), None);
         assert!(packs::valid_locale("sr-latn"));
@@ -484,6 +499,34 @@ mod tests {
         let messages = |lang| wordcraft_proof::check_grammar_in("Ele disse que que viria .", lang).into_iter().map(|i| i.message).collect::<Vec<_>>();
         assert!(!messages(ProofLang::Pt).is_empty());
         assert_eq!(messages(pt_pt), messages(ProofLang::Pt), "Portugal text gets the Portuguese grammar checks");
+    }
+
+    /// The one region test and region-dropping step the engine and the UI share: two letters or
+    /// three digits after the language; hostile text never panics.
+    #[test]
+    fn a_region_is_two_letters_or_three_digits() {
+        for r in ["NL", "nl", "419", "ZZ"] {
+            assert!(packs::is_region(r), "{r}");
+        }
+        for r in ["", "n", "nld", "4190", "41", "Latn", "valencia", "é1", "\u{202e}\u{202e}"] {
+            assert!(!packs::is_region(r), "{r:?}");
+        }
+        for (tag, bare) in [
+            ("nl-NL", "nl"),
+            ("sr-Latn-RS", "sr-Latn"),
+            ("ca-ES-valencia", "ca-valencia"),
+            ("es_419", "es"),
+            ("pt", "pt"),
+            ("en-US-x-test", "en-x-test"),
+            ("", ""),
+            ("-", "-"),
+        ] {
+            assert_eq!(packs::without_region(tag), bare, "{tag}");
+        }
+        // The language itself is never a region, even when it looks like one.
+        assert_eq!(packs::without_region("de"), "de");
+        let _ = packs::without_region(&"-".repeat(10_000));
+        let _ = packs::without_region("\u{0}-\u{202e}");
     }
 
     use crate::packs::Pack;
