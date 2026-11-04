@@ -499,6 +499,19 @@ impl Reader<'_> {
                 .and_then(|g| preset_adj(g, "adj"))
                 .and_then(|v| u32::try_from(v.clamp(0, i64::from(wordcraft_doc::connector::MAX_CORNER))).ok());
         }
+        // An elbow's or curve's preset and adjust values: Word routes connectors around shapes
+        // with `bentConnector4`, adjust values outside 0..100000 and so on, and they were drawn
+        // as the elbow through the middle and saved as `bentConnector3`.
+        if let Some(n) = prst
+            .strip_prefix("bentConnector")
+            .or_else(|| prst.strip_prefix("curvedConnector"))
+            .and_then(|n| n.parse::<u8>().ok())
+            .filter(|n| (2..=5).contains(n))
+        {
+            let g = sppr.and_then(|s| s.child("a:prstGeom"));
+            let adj = (1..=3).map(|k| g.and_then(|g| preset_adj(g, &format!("adj{k}")).or_else(|| if k == 1 { preset_adj(g, "adj") } else { None })));
+            extra.connector = wordcraft_doc::connector::ConnectorGeom::new(n, adj);
+        }
         // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle of its
         // width and length.
         let arrow = |tag: &str| {

@@ -2523,6 +2523,63 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     assert_eq!(corners(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
 
+/// An elbow's or curve's preset and adjust values are read and written back. They were drawn as
+/// the elbow through the middle and saved as `bentConnector3` / `curvedConnector3`, so a document
+/// from Word lost the route its connectors take around shapes.
+#[test]
+fn connector_presets_and_adjust_values_are_read_and_saved() {
+    let geom = |prst: &str, av: &str| format!(r#"<a:prstGeom prst="{prst}"><a:avLst>{av}</a:avLst></a:prstGeom><a:ln w="12700"/>"#);
+    let gd = |k: u8, v: i64| format!(r#"<a:gd name="adj{k}" fmla="val {v}"/>"#);
+    let body = [
+        geom("bentConnector3", ""),
+        geom("bentConnector3", &gd(1, 50000)),
+        geom("bentConnector3", &gd(1, -30000)),
+        geom("bentConnector2", ""),
+        geom("bentConnector4", &gd(2, 80000)),
+        geom("bentConnector5", &format!("{}{}{}", gd(1, 25000), gd(2, 75000), gd(3, 60000))),
+        geom("curvedConnector4", ""),
+        geom("bentConnector4", &gd(1, 9_000_000_000)),
+    ]
+    .iter()
+    .map(|sppr| anchored_wsp("Connector", 2540000, 1270000, sppr, "", "<wps:cNvCnPr/>"))
+    .collect::<String>();
+    let geoms = |d: &Document| -> Vec<(ShapeKind, Option<(u8, Vec<i32>)>)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Shape { kind, extra, .. } => Some((*kind, extra.connector.as_ref().map(|c| (c.preset, c.adj.clone())))),
+                _ => None,
+            })
+            .collect()
+    };
+    let (elbow, curved) = (ShapeKind::ElbowConnector, ShapeKind::CurvedConnector);
+    let expected = vec![
+        // the default elbow through the middle, given or not, keeps nothing
+        (elbow, None),
+        (elbow, None),
+        (elbow, Some((3, vec![-30000]))),
+        (elbow, Some((2, vec![]))),
+        // a missing adjust value is the spec's default, a huge one is clamped
+        (elbow, Some((4, vec![50000, 80000]))),
+        (elbow, Some((5, vec![25000, 75000, 60000]))),
+        (curved, Some((4, vec![50000, 50000]))),
+        (elbow, Some((4, vec![10_000_000, 50000]))),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(geoms(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(
+        xml.contains(r#"<a:prstGeom prst="bentConnector5"><a:avLst><a:gd name="adj1" fmla="val 25000"/><a:gd name="adj2" fmla="val 75000"/><a:gd name="adj3" fmla="val 60000"/></a:avLst></a:prstGeom>"#),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<a:prstGeom prst="bentConnector2"><a:avLst/></a:prstGeom>"#), "{xml}");
+    assert_eq!(geoms(&wordcraft_docx::read(&bytes).unwrap()), expected);
+}
+
 /// #611: legacy VML lines and rectangles (documents without DrawingML).
 #[test]
 fn vml_lines_and_rectangles() {
