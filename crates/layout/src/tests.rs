@@ -1423,6 +1423,32 @@ fn center_and_right_alignment() {
 }
 
 #[test]
+fn caret_on_an_empty_line_after_a_break_follows_alignment() {
+    // "BAB I", Shift+Enter: the empty line's caret sits where its alignment puts it (#4283).
+    let text = format!("BAB I{}", wordcraft_doc::para::LINE_BREAK);
+    for rtl in [false, true] {
+        for (align, ltr_x) in [(Align::Left, 72.0), (Align::Center, 306.0), (Align::Right, 540.0), (Align::Justify, 72.0)] {
+            let mut d = Document::new();
+            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+            let at = Pos::body(0, 0);
+            d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+                p.align = Some(align);
+                p.bidi = Some(rtl);
+            })
+            .unwrap();
+            let expected = if rtl { 612.0 - ltr_x } else { ltr_x };
+            let x = lay(&d).caret(&Pos::body(0, text.len())).unwrap().x;
+            assert!((x - expected).abs() < 1.0, "{align:?} rtl={rtl}: {x}, expected {expected}");
+        }
+    }
+    // An empty centred paragraph without a break was already centred.
+    let mut d = Document::from_text("");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(Align::Center)).unwrap();
+    let x = lay(&d).caret(&Pos::body(0, 0)).unwrap().x;
+    assert!((x - 306.0).abs() < 1.0, "{x}");
+}
+
+#[test]
 fn tabs_land_on_default_stops() {
     let d = Document::from_text("a\tb");
     let l = lay(&d);
@@ -5185,12 +5211,12 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
 }
 
 #[test]
-fn a_line_of_only_pictures_fits_them_in_odt_documents() {
-    // LibreOffice (ODT documents): a line holding only a picture is as tall as the picture;
-    // Word keeps the font's ascent and descent around it.
-    let height = |fit: bool, h: f32| {
+fn a_line_of_only_pictures_keeps_its_fonts_height_in_odt_documents() {
+    // The standard has no line-height algorithm: as in Word, the line keeps the font's height, and
+    // its descent below a taller picture.
+    let height = |h: f32| {
         let mut d = Document::from_text("");
-        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: fit, ..Default::default() });
+        d.settings.odf = Some(wordcraft_doc::OdfLayout::default());
         if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
             p.props.space_after = Some(0.0);
             p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
@@ -5200,20 +5226,8 @@ fn a_line_of_only_pictures_fits_them_in_odt_documents() {
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         para.lines[0].height
     };
-    assert!((height(true, 3.5) - 3.5).abs() < 0.01, "{}", height(true, 3.5));
-    assert!((height(true, 40.0) - 40.0).abs() < 0.01, "{}", height(true, 40.0));
-    // Word's: the font's height at least, and its descent below a taller picture.
-    assert!(height(false, 3.5) > 10.0);
-    assert!(height(false, 40.0) > 42.0);
-    // Text on the line: its font counts either way.
-    let mut d = Document::from_text("Text");
-    d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { picture_lines_fit_pictures: true, ..Default::default() });
-    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.insert_object(0, picture(20.0, 3.5, Default::default()), &Default::default()).unwrap();
-    }
-    let l = lay(&d);
-    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
-    assert!(para.lines[0].height > 10.0);
+    assert!(height(3.5) > 10.0);
+    assert!(height(40.0) > 42.0);
 }
 
 #[test]
@@ -5221,7 +5235,7 @@ fn padding_without_a_border_takes_room_in_odt_documents() {
     // LibreOffice keeps a paragraph's padding on a side without a line; Word drops it.
     let place = |odf: bool| {
         let mut d = Document::from_text("Above\nPadded\nBelow");
-        d.settings.odf = odf.then_some(wordcraft_doc::odf_profile::OdfLayout::default());
+        d.settings.odf = odf.then_some(wordcraft_doc::OdfLayout::default());
         for b in d.body.iter_mut() {
             if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
                 (p.props.space_before, p.props.space_after) = (Some(0.0), Some(0.0));
@@ -13011,7 +13025,7 @@ fn default_tab_stops_count_from_the_indent_in_odt_documents_that_say_so() {
     let x_of_b = |from_indent: bool, left: f32, first: f32| {
         let mut d = Document::from_text("a\tb");
         d.settings.default_tab = 36.0;
-        d.settings.odf = Some(wordcraft_doc::odf_profile::OdfLayout { tabs_from_indent: from_indent, ..Default::default() });
+        d.settings.odf = Some(wordcraft_doc::OdfLayout { tabs_from_indent: from_indent });
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
             p.indent_left = Some(left);
             p.indent_first = Some(first);
