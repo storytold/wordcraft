@@ -161,3 +161,88 @@ pub(super) fn bookmark(s: &mut Session, v: &Value) -> CmdResult {
     let _ = end;
     sel_result(s)
 }
+
+/// A link the caret is on or the selection lies inside: all of it, however its formatting splits
+/// it, within one paragraph.
+pub struct LinkSpan {
+    pub url: String,
+    /// What it shows, without any picture or field in it.
+    pub text: String,
+    /// It holds a picture or field, so its text can't be retyped as plain text.
+    pub has_objects: bool,
+    from: Pos,
+    to: Pos,
+}
+
+/// The link to edit (Word's Edit Hyperlink, #4974). At a caret the character after it counts
+/// first, then the one before, so the end of a link is still on it.
+pub fn link_at_selection(s: &Session) -> Option<LinkSpan> {
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path {
+        return None;
+    }
+    let p = s.doc.para_at(&a)?;
+    let linked = |off: usize| p.props_of_char(off).link.is_some();
+    let off = if a.off < p.len() && linked(a.off) {
+        a.off
+    } else if a == b {
+        p.text.get(..a.off)?.char_indices().next_back()?.0
+    } else {
+        return None;
+    };
+    let url = p.props_of_char(off).link.clone()?;
+    let (mut start, mut end) = (0, None);
+    for (range, props) in p.run_ranges() {
+        if props.link.as_deref() == Some(url.as_str()) {
+            if range.end > off {
+                end = Some(range.end);
+            }
+        } else if end.is_some() {
+            break;
+        } else {
+            start = range.end;
+        }
+    }
+    let end = end.filter(|e| b.off <= *e)?;
+    let shown = p.text.get(start..end)?;
+    Some(LinkSpan {
+        text: shown.replace(wordcraft_doc::para::OBJ, ""),
+        has_objects: shown.contains(wordcraft_doc::para::OBJ),
+        url,
+        from: Pos { off: start, ..a.clone() },
+        to: Pos { off: end, ..a },
+    })
+}
+
+/// Point the link at the caret somewhere else, and retype its text when `text` differs. The rest
+/// of its formatting stays.
+pub(super) fn edit_link(s: &mut Session, v: &Value) -> CmdResult {
+    let none = || CmdError::Params("no link at the caret".into());
+    link_at_selection(s).ok_or_else(none)?;
+    // A heading's new `_Toc` bookmark can move the link, so it's read again after this.
+    let (url, label) = match p::str(v, "url") {
+        Some(url) => (url.to_string(), url.to_string()),
+        None => place_target(s, v)?.ok_or_else(|| CmdError::Params("a target is required".into()))?,
+    };
+    if url.is_empty() || url.len() > 4096 {
+        return Err(CmdError::Params("bad url".into()));
+    }
+    let span = link_at_selection(s).ok_or_else(none)?;
+    let text = p::str(v, "text").map(|t| if t.is_empty() { label.as_str() } else { t }).filter(|t| *t != span.text);
+    let (mut from, mut to) = (span.from, span.to);
+    crate::cmd::controls::check_edit(s, &from, &to)?;
+    if let Some(text) = text {
+        if span.has_objects || text.contains(['\n', '\r', wordcraft_doc::para::OBJ]) {
+            return Err(CmdError::Params("this text can't replace the link's".into()));
+        }
+        let first = s.doc.para_at(&from).map(|p| p.props_of_char(from.off).clone());
+        s.sel = Selection { anchor: from.clone(), focus: to };
+        s.pending = first;
+        crate::cmd::paste_text(s, text)?;
+        to = s.sel.focus.clone();
+        from = Pos { off: to.off.saturating_sub(text.len()), ..to.clone() };
+        s.pending = Some(CharProps::default());
+    }
+    s.doc.format_range(&from, &to, &|c| c.link = Some(url.clone()))?;
+    sel_result(s)
+}

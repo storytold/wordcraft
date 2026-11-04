@@ -200,6 +200,120 @@ fn new_header_links_to_previous_and_even_pages_edit_what_they_show() {
     assert_eq!(s.doc.sections()[0].1.headers.even, None, "nothing made");
 }
 
+/// "Go see Kiln now" with "Kiln" linked to `old`, its "ln" bold, and the caret in it.
+fn linked_kiln() -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Go see Kiln now"));
+    s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+    s.run("insert.link", &json!({"url": "https://old.example"})).unwrap();
+    s.run("select.text", &json!({"text": "ln"})).unwrap();
+    s.run("format.bold", &json!({})).unwrap();
+    let at = Pos { off: 8, ..s.sel.focus.clone() };
+    s.sel = Selection::caret(at);
+    s
+}
+
+/// (text, link, bold) of each run of the first paragraph.
+fn link_runs(s: &Session) -> Vec<(String, Option<String>, bool)> {
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    p.run_ranges().map(|(r, c)| (p.text[r].to_string(), c.link.clone(), c.bold == Some(true))).collect()
+}
+
+/// #4974: the whole link moves to the new address, its formatting stays.
+#[test]
+fn edit_link_retargets_all_of_the_link() {
+    let mut s = linked_kiln();
+    let found = crate::cmd::insert::link_at_selection(&s).unwrap();
+    assert_eq!((found.url.as_str(), found.text.as_str()), ("https://old.example", "Kiln"));
+    s.run("insert.editLink", &json!({"url": "https://new.example", "text": "Kiln"})).unwrap();
+    let new = Some("https://new.example".to_string());
+    let runs = link_runs(&s);
+    assert_eq!(runs[1], ("Ki".to_string(), new.clone(), false));
+    assert_eq!(runs[2], ("ln".to_string(), new, true));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go see Kiln now");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(link_runs(&s)[1].1.as_deref(), Some("https://old.example"));
+}
+
+#[test]
+fn edit_link_retypes_the_text_and_typing_after_it_is_plain() {
+    let mut s = linked_kiln();
+    s.run("insert.editLink", &json!({"url": "https://new.example", "text": "Oven"})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go see Oven now");
+    assert_eq!(link_runs(&s)[1].1.as_deref(), Some("https://new.example"));
+    assert_eq!(s.doc.body[0].as_para().unwrap().props_of_char(7).style.as_deref(), Some("Hyperlink"));
+    s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go see Oven! now");
+    assert_eq!(s.doc.body[0].as_para().unwrap().props_of_char(11).link, None);
+}
+
+#[test]
+fn edit_link_with_empty_text_shows_the_target() {
+    let mut s = linked_kiln();
+    s.run("insert.editLink", &json!({"url": "https://new.example", "text": ""})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go see https://new.example now");
+}
+
+#[test]
+fn edit_link_tracks_a_retyped_text() {
+    let mut s = linked_kiln();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("insert.editLink", &json!({"url": "https://new.example", "text": "Oven"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Oven"));
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Kiln"), "the old text stays as a deletion");
+    let p = s.doc.body[0].as_para().unwrap();
+    let off = p.text.find("Oven").unwrap();
+    assert_eq!(p.props_of_char(off).link.as_deref(), Some("https://new.example"));
+}
+
+#[test]
+fn a_caret_or_selection_finds_a_link_only_inside_it() {
+    let mut s = linked_kiln();
+    let para = s.sel.focus.clone();
+    let at = |off: usize| Pos { off, ..para.clone() };
+    for (from, to, on) in [(7, 7, true), (11, 11, true), (9, 11, true), (6, 6, false), (12, 12, false), (5, 9, false), (9, 13, false)] {
+        s.sel = Selection { anchor: at(from), focus: at(to) };
+        assert_eq!(crate::cmd::insert::link_at_selection(&s).is_some(), on, "{from}..{to}");
+    }
+    s.sel = Selection::caret(at(2));
+    assert!(s.run("insert.editLink", &json!({"url": "https://new.example"})).is_err());
+}
+
+#[test]
+fn a_link_next_to_another_stays_apart() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("OneTwo"));
+    for (text, url) in [("One", "https://one.example"), ("Two", "https://two.example")] {
+        s.run("select.text", &json!({"text": text})).unwrap();
+        s.run("insert.link", &json!({"url": url})).unwrap();
+    }
+    s.sel = Selection::caret(Pos { off: 1, ..s.sel.focus.clone() });
+    s.run("insert.editLink", &json!({"url": "https://new.example"})).unwrap();
+    let links: Vec<_> = link_runs(&s).into_iter().map(|r| r.1.unwrap()).collect();
+    assert_eq!(links, ["https://new.example", "https://two.example"]);
+}
+
+#[test]
+fn edit_link_refuses_text_it_cannot_put_in_one_line() {
+    let mut s = linked_kiln();
+    for text in ["two\nlines", "two\rlines", "\u{FFFC}"] {
+        assert!(s.run("insert.editLink", &json!({"url": "https://new.example", "text": text})).is_err(), "{text:?}");
+    }
+    assert!(s.run("insert.editLink", &json!({"url": ""})).is_err());
+    assert!(s.run("insert.editLink", &json!({})).is_err());
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go see Kiln now");
+}
+
+/// A link around a field: the address can change, but its text can't be retyped.
+#[test]
+fn a_link_holding_an_object_keeps_its_text() {
+    let mut s = linked_kiln();
+    s.run("insert.field", &json!({"instr": "PAGE", "result": "1"})).unwrap();
+    let found = crate::cmd::insert::link_at_selection(&s).unwrap();
+    assert!(found.has_objects && !found.text.contains('\u{FFFC}'));
+    assert!(s.run("insert.editLink", &json!({"url": "https://new.example", "text": "Oven"})).is_err());
+    s.run("insert.editLink", &json!({"url": "https://new.example"})).unwrap();
+    assert_eq!(crate::cmd::insert::link_at_selection(&s).unwrap().url, "https://new.example");
+}
+
 #[test]
 fn base64_round_trip() {
     let data = b"hello world!?";
