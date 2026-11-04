@@ -102,7 +102,7 @@ fn kept_heading_checks_a_first_row_without_headers() {
 #[test]
 fn table_lookahead_preserves_list_counters() {
     let mut doc = control(28.0, 100.0, true, 1, true);
-    let num = doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     doc.para_mut(StoryRef::Body, &Path(vec![2, 1, 0, 0])).unwrap().props.numbering = numbering;
     let mut next = Paragraph::with_text("SYNTHETIC FOLLOWING ITEM", Default::default());
