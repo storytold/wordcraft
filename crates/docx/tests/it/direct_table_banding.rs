@@ -47,7 +47,7 @@ fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
     let ex = table.rows[0].props.exceptions.as_ref().expect("read row exception");
     assert_eq!((ex.band_size, ex.col_band_size), (Some(4), Some(5)));
 
-    for pass in 0..2 {
+    for _ in 0..2 {
         let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
         assert_eq!((tbl.props.band_size, tbl.props.col_band_size), (Some(2), Some(3)));
         let saved = wordcraft_docx::write(&doc).unwrap();
