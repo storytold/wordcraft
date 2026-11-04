@@ -1,4 +1,4 @@
-use super::{NumeralMode, WriteError};
+use super::{MarkupOptions, NumeralMode, WriteError};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PdfError {
@@ -44,6 +44,9 @@ pub struct PdfOptions {
     /// How [`export`] shows digits (the Numeral setting; callers resolve `System`, see
     /// [`NumeralMode::resolve`]). [`export_layout`] keeps the layout it is given.
     pub numeral: NumeralMode,
+    /// How tracked changes are marked when `include_markup` is on: the Track Changes Options
+    /// (insertion and deletion marks and colours, change bars, Hidden deletions), as on screen.
+    pub revisions: MarkupOptions,
 }
 
 impl Default for PdfOptions {
@@ -59,6 +62,7 @@ impl Default for PdfOptions {
             links: true,
             paper: None,
             numeral: NumeralMode::Arabic,
+            revisions: MarkupOptions::default(),
         }
     }
 }

@@ -419,6 +419,7 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        revisions: s.prefs.markup.clone(),
     }
 }
 
@@ -433,9 +434,11 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
-    // the on-screen cue while editing the body, not part of the page.
+    // the on-screen cue while editing the body, not part of the page. Tracked changes are marked
+    // as Track Changes Options mark them on screen.
     let mut opts = wordcraft_render::RenderOptions::default();
     opts.display.dim_header = false;
+    opts.display.revisions = s.prefs.markup.clone();
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
     }
