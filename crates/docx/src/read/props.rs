@@ -242,6 +242,9 @@ impl PropCtx {
                     // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
                     // is left to inherit, like `w:cstheme`.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // Which font characters of ambiguous script take: `eastAsia` sets curly quotes,
+                    // dashes and ellipses in the East Asian font; `default` and `cs` don't.
+                    c.hint_ea = k.attr("w:hint").map(|h| h == "eastAsia");
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:bCs" => c.bold_cs = Some(on_off(k)),

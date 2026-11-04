@@ -325,6 +325,11 @@ pub struct CharProps {
     /// inherit, then `font`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ea: Option<String>,
+    /// The run's characters whose script is ambiguous (curly quotes, dashes, ellipses, middle
+    /// dots…) are East Asian text, set in `font_ea` (`w:rFonts/@w:hint="eastAsia"`). `None` =
+    /// inherit, then no.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint_ea: Option<bool>,
     /// Complex-script size, points (`w:szCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_cs: Option<f32>,
@@ -470,7 +475,7 @@ impl CharProps {
     }
 
     fn minus_script_style(&mut self, base: &CharProps) {
-        drop_same_fields!(self, base; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        drop_same_fields!(self, base; cs, font_cs, font_ea, hint_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
     }
 
     fn minus_document_marks(&mut self, base: &CharProps) {
@@ -501,7 +506,7 @@ impl CharProps {
     }
 
     fn overlay_script_style(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
+        overlay_fields!(self, patch; cs, font_cs, font_ea, hint_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout);
     }
 
     fn overlay_document_marks(&mut self, patch: &CharProps) {
