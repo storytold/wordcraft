@@ -2626,7 +2626,10 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
             for _ in 0..3 {
                 h.step();
             }
-            assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "a click still selects text");
+            // In the header the picture lies over the body area, clear of the header's own text, so a
+            // click on it selects it (Word); in the body a click still reaches the text behind it.
+            let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_some();
+            assert_eq!(picked, header, "a click selects the header's picture, but only edits the body's text");
             if preselect {
                 let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
                 h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
@@ -4922,4 +4925,59 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
         );
         assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
     }
+}
+
+/// A Behind Text picture anchored in the header but drawn far down the page, over the body: while
+/// editing the header a click on it selects it; from the body a click there is body text.
+#[test]
+fn header_picture_outside_the_header_band_is_selected_while_editing_the_header() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.editHeader", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "Header"})).unwrap();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
+    let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    a.run("arrange.bounds", json!({"x": 200, "y": 400})).unwrap();
+    a.run("arrange.wrap", json!({"wrap": "behindText"})).unwrap();
+    let rect = a.session.layout().object(&pos, 0).unwrap().rect;
+    assert!(rect.y > 300.0, "the picture sits well below the header band: {rect:?}");
+    a.run("insert.closeHeader", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let page = h.state().canvas.page_rects[0];
+    let scale = h.state().canvas.scale;
+    let frame = crate::frame::to_screen(page, scale, rect);
+    let at = frame.center();
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        h.event(Event::PointerMoved(at));
+        h.event(button(true));
+        h.step();
+        h.event(button(false));
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    click(&mut h);
+    assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_none(), "from the body the header picture isn't selectable");
+    assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+    h.state_mut().run("insert.editHeader", json!({"page": 0})).unwrap();
+    for _ in 0..6 {
+        h.step();
+    }
+    click(&mut h);
+    let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+    assert_eq!(picked, Some(pos), "while editing the header a click on its picture selects it");
 }

@@ -289,7 +289,11 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
-    if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
+    // A header/footer picture drawn outside the header/footer band (down over the body) has no
+    // header text to edit there, so a click selects it as it does in Word, not the deferred text click.
+    let outside_band = matches!(object.story, StoryRef::Part(_))
+        && crate::canvas::page_at(pages, layout, scale, at).is_some_and(|(page, _, y)| layout.header_footer_zone(page, y).is_none());
+    if pressed && grab == Grab::Move && object.behind() && !outside_band && behind_draggable(app, &object) {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return false,
