@@ -21,6 +21,10 @@ fn apply_impl() {
     if std::env::var_os("DISPLAY").is_none_or(|v| v.is_empty()) {
         return;
     }
+    // Native Wayland ignores `WINIT_X11_SCALE_FACTOR`; ask only when winit will use X11.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()) && !matches!(std::env::var("WINIT_UNIX_BACKEND").as_deref(), Ok("x11")) {
+        return;
+    }
     if let Ok(current) = std::env::var("WINIT_X11_SCALE_FACTOR")
         && !current.trim().is_empty()
     {
@@ -94,6 +98,17 @@ fn run_query(program: &str, args: &[&str]) -> String {
 }
 
 fn xsettings_manager_present() -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("x11-settings".into()).spawn(move || {
+        let _ = tx.send(xsettings_owner_present());
+    });
+    if spawned.is_err() {
+        return false;
+    }
+    rx.recv_timeout(std::time::Duration::from_millis(750)).unwrap_or(false)
+}
+
+fn xsettings_owner_present() -> bool {
     use x11rb::protocol::xproto::ConnectionExt as _;
 
     let Ok((connection, screen)) = x11rb::connect(None) else { return false };
