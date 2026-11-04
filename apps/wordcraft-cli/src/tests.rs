@@ -543,3 +543,21 @@ fn script_parse_resolves_paths_against_the_base() {
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
 }
+
+/// `WORDCRAFT_ODF` names a display style, and a session opened in one keeps it, so a `run`
+/// script's later `file.open` reads OpenDocument files the same way.
+#[test]
+fn the_odf_style_is_kept_by_the_session() {
+    use wordcraft_doc::odf_profile::OdfProfile;
+    assert_eq!(odf_from(None), Ok(OdfProfile::default()));
+    assert_eq!(odf_from(Some("libreoffice".into())), Ok(OdfProfile::libreoffice()));
+    assert_eq!(odf_from(Some("word".into())), Ok(OdfProfile::word()));
+    assert!(odf_from(Some("custom".into())).is_err());
+    let dir = std::env::temp_dir().join(format!("wc-cli-odf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.txt");
+    std::fs::write(&path, "Hello").unwrap();
+    let s = open_in(&path, None, OdfProfile::libreoffice()).unwrap();
+    assert_eq!(s.prefs.odf, OdfProfile::libreoffice());
+    let _ = std::fs::remove_dir_all(&dir);
+}

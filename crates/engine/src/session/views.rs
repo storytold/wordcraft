@@ -143,6 +143,7 @@ impl Session {
         let viewing = self.view.viewing;
         self.view = view;
         self.view.viewing = viewing;
+        self.view.read_page_color = self.prefs.read_page_color;
         self.pending = pending;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
