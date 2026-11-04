@@ -109,6 +109,7 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        header_repeats: 0,
     }
 }
 
@@ -196,6 +197,7 @@ fn new_page_builder<'p>(sect: &'p SectionProps, early: &'p EarlyFloats, web: boo
         early,
         seeded: 0,
         settle,
+        column_lines: None,
     }
 }
 
@@ -289,12 +291,14 @@ fn start_section_page<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLinks<
 }
 
 /// Continuous: new column layout below the current text (its tallest column).
-fn continue_page(pb: &mut PageBuilder, sect: &SectionProps) {
+fn continue_page(pb: &mut PageBuilder, sect: &SectionProps, block: usize) {
+    pb.close_column_lines();
     pb.cols = sect.column_boxes();
     pb.col = 0;
     pb.top = pb.text_bottom();
     pb.y = pb.top;
     pb.max_y = pb.top;
+    pb.open_column_lines(block);
 }
 
 /// Whether the section's last page balances its columns (see [`balance_columns`]), and set what
@@ -362,6 +366,7 @@ fn section_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, endnotes: &mut VecDeque
 /// the turned pages of vertical sections.
 fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionProps)], web: bool) -> Vec<Page> {
     let mut pb = pb;
+    pb.close_column_lines();
     pb.apply_valign();
     pb.flush_notes();
     let last_block = doc.body.len().saturating_sub(1);
@@ -504,7 +509,7 @@ pub(crate) fn layout_pass(
         } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
             start_section_page(&mut ctx, &mut pb, &hf, &sec, (mode, block));
         } else {
-            continue_page(&mut pb, sect);
+            continue_page(&mut pb, sect, block);
         }
         prev_turn = turn;
         pb.foot_top = sec.tops.foot;
@@ -556,6 +561,7 @@ struct Snap<'a> {
     eq_count: u32,
     page_field: u32,
     boxes: usize,
+    header_repeats: usize,
 }
 
 impl<'a> Snap<'a> {
@@ -573,6 +579,7 @@ impl<'a> Snap<'a> {
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
             boxes: ctx.boxes.total(),
+            header_repeats: ctx.header_repeats,
         }
     }
 
@@ -595,6 +602,7 @@ impl<'a> Snap<'a> {
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
+        ctx.header_repeats = self.header_repeats;
     }
 }
 

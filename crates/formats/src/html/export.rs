@@ -19,6 +19,24 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// A font name as a quoted CSS string. Quotes, `\` and control characters would end the string,
+/// and `;` and `,` the declaration or the family list for a reader that splits on them, so all of
+/// these are written as hex escapes ([`css_unescape`] reads them back).
+fn css_font_name(name: &str) -> String {
+    let mut o = String::with_capacity(name.len() + 2);
+    o.push('\'');
+    for c in name.chars() {
+        match c {
+            '\0' => o.push('\u{FFFD}'),
+            '\'' | '"' | '\\' | ';' | ',' => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c if c.is_control() => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c => o.push(c),
+        }
+    }
+    o.push('\'');
+    o
+}
+
 fn align_css(a: Option<Align>) -> Option<&'static str> {
     match a? {
         Align::Center => Some("text-align:center"),
@@ -92,7 +110,7 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
         css.push(format!("font-size:{}pt", trim_num(s)));
     }
     if let Some(fam) = &f.font {
-        css.push(format!("font-family:'{}'", esc(&fam.replace('\'', ""))));
+        css.push(format!("font-family:{}", esc(&css_font_name(fam))));
     }
     if !css.is_empty() {
         open.push_str(&format!("<span style=\"{}\">", css.join(";")));

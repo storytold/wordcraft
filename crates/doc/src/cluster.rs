@@ -115,12 +115,22 @@ pub fn next_cluster(text: &str, off: usize) -> usize {
     }
 }
 
-/// Scripts whose Backspace removes one character at a time (a vowel sign, a medial, a stacked
-/// consonant) rather than the whole cluster, as on Windows and macOS: the Brahmic scripts of
-/// South and South-East Asia.
+/// Characters Backspace removes individually rather than with their whole cluster: Arabic
+/// combining marks and characters of the Brahmic scripts of South and South-East Asia.
 pub fn backspaces_by_char(c: char) -> bool {
     matches!(u32::from(c),
-        0x0900..=0x0DFF // Devanagari … Sinhala
+        0x0610..=0x061A // Arabic nonspacing marks (Unicode 17.0)
+        | 0x064B..=0x065F
+        | 0x0670
+        | 0x06D6..=0x06DC
+        | 0x06DF..=0x06E4
+        | 0x06E7..=0x06E8
+        | 0x06EA..=0x06ED
+        | 0x0897..=0x089F
+        | 0x08CA..=0x08E1
+        | 0x08E3..=0x08FF
+        | 0x10EFA..=0x10EFF
+        | 0x0900..=0x0DFF // Devanagari … Sinhala
         | 0x0E00..=0x0EFF // Thai, Lao
         | 0x0F00..=0x0FFF // Tibetan
         | 0x1000..=0x109F // Myanmar
@@ -250,8 +260,10 @@ mod tests {
     }
 
     #[test]
-    fn backspace_by_character_in_brahmic_scripts_only() {
+    fn backspace_by_character_in_brahmic_scripts_and_arabic_marks() {
         assert!(backspaces_by_char('ေ') && backspaces_by_char('ि') && backspaces_by_char('្'));
+        assert!(backspaces_by_char('\u{064E}') && backspaces_by_char('\u{06E7}') && backspaces_by_char('\u{10EFF}'));
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
+        assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
     }
 }
