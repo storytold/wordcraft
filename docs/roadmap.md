@@ -1,7 +1,5 @@
 # WordCraft roadmap: milestones and what's next
 
-> **RTF export update (2026-10-27):** RTF export now writes the default, first-page and even-page header/footer stories for each section, sharing document font/colour/revision tables. Omitted destinations stay linked; explicit empty stories clear inherited content. Synthetic tests cover section boundaries, tables and styles; readiness estimates are unchanged. Notes/comments remain separate work (#1056). The `\facingp` document setting survives import/export; stored even stories do not enable it when it is off.
->
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (M15: Arabic mirrored UI #1195; 28 UI languages; Hebrew UI and native IME acceptance remain open); previously trivial (HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged; previously trivial: egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…), and the input-method handling has synthetic regressions while managed CI passed and native acceptance (#155–#164) remains open; previously trivial: M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
@@ -74,12 +72,12 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 ## Revision history
 
-> 2026-10-27 · RTF section header/footer export: synthetic regressions for section boundaries, story variants, resources and explicit empty destinations. Readiness estimates unchanged. Facing-page import/export now retains the document setting; two further synthetic regressions cover enabled, disabled and story-local controls.
-
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-29 | trivial | HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged. |
+| 2026-10-27 | trivial | RTF export update (2026-10-27): RTF export now writes the default, first-page and even-page header/footer stories for each section, sharing document font/colour/revision tables. Omitted destinations stay linked; explicit empty stories clear inherited content. Synthetic tests cover section boundaries, tables and styles; readiness estimates are unchanged. Notes/comments remain separate work (#1056). The `\facingp` document setting survives import/export; stored even stories do not enable it when it is off. |
+| 2026-10-27 | trivial | 2026-10-27 · RTF section header/footer export: synthetic regressions for section boundaries, story variants, resources and explicit empty destinations. Readiness estimates unchanged. Facing-page import/export now retains the document setting; two further synthetic regressions cover enabled, disabled and story-local controls. |
 | 2026-10-25 | trivial | egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…); input-method surrounding-delete and commit handling has synthetic regressions only, with managed CI passing; native acceptance (#155–#164) and native-speaker review remain open |
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
