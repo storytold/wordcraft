@@ -560,6 +560,19 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
+/// Where whole pasted paragraphs go in `p` for a caret at `off`: at the start when nothing but
+/// bookmark starts come before the caret, so those bookmarks stay with the paragraph's text.
+fn paste_off(p: &Paragraph, off: usize) -> usize {
+    let mut starts = 0;
+    for (at, o) in p.objects_with_offsets() {
+        if at != starts || at >= off || !matches!(o, InlineObject::BookmarkStart { .. }) {
+            break;
+        }
+        starts = at + crate::para::OBJ.len_utf8();
+    }
+    if starts == off { 0 } else { off }
+}
+
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1420,7 +1433,9 @@ impl Document {
             target.section = sect;
             return Ok(Pos { off: pos.off + added, ..pos.clone() });
         }
-        // Multi-block: split, merge first into left part, last into right part.
+        // Multi-block: split, merge first into left part, last into right part. Bookmarks that
+        // start the paragraph stay with its text, as in Word: the paste goes in front of them.
+        let pos = &Pos { off: self.para_at(pos).map_or(pos.off, |p| paste_off(p, pos.off)), ..pos.clone() };
         let after = self.split_paragraph(pos)?;
         let left = pos.path.clone();
         let first = blocks.remove(0);
