@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use wordcraft_ui_egui::office_pane::OfficeHost;
+use wordcraft_ui_egui::office_pane::{self, OfficeHost};
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::HasWindowHandle;
 use wry::{Rect, WebView, WebViewBuilder};
@@ -57,10 +57,13 @@ impl Library {
             dirs.push(dir.join("office-js"));
             dirs.push(dir.join("../Resources/office-js"));
         }
-        let dir = dirs.into_iter().find(|d| d.join("office_js.js").is_file() && d.join("office_js_bg.wasm").is_file())?;
+        // All three or none: without the bootstrap the library would never start.
+        let dir = dirs
+            .into_iter()
+            .find(|d| d.join("office_js.js").is_file() && d.join("office_js_bg.wasm").is_file() && d.join("bootstrap.js").is_file())?;
         let glue = std::fs::read_to_string(dir.join("office_js.js")).ok()?;
         let wasm = std::fs::read(dir.join("office_js_bg.wasm")).ok()?;
-        let bootstrap = std::fs::read_to_string(dir.join("bootstrap.js")).unwrap_or_default();
+        let bootstrap = std::fs::read_to_string(dir.join("bootstrap.js")).ok()?;
         let script =
             format!("{bootstrap}\n{glue}\n;globalThis.__craftOfficeStart && globalThis.__craftOfficeStart(wasm_bindgen, \"{}\");", base64(&wasm));
         Some(Library { script })
@@ -87,6 +90,9 @@ fn base64(bytes: &[u8]) -> String {
 /// A page: the web view once created, and what it should show.
 struct View {
     url: String,
+    /// Origins the page may be at ([`office_pane::allowed_origins`]): the add-in's own and its
+    /// `<AppDomains>`. Shared with the web view's handlers.
+    allowed: Rc<RefCell<Vec<String>>>,
     webview: Option<WebView>,
     rect: egui::Rect,
     visible: bool,
@@ -133,6 +139,8 @@ impl Host {
             if view.webview.is_none() {
                 let k = key.clone();
                 let inbox = inbox.clone();
+                let nav_allowed = view.allowed.clone();
+                let ipc_allowed = view.allowed.clone();
                 let mut builder = WebViewBuilder::new()
                     .with_url(view.url.clone())
                     .with_bounds(bounds)
@@ -142,9 +150,20 @@ impl Host {
                         open_with_system(&url);
                         wry::NewWindowResponse::Deny
                     })
-                    // Add-in pages are https pages (as the manifest schema requires).
-                    .with_navigation_handler(|url| url.starts_with("https://") || url == "about:blank")
+                    // As in Office: the pane stays on the add-in's origin and its `<AppDomains>`
+                    // (the page there gets the document); any other link opens in the browser.
+                    .with_navigation_handler(move |url| {
+                        if url == "about:blank" || office_pane::origin_allowed(&url, &nav_allowed.borrow()) {
+                            return true;
+                        }
+                        open_with_system(&url);
+                        false
+                    })
                     .with_ipc_handler(move |req: wry::http::Request<String>| {
+                        // Only the add-in's own pages may talk to the document.
+                        if !office_pane::origin_allowed(&req.uri().to_string(), &ipc_allowed.borrow()) {
+                            return;
+                        }
                         let mut q = match inbox.lock() {
                             Ok(g) => g,
                             Err(p) => p.into_inner(),
@@ -204,16 +223,18 @@ fn call(function: &str, arg: &str) -> String {
 }
 
 impl OfficeHost for Host {
-    fn show(&mut self, key: &str, url: &str, rect: egui::Rect, _pixels_per_point: f32) {
+    fn show(&mut self, key: &str, url: &str, allowed: &[String], rect: egui::Rect, _pixels_per_point: f32) {
         let mut inner = self.0.borrow_mut();
         let view = inner.views.entry(key.to_string()).or_insert_with(|| View {
             url: url.to_string(),
+            allowed: Rc::new(RefCell::new(allowed.to_vec())),
             webview: None,
             rect,
             visible: true,
             scripts: Vec::new(),
             closed: false,
         });
+        *view.allowed.borrow_mut() = allowed.to_vec();
         if view.url != url
             && let Some(w) = &view.webview
         {
@@ -234,10 +255,11 @@ impl OfficeHost for Host {
             v.visible = false;
         }
     }
-    fn load_hidden(&mut self, key: &str, url: &str) {
+    fn load_hidden(&mut self, key: &str, url: &str, allowed: &[String]) {
         let mut inner = self.0.borrow_mut();
         inner.views.entry(key.to_string()).or_insert_with(|| View {
             url: url.to_string(),
+            allowed: Rc::new(RefCell::new(allowed.to_vec())),
             webview: None,
             rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)),
             visible: false,

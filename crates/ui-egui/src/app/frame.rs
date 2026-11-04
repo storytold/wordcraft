@@ -53,6 +53,7 @@ impl WordApp {
             backstage::show(self, ui);
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.
+            crate::office_pane::covered(self);
             chrome::title_bar(self, ui);
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
@@ -62,6 +63,8 @@ impl WordApp {
             // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
             self.focus_ribbon &= screen == chrome::Screen::Focus;
             if screen != chrome::Screen::Normal {
+                // No task panes in Focus or Full Screen: the add-in's web view would cover the page.
+                crate::office_pane::covered(self);
                 chrome::screen_bar(self, ui, screen);
             } else {
                 chrome::title_bar(self, ui);

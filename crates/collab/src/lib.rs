@@ -66,7 +66,7 @@ impl std::fmt::Display for CollabError {
             CollabError::Corrupt(m) => write!(f, "a damaged update was dropped: {m}"),
             CollabError::Mismatch { app, schema } => write!(f, "This room is for {app} {schema}"),
             CollabError::Decrypt => write!(f, "a message that can't be decrypted was dropped"),
-            CollabError::TooLarge(n) => write!(f, "a message of {n} bytes is larger than the 16 MiB allowed"),
+            CollabError::TooLarge(n) => write!(f, "a message of {n} bytes is larger than allowed"),
             CollabError::NotReady => write!(f, "the room's document hasn't arrived yet"),
             CollabError::Other(m) => write!(f, "{m}"),
         }

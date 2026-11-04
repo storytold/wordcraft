@@ -309,7 +309,8 @@ impl Config {
         let field = |k: &str| u.get(k).and_then(Json::as_str).map(|t| clean(t, 128)).unwrap_or_default();
         let mut id = field("id");
         if id.is_empty() {
-            id = format!("guest-{}", pct(&token).chars().rev().take(8).collect::<String>());
+            // Random, never from the token: every peer sees this id, and the token is a secret.
+            id = format!("guest-{:08x}", wordcraft_collab::new_client_id() & 0xffff_ffff);
         }
         let mut name = field("name");
         if name.is_empty() {
@@ -725,6 +726,12 @@ impl Live {
     }
 
     /// A frame for the room: now when the socket is up and welcomed, else queued.
+    /// Edits wait for the socket (it's down, or the server hasn't welcomed it): leaving the page
+    /// now would lose them.
+    pub fn has_unsent(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
     fn send(&mut self, frame: Vec<u8>) {
         if self.socket == Socket::Open && self.welcomed {
             self.out.push(Action::Send(frame));

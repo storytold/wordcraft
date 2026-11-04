@@ -69,9 +69,11 @@ pub fn from_object<T: DeserializeOwned + Default>(o: JsonMap<String, Json>) -> T
     if let Ok(v) = serde_json::from_value::<T>(Json::Object(o.clone())) {
         return v;
     }
+    // Each key on its own (the properties' fields don't depend on each other): linear in the
+    // keys, however many unknown ones a peer sends.
     let mut kept = JsonMap::new();
     for (k, v) in o {
-        let mut trial = kept.clone();
+        let mut trial = JsonMap::new();
         trial.insert(k.clone(), v.clone());
         if serde_json::from_value::<T>(Json::Object(trial)).is_ok() {
             kept.insert(k, v);

@@ -1,12 +1,13 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (protocol 2.2: documents carry an `id`, multi-line form fields, `text.insert {literal: true}`; previously minor: Office add-ins: `office.js` defused, function commands, colour names, more of the Word API; [officejs.md](officejs.md); previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-04 · **Change:** trivial (the introduction says VBA runs through a macro add-in; `requires.features` lists all eight names; previously minor: protocol 2.2: documents carry an `id`, multi-line form fields, `text.insert {literal: true}`; previously minor: Office add-ins: `office.js` defused, function commands, colour names, more of the Word API; [officejs.md](officejs.md); previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
 written in any language, that WordCraft starts and talks to over its standard input and output.
-This is WordCraft's equivalent of Word's add-ins (Office add-ins, COM add-ins); VBA stays out of
-scope.
+This is WordCraft's equivalent of Word's add-ins (Office add-ins, COM add-ins). WordCraft itself
+doesn't run VBA: a macro add-in does ([protocol 1.1](#protocol-11-asking-the-host-and-macros): the `macros` manifest key,
+`developer.runMacro`).
 
 Because an add-in runs in its own process, a crash, a hang or a bad answer fails its command,
 never the document. The host's code is `crates/plugin`; the reference add-in is
@@ -136,7 +137,7 @@ loaded with `--plugin` before that keep working.
 | `ui.menus[]` | A right-click menu item: `menu` (`text`, the default, always shown; `table` in a table; `picture` with a picture, shape or text box selected), `command`, `label`, `params`. Items go at the end of the menu, after a separator |
 | `requires.apps` | Manifest 1.3. Per app id, the app versions the add-in works with (`{"wordcraft": ">=0.7.0"}`); an app missing from the map isn't constrained. See [Requirements](#requirements-manifest-13) |
 | `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.2"`) |
-| `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`) that must all be present |
+| `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`, `multiline`, `literalValues`) that must all be present |
 | `requires.addins[]` | Other add-ins it needs: `id`, `version` (a range; default `*`), `github` (`owner/repo` to install it from), `optional` (default false), `why` (shown to the person, at most 200 characters). At most 32 |
 
 Icons are named from WordCraft's own icon set (`crates/ui-egui/src/icons.rs`), for example
@@ -603,6 +604,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | The introduction no longer says VBA is out of scope (it runs through a macro add-in); `requires.features` lists `multiline` and `literalValues` too |
 | 2026-10-16 | minor | Protocol 2.2 (shared, craft-collab `docs/protocol-2.2.md`): `host.protocol` `"2.2"`; `id` in `context.document` and the document events; multi-line and code form fields (`multiline`); `text.insert {literal: true}` (`literalValues`); the formula-function features don't apply |
 | 2026-10-15 | minor | Office add-ins ([officejs.md](officejs.md)): Microsoft's `office.js` defused in the page and the globals made irreplaceable; function commands run end to end (`Office.actions.associate`, the control id as `event.source.id`, `event.completed()`, a 5-minute limit); CSS colour names; `set()`, `insertBreak`, strikethrough and sub/superscript; `DocumentSelectionChanged`; common-API enums; late `Office.initialize` |
 | 2026-10-15 | minor | Manifest 1.3 (shared with GridCraft and DeckCraft): `requires` (apps, protocol, features, other add-ins with Cargo-style version ranges), blocked add-ins (`state`, `blockedBy`, `requiredBy`), start order, `host.protocol` and `addins` in `initialize`, `plugins.requirements`, `plugins.installMissing`, `plugins.install` `github`/`withRequirements`/`force`/`version` (newest release in range), `plugins.load` `force`, Install Missing, asking before turning off a needed add-in or updating out of range; Office add-ins' `<Requirements>` sets and methods checked |
