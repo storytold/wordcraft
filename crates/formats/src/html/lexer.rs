@@ -34,7 +34,9 @@ impl Lexer<'_> {
     }
 
     /// Skip past the next matching end tag `</tag...>` (ASCII case-insensitive), or to the end.
-    pub(super) fn skip_past_end_tag(&mut self, tag: &str) {
+    /// Skip past the end tag of raw text element `tag`; returns where that end tag starts (the
+    /// end of the input when there is none).
+    pub(super) fn skip_past_end_tag(&mut self, tag: &str) -> usize {
         let prefix = format!("</{tag}");
         let p = prefix.as_bytes();
         while self.pos < self.s.len() {
@@ -42,17 +44,19 @@ impl Lexer<'_> {
             let found = hay.windows(p.len().max(1)).position(|w| w.eq_ignore_ascii_case(p));
             let Some(k) = found else {
                 self.pos = self.s.len();
-                return;
+                return self.pos;
             };
             let after_tag = k + p.len();
             let next_byte = hay.get(after_tag);
             if next_byte.is_none_or(|b| b.is_ascii_whitespace() || *b == b'>' || *b == b'/') {
+                let at = self.pos + k;
                 self.pos += after_tag;
                 self.skip_past(">");
-                return;
+                return at;
             }
             self.pos += k + 2;
         }
+        self.s.len()
     }
 
     pub(super) fn next(&mut self) -> Option<Tok> {
