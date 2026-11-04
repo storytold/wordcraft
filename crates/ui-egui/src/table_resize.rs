@@ -103,7 +103,7 @@ pub(crate) fn available(app: &WordApp) -> bool {
 fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32, ResizeTarget)> {
     let (page, x, y) = crate::canvas::page_at(rects, layout, scale, p)?;
     let sc = page_scale(rects, layout, scale, page)?;
-    let t = table_resize::resize_target(layout, &app.session.doc, page, x, y, REACH_PX / sc)?;
+    let t = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, app.session.sel.focus.story)?;
     Some((page, x, y, t))
 }
 
@@ -167,7 +167,7 @@ pub(crate) fn grab(app: &mut WordApp, layout: &DocLayout, page: usize, x: f32, y
     if !available(app) {
         return;
     }
-    if let Some(mut target) = table_resize::resize_target(layout, &app.session.doc, page, x, y, 1.0) {
+    if let Some(mut target) = table_resize::resize_target_in(layout, &app.session.doc, page, x, y, 1.0, app.session.sel.focus.story) {
         target.limit_to_selection(&app.session, y);
         app.canvas.table_resize = Some(ResizeDrag { page, from: (x, y), to: (x, y), target, ruler: true });
     }
@@ -277,7 +277,7 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) else { return };
     let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
     let Some(sc) = page_scale(rects, layout, scale, page) else { return };
-    let Some(tg) = table_resize::table_under(layout, &app.session.doc, page, x, y, REACH_PX / sc) else { return };
+    let Some(tg) = table_resize::table_under_in(layout, &app.session.doc, page, x, y, REACH_PX / sc, app.session.sel.focus.story) else { return };
     let h = tg.handle();
     if let (Some(a), Some(b)) = (s(page, h.x, h.y), s(page, h.right(), h.bottom())) {
         let r = Rect::from_two_pos(a, b);

@@ -12009,3 +12009,58 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// #5558: a table in the header is edited like one in the body (typing in its cells, Table
+/// Layout's rows and columns), and a table copied from the body is pasted into the header as a
+/// table, not as its text.
+#[test]
+fn a_header_table_is_edited_and_a_copied_table_pastes_into_the_header() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    let id = run(&mut s, "insert.header", json!({"text": "Head"}))["story"].as_u64().unwrap() as u32;
+    let hf = StoryRef::Part(id);
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    assert_eq!(s.sel.focus.story, hf, "the caret stays in the header");
+    assert!(s.sel.focus.path.cell().is_some(), "the caret is in the new table: {:?}", s.sel.focus);
+    run(&mut s, "text.insert", json!({"text": "Cell"}));
+    run(&mut s, "table.insertRowBelow", json!({}));
+    run(&mut s, "table.insertColumnRight", json!({}));
+    let tables = |s: &Session| {
+        s.doc
+            .story(hf)
+            .map(|b| b.iter().filter_map(|b| b.as_table().map(|t| (t.rows.len(), t.rows[0].cells.len()))).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    assert_eq!(tables(&s), vec![(3, 3)]);
+    assert!(s.doc.plain_text(hf).contains("Cell"));
+    // Its column border drags, as a body table's does: the border is in the page's header.
+    let first = s.layout().pages[0].header.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, story, .. } if *story == hf => Some(*rect),
+        _ => None,
+    });
+    let first = first.expect("the header's table is laid out");
+    let grid = |s: &Session| s.doc.story(hf).and_then(|b| b.iter().find_map(|b| b.as_table().map(|t| t.grid.clone()))).unwrap_or_default();
+    let before = grid(&s);
+    let (x, y) = (first.right(), first.y + first.h / 2.0);
+    run(&mut s, "table.resizeDrag", json!({"page": 0, "x": x, "y": y, "toX": x + 30.0, "toY": y}));
+    let after = grid(&s);
+    assert!(after[0] > before[0] + 20.0, "the header table's first column widened: {before:?} → {after:?}");
+    // While the body is edited, the dimmed header's table doesn't take the pointer.
+    assert!(crate::cmd::table_resize::resize_target_in(&s.layout(), &s.doc, 0, x, y, 4.0, StoryRef::Body).is_none());
+    // A table copied from the body pastes into the header as a table.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Copied"}));
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    // The end of the header's "Head" paragraph, after its table.
+    let head = s.doc.story(hf).map_or(0, |b| b.len().saturating_sub(1));
+    let at = Pos { story: hf, path: wordcraft_doc::Path::top(head), off: 4 };
+    assert_eq!(s.doc.para_at(&at).map(|p| p.text.as_str()), Some("Head"));
+    run(&mut s, "caret.set", json!({"pos": at}));
+    run(&mut s, "edit.paste", json!({}));
+    let mut found = tables(&s);
+    found.sort();
+    assert_eq!(found, vec![(1, 2), (3, 3)], "{:?}", s.doc.story(hf));
+    assert!(s.doc.plain_text(hf).contains("Copied"));
+}

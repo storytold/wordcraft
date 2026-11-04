@@ -327,12 +327,14 @@ pub(crate) struct CellBox {
     pub(crate) cell: usize,
 }
 
-pub(crate) fn cell_boxes(l: &DocLayout, page: usize) -> Vec<CellBox> {
+/// The table cells on a page that the pointer reaches while `editing` is edited: with the body,
+/// those among the page's items; with a header or footer (#5558), the header's and footer's
+/// too, but not the body's, which is dimmed then.
+pub(crate) fn cell_boxes_in(l: &DocLayout, page: usize, editing: StoryRef) -> Vec<CellBox> {
     let Some(pg) = l.pages.get(page) else { return Vec::new() };
-    pg.items
-        .iter()
+    pg.story_items(editing)
         .filter_map(|it| match it {
-            Placed::Cell { rect, table, row, cell, story, .. } => {
+            Placed::Cell { rect, table, row, cell, story, .. } if editing == StoryRef::Body || *story != StoryRef::Body => {
                 Some(CellBox { rect: *rect, table: table.clone(), story: *story, row: *row, cell: *cell })
             }
             _ => None,
@@ -403,8 +405,15 @@ fn geometry(t: &Table, boxes: &[&CellBox]) -> Option<(Vec<f32>, Vec<DrawnRow>)> 
 }
 
 /// Every table drawn on a page, with its geometry there (`edge` is a placeholder).
+#[cfg(test)]
 pub(crate) fn tables_on(l: &DocLayout, doc: &Document, page: usize) -> Vec<ResizeTarget> {
-    let boxes = cell_boxes(l, page);
+    tables_on_in(l, doc, page, StoryRef::Body)
+}
+
+/// Every table drawn on a page that the pointer reaches while `editing` is edited
+/// ([`cell_boxes_in`]).
+pub(crate) fn tables_on_in(l: &DocLayout, doc: &Document, page: usize, editing: StoryRef) -> Vec<ResizeTarget> {
+    let boxes = cell_boxes_in(l, page, editing);
     let mut tables: Vec<(StoryRef, &Path)> = Vec::new();
     for b in &boxes {
         if !tables.iter().any(|(s, p)| *s == b.story && **p == b.table) {
@@ -431,11 +440,16 @@ fn on_handle(t: &ResizeTarget, x: f32, y: f32, reach: f32) -> bool {
 /// The innermost table under page point (`x`, `y`) whose resize handle is on this page, or whose
 /// handle is under the point: the one whose handle the app shows.
 pub fn table_under(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, reach: f32) -> Option<ResizeTarget> {
+    table_under_in(l, doc, page, x, y, reach, StoryRef::Body)
+}
+
+/// [`table_under`] while `editing` is edited: a header's or footer's tables then (#5558).
+pub fn table_under_in(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, reach: f32, editing: StoryRef) -> Option<ResizeTarget> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
     let reach = if reach.is_finite() { reach.clamp(0.5, 24.0) } else { REACH };
-    tables_on(l, doc, page)
+    tables_on_in(l, doc, page, editing)
         .into_iter()
         .filter(|t| t.ends_here && ((x >= t.left() && x <= t.right() && y >= t.top() && y <= t.bottom()) || on_handle(t, x, y, reach)))
         .max_by_key(|t| t.table.0.len())
@@ -444,12 +458,17 @@ pub fn table_under(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, r
 /// The table border or resize handle within `reach` points of page point (`x`, `y`): the
 /// nearest, and of nested tables the innermost.
 pub fn resize_target(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, reach: f32) -> Option<ResizeTarget> {
+    resize_target_in(l, doc, page, x, y, reach, StoryRef::Body)
+}
+
+/// [`resize_target`] while `editing` is edited: a header's or footer's tables then (#5558).
+pub fn resize_target_in(l: &DocLayout, doc: &Document, page: usize, x: f32, y: f32, reach: f32, editing: StoryRef) -> Option<ResizeTarget> {
     if !x.is_finite() || !y.is_finite() {
         return None;
     }
     let reach = if reach.is_finite() { reach.clamp(0.5, 24.0) } else { REACH };
     let mut best: Option<(f32, usize, ResizeTarget)> = None;
-    for mut target in tables_on(l, doc, page) {
+    for mut target in tables_on_in(l, doc, page, editing) {
         let depth = target.table.0.len();
         let mut offer = |d: f32, edge: Edge, target: &mut ResizeTarget| {
             if d <= reach && best.as_ref().is_none_or(|(bd, bdepth, _)| d < *bd - 0.01 || (d <= *bd + 0.01 && depth > *bdepth)) {
@@ -500,8 +519,8 @@ fn resize_drag(s: &mut Session, v: &Value) -> CmdResult {
     if l.pages.get(page).is_none() {
         return Err(CmdError::Params(format!("no page {page}")));
     }
-    let mut target =
-        resize_target(&l, &s.doc, page, x, y, reach).ok_or_else(|| CmdError::Failed("there's no table border or resize handle there".into()))?;
+    let mut target = resize_target_in(&l, &s.doc, page, x, y, reach, s.sel.focus.story)
+        .ok_or_else(|| CmdError::Failed("there's no table border or resize handle there".into()))?;
     target.limit_to_selection(s, y);
     let plan = target.plan(to_x - x, to_y - y, share);
     if plan.widths.is_none() && plan.heights.is_empty() && plan.cells.is_empty() {
@@ -647,7 +666,11 @@ fn regrid(t: &mut Table, cols: &[f32], rows: &[(usize, Vec<f32>)]) -> Result<(),
 
 /// The page x of the target table's left edge on `page`, as drawn.
 fn drawn_left(l: &DocLayout, page: usize, target: &ResizeTarget) -> Option<f32> {
-    cell_boxes(l, page).iter().filter(|b| b.story == target.story && b.table == target.table).map(|b| b.rect.x).min_by(f32::total_cmp)
+    cell_boxes_in(l, page, target.story)
+        .iter()
+        .filter(|b| b.story == target.story && b.table == target.table)
+        .map(|b| b.rect.x)
+        .min_by(f32::total_cmp)
 }
 
 /// Make `widths` (one per grid column) the table's column widths, as drawn: no preferred table
@@ -663,7 +686,7 @@ pub(crate) fn set_widths(t: &mut Table, widths: Vec<f32>) {
 
 /// The drawn height of each of the target table's rows on `page`.
 fn drawn_heights(l: &DocLayout, doc: &Document, page: usize, target: &ResizeTarget) -> Vec<(usize, f32)> {
-    tables_on(l, doc, page)
+    tables_on_in(l, doc, page, target.story)
         .into_iter()
         .find(|t| t.story == target.story && t.table == target.table)
         .map(|t| t.rows.iter().map(|r| (r.row, r.bottom - r.top)).collect())

@@ -142,33 +142,35 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     let ink = Stroke::new(1.5, t.accent);
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
     match (tool, app.canvas.table_stroke) {
-        (TableTool::Draw, Some(st)) => match table_draw::stroke(layout, st.page, st.from.0, st.from.1, st.to.0, st.to.1) {
-            Some(Kind::Rect(r)) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, r.x, r.y), to_screen(st.page, r.right(), r.bottom())) {
-                    painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, ink, egui::StrokeKind::Middle);
+        (TableTool::Draw, Some(st)) => {
+            match table_draw::stroke_in(layout, st.page, app.session.sel.focus.story, st.from.0, st.from.1, st.to.0, st.to.1) {
+                Some(Kind::Rect(r)) => {
+                    if let (Some(a), Some(b)) = (to_screen(st.page, r.x, r.y), to_screen(st.page, r.right(), r.bottom())) {
+                        painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, ink, egui::StrokeKind::Middle);
+                    }
+                }
+                Some(Kind::Vertical { x, y0, y1 }) => {
+                    if let (Some(a), Some(b)) = (to_screen(st.page, x, y0), to_screen(st.page, x, y1)) {
+                        painter.line_segment([a, b], ink);
+                    }
+                }
+                Some(Kind::Horizontal { y, x0, x1 }) => {
+                    if let (Some(a), Some(b)) = (to_screen(st.page, x0, y), to_screen(st.page, x1, y)) {
+                        painter.line_segment([a, b], ink);
+                    }
+                }
+                // Not a table or a line yet: the drag's box, dashed and dim.
+                None => {
+                    if let (Some(a), Some(b)) = (to_screen(st.page, st.from.0, st.from.1), to_screen(st.page, st.to.0, st.to.1)) {
+                        dashed_rect(painter, Rect::from_two_pos(a, b), Stroke::new(1.0, t.text_dim));
+                    }
                 }
             }
-            Some(Kind::Vertical { x, y0, y1 }) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, x, y0), to_screen(st.page, x, y1)) {
-                    painter.line_segment([a, b], ink);
-                }
-            }
-            Some(Kind::Horizontal { y, x0, x1 }) => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, x0, y), to_screen(st.page, x1, y)) {
-                    painter.line_segment([a, b], ink);
-                }
-            }
-            // Not a table or a line yet: the drag's box, dashed and dim.
-            None => {
-                if let (Some(a), Some(b)) = (to_screen(st.page, st.from.0, st.from.1), to_screen(st.page, st.to.0, st.to.1)) {
-                    dashed_rect(painter, Rect::from_two_pos(a, b), Stroke::new(1.0, t.text_dim));
-                }
-            }
-        },
+        }
         (TableTool::Erase, _) => {
             if let Some(p) = hover
                 && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, p)
-                && let Some(e) = table_draw::erase_target(layout, page, x, y)
+                && let Some(e) = table_draw::erase_target_in(layout, page, app.session.sel.focus.story, x, y)
                 && let (Some(a), Some(b)) = (to_screen(page, e.from.0, e.from.1), to_screen(page, e.to.0, e.to.1))
             {
                 painter.line_segment([a, b], Stroke::new(3.0, t.red));
