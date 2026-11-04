@@ -155,7 +155,8 @@ fn date_of(app: &WordApp, at: &Pos) -> Option<(i64, u32, u32)> {
 }
 
 fn today() -> (i64, u32, u32) {
-    let (y, m, d) = wordcraft_engine::cmd::civil_from_days((wordcraft_engine::cmd::now_unix() / 86_400) as i64);
+    // The local day, as Word's date picker shows it (#1707).
+    let (y, m, d, ..) = wordcraft_engine::cmd::local_now();
     (y, m, d)
 }
 
@@ -172,6 +173,7 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     let mut close = false;
     let area = egui::Area::new(egui::Id::unique("content_control_popup"))
         .order(egui::Order::Foreground)
+        .interactable(!app.modal_open())
         .fixed_pos(pos2(anchor.max.x - 180.0, anchor.max.y + 2.0));
     let shown = area.show(ctx, |ui| {
         egui::Frame::popup(ui.style()).fill(t.menu).show(ui, |ui| {
