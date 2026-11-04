@@ -305,6 +305,16 @@ fn page_picture_is_painted_behind_the_text() {
         let i = ((300 * img.width + 300) * 4) as usize;
         assert_eq!(&img.pixels[i..i + 3], &[10, 200, 30], "{kind}");
     }
+    // Centred once at its own size (8 px = 6 pt), the rest of the page paper.
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "center".into(), title: String::new() });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let px = |x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    assert_eq!(px(img.width / 2, img.height / 2), [10, 200, 30], "centred");
+    assert_eq!(px(5, 5), [255, 255, 255], "only in the middle");
     // An undecodable picture leaves the paper alone.
     d.media.insert("bg.png".into(), Arc::new(b"junk".to_vec()));
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());

@@ -48,13 +48,16 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    /// The page's text boxes (see [`text_frames`]): a turned one's lines are drawn turned.
+    turned: Vec<(u32, Rect, Spin)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let turned = [&page.items, &page.header, &page.footer].into_iter().flat_map(|items| text_frames(items)).collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), turned }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -64,6 +67,12 @@ impl<'a> ItemDisplay<'a> {
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        // A line of a turned text box turns with it (as `stories_display` turns them on a page).
+        if let Some((_, rect, spin)) = turned_frame(&self.turned, it).and_then(|k| self.turned.get(k)) {
+            let mut turned = Vec::new();
+            spun(*spin, *rect, std::mem::take(&mut out), &mut turned);
+            out = turned;
+        }
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
     }
@@ -108,6 +117,8 @@ fn stories_display(
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
+        let frames = text_frames(items);
+        let mut spun_frames: Vec<usize> = Vec::new();
         let own;
         let clips = match shared {
             Some(c) => c,
@@ -143,10 +154,56 @@ fn stories_display(
                         warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
                     }
                 }
-                _ => item(doc, it, opts, authors, a, out),
+                _ => match turned_frame(&frames, it) {
+                    // A turned text box's lines are drawn together, turned with it about its
+                    // centre, where its first one is. Linked boxes show one story: each line goes
+                    // with the box it was laid out in.
+                    Some(k) => {
+                        if spun_frames.contains(&k) {
+                            continue;
+                        }
+                        spun_frames.push(k);
+                        if let Some((_, rect, spin)) = frames.get(k) {
+                            let mut inner = Vec::new();
+                            for line in items.iter().filter(|i| turned_frame(&frames, i) == Some(k)) {
+                                item(doc, line, opts, authors, a, &mut inner);
+                            }
+                            super::objects::spun(*spin, *rect, inner, out);
+                        }
+                    }
+                    None => item(doc, it, opts, authors, a, out),
+                },
             }
         }
     }
+}
+
+/// The text boxes among `items`: the story each shows, its frame (unturned) and how its text
+/// turns with it (not at all for most). As in Word, the text turns with the box but isn't
+/// mirrored: a box flipped across turns its text upside down, one flipped side to side leaves it
+/// readable. Linked boxes all show the first box's story, so a story can have several frames.
+fn text_frames(items: &[Placed]) -> Vec<(u32, Rect, Spin)> {
+    items
+        .iter()
+        .filter_map(|it| {
+            let Placed::Object { rect, spin, text_box: Some(id), .. } = it else { return None };
+            let text = Spin::new(spin.deg + if spin.flip_v { 180.0 } else { 0.0 }, false, false);
+            Some((*id, *rect, text))
+        })
+        .collect()
+}
+
+/// Which of `frames` the text box line `it` was laid out in, if that frame is turned: of the
+/// frames showing its story, the one it is in (or nearest, for a line on an edge).
+fn turned_frame(frames: &[(u32, Rect, Spin)], it: &Placed) -> Option<usize> {
+    let Placed::Lines { story: StoryRef::Part(id), x, y, .. } = it else { return None };
+    let away = |r: &Rect| {
+        let dx = (r.x - x).max(x - r.right()).max(0.0);
+        let dy = (r.y - y).max(y - r.bottom()).max(0.0);
+        dx * dx + dy * dy
+    };
+    let (k, _) = frames.iter().enumerate().filter(|(_, (s, ..))| s == id).min_by(|(_, (_, a, _)), (_, (_, b, _))| away(a).total_cmp(&away(b)))?;
+    frames.get(k).is_some_and(|(.., spin)| !spin.is_identity()).then_some(k)
 }
 
 /// One object drawn alone, as its page draws it: the picture, shape or group `o` in `rect` (its
