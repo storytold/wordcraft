@@ -159,10 +159,7 @@ fn every_char_prop_round_trips() {
 
 #[test]
 fn adjacent_ungrouped_fit_text_runs_remain_separate_after_round_trips() {
-    let props = CharProps {
-        fit_text: Some(wordcraft_doc::props::FitText { width: Some(720), id: None }),
-        ..Default::default()
-    };
+    let props = CharProps { fit_text: Some(wordcraft_doc::props::FitText { width: Some(720), id: None }), ..Default::default() };
     let doc = doc_with(vec![para_runs(&[("first", props.clone()), ("second", props)])]);
     assert_eq!(paras(&doc)[0].text, "firstsecond");
     let bytes = wordcraft_docx::write(&doc).unwrap();
