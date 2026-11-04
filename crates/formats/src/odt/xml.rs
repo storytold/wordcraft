@@ -50,6 +50,12 @@ pub(super) enum Ev {
 
 /// Stream XML events (empty elements become start + end). Malformed XML ends the stream.
 pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
+    events_at(xml, |ev, _| f(ev));
+}
+
+/// [`events`], each with the byte range of `xml` its markup takes (an empty element's start
+/// and end both take the whole element).
+pub(super) fn events_at(xml: &[u8], mut f: impl FnMut(Ev, (usize, usize))) {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
@@ -58,16 +64,19 @@ pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
     let mut buf = Vec::new();
     loop {
         buf.clear();
-        match r.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => f(Ev::Start(String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs_of(&e))),
+        let from = usize::try_from(r.buffer_position()).unwrap_or(usize::MAX);
+        let ev = r.read_event_into(&mut buf);
+        let at = (from, usize::try_from(r.buffer_position()).unwrap_or(usize::MAX));
+        match ev {
+            Ok(Event::Start(e)) => f(Ev::Start(String::from_utf8_lossy(e.name().as_ref()).into_owned(), attrs_of(&e)), at),
             Ok(Event::Empty(e)) => {
                 let n = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                f(Ev::Start(n.clone(), attrs_of(&e)));
-                f(Ev::End(n));
+                f(Ev::Start(n.clone(), attrs_of(&e)), at);
+                f(Ev::End(n), at);
             }
-            Ok(Event::End(e)) => f(Ev::End(String::from_utf8_lossy(e.name().as_ref()).into_owned())),
-            Ok(Event::Text(t)) => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default())),
-            Ok(Event::CData(t)) => f(Ev::Text(String::from_utf8_lossy(&t).into_owned())),
+            Ok(Event::End(e)) => f(Ev::End(String::from_utf8_lossy(e.name().as_ref()).into_owned()), at),
+            Ok(Event::Text(t)) => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default()), at),
+            Ok(Event::CData(t)) => f(Ev::Text(String::from_utf8_lossy(&t).into_owned()), at),
             Ok(Event::GeneralRef(r)) => {
                 let name = String::from_utf8_lossy(&r).into_owned();
                 let s = match name.as_str() {
@@ -78,7 +87,7 @@ pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
                     "apos" => "'".to_string(),
                     _ => r.resolve_char_ref().ok().flatten().map(|c| c.to_string()).unwrap_or_default(),
                 };
-                f(Ev::Text(s));
+                f(Ev::Text(s), at);
             }
             Ok(Event::Eof) | Err(_) => break,
             Ok(_) => {}

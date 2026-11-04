@@ -52,7 +52,16 @@ pub fn sized_img(data: Arc<Vec<u8>>, ext: &str, natural: Option<(f32, f32)>, w: 
         h *= 468.0 / w;
         w = 468.0;
     }
-    Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() }
+    Img {
+        data,
+        ext: ext.to_string(),
+        w: w.clamp(1.0, 1584.0),
+        h: h.clamp(1.0, 1584.0),
+        alt: alt.to_string(),
+        float: None,
+        object: None,
+        crop: [0.0; 4],
+    }
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -138,6 +147,8 @@ pub fn mime_of(ext: &str) -> &'static str {
         "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
+        "wmf" => "image/x-wmf",
+        "emf" => "image/x-emf",
         _ => "application/octet-stream",
     }
 }

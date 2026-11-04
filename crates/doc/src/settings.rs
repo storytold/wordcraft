@@ -46,6 +46,10 @@ pub struct CustomProp {
     /// Bookmark associated with this property (`linkTarget`), retained without evaluating it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
+    /// Declared in an ODF document as a user field (§7.4.7 `text:user-field-decl`) rather than
+    /// a document property: written back as one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub odf_user_field: bool,
 }
 
 /// Document properties (File › Info).
@@ -169,6 +173,11 @@ pub struct Settings {
     /// Hide grammar errors in this document only (`w:hideGrammaticalErrors`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hide_grammar_errors: bool,
+    /// The document was opened from ODF: the standard's rules that differ from Word's apply as
+    /// it is laid out, with the choices it leaves open made as the user's profile made them
+    /// (see [`crate::odf_profile`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf: Option<crate::odf_profile::OdfLayout>,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -316,6 +325,7 @@ impl Default for Settings {
             remove_date_time: false,
             hide_spelling_errors: false,
             hide_grammar_errors: false,
+            odf: None,
         }
     }
 }
