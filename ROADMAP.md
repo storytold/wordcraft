@@ -1,7 +1,5 @@
 # WordCraft roadmap
 
-> **PR #4723 integration:** 2026-11-04 · Integrate #4723 with current main: retain inherited numbering, table-aware hanging indents and both sets of typing regressions; original #4322 credit and readiness estimates unchanged.
->
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -764,7 +762,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | trivial | Integrate #4723 with current main: retain inherited numbering, table-aware hanging indents and both sets of typing regressions; original #4322 credit and readiness estimates unchanged. |
+| 2026-11-04 | trivial | PR #4723 integration: 2026-11-04 · Integrate #4723 with current main: retain inherited numbering, table-aware hanging indents and both sets of typing regressions; original #4322 credit and readiness estimates unchanged. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
@@ -776,6 +774,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | Integrate #4723 with current main: retain inherited numbering, table-aware hanging indents and both sets of typing regressions; original #4322 credit and readiness estimates unchanged. |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
@@ -789,8 +788,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-31 | trivial | Progress log: a list level above counts its first number at the first deeper item |
 | 2026-11-01 | trivial | Progress log: paragraph side borders lie outside the text (#5036) |
 | 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
-| 2026-11-01 | minor | #4723: Outdent no-ops at/before the leading-edge margin, retaining physical/character-unit indents and undo/redo history; synthetic command regression, no new native Word qualification |
-| 2026-11-01 | minor | #4723: Indent/Outdent use table-style defaults and conditional cell mark sizes; synthetic nested/multi-cell, direct-override, history and DOCX controls; no new native Word table qualification |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |
@@ -798,8 +795,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: documents with links print (#4734) |
 | 2026-10-31 | trivial | Synchronize the existing Proofing pane with main `eecbb8f`; preserve explicit-position lookup, implicit selection, navigation, undo and per-window state; fresh exact-SHA hosted validation pending, readiness unchanged |
 | 2026-10-30 | trivial | Synchronize the existing Proofing pane and navigation/selection/undo regressions with main `3b7f7ed`; new-SHA validation pending, readiness unchanged |
-| 2026-10-31 | minor | #4723: hanging first-line tab alignment and explicit list-cancellation indentation; six synthetic native Word for Mac property controls, history/character-unit/DOCX regressions; list-definition boundary edits and general Office parity remain unclaimed |
-| 2026-10-28 | minor | Style-inherited list level changes, direct-indent reset and no-op boundaries; original synthetic DOCX/PDF controls (builds on #4322, related #4287) |
 | 2026-10-28 | trivial | Aligned copies retain their locked document coordinate during middle-button scrolling and can start on secondary selected objects; existing Ctrl and Shift selection behavior stays (#4764) |
 | 2026-10-28 | trivial | Ctrl/Command+Shift drags a selected floating object into an axis-aligned copy (#4764); synthetic Linux interaction and persistence controls, native desktop and Word untested; gap/readiness estimates unchanged |
 | 2026-10-28 | trivial | Connector object lookups retain the typed column-selection inputs on current main (#3631); readiness estimates unchanged |
@@ -1186,6 +1181,10 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-29 | trivial | Progress log: corporate authors in bibliographies (#4848) |
 | 2026-10-29 | trivial | Progress log: Table Properties follows the selection (#4857) |
 | 2026-11-01 | trivial | Progress log: a list inside a Markdown block quote stays quoted |
+| 2026-11-01 | minor | #4723: Outdent no-ops at/before the leading-edge margin, retaining physical/character-unit indents and undo/redo history; synthetic command regression, no new native Word qualification |
+| 2026-11-01 | minor | #4723: Indent/Outdent use table-style defaults and conditional cell mark sizes; synthetic nested/multi-cell, direct-override, history and DOCX controls; no new native Word table qualification |
+| 2026-10-31 | minor | #4723: hanging first-line tab alignment and explicit list-cancellation indentation; six synthetic native Word for Mac property controls, history/character-unit/DOCX regressions; list-definition boundary edits and general Office parity remain unclaimed |
 | 2026-10-27 | trivial | Progress log: AutoCorrect Options with no document open (#4585) |
 | 2026-10-28 | trivial | Progress log: RTF metafile pictures are imported (#4259) |
 | 2026-10-28 | trivial | Progress log: Chinese and Japanese text counts a word per character (#4547) |
+| 2026-10-28 | minor | Style-inherited list level changes, direct-indent reset and no-op boundaries; original synthetic DOCX/PDF controls (builds on #4322, related #4287) |
