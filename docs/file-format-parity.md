@@ -1,5 +1,7 @@
 # File-format parity with Microsoft Word
 
+> **REF context update:** 2026-11-04 · #4609 retains the label and template actually rendered by an ancestor list instance; implicitly counted levels remain distinct from explicitly rendered paragraphs. Synthetic instance-override and field-update regressions; no new native Word qualification or readiness change.
+
 > 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged.
 > 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged.
 >

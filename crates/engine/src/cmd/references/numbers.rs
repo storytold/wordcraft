@@ -59,9 +59,8 @@ pub(super) fn para_numbers(doc: &wordcraft_doc::Document) -> std::collections::H
         for k in 0..=level {
             num.values.push(values.get(k).copied().unwrap_or(0));
             num.started.push(started.get(k).copied().unwrap_or(false));
-            let def = doc.numbering.level(n.num, k as u8);
             num.labels.push(counters.current_label(&doc.numbering, n.num, k as u8));
-            num.shows.push(def.map(|d| wordcraft_doc::numbering::template_levels(&d.text)).unwrap_or_default());
+            num.shows.push(counters.current_template_levels(&doc.numbering, n.num, k as u8));
         }
         out.insert(path, num);
     }

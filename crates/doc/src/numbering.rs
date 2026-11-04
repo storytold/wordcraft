@@ -294,6 +294,14 @@ pub struct Counters {
     /// Per abstract list: whether each level has counted yet (a value of 0 can be a real count when a
     /// level starts at 0).
     flags: HashMap<u32, [LevelFlags; 9]>,
+    /// The last explicitly rendered label and template at each abstract-list level.
+    labels: HashMap<(u32, u8), CountedLabel>,
+}
+
+#[derive(Debug, Clone)]
+struct CountedLabel {
+    label: Option<String>,
+    levels: Vec<usize>,
 }
 
 /// Whether a level has counted yet, and the value its next item takes if a start override says so.
@@ -320,6 +328,7 @@ impl Counters {
         let def = level_def(lv)?.clone();
         // A "none" level shows no label at all (Word's numFmt none) — not even its text.
         if def.format == NumFormat::None {
+            self.labels.insert((abs.id, lv as u8), CountedLabel { label: None, levels: Vec::new() });
             return None;
         }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
@@ -366,22 +375,21 @@ impl Counters {
             if restarts {
                 *deeper = 0;
                 *f = LevelFlags::default();
+                self.labels.remove(&(abs.id, d as u8));
             }
         }
         let vals = *st;
         let started = *fl;
-        if def.format == NumFormat::Bullet {
-            return Some((def.text.clone(), def));
-        }
-        let label = render_label(numbering, num, &def, &vals, &started);
+        let numeric = def.format != NumFormat::Bullet;
+        let label = if numeric { render_label(numbering, num, &def, &vals, &started) } else { def.text.clone() };
+        self.labels.insert((abs.id, lv as u8), CountedLabel { label: numeric.then(|| label.clone()), levels: template_levels(&def.text) });
         Some((label, def))
     }
     /// Which levels of `num`'s list have counted a paragraph yet (a level never used has no
     /// number of its own to show in a reference).
     pub fn started(&self, numbering: &Numbering, num: u32) -> Option<[bool; 9]> {
         let abs = numbering.abstract_of(num)?;
-        let flags = self.flags.get(&abs.id).copied().unwrap_or_default();
-        Some(flags.map(|f| f.started))
+        Some(std::array::from_fn(|k| self.labels.get(&(abs.id, k as u8)).is_some_and(|last| last.label.is_some())))
     }
 
     /// The label `level` of `num`'s list shows at this point of the walk, without counting: what
@@ -389,6 +397,10 @@ impl Counters {
     /// `None` for a bullet or "none" level, or a level the list doesn't define.
     pub fn current_label(&self, numbering: &Numbering, num: u32, level: u8) -> Option<String> {
         let abs = numbering.abstract_of(num)?;
+        if let Some(last) = self.labels.get(&(abs.id, level.min(8))) {
+            return last.label.clone();
+        }
+        // A deeper item can count a level implicitly without rendering a paragraph there.
         let def = numbering.level(num, level.min(8))?;
         if matches!(def.format, NumFormat::None | NumFormat::Bullet) {
             return None;
@@ -396,6 +408,16 @@ impl Counters {
         let vals = self.state.get(&abs.id).copied().unwrap_or([0; 9]);
         let started = self.flags.get(&abs.id).copied().unwrap_or_default();
         Some(render_label(numbering, num, def, &vals, &started))
+    }
+
+    /// Levels shown by the last rendered label, or the current definition for an implicit level.
+    pub fn current_template_levels(&self, numbering: &Numbering, num: u32, level: u8) -> Vec<usize> {
+        if let Some(abs) = numbering.abstract_of(num)
+            && let Some(last) = self.labels.get(&(abs.id, level.min(8)))
+        {
+            return last.levels.clone();
+        }
+        numbering.level(num, level.min(8)).map(|def| template_levels(&def.text)).unwrap_or_default()
     }
 }
 
@@ -475,6 +497,27 @@ mod tests {
         assert!(label.len() <= 512);
         assert_eq!(template_levels(&"%1%9".repeat(30_000)), [0, 8]);
         assert!(c.started(&n, id).unwrap()[0]);
+    }
+
+    #[test]
+    fn last_ancestor_label_keeps_the_instance_that_rendered_it() {
+        let mut numbering = Numbering::default();
+        let first = numbering.add_list(ListKind::Numbered);
+        numbering.abstracts[0].levels[0].text = "Clause %1.".into();
+        let mut second = numbering.num(first).unwrap().clone();
+        second.id = first + 1;
+        second.level_overrides = vec![
+            (0, Level { text: "Part %1.%2.".into(), ..Level::default() }),
+            (1, Level { format: NumFormat::LowerLetter, text: "(%2)".into(), ..Level::default() }),
+        ];
+        let second_id = second.id;
+        numbering.nums.push(second);
+        let mut counters = Counters::default();
+        assert_eq!(counters.next_label(&numbering, first, 0).unwrap().0, "Clause 1.");
+        assert_eq!(counters.next_label(&numbering, second_id, 1).unwrap().0, "(a)");
+        assert_eq!(counters.current_label(&numbering, second_id, 0).as_deref(), Some("Clause 1."));
+        assert_eq!(counters.current_template_levels(&numbering, second_id, 0), vec![0]);
+        assert_eq!(counters.started(&numbering, second_id).unwrap()[..2], [true, true]);
     }
 
     #[test]

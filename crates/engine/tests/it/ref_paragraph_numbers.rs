@@ -340,3 +340,27 @@ fn repeated_numeric_refs_keep_the_first_body_bookmark() {
     assert_eq!(got[64].1, "First synthetic target");
     assert_eq!(s.doc.bookmarks().iter().find(|(name, _)| name == "_Duplicate").unwrap().1.path, Path::top(0));
 }
+
+/// A target's instance must not invent a different label for its actual ancestor paragraph.
+#[test]
+fn full_context_keeps_the_actual_ancestor_instance_label() {
+    let mut s = session(
+        &[
+            para(Some((1, 0)), &text("Synthetic ancestor")),
+            para(Some((6, 1)), &marked("_ActualAncestor", 80, "Synthetic child")),
+            para(None, &field(r"REF _ActualAncestor \w", "STALE")),
+        ]
+        .concat(),
+    );
+    let numbering = std::sync::Arc::make_mut(&mut s.doc.numbering);
+    numbering.abstracts.iter_mut().find(|a| a.id == 0).unwrap().levels[0].text = "Clause %1.".into();
+    let mut child = numbering.nums.iter().find(|n| n.id == 1).unwrap().clone();
+    child.id = 6;
+    child.level_overrides = vec![
+        (0, wordcraft_doc::numbering::Level { text: "Part %1.%2.".into(), ..Default::default() }),
+        (1, wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::LowerLetter, text: "(%2)".into(), ..Default::default() }),
+    ];
+    numbering.nums.push(child);
+    s.run("references.updateFields", &json!({"all":true})).unwrap();
+    assert_eq!(fields(&s).into_iter().map(|(_, value)| value).collect::<Vec<_>>(), ["Clause 1(a)"]);
+}
