@@ -3,7 +3,7 @@ use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, crop, recolor, relook, remove_background, reset, size};
 use super::select::{
     all_objects, alt_text, can_group, edit_obj, has_floating, has_group, has_movable, has_object, has_picture, has_shape, has_shape_or_canvas,
-    has_sizable, obj_size, objects_list, selected, with_float, with_obj,
+    has_sizable, obj_size, objects_list, picked_objects, selected, selected_all, with_float, with_obj,
 };
 use super::shape::{
     NO_TEXT_BOX, can_link, color_ids, has_text_box, link_text_box, set_text_body, shape_effects, shape_style, style_ids, text_box_target,
@@ -310,15 +310,29 @@ pub fn specs() -> Vec<CommandSpec> {
             let st = shape_style(style, color, &s.doc.settings.theme_colors).ok_or_else(|| {
                 CmdError::Params(format!("unknown shape style `{style}` or colour `{color}` (styles: {}; colours: {})", style_ids(), color_ids()))
             })?;
-            with_obj(s, |o| {
-                if let InlineObject::Shape { fill, stroke, stroke_width, effects, extra, .. } = o {
-                    (*fill, *stroke, *stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
-                    extra.outline_fill = None;
-                    effects.shadow = if st.shadow { wordcraft_doc::effects::Shadow::preset("offsetBottomRight") } else { None };
-                } else if let Some(c) = crate::cmd::canvas::style_mut(o) {
-                    (c.fill, c.stroke, c.stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
+            let mut targets: Vec<Pos> = selected_all(s, 10_000).into_iter().map(|(pos, _)| pos).collect();
+            for pos in picked_objects(s) {
+                if !targets.contains(&pos) {
+                    targets.push(pos);
                 }
-            })
+            }
+            if targets.is_empty() {
+                return Err(CmdError::Disabled("no picture or shape selected".into()));
+            }
+            let mut last = serde_json::Value::Null;
+            for pos in &targets {
+                let o = edit_obj(s, pos, |o| {
+                    if let InlineObject::Shape { fill, stroke, stroke_width, effects, extra, .. } = o {
+                        (*fill, *stroke, *stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
+                        extra.outline_fill = None;
+                        effects.shadow = if st.shadow { wordcraft_doc::effects::Shadow::preset("offsetBottomRight") } else { None };
+                    } else if let Some(c) = crate::cmd::canvas::style_mut(o) {
+                        (c.fill, c.stroke, c.stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
+                    }
+                })?;
+                last = serde_json::to_value(o).unwrap_or(serde_json::Value::Null);
+            }
+            Ok(json!({"object": last}))
         })
         .params(
             r#"{"style": "outline|fill|fillLight|subtle|moderate|intense", "color"?: "dark1|accent1|…|accent6"}  (fill, outline and shadow in one step, from the document's theme colours; default accent1)"#,

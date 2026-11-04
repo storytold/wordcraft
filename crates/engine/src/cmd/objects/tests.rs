@@ -108,6 +108,18 @@ fn shape_style_sets_fill_outline_and_shadow_from_the_theme() {
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(look(&s).0, shape_style("outline", "accent2", &theme).unwrap().fill, "one undo step per style");
     assert_ne!(selected(&s).unwrap().1, before);
+
+    // Multi-selection: applies to every selected shape.
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    s.run("select.addObject", &json!({"index": 1})).unwrap();
+    s.run("shape.style", &json!({"style": "moderate", "color": "accent3"})).unwrap();
+    let want = shape_style("moderate", "accent3", &theme).unwrap();
+    for (_, o) in all_objects(&s) {
+        let InlineObject::Shape { fill, stroke, .. } = o else { panic!("expected shape") };
+        assert_eq!((fill.map(|f| f.main_color()), stroke), (want.fill, want.stroke));
+    }
 }
 
 /// The body's top-level paragraphs, an object's character shown as ▣.
