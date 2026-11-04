@@ -137,6 +137,9 @@ struct Fit {
     /// A page break followed only by the paragraph mark: the mark's (empty) line stays on this
     /// page with the break, so nothing of the paragraph goes to the next page (Word).
     mark_with_break: bool,
+    /// The empty mark closing a section before a new page stays on a full page without room for
+    /// it: the footnotes are placed as if it weren't there (Word, #3974).
+    mark_over: bool,
     /// The footnotes referenced on those lines.
     notes: Vec<NoteBox>,
 }
@@ -376,7 +379,7 @@ impl<'a> Flow<'a> {
     fn fit_lines(&self, ctx: &mut Ctx, pb: &PageBuilder, notes: &[(usize, u32)], lead: f32) -> Fit {
         let (pl, n, l0) = (&self.pl, self.n(), self.l0);
         let first_top = pl.lines.get(l0).map_or(0.0, |f| f.top);
-        let mut fit = Fit { l1: l0, forced: None, mark_with_break: false, notes: Vec::new() };
+        let mut fit = Fit { l1: l0, forced: None, mark_with_break: false, mark_over: false, notes: Vec::new() };
         // Worked out only for a last line on a page with notes.
         let mut after_on_page: Option<f32> = None;
         while let Some(l) = pl.lines.get(fit.l1) {
@@ -398,9 +401,13 @@ impl<'a> Flow<'a> {
             if over && fit.l1 > l0 && !split {
                 break;
             }
-            if over && fit.l1 == l0 && !pb.fresh() && !split && !self.stays_at_bottom(pb, l) {
+            let kept_over = over && fit.l1 == l0 && !pb.fresh() && !split;
+            if kept_over && !self.stays_at_bottom(pb, l) {
                 break;
             }
+            // Kept without room and not a break: the empty mark closing the section (#3974). A
+            // mark showing a list label draws something, so it keeps the room it takes.
+            fit.mark_over |= kept_over && self.label.is_none() && !matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak);
             fit.notes.extend(line_notes);
             fit.l1 += 1;
             if self.ends_page(pb, l, &mut fit) || split {
@@ -475,6 +482,9 @@ impl<'a> Flow<'a> {
     /// Put the lines `l0..fit.l1` on the page, with their notes, objects and line numbers.
     fn emit(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, (lead, fit, notes): (f32, Fit, &[(usize, u32)])) {
         let (l0, l1, n) = (self.l0, fit.l1, self.n());
+        if fit.mark_over && !pb.web {
+            pb.mark_floor = Some(pb.body_floor());
+        }
         add_notes(pb, fit.notes, notes, self.pl.lines.get(l1.saturating_sub(1)).map_or(0, |l| l.c1));
         // Mirror indents: on an even (left-hand) page the inside indent is on the right, so the
         // paragraph's lines (broken for the same width) move over by the indents' difference.
@@ -484,6 +494,7 @@ impl<'a> Flow<'a> {
         // the page before) get what's left under it and continue on the next page.
         if !pb.notes.is_empty()
             && !pb.web
+            && !fit.mark_over
             && let Some(placed_bottom) = item_bottom(y, &self.pl, l0, l1)
             && placed_bottom > pb.bottom + 0.01
         {

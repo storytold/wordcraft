@@ -25,6 +25,10 @@ pub(crate) struct PageBuilder<'a> {
     pub(crate) notes: Vec<NoteBox>,
     /// The parts of footnotes that didn't fit on their page, continued on the next one.
     pub(crate) carry: Vec<NoteBox>,
+    /// The bottom of the text above an empty mark closing the section that stayed on this full
+    /// page without room for it: the footnotes are placed as if the mark weren't there, as in
+    /// Word (#3974).
+    pub(crate) mark_floor: Option<f32>,
     /// Page bottom before footnotes took space.
     pub(crate) orig_bottom: f32,
     /// The paragraph above: its style, contextual spacing, space after, whether that is automatic
@@ -145,18 +149,21 @@ impl PageBuilder<'_> {
     /// below the body (`bottom`), the note that doesn't is split at a line and its rest, with
     /// the notes after it, continues on the next page.
     pub(crate) fn flush_notes(&mut self) {
+        let mark_floor = self.mark_floor.take();
         if self.notes.is_empty() {
             return;
         }
         let total = self.notes_h();
         let x = self.sect.margin_left + self.sect.gutter;
-        // The note area starts below the text (a page of continued notes alone: at its top).
-        let area = self.bottom.max(self.body_floor());
+        // The note area starts below the text (a page of continued notes alone: at its top). An
+        // empty section mark kept without room doesn't count as text here (#3974).
+        let floor = mark_floor.unwrap_or_else(|| self.body_floor());
+        let area = self.bottom.max(floor);
         let fits = total <= self.orig_bottom - area + 0.01;
         let top = match (fits, self.beneath) {
             (false, _) => area,
             // Below the page's last line of text.
-            (true, true) => self.body_floor().min(self.orig_bottom - total),
+            (true, true) => floor.min(self.orig_bottom - total),
             (true, false) => self.orig_bottom - total,
         };
         let notes = std::mem::take(&mut self.notes);
