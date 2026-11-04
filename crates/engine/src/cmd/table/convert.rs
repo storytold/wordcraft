@@ -259,6 +259,10 @@ pub fn text_table_lines(s: &Session) -> Result<Vec<String>, CmdError> {
     if a.path.parent() != b.path.parent() || a.story != b.story {
         return Err(CmdError::Failed("select paragraphs to convert".into()));
     }
+    // Section breaks cannot live in table cells. Refuse before conversion would discard their page setup.
+    if (a.path.last()..=b.path.last()).any(|i| s.doc.para(a.story, &a.path.with_last(i)).is_some_and(|p| p.section.is_some())) {
+        return Err(CmdError::Failed("select paragraphs without section breaks to convert".into()));
+    }
     let lines: Vec<String> =
         (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).map(|p| p.plain_text())).collect();
     // Refuse rather than drop content: a table between the paragraphs would be removed with them.
