@@ -30,8 +30,8 @@ fn lay(doc: &Document) -> DocLayout {
 /// Keep their explicit spacing local; ordinary document/layout defaults remain unchanged.
 pub(super) fn pagination_fixture_document(text: &str) -> Document {
     let mut doc = Document::from_text(text);
-    doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
-    doc.styles.default_chr.size = Some(12.0);
+    Arc::make_mut(&mut doc.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut doc.styles).default_chr.size = Some(12.0);
     for block in &mut doc.body {
         if let Block::Para(para) = Arc::make_mut(block) {
             para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(14.0));
@@ -299,7 +299,7 @@ fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_
     use wordcraft_doc::props::LineSpacing;
     let mut d = Document::new();
     for id in ["SpacingA", "SpacingB"] {
-        d.styles.upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
     }
     let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
     let props = ParaProps {
@@ -375,7 +375,7 @@ fn contextual_spacing_removes_every_gap_in_a_four_paragraph_run() {
     use wordcraft_doc::props::LineSpacing;
     for table in [false, true] {
         let mut doc = Document::new();
-        doc.styles.upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
+        Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
         let paragraphs = ["One", "Two", "Three", "Four"]
             .into_iter()
             .map(|text| {
@@ -424,7 +424,7 @@ fn contextual_automatic_lists_do_not_subtract_the_gap_twice() {
     use wordcraft_doc::props::{LineSpacing, NumRef};
     for table in [false, true] {
         let mut doc = Document::new();
-        let num = doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let paragraphs = ["First", "Second", "Third"]
             .into_iter()
             .map(|text| {
@@ -698,7 +698,7 @@ fn deleted_text_adds_no_line_break_opportunity_without_markup() {
     // "xx ab\u{ad}cdef" in a column where "xx ab-" and "abcdef" fit but "xx abcdef" does not; only
     // the soft hyphen (5..7) is track-deleted.
     let mut d = Document::from_text("xx ab\u{ad}cdef");
-    d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
     d.format_range(&Pos::body(0, 5), &Pos::body(0, 7), &|c| c.del = Some(0)).unwrap();
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
     let line_starts = |hide_deleted: bool| {
@@ -735,7 +735,7 @@ fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
     // but "xx abcdef" does not. Measured in Word (hidden text not printed): "xx" / "abcdef" both times.
     for hidden in ["\u{ad}", " "] {
         let mut d = Document::from_text(&format!("xx ab{hidden}cdef"));
-        d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
         let end = 5 + hidden.len();
         d.format_range(&Pos::body(0, 5), &Pos::body(0, end), &|c| c.hidden = Some(true)).unwrap();
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
@@ -1749,7 +1749,7 @@ fn a_bookmark_is_no_line_break_opportunity() {
 #[test]
 fn lists_get_labels_and_indent() {
     let mut d = Document::from_text("one\ntwo\nthree");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let l = lay(&d);
     let labels: Vec<String> = l.pages[0]
@@ -1767,7 +1767,7 @@ fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
         let mut d = Document::from_text("First\n\u{000C}\nLast\n\nAfter");
-        let id = d.numbering.add_list(kind);
+        let id = Arc::make_mut(&mut d.numbering).add_list(kind);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(4, 5), &|p| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
         })
@@ -1803,7 +1803,7 @@ fn empty_list_paragraph_with_a_hidden_mark_counts_but_shows_nothing() {
             None => "Alpha\nBeta\nGamma".to_string(),
         };
         let mut d = Document::from_text(&text);
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let last = d.body.len() - 1;
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(last, 5), &|p| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
@@ -1855,7 +1855,7 @@ fn a_numbered_heading_opening_with_a_page_break_takes_its_number_along() {
     // "Before", then a numbered paragraph whose text opens with a page break: Word draws its
     // number on the next page with the text, not alone at the bottom of the first.
     let mut d = Document::from_text("Before\n\u{000C}Heading");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let l = lay(&d);
     let label_pages: Vec<usize> = l
@@ -1875,8 +1875,8 @@ fn russian_letter_list_labels_draw_cyrillic() {
     // russianLower labelled items 1, 2, 3 instead of а), б), в).
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::from_text("один\nдва\nтри");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::RussianLower;
             l.text = "%1)".into();
@@ -1906,8 +1906,8 @@ fn chinese_counting_list_labels_and_their_font_runs() {
     // Issue #534: a "一、" list showed digits, drawn with glyph ids of another font.
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::from_text("甲\n乙\n丙");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::ChineseCounting;
             l.text = "%1、".into();
@@ -1939,7 +1939,7 @@ fn chinese_counting_list_labels_and_their_font_runs() {
     let got = labels(&d);
     assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["一、", "二、", "三、"]);
     // A decimal label next to a CJK comma mixes faces when the Latin face lacks the comma.
-    for a in &mut d.numbering.abstracts {
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::Decimal;
         }
@@ -1954,8 +1954,8 @@ fn chinese_counting_list_labels_and_their_font_runs() {
 fn symbol_font_bullet_without_the_font_draws_a_bullet() {
     // Word's default bullet: U+F0B7 in Symbol.
     let mut d = Document::from_text("one");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.chr.font = Some("Symbol".into());
         }
@@ -1973,8 +1973,8 @@ fn symbol_font_bullet_without_the_font_draws_a_bullet() {
 fn bullet_first_line(label_font: Option<&str>) -> (f32, f32, f32, f32) {
     let mut d = Document::from_text("one");
     if let Some(label_font) = label_font {
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
-        for a in &mut d.numbering.abstracts {
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
+        for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
             if let Some(l) = a.levels.first_mut() {
                 l.chr.font = Some(label_font.into());
             }
@@ -2028,8 +2028,8 @@ fn private_use_bullet_no_font_draws_shows_the_levels_default_bullet() {
     // #1683: a level-2 bullet stored as a private-use code in a font that isn't installed was
     // drawn from an installed icon font (U+F081 is the Twitter logo in Font Awesome).
     let mut d = Document::from_text("one");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.get_mut(1) {
             l.text = "\u{F081}".into();
             l.chr.font = Some("WordCraft Missing Font 1683".into());
@@ -3442,7 +3442,7 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
     // resolved formatting says so). Measured in Word: not printed, and the text runs full width.
     let text = "Words flow around the picture here. ".repeat(30);
     let mut d = Document::from_text(&text);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Secret".into(),
         name: "Secret".into(),
         kind: wordcraft_doc::StyleKind::Character,
@@ -4421,11 +4421,11 @@ fn row_bands_shade_only_with_a_band_size() {
     };
     let mut d = styled_table_doc(Some("GridTable4AccentBlue"), 5);
     assert_eq!(shaded_rows(&d), vec![1, 3], "Grid Table 4 bands one row at a time");
-    if let Some(t) = d.styles.get_mut("GridTable4AccentBlue").and_then(|s| s.table.as_mut()) {
+    if let Some(t) = Arc::make_mut(&mut d.styles).get_mut("GridTable4AccentBlue").and_then(|s| s.table.as_mut()) {
         t.band_size = None;
     }
     assert_eq!(shaded_rows(&d), Vec::<usize>::new(), "no band size, no bands");
-    if let Some(t) = d.styles.get_mut("GridTable4AccentBlue").and_then(|s| s.table.as_mut()) {
+    if let Some(t) = Arc::make_mut(&mut d.styles).get_mut("GridTable4AccentBlue").and_then(|s| s.table.as_mut()) {
         t.band_size = Some(2);
     }
     assert_eq!(shaded_rows(&d), vec![1, 2], "bands of two rows");
@@ -4436,7 +4436,7 @@ fn row_bands_shade_only_with_a_band_size() {
 #[test]
 fn paragraph_style_and_direct_formatting_beat_table_style() {
     let mut d = styled_table_doc(Some("TableGrid"), 3);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Spaced".into(),
         name: "Spaced".into(),
         based_on: Some("Normal".into()),
@@ -4462,7 +4462,7 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
     assert_eq!(cell_para(&l, 1, 0).rp.space_after, 3.0, "direct formatting");
     assert_eq!(cell_para(&l, 2, 0).rp.space_after, 0.0, "table style");
     // Normal setting its own spacing wins too, even where it equals nothing in the defaults.
-    if let Some(n) = d.styles.get_mut("Normal") {
+    if let Some(n) = Arc::make_mut(&mut d.styles).get_mut("Normal") {
         n.para.space_after = Some(10.0);
     }
     assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
@@ -4475,7 +4475,7 @@ fn derived_table_style_merges_its_base() {
     use wordcraft_doc::styles::TableStyleParts;
     let red = wordcraft_doc::Rgb(0xC0, 0, 0);
     let mut d = styled_table_doc(Some("RedGrid"), 3);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "RedGrid".into(),
         name: "Red Grid".into(),
         kind: wordcraft_doc::StyleKind::Table,
@@ -4613,6 +4613,62 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
     // Plain text: nothing.
     let c = l.caret(&Pos::body(0, 10)).unwrap();
     assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
+}
+
+#[test]
+fn a_press_inside_a_text_box_over_a_picture_goes_to_its_text() {
+    // A form scanned as a picture, with text boxes laid over it to fill in: a press inside a box
+    // grabbed the picture under it, so the box's text could not be reached.
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let float =
+        |wrap: Wrap, z: u32| Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, z, ..Default::default() };
+    let form = |wrap: Wrap, picture_z: u32, rot: f32| {
+        let mut d = Document::from_text("Form");
+        let picture = InlineObject::Image {
+            media: "form".into(),
+            w: 300.0,
+            h: 400.0,
+            alt: String::new(),
+            float: float(wrap, picture_z),
+            crop: [0.0; 4],
+            ole: None,
+        };
+        d.insert_object(&Pos::body(0, 0), picture, &Default::default()).unwrap();
+        let id = text_box(&mut d, 0, "Name", 200.0, 100.0, Float { x: 50.0, y: 150.0, rot, ..float(wrap, 2) });
+        (lay(&d), id)
+    };
+    let (l, id) = form(Wrap::InFrontOfText, 1, 0.0);
+    let b = box_rect(&l, id);
+    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    // Inside the box: its text, not the picture under it.
+    assert!(l.object_at(0, cx, cy, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, cy), Some(StoryRef::Part(id)));
+    // The box's border grabs the box; the picture around the box grabs the picture.
+    assert_eq!(l.object_at(0, b.x + 1.0, cy, 4.0).map(|o| o.text_box), Some(Some(id)));
+    assert_eq!(l.object_at(0, cx, b.y - 40.0, 4.0).map(|o| o.text_box), Some(None));
+    // A picture in front of the box still grabs where it covers it.
+    let (l, id) = form(Wrap::InFrontOfText, 3, 0.0);
+    let b = box_rect(&l, id);
+    assert_eq!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).map(|o| o.text_box), Some(None));
+    // A box turned a quarter covers a tall strip: a press in it, below its unturned frame, is its
+    // text for both the object and the story hit test.
+    let (l, id) = form(Wrap::InFrontOfText, 1, 90.0);
+    let b = box_rect(&l, id);
+    let (cx, y) = (b.x + b.w / 2.0, b.y + b.h / 2.0 + 80.0);
+    assert!(!b.contains(wordcraft_geom::Point::new(cx, y)), "{b:?}");
+    assert!(l.object_at(0, cx, y, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, y), Some(StoryRef::Part(id)));
+    assert_eq!(l.hit(0, cx, y, StoryRef::Part(id)).map(|p| p.story), Some(StoryRef::Part(id)));
+    // Both behind the text, away from the body text: the same, and a picture stacked above the
+    // box still grabs.
+    let (l, id) = form(Wrap::BehindText, 1, 0.0);
+    let b = box_rect(&l, id);
+    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
+    assert!(l.object_at(0, cx, cy, 4.0).is_none());
+    assert_eq!(l.story_at(0, cx, cy), Some(StoryRef::Part(id)));
+    let (l, id) = form(Wrap::BehindText, 3, 0.0);
+    let b = box_rect(&l, id);
+    assert_eq!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).map(|o| o.text_box), Some(None));
 }
 
 /// (lines placed, lines laid out) of a text box's story, and its area.
@@ -5006,8 +5062,8 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
     use wordcraft_doc::props::{LineSpacing, NumRef};
     for spacing in [LineSpacing::Multiple(1.25), LineSpacing::AtLeast(12.0)] {
         let mut d = Document::from_text("");
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-        d.numbering.abstracts[0].levels[0].chr.size = Some(24.0);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+        Arc::make_mut(&mut d.numbering).abstracts[0].levels[0].chr.size = Some(24.0);
         let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         p.props.line_spacing = Some(spacing);
         p.props.numbering = Some(NumRef { num: id, level: 0 });
@@ -5051,7 +5107,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
     // Drawn inside that room.
     let obj = picture(100.0, 50.0, shadow);
-    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h, c.adv);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
 
@@ -5776,7 +5832,7 @@ fn labels(l: &DocLayout) -> Vec<String> {
 }
 
 fn numbered(d: &mut Document, texts: &[&str], props: ParaProps) -> Vec<wordcraft_doc::Paragraph> {
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     texts
         .iter()
         .map(|t| {
@@ -7272,6 +7328,31 @@ fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
     assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }
 
+/// 行頭禁則 (JIS X 4051 §4) end to end: a paragraph wrapping in a narrow column never starts a
+/// line with a small kana or the prolonged sound mark, even where the break opportunity that
+/// would put one there sits right after a kanji.
+#[test]
+fn a_line_never_starts_with_a_small_kana_or_the_prolonged_sound_mark() {
+    let text = "漢っ漢ゃ漢ー漢ッ漢ャ漢ゕ漢ヶ漢ㇺ漢ｯ漢ｬ漢ｰ漢";
+    let mut d = Document::from_text(text);
+    d.last_section.page_w = 72.0 + 72.0 + 72.0; // 72 pt of text: a few East Asian characters
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.stop)));
+            }
+        }
+    }
+    assert!(lines.len() > 1, "the paragraph wraps: {lines:?}");
+    let non_starters = "ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰ";
+    for &(start, _) in &lines {
+        let first = text.get(start..).and_then(|t| t.chars().next()).unwrap_or_default();
+        assert!(!non_starters.contains(first), "a line must not start with {first}: {lines:?}");
+    }
+}
+
 /// #332: a rotated floating shape keeps text clear of its rotated bounds (it reaches further at
 /// the side), its frame stays put (rotation is about the centre) and it is drawn turned; hit
 /// testing follows the turned shape, not its frame.
@@ -7614,7 +7695,7 @@ fn tight_wrap_follows_an_ellipse() {
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
     let spans = |wrap| {
         let mut d = wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() });
-        d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut d.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
         line_spans(&lay(&d))
     };
     let (square, tight, through) = (spans(Wrap::Square), spans(Wrap::Tight), spans(Wrap::Through));
@@ -8308,7 +8389,7 @@ fn list_item_first_word_gets_no_capital_squiggle() {
         l.pages[0].items.iter().map(|i| if let Placed::Lines { para, .. } = i { para.issues.iter().filter(|x| x.2).count() } else { 0 }).sum()
     };
     let mut d = Document::from_text("item one");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
     assert_eq!(grammar_squiggles(&d), 1, "plain paragraph");
     // Direct numbering.
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(NumRef { num: id, level: 0 })).unwrap();
@@ -8319,7 +8400,7 @@ fn list_item_first_word_gets_no_capital_squiggle() {
         p.style = Some("Bullets".into());
     })
     .unwrap();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Bullets".into(),
         name: "Bullets".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
@@ -8346,11 +8427,11 @@ fn unproofed_languages_and_no_proof_runs_are_not_marked() {
     let text = "Nous écrivons beaucoup aujourd'hui.";
     let mut d = Document::from_text(text);
     assert!(issues(&d) > 0, "French words are English misspellings in an English document");
-    d.styles.default_chr.lang = Some("fr-FR".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("fr-FR".into());
     assert_eq!(issues(&d), 0, "no French dictionary: no marks");
-    d.styles.default_chr.lang = Some("pl-PL".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("pl-PL".into());
     let mut pl = Document::from_text("Płynie żeka.");
-    pl.styles.default_chr.lang = Some("pl-PL".into());
+    Arc::make_mut(&mut pl.styles).default_chr.lang = Some("pl-PL".into());
     assert_eq!(issues(&pl), 1);
     pl.format_range(&Pos::body(0, 0), &Pos::body(0, "Płynie żeka.".len()), &|c| c.no_proof = Some(true)).unwrap();
     assert_eq!(issues(&pl), 0);
@@ -8621,8 +8702,8 @@ fn spaces_and_tabs_do_not_make_a_line_taller() {
 fn a_list_label_adds_ascent_but_not_descent() {
     let first_line = |label_size: Option<f32>| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        for a in &mut d.numbering.abstracts {
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
             for l in &mut a.levels {
                 l.chr.size = label_size;
             }
@@ -8759,7 +8840,7 @@ fn list_indents_and_style_indents_combine_like_word() {
     use wordcraft_doc::styles::{Style, StyleKind};
     let text_x = |style: &str, own: ParaProps| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let style_of = |id: &str, based: Option<&str>, para: ParaProps| Style {
             id: id.into(),
             name: id.into(),
@@ -8771,11 +8852,11 @@ fn list_indents_and_style_indents_combine_like_word() {
         let list = ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() };
         let ind = ParaProps { indent_left: Some(64.8), ..Default::default() };
         // List and indent in one style; list in the base, indent in the derived one; the reverse.
-        d.styles.upsert(style_of("Both", None, ParaProps { indent_left: Some(64.8), ..list.clone() }));
-        d.styles.upsert(style_of("ListBase", None, list.clone()));
-        d.styles.upsert(style_of("IndentOnList", Some("ListBase"), ind.clone()));
-        d.styles.upsert(style_of("IndentBase", None, ind));
-        d.styles.upsert(style_of("ListOnIndent", Some("IndentBase"), list.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("Both", None, ParaProps { indent_left: Some(64.8), ..list.clone() }));
+        Arc::make_mut(&mut d.styles).upsert(style_of("ListBase", None, list.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("IndentOnList", Some("ListBase"), ind.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("IndentBase", None, ind));
+        Arc::make_mut(&mut d.styles).upsert(style_of("ListOnIndent", Some("IndentBase"), list.clone()));
         let own =
             ParaProps { style: Some(style.into()), numbering: own.numbering.map(|n| NumRef { num: if n.num == 0 { 0 } else { num }, ..n }), ..own };
         let mut p = wordcraft_doc::Paragraph::with_text("Text", Default::default());
@@ -9022,7 +9103,7 @@ fn section_mark_hidden_styles() {
 
     let position = |kind: Option<StyleKind>, show_hidden| {
         let mut doc = Document::from_text("\nAfter marker");
-        doc.styles.upsert(Style {
+        Arc::make_mut(&mut doc.styles).upsert(Style {
             id: "HiddenMark".into(),
             name: "Hidden mark".into(),
             kind: kind.unwrap_or(StyleKind::Character),
@@ -9337,7 +9418,7 @@ fn kerning_follows_kerning_for_fonts_like_word() {
     // A new document kerns from 1 pt, like Word's Normal template.
     assert!((width(None) - width(Some(1.0))).abs() < 0.01, "new documents kern");
     let mut d = Document::new();
-    d.styles.default_chr.kern = None;
+    Arc::make_mut(&mut d.styles).default_chr.kern = None;
     assert!(d.styles.resolve_char(None, &Default::default()).kern == 0.0, "no Kerning for fonts: not kerned");
 }
 
@@ -9353,7 +9434,7 @@ fn ligatures_follow_w14_ligatures() {
     assert_eq!(wordcraft_fonts::shape(&face, "fi", &[], |c| c).len(), 1, "the test font draws fi as one glyph");
     let glyphs = |style: Option<Ligatures>, run: Option<Ligatures>| {
         let mut d = Document::new();
-        d.styles.upsert(Style {
+        Arc::make_mut(&mut d.styles).upsert(Style {
             id: "Plain".into(),
             name: "Plain".into(),
             kind: StyleKind::Character,
@@ -9493,8 +9574,8 @@ fn automatic_spacing_drops_between_list_items() {
     let plain = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
     let tops = |items: [ParaProps; 3], in_cell: bool| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        let other = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let other = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let fix = |p: ParaProps| ParaProps {
             numbering: p.numbering.map(|n| NumRef {
                 num: match n.num {
@@ -9994,7 +10075,7 @@ fn space_after_stays_clear_before_a_numbered_paragraph_without_a_label() {
     use wordcraft_doc::props::NumRef;
     space_after_clear_with(
         |d, t| {
-            let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+            let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
             let p = para_props(d, t);
             p.numbering = Some(NumRef { num, level: 0 });
             p.space_after_auto = Some(true);
@@ -10695,7 +10776,7 @@ fn row_keep_doc() -> Document {
     d.last_section.margin_bottom = 36.0;
     d.last_section.margin_left = 36.0;
     d.last_section.margin_right = 36.0;
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "KeptRow".into(),
         name: "Kept row".into(),
         para: ParaProps { keep_next: Some(true), keep_lines: Some(true), ..Default::default() },
@@ -12102,8 +12183,8 @@ fn keep_next_counts_list_indent() {
     doc.last_section.margin_bottom = 20.0;
     doc.last_section.margin_left = 20.0;
     doc.last_section.margin_right = 20.0;
-    let id = doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    let level = &mut doc.numbering.abstracts[0].levels[0];
+    let id = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    let level = &mut Arc::make_mut(&mut doc.numbering).abstracts[0].levels[0];
     level.indent = 100.0;
     level.hanging = 0.0;
     let props = ParaProps {
@@ -12326,6 +12407,105 @@ fn a_row_leaves_room_for_the_border_below_it() {
     }
 }
 
+/// A horizontal rule (VML `o:hr`) takes its whole line and is drawn across its share of it,
+/// placed by its alignment (Word, measured: 50 % centred, left, right). In a table cell it
+/// follows its column instead of widening the table.
+#[test]
+fn horizontal_rules_take_their_line() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let rule = |pct: f32, align: Align| {
+        let mut o = rect_shape(0.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align, standard: true });
+        }
+        o
+    };
+    let drawn = |d: &Document| -> Vec<wordcraft_geom::Rect> {
+        let l = lay(d);
+        display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
+            .iter()
+            .filter_map(
+                |i| if let display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } = i { Some(*rect) } else { None },
+            )
+            .collect()
+    };
+    let mut d = Document::from_text("a\nb");
+    d.insert_object(&Pos::body(1, 0), rule(50.0, Align::Center), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(0, 0), rule(100.0, Align::Left), &Default::default()).unwrap();
+    let s = drawn(&d);
+    let (full, half) = (s[0], s[1]);
+    assert!(full.w > 400.0, "the whole line: {full:?}");
+    assert!((half.w - full.w / 2.0).abs() < 0.01 && (half.x - (full.x + full.w / 4.0)).abs() < 0.01, "{half:?} in {full:?}");
+    let mut cell = Table::new(1, 1, 200.0);
+    let mut p = Paragraph::default();
+    p.insert_object(0, rule(100.0, Align::Left), &Default::default()).unwrap();
+    cell.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![Arc::new(Block::Table(cell))];
+    let s = drawn(&d);
+    assert!(s.first().is_some_and(|r| r.w > 150.0 && r.w < 200.0), "the cell's width, not the page's: {s:?}");
+    // Word's numbers (A4, 1 inch margins, a 100 pt float): beside a float a rule keeps its width
+    // and is placed in what the line has left, a first-line indent moving the end of that room
+    // along, so a whole-line rule runs past the margin as in Word.
+    let beside = |pct: f32, align: Align, side: Option<f32>, first: f32| {
+        use wordcraft_doc::para::{Anchor, Float, Wrap};
+        let mut d = Document::from_text("a");
+        if first != 0.0 {
+            let mut p = d.body[0].as_para().unwrap().clone();
+            p.props.indent_first = Some(first);
+            d.body[0] = Arc::new(Block::Para(p));
+        }
+        d.insert_object(&Pos::body(0, 0), rule(pct, align), &Default::default()).unwrap();
+        if let Some(x) = side {
+            let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, dist: 9.0, ..Default::default() };
+            d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 100.0, f), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions::default())
+            .iter()
+            .find_map(|i| match i {
+                display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, .. } if rect.h < 10.0 => {
+                    Some((rect.x, rect.x + rect.w))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (x0, x1) = beside(100.0, Align::Left, None, 0.0);
+    let (tw, half) = (x1 - x0, (x1 - x0) / 2.0);
+    let near =
+        |got: (f32, f32), want: (f32, f32)| assert!((got.0 - want.0).abs() < 0.5 && (got.1 - want.1).abs() < 0.5, "{got:?}, Word's rule {want:?}");
+    // A float on the left: the room is from past it to the margin.
+    let lo = x0 + 109.0;
+    near(beside(50.0, Align::Left, Some(0.0), 0.0), (lo, lo + half));
+    near(beside(50.0, Align::Center, Some(0.0), 0.0), ((lo + x1 - half) / 2.0, (lo + x1 + half) / 2.0));
+    near(beside(50.0, Align::Right, Some(0.0), 0.0), (x1 - half, x1));
+    near(beside(100.0, Align::Left, Some(0.0), 0.0), (lo, lo + tw));
+    // A float on the right: from the margin to before it.
+    let hi = x1 - 109.0;
+    near(beside(50.0, Align::Center, Some(tw - 100.0), 0.0), ((x0 + hi - half) / 2.0, (x0 + hi + half) / 2.0));
+    near(beside(50.0, Align::Right, Some(tw - 100.0), 0.0), (hi - half, hi));
+    near(beside(100.0, Align::Left, Some(tw - 100.0), 0.0), (x0, x1));
+    // A first-line indent moves the room along.
+    near(beside(100.0, Align::Left, None, 36.0), (x0 + 36.0, x1 + 36.0));
+    near(beside(50.0, Align::Center, None, 36.0), (x0 + 36.0 + half / 2.0, x1 + 36.0 - half / 2.0));
+    near(beside(50.0, Align::Right, None, 36.0), (x1 + 36.0 - half, x1 + 36.0));
+    // Measuring a table column: a rule of its own width asks for it, a share of the line for none.
+    let measured = |pct: f32| {
+        let mut o = rect_shape(150.0, 1.5, Default::default());
+        if let InlineObject::Shape { extra, .. } = &mut o {
+            extra.hr = Some(HorizontalRule { pct, align: Align::Left, standard: false });
+        }
+        let mut t = Table::new(1, 1, 200.0);
+        let mut p = Paragraph::default();
+        p.insert_object(0, o, &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        crate::autofit_widths(&crate::measure_table_columns(&d, &t), 451.0)[0]
+    };
+    assert!(measured(0.0) >= 150.0, "{}", measured(0.0));
+    assert!(measured(100.0) < 150.0, "{}", measured(100.0));
+}
+
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
 /// one of its lines, moves whole to the next page, where it fits (#3907 review).
 #[test]
@@ -12431,7 +12611,7 @@ fn stacked_marks_past_the_bottom_draw_no_label() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
     let marks = 100;
     let mut d = Document::from_text(&format!("Start\n{}End", "\n".repeat(marks)));
-    let id = d.numbering.add_list(ListKind::Bullet);
+    let id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
     for i in 1..=marks {
         let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
         p.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
@@ -12494,7 +12674,7 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
     use wordcraft_doc::section::{SectionProps, SectionStart};
     for filler in (40..140).step_by(3) {
         let mut d = Document::from_text(&format!("{}file this form\n\nFailure to comply", "Instructions\n".repeat(filler)));
-        let id = d.numbering.add_list(ListKind::Bullet);
+        let id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
         let mut two = SectionProps { start: SectionStart::Continuous, ..Default::default() };
         two.columns.count = 2;
         for i in [filler, filler + 1] {
@@ -12518,6 +12698,26 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
             .any(|it| matches!(it, Placed::Lines { path, para, .. } if *path == Path::top(filler) && para.label.is_some()));
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
+}
+
+#[test]
+fn a_list_item_that_shows_nothing_reports_no_missing_font() {
+    // Its number is shaped in its mark's font before the paragraph turns out to show nothing
+    // (#3982): that font isn't shown in another, so it isn't missing from what's drawn.
+    let mut d = Document::from_text("Alpha\n\nBeta");
+    let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 4), &|p| {
+        p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+    })
+    .unwrap();
+    let mark = &mut d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark;
+    mark.font = Some("Wordcraft Gone Number Face".into());
+    let missing = |d: &Document| layout(d, &mut LayoutCache::new(), &LayoutOptions::default()).substituted_fonts();
+    let shown = missing(&d);
+    assert!(shown.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "a shown number counts: {shown:?}");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.hidden = Some(true);
+    let gone = missing(&d);
+    assert!(!gone.iter().any(|(f, _)| f == "Wordcraft Gone Number Face"), "{gone:?}");
 }
 
 fn boundary_header_para() -> Paragraph {
@@ -12762,3 +12962,5 @@ fn header_margin_table_area() {
         }
     }
 }
+
+mod shape_alpha;

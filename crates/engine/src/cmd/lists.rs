@@ -4,6 +4,7 @@
 //! the number and the number's font.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::StoryRef;
 use wordcraft_doc::numbering::{Level, LevelSuffix, ListKind, levels_for};
 use wordcraft_doc::props::{Align, NumRef, Rgb, TextColor};
@@ -210,26 +211,26 @@ fn define(s: &mut Session, v: &Value) -> CmdResult {
         Some(n) => {
             // Change the list in place: every list sharing its definition follows.
             let aid = s.doc.numbering.num(n).map(|x| x.abstract_id).ok_or_else(|| CmdError::Params("no such list".into()))?;
-            if let Some(a) = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == aid) {
+            if let Some(a) = Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == aid) {
                 a.levels = levels.clone();
                 if name.is_some() {
                     a.name = name;
                 }
             }
-            if let Some(x) = s.doc.numbering.nums.iter_mut().find(|x| x.id == n) {
+            if let Some(x) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n) {
                 x.level_overrides.clear();
             }
             let sharing: Vec<u32> = s.doc.numbering.nums.iter().filter(|x| x.abstract_id == aid).map(|x| x.id).collect();
             touch_lists(s, &sharing)?;
             n
         }
-        None => s.doc.numbering.try_add_levels(name, levels.clone())?,
+        None => Arc::make_mut(&mut s.doc.numbering).try_add_levels(name, levels.clone())?,
     };
     // Levels linked to a paragraph style number every paragraph in that style.
     let mut linked = Vec::new();
     for (i, l) in levels.iter().enumerate() {
         let Some(id) = l.style.as_deref().map(|st| s.doc.styles.find(st).map(|x| x.id.clone()).unwrap_or_else(|| st.to_string())) else { continue };
-        if let Some(st) = s.doc.styles.get_mut(&id) {
+        if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: i as u8 });
             linked.push(id);
         }
@@ -319,11 +320,11 @@ fn preset_levels(preset: &str) -> Option<Vec<Level>> {
 fn preset(s: &mut Session, v: &Value) -> CmdResult {
     let id = p::req_str(v, "preset")?;
     let levels = preset_levels(id).ok_or_else(|| CmdError::Params("`preset` must be headings, article, outlineHeadings or chapter".into()))?;
-    let num = s.doc.numbering.try_add_levels(None, levels)?;
+    let num = Arc::make_mut(&mut s.doc.numbering).try_add_levels(None, levels)?;
     let mut linked = Vec::new();
     for n in 1..=LEVELS as u8 {
         let id = super::para::ensure_heading_style(s, n);
-        if let Some(st) = s.doc.styles.get_mut(&id) {
+        if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
             st.para.numbering = Some(NumRef { num, level: n - 1 });
             linked.push(id);
         }
@@ -670,7 +671,7 @@ mod tests {
     /// The list of body paragraph `i`, given a start override at `level`.
     fn override_start(s: &mut Session, i: usize, level: u8, start: u32) -> wordcraft_doc::props::NumRef {
         let n = s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(i)).and_then(|p| p.props.numbering).unwrap();
-        if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == n.num) {
+        if let Some(num) = std::sync::Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == n.num) {
             num.start_overrides = vec![(level, start)];
         }
         n
@@ -682,7 +683,7 @@ mod tests {
     fn set_numbering_value_carries_items_numbered_by_their_style() {
         let mut s = numbered_at(&["One", "Two"], &[(0, "numbered")]);
         let n = override_start(&mut s, 0, 0, 5);
-        s.doc.styles.get_mut("Heading1").unwrap().para.numbering = Some(n);
+        std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1").unwrap().para.numbering = Some(n);
         s.sel = crate::Selection::caret(wordcraft_doc::Pos::body(1, 0));
         s.run("para.style", &json!({"style": "Heading1"})).unwrap();
         assert_eq!(shown(&mut s), want(&[Some("5."), Some("6.")]));

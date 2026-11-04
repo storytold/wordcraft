@@ -364,3 +364,35 @@ fn macos_voice_matches_the_language() {
     assert_eq!(mac_voice("ru", "", "en"), None);
     assert_eq!(mac_voice("ru", "garbage line\n\n  \n", "en"), None);
 }
+
+#[test]
+fn skipped_spans_match_a_scan_of_every_span() {
+    // Overlapping, nested, touching, empty-range and reversed spans.
+    let raw = vec![
+        (Pos::body(0, 5), Pos::body(0, 9)),
+        (Pos::body(0, 7), Pos::body(0, 12)),
+        (Pos::body(0, 20), Pos::body(0, 20)),
+        (Pos::body(0, 30), Pos::body(2, 3)),
+        (Pos::body(1, 4), Pos::body(1, 8)),
+        (Pos::body(3, 9), Pos::body(3, 2)),
+        (Pos::body(4, 0), Pos::body(4, 1)),
+        (Pos::body(4, 2), Pos::body(4, 3)),
+    ];
+    let spans = Spans::new(raw.clone());
+    for block in 0..6 {
+        for off in 0..40 {
+            let p = Pos::body(block, off);
+            let scan = raw.iter().any(|(a, b)| *a <= p && p <= *b);
+            assert_eq!(spans.contains(&p), scan, "{p:?}");
+        }
+    }
+}
+
+#[test]
+fn many_citations_are_looked_up_quickly() {
+    // 50,000 disjoint spans and 200,000 lookups: a scan of every span per position would take
+    // ten billion comparisons.
+    let spans = Spans::new((0..50_000).map(|i| (Pos::body(0, i * 4), Pos::body(0, i * 4 + 1))).collect());
+    let hits = (0..200_000).filter(|&off| spans.contains(&Pos::body(0, off))).count();
+    assert_eq!(hits, 100_000);
+}

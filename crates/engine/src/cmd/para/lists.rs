@@ -1,5 +1,6 @@
 use super::format::fmt;
 use super::{CmdError, CmdResult, LineSpacing, ListKind, NumRef, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use std::sync::Arc;
 
 /// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
@@ -59,9 +60,9 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         None => match kind {
             ListKind::Bullet | ListKind::BulletChar(_) => match s.doc.numbering.find_kind(kind) {
                 Some(n) => n,
-                None => s.doc.numbering.try_add_list(kind)?,
+                None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
             },
-            _ => s.doc.numbering.try_add_list(kind)?,
+            _ => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
         },
     };
     fmt(s, &|p| {
@@ -105,8 +106,8 @@ pub(crate) fn restart_at(s: &mut Session, value: Option<u32>) -> CmdResult {
         .map(|x| x.level)
         .max();
     let old_starts = s.doc.numbering.num(n.num).map(|x| x.start_overrides.clone()).unwrap_or_default();
-    let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-    if let Some(num) = s.doc.numbering.nums.iter_mut().find(|x| x.id == new) {
+    let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
+    if let Some(num) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == new) {
         // Only this level and the ones below start again: a level above that is already counting
         // counts on (1., 2., a., then 3.); one that isn't keeps the start it had, old list's
         // override included, for this item to begin.
