@@ -588,6 +588,12 @@ fn tblprex(w: &mut W, t: &TableProps) {
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
     }
+    if let Some(n) = t.band_size {
+        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+    }
+    if let Some(n) = t.col_band_size {
+        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+    }
     w.close("w:tblPrEx");
 }
 

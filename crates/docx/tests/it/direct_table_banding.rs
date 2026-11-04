@@ -54,17 +54,15 @@ fn direct_table_band_sizes_survive_json_and_two_docx_saves() {
         let xml = document_xml(&saved);
         assert!(xml.contains(r#"<w:tblStyleRowBandSize w:val="2"/>"#), "{xml}");
         assert!(xml.contains(r#"<w:tblStyleColBandSize w:val="3"/>"#), "{xml}");
-        assert!(!xml.contains(r#"<w:tblPrEx><w:tblStyle"#), "{xml}");
+        assert!(xml.contains(r#"<w:tblPrEx><w:tblStyleRowBandSize w:val="4"/><w:tblStyleColBandSize w:val="5"/></w:tblPrEx>"#), "{xml}");
         let tblpr = xml.split_once("<w:tblPr>").unwrap().1.split_once("</w:tblPr>").unwrap().0;
         assert!(tblpr.find("w:tblStyleColBandSize").unwrap() < tblpr.find("w:tblW").unwrap(), "{tblpr}");
         doc = wordcraft_docx::read(&saved).unwrap();
         assert_eq!(doc.styles.table_style("Control").map(|s| (s.parts.band_size, s.parts.col_band_size)), Some((Some(6), Some(7))));
         let table = doc.body.iter().find_map(|b| b.as_table()).unwrap();
         assert_eq!((table.props.band_size, table.props.col_band_size), (Some(2), Some(3)));
-        if pass == 1 {
-            let ex = table.rows[0].props.exceptions.as_ref().expect("empty row exception retained");
-            assert_eq!((ex.band_size, ex.col_band_size), (None, None));
-        }
+        let ex = table.rows[0].props.exceptions.as_ref().expect("row exception retained");
+        assert_eq!((ex.band_size, ex.col_band_size), (Some(4), Some(5)));
     }
 }
 

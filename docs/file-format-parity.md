@@ -286,7 +286,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 ## Revision history
 
-> 2026-11-03 · Direct DOCX table band sizes are parsed only from integer values and written before `w:tblW`; invalid row-exception band-size elements are not emitted.
+> 2026-11-03 · Direct DOCX table band sizes parse integer values, cap oversized integers and serialize before `w:tblW`; row-exception band sizes round-trip through repeated saves.
 >
 
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).

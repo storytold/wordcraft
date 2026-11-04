@@ -695,7 +695,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
-Direct table band sizes now serialize in schema order. Row-exception values remain available in native JSON but are omitted from DOCX output because `w:tblPrEx` does not allow these elements; real-world stripe geometry remains open.
+Direct table band sizes serialize before `w:tblW`, and row-exception band sizes round-trip through two DOCX saves; real-world stripe geometry remains open.
 
 ## Revision history
 
