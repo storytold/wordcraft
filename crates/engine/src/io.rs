@@ -18,8 +18,12 @@ pub const OPEN_EXTS: &[&str] = &[
     "markdown",
     "html",
     "htm",
+    "mht",
+    "mhtml",
     "rtf",
     "odt",
+    "ott",
+    "fodt",
     "tex",
     "latex",
     "ltx",
@@ -28,7 +32,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "json",
 ];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json", "xml"];
+pub const SAVE_EXTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "ott", "fodt", "tex", "png", "json", "xml"];
 
 /// Magic number for ZIP package signatures (used by .docx/.docm/.dotx/.dotm).
 const ZIP_SIG: &[u8] = b"PK\x03\x04";
@@ -113,9 +118,39 @@ pub fn is_empty_file(_path: &std::path::Path) -> bool {
     false
 }
 
-/// Can files with this extension be saved with a password (Word's packages)?
+/// The canonical form of `path` (symbolic links and `.`/`..` resolved), for telling whether two
+/// spellings name one file; `None` when it can't be resolved or is outside the readable roots.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn canonical(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
+    std::fs::canonicalize(path).ok()
+}
+
+/// [`canonical`]: on the web files come through the browser, never by path.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Can files with this extension be saved with a password (Word's packages, ODT)?
 pub fn can_encrypt(name: &str) -> bool {
-    is_word_package(&ext_of(name))
+    let ext = ext_of(name);
+    is_word_package(&ext) || ext == "odt" || ext == "ott"
+}
+
+/// Open a password-protected ODT package (ODF 1.3 Part 2 §3.4). The errors for a missing or
+/// wrong password are the `.docx` reader's texts, so [`needs_password`] and [`wrong_password`]
+/// recognise them.
+fn open_encrypted_odt(bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<Document, String> {
+    let pw = password.ok_or_else(|| format!("ODT: {}", wordcraft_docx::PASSWORD_REQUIRED))?;
+    let plain = wordcraft_formats::odt::decrypt(bytes, pw).map_err(|e| match e {
+        wordcraft_formats::odt::CryptError::WrongPassword => format!("ODT: {}", wordcraft_docx::WRONG_PASSWORD),
+        other => other.to_string(),
+    })?;
+    match crate::io_ext::open("odt", &plain, page) {
+        Some(r) => r,
+        None => Err("ODT: no reader".into()),
+    }
 }
 
 /// Finish a document just read from a file: never leave it empty, and bring its unlocked
@@ -146,7 +181,8 @@ fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bo
 }
 
 /// [`open_bytes`] for a file that may be password-protected: a Word document encrypted with a
-/// password ([MS-OFFCRYPTO] agile encryption, or the Word 97-2003 schemes) is decrypted with
+/// password ([MS-OFFCRYPTO] agile or Standard encryption, under any Word extension, or the
+/// Word 97-2003 schemes) is decrypted with
 /// `password` first. Also says
 /// whether the file was encrypted. Without the password needed the error satisfies
 /// [`needs_password`]; with a wrong one, [`wrong_password`].
@@ -186,7 +222,12 @@ fn load_embedded_fonts(doc: &Document) {
 fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<(Document, bool), String> {
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
-        let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
+        let mut doc = read_docx(bytes, password).map_err(|e| e.to_string())?;
+        opened(&mut doc);
+        return Ok((doc, true));
+    }
+    if (ext == "odt" || ext == "ott") && wordcraft_formats::odt::is_encrypted(bytes) {
+        let mut doc = open_encrypted_odt(bytes, password, page)?;
         opened(&mut doc);
         return Ok((doc, true));
     }
@@ -213,6 +254,42 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
     };
     opened(&mut doc);
     Ok((doc, false))
+}
+
+/// Read a Word package (decrypted with `password` if it is encrypted), bringing in its
+/// alternative format chunks (`w:altChunk`) as Word does when it opens one: see [`import_chunk`].
+pub(crate) fn read_docx(bytes: &[u8], password: Option<&str>) -> Result<Document, wordcraft_docx::DocxError> {
+    wordcraft_docx::read_with(bytes, &wordcraft_docx::ReadOptions { password, chunks: Some(&import_chunk) })
+}
+
+/// An alternative format chunk in a format the docx reader leaves to the format importers, as a
+/// document: an MHT web archive, HTML, RTF or plain text, told by its content type, its part's
+/// extension or what it holds. Its pictures fit the text width, as when the file is opened.
+fn import_chunk(c: &wordcraft_docx::AltChunk) -> Option<Document> {
+    use wordcraft_formats::{html, mht, rtf, txt};
+    let full = c.content_type.to_ascii_lowercase();
+    let ct = full.split(';').next().unwrap_or("").trim();
+    let charset = full.split(';').skip(1).find_map(|p| p.trim().strip_prefix("charset=")).map(|v| v.trim_matches('"'));
+    let ext = ext_of(c.part);
+    let b = c.bytes;
+    let mut doc = if matches!(ct, "message/rfc822" | "application/x-mimearchive")
+        || ct.starts_with("multipart/")
+        || matches!(ext.as_str(), "mht" | "mhtml")
+        || mht::is_mht(b)
+    {
+        mht::import(b)
+    } else if ct.contains("rtf") || ext == "rtf" || b.starts_with(b"{\\rtf") {
+        rtf::import(b).ok()?
+    } else if ct.contains("html") || matches!(ext.as_str(), "html" | "htm" | "xhtml") {
+        html::import_page(&html::decode_as(b, charset), &|_| None)
+    } else if ct == "text/plain" || ext == "txt" {
+        txt::import(b)
+    } else {
+        return None;
+    };
+    // shortcut: pictures fit the chunk's default page, not the section it lands in; fit them there if wide pictures in chunks overflow narrow sections.
+    fit_pictures(&mut doc);
+    Some(doc)
 }
 
 /// The narrowest text width of the document's sections, points: what a picture must fit.
@@ -255,7 +332,7 @@ pub(crate) fn fit_pictures(doc: &mut Document) {
 /// Does the file hold a different document format than its Word or RTF extension says? An RTF
 /// file saved as `.doc` (as accounting systems and report generators often save their
 /// documents), a `.docx` package renamed `.doc`, a Word 97-2003 file renamed `.docx`, a Word XML
-/// Document (2003 or Flat OPC) or a web page saved as `.doc` (#2853): Word opens
+/// Document (2003 or Flat OPC) or a web page (HTML or MHT) saved as `.doc` (#2853): Word opens
 /// each by what it holds, so they go through [`open_by_content`] instead of failing.
 fn signature_contradicts(ext: &str, bytes: &[u8]) -> bool {
     let expected = match ext {
@@ -274,6 +351,8 @@ fn signature_contradicts(ext: &str, bytes: &[u8]) -> bool {
         "xml"
     } else if looks_like_web_page(bytes) {
         "html"
+    } else if wordcraft_formats::mht::is_mht(bytes) {
+        "mht"
     } else {
         return false;
     };
@@ -331,9 +410,9 @@ fn open_by_content(
     page: &wordcraft_doc::SectionProps,
 ) -> Result<(Document, bool), String> {
     let (mut doc, encrypted) = if bytes.starts_with(OLE_SIG) && wordcraft_docx::is_encrypted(bytes) {
-        (wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?, true)
+        (read_docx(bytes, password).map_err(|e| e.to_string())?, true)
     } else if bytes.starts_with(ZIP_SIG) {
-        (wordcraft_docx::read(bytes).map_err(|e| format!("{name}: not a document WordCraft can open ({e})"))?, false)
+        (read_docx(bytes, None).map_err(|e| format!("{name}: not a document WordCraft can open ({e})"))?, false)
     } else if bytes.starts_with(OLE_SIG) {
         open_binary_doc(bytes, password)
             .map_err(|e| if needs_password(&e) || wrong_password(&e) { e } else { format!("{name}: not a document WordCraft can open ({e})") })?
@@ -343,6 +422,9 @@ fn open_by_content(
         (wordcraft_docx::read_xml(bytes).map_err(|e| format!("{name}: {e}"))?, false)
     } else if matches!(ext, "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") && looks_like_web_page(bytes) {
         let opened = crate::io_ext::open("html", bytes, page).unwrap_or_else(|| Err(format!("{name}: can't open web pages")));
+        (opened?, false)
+    } else if matches!(ext, "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") && wordcraft_formats::mht::is_mht(bytes) {
+        let opened = crate::io_ext::open("mht", bytes, page).unwrap_or_else(|| Err(format!("{name}: can't open web archives")));
         (opened?, false)
     } else if wordcraft_formats::txt::is_text(bytes) {
         (wordcraft_formats::txt::import_on(bytes, page), false)
@@ -382,6 +464,7 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let bytes = save_bytes_opts(name, doc, opts)?;
     match password {
+        Some(pw) if matches!(ext_of(name).as_str(), "odt" | "ott") => wordcraft_formats::odt::encrypt(&bytes, pw),
         Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
         _ => Ok(bytes),
     }
@@ -506,7 +589,7 @@ impl LocalImages {
         left.map(|_| ())
     }
 
-    /// The canonical path `src` names, if it's inside the folder.
+    /// The canonical path `src` names, if it's inside the folder and may be read.
     fn resolve(&self, src: &str) -> Option<std::path::PathBuf> {
         let src = src.split(['#', '?']).next().unwrap_or("");
         if src.is_empty() || src.starts_with("//") || src.split_once(':').is_some_and(|(scheme, _)| !scheme.contains('/')) {
@@ -520,6 +603,9 @@ impl LocalImages {
         let dir = self.dir.as_ref()?;
         // Canonical paths have `..` and symlinks resolved, so this keeps both inside the folder.
         let path = std::fs::canonicalize(dir.join(rel)).ok()?;
+        // The folder is the one the HTML path names, which may be a link from outside the
+        // automation read root; the picture itself must be inside it (#3736).
+        crate::file_access::check_read(&path.to_string_lossy()).ok()?;
         path.starts_with(dir).then_some(path)
     }
 }
@@ -527,21 +613,67 @@ impl LocalImages {
 /// Up to `limit + 1` bytes of the regular file at `path` (more than `limit` means too large), or
 /// `None` for anything else. A named pipe blocks when opened and a device reports a length of 0
 /// and may never end, so the path is checked before opening, the opened handle is checked again,
-/// and the read is bounded whatever length the file reports.
+/// and the read is bounded whatever length the file reports. Public for the app (a copied picture
+/// file, Paste Special).
 #[cfg(not(target_arch = "wasm32"))]
-fn read_regular_file(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
-    use std::io::Read;
-    if !std::fs::metadata(path).ok()?.is_file() {
+pub fn read_regular_file(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
+    let (file, meta) = open_regular_file(path).ok()?;
+    read_bounded(file, &meta, limit).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_regular_file(_path: &std::path::Path, _limit: u64) -> Option<Vec<u8>> {
+    None
+}
+
+/// The bytes of the regular file at `path` when it holds at most `limit` of them; `None` for
+/// anything else. A file whose opened handle reports more than `limit` bytes is refused before
+/// anything is read; the read stays bounded for a file that grows after the check. Public for the
+/// app (a copied picture file, Paste Special).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_regular_file_within(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
+    let (file, meta) = open_regular_file(path).ok()?;
+    if meta.len() > limit {
         return None;
     }
-    let file = std::fs::File::open(path).ok()?;
-    let meta = file.metadata().ok()?;
+    read_bounded(file, &meta, limit).ok().filter(|b| b.len() as u64 <= limit)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn read_regular_file_within(_path: &std::path::Path, _limit: u64) -> Option<Vec<u8>> {
+    None
+}
+
+/// The regular file at `path`, opened once, with the opened handle's metadata. The path is
+/// checked before opening (a named pipe blocks in `open` until a writer appears) and the handle
+/// after (the path may have been swapped in between); anything but a regular file is "not a file".
+#[cfg(not(target_arch = "wasm32"))]
+fn open_regular_file(path: &std::path::Path) -> Result<(std::fs::File, std::fs::Metadata), String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
-        return None;
+        return Err(format!("{}: not a file", path.display()));
     }
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    // A path swapped for a named pipe since the check above would block `open`; non-blocking
+    // opens it at once (no effect on a regular file) and the handle check below refuses it.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+    let file = open.open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let meta = file.metadata().map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{}: not a file", path.display()));
+    }
+    Ok((file, meta))
+}
+
+/// Up to `limit + 1` bytes of `file` (more than `limit` means too large), however long it says it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_bounded(file: std::fs::File, meta: &std::fs::Metadata, limit: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
     let mut out = Vec::with_capacity(usize::try_from(meta.len().min(limit)).unwrap_or(0));
-    file.take(limit.saturating_add(1)).read_to_end(&mut out).ok()?;
-    Some(out)
+    file.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+    Ok(out)
 }
 
 /// Largest file [`read_file`] reads whole — the same 2 GB ceiling [`open_path_with`] gives a
@@ -563,29 +695,33 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 }
 
 /// [`read_file`] for a file that must be a regular file of at most `max` bytes, checked before
-/// anything is read (a font named by the user, which could be any size).
+/// anything is read (a font named by the user, which could be any size). The file is opened once
+/// and the read stops past `max`, so a file swapped or grown after the check is refused too (#3666).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, String> {
     crate::file_access::check_read(path)?;
-    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-    if !meta.is_file() {
-        return Err(format!("{path}: not a file"));
-    }
+    let too_large = || format!("{path}: the {what} is larger than {} MB", max >> 20);
+    let (file, meta) = open_regular_file(std::path::Path::new(path))?;
     if meta.len() > max {
-        return Err(format!("{path}: the {what} is larger than {} MB", max >> 20));
+        return Err(too_large());
     }
-    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+    let bytes = read_bounded(file, &meta, max).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > max {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// The first `max` bytes of the file at `path` (fewer when it is shorter), inside the automation
-/// read root when there is one: enough to tell a file's format by its start.
+/// read root when there is one: enough to tell a file's format by its start. Only a regular file
+/// is opened: a named pipe would block the open until a writer appeared (#3666).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     crate::file_access::check_read(path)?;
-    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let (file, _) = open_regular_file(std::path::Path::new(path))?;
     let mut head = Vec::new();
-    f.take(max).read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
+    file.take(max).read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
     Ok(head)
 }
 

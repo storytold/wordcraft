@@ -10,6 +10,8 @@ use crate::fields;
 use crate::wire::{self, Call, Frame};
 use crate::{Bridge, Command, Headless, ZoteroError};
 
+mod limits;
+
 const CITE: &str = r#"ITEM CSL_CITATION {"citationID":"k1","properties":{"formattedCitation":"(Doe, 2020)"},"citationItems":[{"id":7}]}"#;
 const BIBL: &str = r#"BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY"#;
 const PREFS: &str = r#"<data data-version="3" zotero-version="7.0"><session id="s1"/><style id="http://www.zotero.org/styles/apa" hasBibliography="1" bibliographyStyleHasBeenSet="1"/><prefs><pref name="fieldType" value="ReferenceMark"/></prefs></data>"#;
@@ -520,7 +522,16 @@ fn a_note_with_a_picture_stays_when_its_citation_leaves() {
     let pid = *z.s.doc.parts.keys().next().unwrap();
     let p = z.s.doc.para_mut(StoryRef::Part(pid), &Path::top(0)).unwrap();
     let n = p.len();
-    let image = InlineObject::Image { media: "m".into(), w: 1.0, h: 1.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = InlineObject::Image {
+        media: "m".into(),
+        w: 1.0,
+        h: 1.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     p.insert_object(n, image, &Default::default()).unwrap();
     z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
     assert_eq!(z.s.doc.parts.len(), 1);
