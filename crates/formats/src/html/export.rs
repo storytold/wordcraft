@@ -141,6 +141,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
+            Inline::NoteMark { n, label, .. } => o.push_str(&format!("<sup><a id=\"fnref{n}\" href=\"#fn{n}\">{}</a></sup>", esc(label))),
         }
     }
     o
@@ -330,7 +331,21 @@ pub fn export_fragment(doc: &Document) -> String {
     let flow = model::from_doc(doc);
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0);
+    notes_html(&flow, &mut out);
     out
+}
+
+/// The footnotes and endnotes the body refers to, each linked back to its mark.
+fn notes_html(flow: &Flow, out: &mut String) {
+    let notes = model::flow_notes(flow);
+    if notes.is_empty() {
+        return;
+    }
+    out.push_str("<hr>\n");
+    for n in &notes {
+        let (num, label, text) = (n.n, esc(&n.label), esc(&n.text));
+        out.push_str(&format!("<p id=\"fn{num}\"><sup>{label}</sup> {text} <a href=\"#fnref{num}\">\u{21A9}</a></p>\n"));
+    }
 }
 
 pub fn export_flow(flow: &Flow, lang: &str) -> String {
@@ -351,6 +366,7 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
          pre{background:#f5f5f5;padding:0.5em;font-family:'Courier New',monospace;font-size:10pt}\n</style>\n</head>\n<body>\n",
     );
     blocks_html(&flow.blocks, &mut out, 0);
+    notes_html(flow, &mut out);
     out.push_str("</body>\n</html>\n");
     out
 }

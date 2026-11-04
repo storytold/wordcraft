@@ -1,8 +1,9 @@
-use super::types::{Cell, FBlock, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
+use super::types::{Cell, FBlock, FNote, FTable, Flow, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, Meta, Para, RevMark, Spacing};
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
     VMerge, VertAlign,
 };
+use wordcraft_doc::StoryRef;
 
 pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
     depth <= MAX_DEPTH
@@ -253,6 +254,15 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     }
                     out.inlines.push(Inline::Anchor(name.clone()));
                 }
+                Some(InlineObject::NoteRef { kind, id, custom }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    // `number_notes` numbers it; until then `n` is the id of the note's part.
+                    let endnote = *kind == wordcraft_doc::para::NoteKind::Endnote;
+                    let (n, label, text) = (*id as usize, custom.clone(), String::new());
+                    out.inlines.push(Inline::NoteMark { n, label, custom: false, text, runs: Vec::new(), endnote });
+                }
                 Some(o) => buf.push_str(o.plain_text()),
                 None => {}
             }
@@ -345,10 +355,114 @@ pub fn from_doc_tracked(doc: &Document) -> Flow {
     flow_of(doc, true)
 }
 
+fn each_inline(blocks: &[FBlock], f: &mut dyn FnMut(&Inline)) {
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                for i in &p.inlines {
+                    f(i);
+                }
+            }
+            FBlock::Table(t) => {
+                for c in t.rows.iter().flatten() {
+                    each_inline(&c.blocks, f);
+                }
+            }
+        }
+    }
+}
+
+fn each_inline_mut(blocks: &mut [FBlock], f: &mut dyn FnMut(&mut Inline)) {
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                for i in &mut p.inlines {
+                    f(i);
+                }
+            }
+            FBlock::Table(t) => {
+                for c in t.rows.iter_mut().flatten() {
+                    each_inline_mut(&mut c.blocks, f);
+                }
+            }
+        }
+    }
+}
+
+/// The notes `flow` refers to, in order of their numbers.
+pub fn flow_notes(flow: &Flow) -> Vec<FNote> {
+    let mut out: Vec<FNote> = Vec::new();
+    each_inline(&flow.blocks, &mut |i| {
+        if let Inline::NoteMark { n, label, text, .. } = i
+            && *n == out.len() + 1
+        {
+            out.push(FNote { n: *n, label: label.clone(), text: text.clone() });
+        }
+    });
+    out
+}
+
+/// The text of a note's flow blocks as inline runs, paragraphs and cells apart by a space:
+/// the runs keep their formatting (and, when tracking, their revision marks).
+fn note_runs(blocks: &[FBlock], out: &mut Vec<Inline>) {
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                if !out.is_empty() {
+                    out.push(Inline::Text(" ".to_string(), Fmt::default()));
+                }
+                for i in &p.inlines {
+                    match i {
+                        Inline::Text(..) => out.push(i.clone()),
+                        Inline::Equation { linear, .. } => out.push(Inline::Text(linear.clone(), Fmt::default())),
+                        Inline::Ruby { base, fmt, .. } => out.push(Inline::Text(base.clone(), fmt.clone())),
+                        Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::NoteMark { .. } => {}
+                    }
+                }
+            }
+            FBlock::Table(t) => t.rows.iter().flatten().for_each(|c| note_runs(&c.blocks, out)),
+        }
+    }
+}
+
+/// Number the note references in `blocks` in order and give each its mark and text. On entry
+/// `n` holds the id of the note's part (see `flow_paras_in`).
+fn number_notes(doc: &Document, blocks: &mut [FBlock], tracked: bool) {
+    let mut seen: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut cache: std::collections::HashMap<u32, (String, Vec<Inline>)> = std::collections::HashMap::new();
+    each_inline_mut(blocks, &mut |i| {
+        if let Inline::NoteMark { n, label, custom, text, runs, .. } = i {
+            let id = u32::try_from(*n).unwrap_or(0);
+            let next = seen.len() + 1;
+            *n = *seen.entry(id).or_insert(next);
+            *custom = !label.is_empty();
+            if label.is_empty() {
+                *label = n.to_string();
+            }
+            // The note's text goes through the same run filter as the body's: hidden text stays
+            // out, and so does tracked-deleted text unless the flow keeps tracked changes (then
+            // `runs` has it, marked; `text` is for the formats that don't keep revisions). A note
+            // referred to more than once is built once.
+            let (joined, kept) = cache.entry(id).or_insert_with(|| {
+                let mut all = Vec::new();
+                if let Some(story) = doc.story(StoryRef::Part(id)) {
+                    note_runs(&flow_blocks(doc, story, 0, tracked), &mut all);
+                }
+                let joined: String = all.iter().filter_map(|r| if let Inline::Text(t, _) = r { Some(t.as_str()) } else { None }).collect();
+                (joined.split_whitespace().collect::<Vec<_>>().join(" "), if tracked { all } else { Vec::new() })
+            });
+            text.clone_from(joined);
+            runs.clone_from(kept);
+        }
+    });
+}
+
 fn flow_of(doc: &Document, tracked: bool) -> Flow {
     let c = &doc.core;
+    let mut blocks = flow_blocks(doc, &doc.body, 0, tracked);
+    number_notes(doc, &mut blocks, tracked);
     Flow {
-        blocks: flow_blocks(doc, &doc.body, 0, tracked),
+        blocks,
         meta: Meta {
             title: c.title.clone(),
             author: c.creator.clone(),

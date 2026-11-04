@@ -164,6 +164,31 @@ pub enum Inline {
         ruby: String,
         fmt: Fmt,
     },
+    /// A footnote or endnote reference. `n` numbers the notes in the order they are first
+    /// referenced (from 1), `label` is the mark shown (the note's custom mark or `n`) and `text`
+    /// is the note's text on one line, as the body shows it: hidden text is not in it, and
+    /// neither is tracked-deleted text. Formats that keep notes write the mark here and the text
+    /// at the end ([`flow_notes`](super::flow_notes)); the others leave it out. `endnote` tells an
+    /// endnote from a footnote. `custom` is set when `label` is the note's own mark, not its
+    /// number. `runs` is the note's text with its formatting, for the formats that keep revisions
+    /// ([`from_doc_tracked`](super::from_doc_tracked) keeps tracked-deleted text in it, with its
+    /// marks); empty otherwise.
+    NoteMark {
+        n: usize,
+        label: String,
+        custom: bool,
+        text: String,
+        runs: Vec<Inline>,
+        endnote: bool,
+    },
+}
+
+/// One note as listed after the body by the text formats.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FNote {
+    pub n: usize,
+    pub label: String,
+    pub text: String,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the
@@ -275,7 +300,7 @@ impl Para {
         for i in &self.inlines {
             match i {
                 Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) | Inline::NoteMark { .. } => {}
             }
         }
         s
@@ -291,6 +316,7 @@ impl Para {
                     _ => s.push_str(t),
                 },
                 Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
+                Inline::NoteMark { label, .. } => s.push_str(&format!("[{label}]")),
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }

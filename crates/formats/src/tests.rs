@@ -1019,3 +1019,78 @@ fn latex_export_keeps_repeated_spaces() {
     let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
     assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }
+
+/// #3272: a footnote kept its reference mark and its text in none of the text formats.
+#[test]
+fn text_formats_keep_footnotes() {
+    let mut d = Document::from_text("Main sentence.");
+    let note = d.add_part(wordcraft_doc::PartKind::Footnote, vec![para_block(Paragraph::with_text("Note text.", CharProps::default()))]);
+    let obj = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id: note, custom: String::new() };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 14), obj, &Default::default()).unwrap();
+    let out = |d: &Document, ext: &str| String::from_utf8(export(ext, d).unwrap().unwrap()).unwrap();
+    assert_eq!(out(&d, "txt"), "Main sentence.[1]\r\n\r\n[1] Note text.");
+    let md = out(&d, "md");
+    assert!(md.contains("Main sentence.[^1]") && md.contains("[^1]: Note text."), "{md}");
+    let html = out(&d, "html");
+    assert!(html.contains("<a id=\"fnref1\" href=\"#fn1\">1</a></sup>") && html.contains("<p id=\"fn1\">"), "{html}");
+    assert!(html.contains("Note text."), "{html}");
+    let rtf = out(&d, "rtf");
+    assert!(rtf.contains(r"{\footnote\pard") && rtf.contains("Note text."), "{rtf}");
+    // An endnote is written as one in RTF (`\ftnalt`) and listed like a footnote elsewhere.
+    let end = d.add_part(wordcraft_doc::PartKind::Endnote, vec![para_block(Paragraph::with_text("End text.", CharProps::default()))]);
+    let obj = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: end, custom: String::new() };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &Default::default()).unwrap();
+    assert_eq!(out(&d, "txt"), "[1]Main sentence.[2]\r\n\r\n[1] End text.\r\n[2] Note text.");
+    assert!(out(&d, "rtf").contains(r"{\footnote\ftnalt\pard\plain {\super\chftn} End text.\par}"));
+}
+
+/// A document "Main sentence." with a footnote whose text has a hidden and a tracked-deleted run.
+fn footnote_with_hidden_and_deleted_runs() -> Document {
+    let mut d = Document::from_text("Main sentence.");
+    d.revisions.push(wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Delete, "Bob", "2024-03-15T10:30:00Z"));
+    let mut p = Paragraph::with_text("Seen", CharProps::default());
+    for (text, props) in [
+        (" secret", CharProps { hidden: Some(true), ..Default::default() }),
+        (" gone", CharProps { del: Some(0), ..Default::default() }),
+        (" kept", CharProps::default()),
+    ] {
+        let n = p.len();
+        p.insert_text(n, text, &props).unwrap();
+    }
+    let note = d.add_part(wordcraft_doc::PartKind::Footnote, vec![para_block(p)]);
+    let obj = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id: note, custom: String::new() };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 14), obj, &Default::default()).unwrap();
+    d
+}
+
+/// A note's text goes through the body's run filter: hidden and tracked-deleted runs stay out of
+/// the text formats, and RTF keeps the deleted run with its deletion mark (as it does in the body).
+#[test]
+fn note_text_skips_hidden_and_deleted_runs() {
+    let d = footnote_with_hidden_and_deleted_runs();
+    let out = |ext: &str| String::from_utf8(export(ext, &d).unwrap().unwrap()).unwrap();
+    assert_eq!(out("txt"), "Main sentence.[1]\r\n\r\n[1] Seen kept");
+    for ext in ["md", "html"] {
+        let s = out(ext);
+        assert!(s.contains("Seen kept"), "{s}");
+        assert!(!s.contains("secret") && !s.contains("gone"), "{s}");
+    }
+    let rtf = out("rtf");
+    assert!(!rtf.contains("secret"), "{rtf}");
+    let gone = rtf.find("gone").expect("deleted run kept in RTF");
+    let group = rtf[..gone].rsplit('{').next().unwrap();
+    assert!(group.contains(r"\deleted"), "{rtf}");
+    assert!(rtf.contains("Seen") && rtf.contains("kept"), "{rtf}");
+}
+
+/// A custom note mark is written as it is in RTF; only an automatic one is `\chftn`.
+#[test]
+fn rtf_keeps_custom_note_marks() {
+    let mut d = Document::from_text("Main sentence.");
+    let note = d.add_part(wordcraft_doc::PartKind::Footnote, vec![para_block(Paragraph::with_text("Note text.", CharProps::default()))]);
+    let obj = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id: note, custom: "*".into() };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 14), obj, &Default::default()).unwrap();
+    let rtf = String::from_utf8(export("rtf", &d).unwrap().unwrap()).unwrap();
+    assert!(rtf.contains(r"{\super *{\footnote\pard\plain {\super *} Note text.\par}}"), "{rtf}");
+    assert!(!rtf.contains(r"\chftn"), "{rtf}");
+}
