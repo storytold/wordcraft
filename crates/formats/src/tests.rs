@@ -1004,6 +1004,18 @@ fn dropped_names_and_links_are_logged_once_per_document() {
 }
 
 #[test]
+fn flow_keeps_tab_stops_from_a_document() {
+    use wordcraft_doc::props::TabStop;
+    let tabs = vec![TabStop { pos: 90.0, align: Default::default(), leader: Default::default() }];
+    let mut p = model::Para { tabs: Some(tabs.clone()), ..Default::default() };
+    p.push_text("a\tb", &Default::default());
+    let doc = model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() });
+    let back = model::from_doc(&doc);
+    let Some(FBlock::Para(q)) = back.blocks.first() else { panic!("{:?}", back.blocks) };
+    assert_eq!(q.tabs.as_ref(), Some(&tabs));
+}
+
+#[test]
 fn html_title_outside_head_is_metadata_not_body() {
     for html in ["<title>T</title><p>b</p>", "<html><title>T</title><body>b</body></html>"] {
         let d = crate::html::import(html);

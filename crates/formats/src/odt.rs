@@ -8,7 +8,9 @@
 //! Quotations, Preformatted Text, page layout) and `meta.xml`.
 //!
 //! Import reads the same subset back from `content.xml` / `styles.xml` (style inheritance
-//! resolved, both automatic and common styles), skipping notes, annotations, text boxes and drawing shapes.
+//! resolved, both automatic and common styles), plus the master pages' headers and footers
+//! (`page_parts`) and page number / page count fields; notes, annotations, text boxes and drawing
+//! shapes are skipped.
 //!
 //! Tracked changes (ODF 1.3 Part 3 §5.5) go both ways: `text:tracked-changes` holds one
 //! `text:changed-region` per change; an insertion is the body text between

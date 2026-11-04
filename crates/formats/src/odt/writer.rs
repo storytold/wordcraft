@@ -389,7 +389,7 @@ impl Writer {
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
                 // Read as its base text by `ruby_as_text` above.
                 Inline::Ruby { .. } => {}
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                Inline::Figure(_) | Inline::Equation { .. } | Inline::Field { .. } => {}
             }
         }
     }
