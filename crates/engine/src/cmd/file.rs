@@ -1,6 +1,7 @@
 //! File tab (Backstage): new, open, save, export, print, properties; document inspection.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::{Block, Document, StoryRef};
 
 use super::{pos_json, sel_result};
@@ -127,7 +128,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.printPdf", "Print to PDF", "File › Print", crate::print::print_pdf_to_file)
             .params(
-                r#"{"path": string, "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
+                r#"{"path": string, "pagesPerSheet"?: 1 | 2 | 4 | 6 | 9 | 16 | "booklet" | "bookletReverse", "range"?: "all" | "current" | "selection" (the pages the selection touches) | "custom", "pages"?: "1-3,5" (implies custom), "parity"?: "all" | "odd" | "even", "copies"?: 1-999, "collate"?: bool (default true), "paper"?: "none" | "Letter" | "Legal" | "A4" | … (a Layout › Size name: scale every page to this paper, centred; the document keeps its size)}"#,
             )
             .pure(),
         CommandSpec::new("file.print", "Print", "File", |s, _| {
@@ -230,7 +231,7 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
 pub(crate) fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
-        d.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }
     d
 }
@@ -271,7 +272,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
     {
-        doc.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
     match s.used_because() {
         None => s.set_document(doc),
