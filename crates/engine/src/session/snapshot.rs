@@ -258,7 +258,7 @@ impl Session {
         }
         self.rev = rev;
         for slot in &mut self.layout {
-            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+            if slot.as_ref().is_some_and(|l| l.0.0 != rev) {
                 *slot = None;
             }
         }
