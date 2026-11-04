@@ -19,14 +19,14 @@ agent control. This page is the summary; the assessment is
 
 | Number | Value | Kind |
 | --- | --- | --- |
-| Ribbon/menu catalog coverage | **493 / 508 (97.0%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
+| Ribbon/menu catalog coverage | **502 / 517 (97.1%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
 | **Feature breadth** (weighted, incl. dialog options, styles, languages beyond the ribbon) | **~80%** | estimated |
 | **Ready for real work** (full target) | **~60%** (55–63%) | estimated, additive weighted sum over the dimensions |
 | **Mainstream practitioner** | **~55%** | estimated: weekly-work depth × discounts for interaction (×0.93), stability (×0.90), file exchange (×0.90) |
 | **Essentials user** | **~63%** | estimated: core-feature depth × discounts for launch (×0.90), discoverability (×0.95), opening received files (×0.92) |
 | Remaining to **beta** | **~150–230 h** of Opus 5.5 agent wall-clock (gaps #1–#7) | estimated |
 | Remaining to **full parity** with Word desktop | **~750–1,250 h** (70–80% parallelizable) | estimated |
-| Commands / tests / code | 433 commands · 855 tests + 10 property blocks · ~88,700 lines of Rust | measured (source) |
+| Commands / tests / code | 439 commands · 855 tests + 10 property blocks · ~88,700 lines of Rust | measured (source) |
 | Releases | v0.4.0 (2026-10-10): signed macOS universal DMG, Windows MSI x64/x86/arm64, Linux AppImage/deb/rpm/Flatpak x86_64 + aarch64, FreeBSD, web | measured |
 
 Hours are calibrated from this repo's PRs (equations #191: ~9.7k lines in ~5 h; `.doc` reader
@@ -239,6 +239,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-18 | Design: custom theme colours, fonts and themes (#1869). Customize Colors… names a set of the 12 theme colours and Customize Fonts… a heading and body font pair; they show first in the Colors and Fonts galleries (right-click Edit…/Delete) and are kept in the settings folder's `themes`. Save Current Theme… writes an Office Theme (`.thmx`) and Browse for Themes… applies one or a document's theme (desktop); a custom theme is saved in the `.docx` theme part, and a built-in theme or colour set now replaces all 12 colours. Commands `design.customColors`, `design.customFonts`, `design.deleteCustom`, `design.customThemes`, `design.saveTheme`, `design.openTheme` |
 | 2026-11-03 | **Arabic interface (#1195):** `ar` selectable (and every `ar-*` system locale); craft-i18n catalog; mirrored ribbon, panes, File page, dialogs and menus; Arabic UI font fallback; document direction stays independent. No kashida or Arabic proofing yet; Hebrew UI still open. |
 | 2026-11-01 | **English spelling reads SCOWL 2026 (CP2, #40, #520, #1281, #1045):** en-US, en-GB (also en-AU, en-NZ, en-IE, en-IN…) and en-CA each check against their own SCOWL `rel-2026.02.25` Hunspell dictionary from craft-i18n, embedded and read by craft-proof's affix engine (which now understands `COMPOUNDRULE`, so ordinals like `21st` are words). Suggestions come from the dialect's own dictionary; our American/British policy (`en-variants.txt`) still decides the other dialect's spellings, because Word accepts more than SCOWL's one spelling per dialect (`organize` and `organise` in en-GB). Rare words the 1990s Moby list accepted (`aposiopesis`) are now flagged. The Moby list stays for hyphenation and as a fallback. The build carries 1.5 MB more Language data. |
 | 2026-11-01 | Proofing moved to the shared libraries, with nothing users see changing: the code is `craft-proof` in storytold/craft-libs (with its history) and the spelling and hyphenation data (the Moby list, our English patterns and word lists, the German, Polish, Portuguese and Italian patterns, `ru-extra`) is craft-i18n's `language-data/`, embedded from `CRAFT_I18N_DIR` at the commit in `craft-i18n.rev`. Before/after `wordcraft-cli` runs on a proofing document give the same issues, suggestions and hyphenated PDF (CP1). |
@@ -1105,6 +1106,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-15 | trivial | Charts: radar charts (standard, marker, filled) are drawn instead of a placeholder (#1890) |
 | 2026-10-15 | trivial | Progress log: dialog close box (#1885) |
 | 2026-10-15 | trivial | Progress log: mixed Hebrew/Latin text keeps its order in Word (#1543) |
+| 2026-10-18 | trivial | Progress log: custom theme colours, fonts and themes, .thmx (#1869); headline 433 → 439 commands |
 | 2026-10-15 | trivial | Progress log: ruler numbers by zoom, rulers follow the caret's page (#1878) |
 | 2026-10-17 | trivial | Progress log: saving into a folder that refuses a temporary file (#2138) |
 | 2026-10-19 | trivial | Progress log: personal templates in File › New, Save as Word Template (#2852) |

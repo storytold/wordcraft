@@ -213,6 +213,10 @@ Design|Document Formatting|Fonts|design.themeFonts
 Design|Document Formatting|Paragraph Spacing|design.paragraphSpacing
 Design|Document Formatting|Effects|design.effects
 Design|Document Formatting|Set as Default|design.setDefault
+Design|Document Formatting|Customize Colors|design.customColors
+Design|Document Formatting|Customize Fonts|design.customFonts
+Design|Document Formatting|Save Current Theme|design.saveTheme
+Design|Document Formatting|Browse for Themes|design.openTheme
 Design|Page Background|Watermark|design.watermark
 Design|Page Background|Page Color|design.pageColor
 Design|Page Background|Page Borders|design.pageBorders

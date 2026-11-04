@@ -28,6 +28,13 @@ impl Session {
         }
     }
 
+    /// Use `dir` as the themes folder: read the custom colour and font sets and themes kept there,
+    /// and save new ones to it (#1869). See [`crate::cmd::themes`].
+    pub fn load_custom_themes(&mut self, dir: &std::path::Path) {
+        self.custom_themes = crate::cmd::themes::CustomThemes::load(dir);
+        self.themes_dir = Some(dir.to_path_buf());
+    }
+
     /// Start an editing session at the document beginning with empty history and
     /// default view, preferences and a yellow highlighter independent of document undo.
     pub fn new(doc: Document) -> Self {
@@ -93,6 +100,8 @@ impl Session {
             path,
             file_name,
             user_dict_path: None,
+            themes_dir: None,
+            custom_themes: Default::default(),
             dirty,
             clipboard: None,
             pending_move,
