@@ -4,20 +4,51 @@ use wordcraft_doc::Document;
 
 /// Open a format other than plain text / JSON; files that give no page size (Markdown, HTML)
 /// start on `page`.
-pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Option<Result<Document, String>> {
+pub fn open(
+    ext: &str,
+    bytes: &[u8],
+    page: &wordcraft_doc::SectionProps,
+    odf: &wordcraft_doc::odf_profile::OdfProfile,
+) -> Option<Result<Document, String>> {
     match ext {
         "docx" | "docm" | "dotx" | "dotm" => Some(crate::io::read_docx(bytes, None).map_err(|e| e.to_string())),
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
         // HTML, Markdown, ODT, RTF…: pictures fit the text width (see `io::fit_pictures`).
-        other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
+        other => wordcraft_formats::import_with(other, bytes, page, odf).map(|r| {
             r.map(|mut doc| {
                 crate::io::fit_pictures(&mut doc);
+                draw_charts(&mut doc);
                 doc
             })
         }),
     }
+}
+
+/// Draw the charts a reader left undrawn (ODT charts come as their chart model alone): in the
+/// document's theme colours, at their size.
+fn draw_charts(doc: &mut Document) {
+    use wordcraft_doc::para::InlineObject;
+    /// Groups nest at most this deep here (the readers flatten deeper ones).
+    const DEPTH: usize = 16;
+    fn undrawn(o: &InlineObject, depth: usize) -> bool {
+        match o {
+            InlineObject::Graphic { graphic, .. } => graphic.chart.is_some() && graphic.items.is_empty(),
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter().any(|c| undrawn(&c.obj, depth + 1)),
+            _ => false,
+        }
+    }
+    fn draw(o: &mut InlineObject, theme: &[wordcraft_doc::Rgb], depth: usize) {
+        match o {
+            InlineObject::Group { children, .. } if depth < DEPTH => children.iter_mut().for_each(|c| draw(&mut c.obj, theme, depth + 1)),
+            o if undrawn(o, depth) => crate::cmd::chart::redraw(o, theme),
+            _ => {}
+        }
+    }
+    let theme = doc.settings.theme_colors.clone();
+    // (Drawing them doesn't change the document: markup kept as read for them still is.)
+    doc.fill_objects(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, 0));
 }
 
 /// Save to a format other than plain text / JSON.
