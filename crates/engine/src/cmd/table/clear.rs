@@ -40,7 +40,7 @@ pub(in crate::cmd) fn clear_range_cells(s: &mut Session, range: &crate::CellRang
     let prefixes: Vec<Vec<u32>> = cells.into_iter().map(|(r, c)| cell_prefix(&range.table, r, c)).collect();
     let spans = text_spans(s, range.story, &prefixes);
     let first = spans.first().map(|(a, _)| a.clone());
-    if guard_delete(s, &spans)?.is_none() {
+    if guard_delete(s, &spans, &[])?.is_none() {
         for (a, b) in spans.iter().rev() {
             if a != b {
                 s.doc.delete_range(a, b)?;
