@@ -48,6 +48,12 @@ pub struct Level {
     pub legal: bool,
     /// Paragraph style linked to this level (e.g. Heading 1 for outline numbering).
     pub style: Option<String>,
+    /// Word 2010 custom number format (`w:numFmt` `w:val="custom" w:format="0001, 0002, 0003, ..."`),
+    /// kept as read; `format` is the format the file gives as its fallback. Labels use it when
+    /// the pattern is a zero-padded sequence (see [`custom_format_label`]) — the `[0001]`
+    /// paragraph numbering of patent specifications is that case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_format: Option<String>,
 }
 
 impl Default for Level {
@@ -66,6 +72,7 @@ impl Default for Level {
             tab: None,
             legal: false,
             style: None,
+            custom_format: None,
         }
     }
 }
@@ -228,7 +235,11 @@ impl Numbering {
     /// Whether a paragraph in list `num` at `level` gets a label ([`Counters::next_label`] gives
     /// one), without counting it.
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
-        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None)
+        // A recognized custom pattern labels even under a `none` fallback (see next_label).
+        self.abstract_of(num).is_some()
+            && self.level(num, level.min(8)).is_some_and(|d| {
+                d.format != NumFormat::None || (!d.legal && d.custom_format.as_deref().is_some_and(|p| custom_pad_width(p).is_some()))
+            })
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
         if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
@@ -318,8 +329,11 @@ impl Counters {
         // This list's own definition of a level wins over its abstract list's.
         let level_def = |k: usize| numbering.level(num, k as u8);
         let def = level_def(lv)?.clone();
+        // A supported custom pattern is the active format (MS-OI29500 17.9.17): the Fallback's
+        // numFmt only steers readers without w14, so it must not suppress the label here.
+        let custom_active = !def.legal && def.custom_format.as_deref().is_some_and(|p| custom_pad_width(p).is_some());
         // A "none" level shows no label at all (Word's numFmt none) — not even its text.
-        if def.format == NumFormat::None {
+        if def.format == NumFormat::None && !custom_active {
             return None;
         }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
@@ -370,7 +384,7 @@ impl Counters {
         }
         let vals = *st;
         let started = *fl;
-        if def.format == NumFormat::Bullet {
+        if def.format == NumFormat::Bullet && !custom_active {
             return Some((def.text.clone(), def));
         }
         let mut label = String::new();
@@ -386,13 +400,18 @@ impl Counters {
                 let counted = started.get(k).is_some_and(|f| f.started);
                 let val = if counted { val } else { level_def(k).map(|l| l.start).unwrap_or(1) };
                 // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
-                // format (二 of a Chinese outline becomes 2 in "2.1").
-                let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
-                    NumFormat::DecimalZero => NumFormat::DecimalZero,
+                // format (二 of a Chinese outline becomes 2 in "2.1"). A supported custom pattern
+                // is decimal-padded, so it legalizes too; a direct decimalZero keeps its padding
+                // under isLgl, which Word shows as [01].
+                let lvk = level_def(k);
+                let pads = lvk.and_then(|l| l.custom_format.as_deref()).is_some_and(|p| custom_pad_width(p).is_some());
+                let fmt = match lvk.map(|l| l.format).unwrap_or(NumFormat::Decimal) {
+                    NumFormat::DecimalZero if !(def.legal && pads) => NumFormat::DecimalZero,
                     _ if def.legal => NumFormat::Decimal,
                     f => f,
                 };
-                label.push_str(&fmt.format(val));
+                let custom = lvk.and_then(|l| l.custom_format.as_deref()).filter(|_| !def.legal);
+                label.push_str(&custom_format_label(custom, fmt, val));
                 if label.len() > MAX_LABEL_BYTES {
                     break;
                 }
@@ -404,6 +423,44 @@ impl Counters {
     }
 }
 
+/// The label number for a Word 2010 custom number format (`w:format`, e.g. "0001, 0002, 0003,
+/// ..."). Word renders each number in the sample's style; a pattern whose samples are equal-length
+/// digit strings with leading zeros (a patent specification's `[0001]` paragraph numbers) renders
+/// as decimal zero-padded to that width. Any other pattern shows in the level's fallback format.
+pub fn custom_format_label(custom: Option<&str>, fallback: NumFormat, n: u32) -> String {
+    if let Some(p) = custom
+        && let Some(w) = custom_pad_width(p)
+    {
+        return format!("{n:0w$}");
+    }
+    fallback.format(n)
+}
+
+/// The zero-pad width of a Word custom number format. Word renders only the sample list it
+/// writes itself — three consecutive, equal-width, zero-leading numbers ending in `"..."`:
+/// `"0001, 0002, 0003, ..."`. Verified on Word 16.0.20527: shorter or longer lists, non-
+/// consecutive samples (`"0001, 0008, ..."`), missing spaces after commas, and the one-character
+/// `"…"` ellipsis all fall back to the level's Fallback format. `None` means "not recognized".
+pub fn custom_pad_width(pattern: &str) -> Option<usize> {
+    let parts: Vec<&str> = pattern.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let (tail, nums) = parts.split_last()?;
+    if *tail != "..." || nums.len() != 3 || parts.join(", ") != pattern.trim() {
+        return None;
+    }
+    let first = *nums.first()?;
+    let width = first.chars().count();
+    if !matches!(width, 2..=9) || !first.starts_with('0') {
+        return None;
+    }
+    let start = first.parse::<u32>().ok()?;
+    for (k, s) in nums.iter().enumerate() {
+        if s.chars().count() != width || !s.chars().all(|c| c.is_ascii_digit()) || s.parse::<u32>().ok()? != start + k as u32 {
+            return None;
+        }
+    }
+    Some(width)
+}
+
 /// Longest level text (in characters) expanded into a list label.
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
@@ -412,6 +469,49 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn list_with(level: Level) -> (Numbering, u32) {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, level)];
+        }
+        (n, id)
+    }
+
+    #[test]
+    fn a_custom_number_format_pads_like_word() {
+        // A patent specification's paragraph numbers: lvlText "[%1]" with the Word 2010 custom
+        // format "0001, 0002, 0003, ..." (the file's fallback numFmt is decimal).
+        let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() });
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0001]");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0002]");
+        for _ in 2..12 {
+            c.next_label(&n, id, 0);
+        }
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0013]");
+    }
+
+    #[test]
+    fn only_the_sample_list_word_recognizes_pads() {
+        // Measured on Word 16.0.20527: every shape other than the canonical three-sample list
+        // falls back to the Fallback format - do not fabricate padding for them.
+        for pattern in ["0002", "0001, 0008, ...", "0001, 0002, ...", "0001, 0002, …", "0001,0002,0003,..."] {
+            let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some(pattern.into()), ..Level::default() });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[1]", "{pattern} falls back as Word does");
+        }
+    }
+
+    #[test]
+    fn a_custom_number_format_we_cannot_pad_falls_back_to_decimal() {
+        for pattern in ["a., b., c.", "00000000001", ", , ...", "0", "1, 2", "0a, 0b", "001, 02, 003"] {
+            let (n, id) = list_with(Level { text: "[%1]".into(), custom_format: Some(pattern.into()), ..Level::default() });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[1]", "pattern {pattern:?}");
+        }
+    }
 
     #[test]
     fn a_huge_level_text_gives_a_bounded_label() {
@@ -611,6 +711,62 @@ mod tests {
         assert_eq!(c.next_label(&n, id, 1).unwrap().0, "1.1.");
         assert_eq!(c.next_label(&n, id, 2).unwrap().0, "1.1.1.");
         assert_eq!(c.next_label(&n, id, 1).unwrap().0, "1.2.");
+    }
+
+    #[test]
+    fn legal_numbering_suppresses_custom_format() {
+        // A patent's [0001] level plus a legal child level: Word shows [1.1], not [0001.1].
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0] =
+                Level { format: NumFormat::Decimal, text: "[%1]".into(), custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() };
+            a.levels[1] = Level { format: NumFormat::Decimal, text: "[%1.%2]".into(), legal: true, ..Level::default() };
+        }
+        let mut c = Counters::default();
+        let mut l = |lv| c.next_label(&n, id, lv).unwrap().0;
+        assert_eq!(l(0), "[0001]");
+        assert_eq!(l(1), "[1.1]", "legal numbering shows referenced levels in decimal, custom format included");
+    }
+
+    #[test]
+    fn a_supported_custom_pattern_beats_a_none_or_bullet_fallback() {
+        // Measured against Word (2026-11-02): the Fallback's numFmt only steers readers without
+        // w14; a recognized custom pattern still renders. An unrecognized one honors the fallback.
+        for fallback in [NumFormat::None, NumFormat::Bullet] {
+            let (n, id) =
+                list_with(Level { text: "[%1]".into(), format: fallback, custom_format: Some("0001, 0002, 0003, ...".into()), ..Level::default() });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[0001]", "{fallback:?} fallback must not hide the pattern");
+            assert!(n.shows_label(id, 0), "{fallback:?} fallback with a recognized pattern still shows a label");
+        }
+        let (n, id) =
+            list_with(Level { text: "[%1]".into(), format: NumFormat::None, custom_format: Some("0001, 0008, ...".into()), ..Level::default() });
+        let mut c = Counters::default();
+        assert!(c.next_label(&n, id, 0).is_none(), "unrecognized pattern with a none fallback shows nothing");
+        assert!(!n.shows_label(id, 0), "shows_label agrees: unrecognized pattern with a none fallback");
+        let (n, id) =
+            list_with(Level { text: "[%1]".into(), format: NumFormat::Bullet, custom_format: Some("0001, 0008, ...".into()), ..Level::default() });
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[%1]", "unrecognized pattern with a bullet fallback shows the raw text");
+    }
+
+    #[test]
+    fn legal_numbering_decustomizes_a_decimalzero_fallback_but_not_a_direct_one() {
+        // Word shows [1] for a legal level whose custom pattern falls back to decimalZero, but
+        // [01] for a direct decimalZero level under isLgl: only the ACTIVE format legalizes.
+        let (n, id) = list_with(Level {
+            text: "[%1]".into(),
+            format: NumFormat::DecimalZero,
+            legal: true,
+            custom_format: Some("0001, 0002, 0003, ...".into()),
+            ..Level::default()
+        });
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[1]");
+        let (n, id) = list_with(Level { text: "[%1]".into(), format: NumFormat::DecimalZero, legal: true, ..Level::default() });
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[01]");
     }
 
     #[test]

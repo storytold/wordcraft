@@ -158,7 +158,7 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
-fn children_of_choice(ac: &El) -> Option<&El> {
+pub(crate) fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
     // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
     const KNOWN: &[&str] = &["wps", "wpg", "wpc", "wpi", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v", "m"];

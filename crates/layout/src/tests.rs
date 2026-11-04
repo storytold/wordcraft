@@ -1789,6 +1789,89 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn a_numbering_num_tab_after_the_label_is_the_text_destination() {
+    // A patent list: label at the margin, w:tab val="num" pos=1080 (54 pt) behind the default
+    // stops. Word puts the text at the num tab (measured against Word 2010 PDF output); a label
+    // that overflows past it resumes the default stops.
+    let mk = |tab: f32| {
+        let mut d = Document::from_text("first");
+        let id;
+        {
+            let n = std::sync::Arc::make_mut(&mut d.numbering);
+            id = n.add_list(wordcraft_doc::ListKind::Numbered);
+            if let Some(a) = n.abstracts.first_mut() {
+                a.levels[0] =
+                    wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        lay(&d).caret(&Pos::body(0, 0)).unwrap().x
+    };
+    assert!((mk(54.0) - 126.0).abs() < 0.5, "num tab beats an earlier default stop");
+    assert!((mk(8.0) - 108.0).abs() < 0.5, "an overflowing label resumes the default stops");
+    assert!((mk(9999.0) - 108.0).abs() < 0.5, "a tab beyond the right boundary is ignored, as in Word");
+    assert!((mk(540.0) - 108.0).abs() < 0.5, "a tab at the text edge leaves no room for text: the default stops rule");
+}
+
+#[test]
+fn a_numbering_num_tab_stays_within_the_first_lines_span() {
+    // Review PR #5317: the destination must leave room for text inside the FIRST line's span.
+    // A square float beside the paragraph narrows that span; a tab under the float falls back
+    // to the ordinary stops instead of starting text inside the wrap area.
+    let mk = |tab: f32| {
+        let mut d = Document::from_text("first words flow here and there and on and on for a while");
+        let id;
+        {
+            let n = std::sync::Arc::make_mut(&mut d.numbering);
+            id = n.add_list(wordcraft_doc::ListKind::Numbered);
+            if let Some(a) = n.abstracts.first_mut() {
+                a.levels[0] =
+                    wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let float = wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::Square,
+            h_rel: wordcraft_doc::para::Anchor::Column,
+            v_rel: wordcraft_doc::para::Anchor::Paragraph,
+            x: 0.0,
+            y: 0.0,
+            dist: 9.0,
+            ..Default::default()
+        };
+        d.insert_object(
+            &Pos::body(0, 0),
+            InlineObject::Shape {
+                kind: wordcraft_doc::para::ShapeKind::Rectangle,
+                w: 144.0,
+                h: 100.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 1.0,
+                float,
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: Default::default(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+        let l = lay(&d);
+        let Placed::Lines { para, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).unwrap() else { panic!() };
+        // First cluster position in column coordinates (Line.left is the span edge).
+        para.lines[0].xs[0]
+    };
+    // The float occupies 0-144 pt plus its distance: the first line spans from 153 pt.
+    assert!(
+        (mk(108.0) - 180.0).abs() < 0.5,
+        "a tab under the float is not the destination: the label sits at the float's edge and the text resumes the default stops, got {}",
+        mk(108.0)
+    );
+    assert!((mk(200.0) - 200.0).abs() < 0.5, "a tab inside the free span still carries the text, got {}", mk(200.0));
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {

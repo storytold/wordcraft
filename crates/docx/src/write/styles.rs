@@ -233,7 +233,21 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
 fn write_level(w: &mut W, i: usize, l: &Level) {
     w.open("w:lvl", &[("w:ilvl", &i.to_string())]);
     w.val("w:start", &l.start.to_string());
-    w.val("w:numFmt", l.format.ooxml());
+    match &l.custom_format {
+        // Word's own shape: the pattern in a Choice that requires w14, the stored fallback
+        // numFmt for readers without markup compatibility.
+        Some(pattern) => {
+            w.open("mc:AlternateContent", &[]);
+            w.open("mc:Choice", &[("Requires", "w14")]);
+            w.empty("w:numFmt", &[("w:val", "custom"), ("w:format", pattern)]);
+            w.close("mc:Choice");
+            w.open("mc:Fallback", &[]);
+            w.val("w:numFmt", l.format.ooxml());
+            w.close("mc:Fallback");
+            w.close("mc:AlternateContent");
+        }
+        None => w.val("w:numFmt", l.format.ooxml()),
+    }
     if !l.restart {
         w.val("w:lvlRestart", "0");
     } else if let Some(k) = l.restart_after.filter(|k| (1..=9).contains(k)) {
