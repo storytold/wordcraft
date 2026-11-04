@@ -20,12 +20,21 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
     }
 }
 
-/// Save to a format other than plain text / JSON.
-pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<Vec<u8>, String>> {
+/// Save to a format other than plain text / JSON, with what a Word package couldn't carry of the document's embedded objects (see
+/// [`wordcraft_docx::write_as_with_report`]); other formats report nothing here.
+pub fn save_report(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<(Vec<u8>, Vec<wordcraft_docx::Loss>), String>> {
     // .docx/.docm/.dotx/.dotm: the extension picks the package flavour Word expects.
     if let Some(flavor) = wordcraft_docx::Flavor::from_ext(ext) {
-        return Some(wordcraft_docx::write_as(doc, flavor).map_err(|e| e.to_string()));
+        return Some(wordcraft_docx::write_as_with_report(doc, flavor).map_err(|e| e.to_string()));
     }
+    // A Word XML Document (Flat OPC) carries embedded objects the same way.
+    if ext == "xml" && !opts.word2003 {
+        return Some(wordcraft_docx::write_flat_with_report(doc).map_err(|e| e.to_string()));
+    }
+    save_other(ext, doc, opts).map(|r| r.map(|bytes| (bytes, Vec::new())))
+}
+
+fn save_other(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<Vec<u8>, String>> {
     match ext {
         "xml" if opts.word2003 => Some(wordcraft_docx::write_wordml2003(doc).map_err(|e| e.to_string())),
         "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),

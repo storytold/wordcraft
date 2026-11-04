@@ -325,7 +325,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
     r.keep_unmodelled(&root, &root_rels, &rels);
-    if !r.embedded.parts.is_empty() {
+    if !r.embedded.parts.is_empty() || !r.embedded.dropped.is_empty() {
         let manifest = r.embedded.to_bytes();
         r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
