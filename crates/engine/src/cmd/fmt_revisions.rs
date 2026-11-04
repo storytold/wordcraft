@@ -373,7 +373,7 @@ pub fn resolve_table(t: &mut Table, accept: bool) {
 /// Accept or reject a row's change.
 pub fn resolve_row(r: &mut Row, accept: bool) {
     if let Some(ch) = r.props.fmt_change.take().filter(|_| !accept) {
-        r.props = RowProps { fmt_change: None, ins: r.props.ins, del: r.props.del, ..ch.old };
+        r.props = RowProps { fmt_change: None, ins: r.props.ins, del: r.props.del, exceptions: r.props.exceptions.take(), ..ch.old };
     }
 }
 
