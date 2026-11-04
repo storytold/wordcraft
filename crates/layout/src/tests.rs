@@ -7620,6 +7620,29 @@ fn overflow_punct_hangs_a_full_stop_past_the_margin() {
     assert_eq!(off.lines.get(1).map(|l| l.start), Some(fourth), "the fourth ideograph moves down with the full stop: {:?}", off.lines);
 }
 
+/// A run of closing marks hangs together (review on #3462): with `。」` after the last ideograph,
+/// the `」` may not start the next line either, so it hangs beside the `。` rather than wrapping
+/// alone and breaking 行頭禁則.
+#[test]
+fn a_run_of_closing_marks_hangs_together() {
+    let text = "漢字漢字。」あ";
+    let adv = advances(text);
+    let width: f32 = adv.get(..4).into_iter().flatten().sum();
+    assert!(width > 0.0);
+    let d = document_of_width(text, width);
+    let pl = first_paragraph(&lay(&d));
+    let l0 = pl.lines.first().expect("a first line");
+    assert_eq!(l0.c1 - l0.c0, 6, "four ideographs and both closing marks: {:?}", pl.lines);
+    assert_eq!(l0.hang, 2, "the full stop and the bracket both hang: {:?}", pl.lines);
+    for (n, ch) in [(4usize, '。'), (5, '」')] {
+        let want = text.char_indices().nth(n).map(|(i, _)| i).unwrap_or(0);
+        assert_eq!(pl.clusters.get(l0.c0 + n).map(|c| c.start), Some(want), "{ch} hangs");
+        assert!(l0.xs.get(n).copied().unwrap_or(0.0) >= l0.right - 0.02, "{ch} starts at or past the margin: {:?}", l0.xs);
+    }
+    let l1 = pl.lines.get(1).expect("a second line");
+    assert_eq!(l1.start, text.find('あ').expect("a letter after the marks"), "the line after the marks starts at the letter: {:?}", pl.lines);
+}
+
 /// The caret, clicks and selection follow a mark hanging past the margin: the caret before it sits
 /// at the margin, a click on its ink reaches it, the caret after it (at the paragraph's end) sits
 /// past the margin, and the selection box covers the overhanging ink.

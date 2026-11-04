@@ -921,10 +921,14 @@ impl Scan {
         // `w:overflowPunct` (Word's default): closing punctuation that would start the next
         // line may hang past this line's right margin instead, as long as it starts on the
         // line. Its advance is no part of the line's content: the text ends before it.
+        // A run of closing marks hangs together: after `。` hangs, the `」` that follows it may
+        // not start the next line either (kinsoku), so it hangs too. The pen is already past the
+        // margin by then, which is why the run needs its own condition (review, #3462).
+        let run_continues = self.hang_from.is_some_and(|h| h + 1 == j);
         let hangs = !fits
             && bk.rp.overflow_punct
             && !self.narrowed
-            && self.x <= self.right_edge + 0.01
+            && (self.x <= self.right_edge + 0.01 || run_continues)
             && pl.clusters.get(j).and_then(|p| cluster_char(text, &pl.shown, j, p)).is_some_and(crate::kinsoku::closing_punct)
             && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room));
         if hangs {
