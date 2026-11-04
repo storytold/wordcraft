@@ -357,8 +357,8 @@ impl<'a> Body<'a> {
     /// [`Body::feed_at`] for a top-level list (§5.3.1): kept whole, as read, when each of its
     /// paragraphs is (a paragraph's own markup can't say how its list numbers and draws its
     /// labels: a label followed by a space, a picture bullet, an unnumbered header). Not one
-    /// continuing another by its `xml:id`, which WordCraft may write anew, nor one without
-    /// its own, which a list continuing it can't name. `None` when it took the event.
+    /// continuing another by its `xml:id`, which WordCraft may write anew (one without its own
+    /// is given one, for a list continuing it to name). `None` when it took the event.
     fn whole_list(&mut self, ev: Ev, at: (usize, usize)) -> Option<Ev> {
         match &ev {
             Ev::Start(q, a)
@@ -367,7 +367,6 @@ impl<'a> Body<'a> {
                     && self.lists.is_empty()
                     && self.para.is_none()
                     && get(a, "text:continue-list").is_none()
-                    && get(a, "xml:id").is_some_and(|i| !i.is_empty())
                     && !self.raw.is_empty()
                     && self.in_text
                     && self.skip == 0

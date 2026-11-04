@@ -226,6 +226,8 @@ pub(super) struct Writer {
     /// The file's tracked changes markup written as read marks, written as read among the
     /// regions (each once).
     kept_changes: std::collections::BTreeSet<String>,
+    /// Lists kept as read given an `xml:id` (see `kept_run`).
+    kept_lists: usize,
     /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
     pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
     pub(super) kept_used: super::kept::Needed,
@@ -775,6 +777,15 @@ impl Writer {
         if !self.kept_markup(&ix.0, &mut markup) {
             return None;
         }
+        // A list without its own `xml:id` (older files' lists) is given one, for a list going on
+        // with it to name.
+        if p.list.is_some()
+            && list_xml_id(&ix.0).is_none()
+            && let Some(at) = markup.find("<text:list").map(|i| i + "<text:list".len())
+        {
+            self.kept_lists += 1;
+            markup.insert_str(at, &format!(" xml:id=\"{}lstk{}\"", self.prefix, self.kept_lists));
+        }
         let last = match blocks.get(i + ix.1.max(1) - 1) {
             Some(FBlock::Para(q)) => q.wrap.as_deref().map(|w| (Vec::new(), w.1)),
             _ => None,
@@ -785,7 +796,7 @@ impl Writer {
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
         if let Some(l) = p.list
-            && let Some(id) = list_xml_id(&ix.0)
+            && let Some(id) = markup.find("<text:list").and_then(|i| markup.get(i..)).and_then(list_xml_id)
         {
             if l.list != 0 {
                 self.list_xml.entry(l.list).or_insert_with(|| id.clone());

@@ -725,3 +725,19 @@ fn a_section_ending_in_a_list_closes_before_the_list_goes_on() {
     }
     check(&e, false);
 }
+
+#[test]
+fn a_list_without_an_id_is_kept_and_given_one() {
+    // Older files' lists have no `xml:id`: kept as read, one is given, and the list going on with
+    // it (by `text:continue-numbering`, read as the same list) names it when written from the model.
+    let content = LISTS.content.replace(r#"<text:list xml:id="list1" text:style-name="L1">"#, r#"<text:list text:style-name="L1">"#).replace(
+        r#"<text:list xml:id="list2" text:continue-list="list1" text:style-name="L1">"#,
+        r#"<text:list text:continue-numbering="true" text:style-name="L1">"#,
+    );
+    let leaked: &'static str = Box::leak(content.into_boxed_str());
+    let d = import(&package(&Sample { name: "older lists", content: leaked, styles: "", meta: "" })).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"<text:list xml:id="wclstk1" text:style-name="L1">"#) && c.contains(r#"text:label-followed-by="space""#), "{c}");
+    let going_on = c.split("Between the lists.").nth(1).unwrap_or("");
+    assert!(going_on.contains(r#"text:continue-list="wclstk1""#) || going_on.contains(r#"text:continue-numbering="true""#), "{c}");
+}
