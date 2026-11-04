@@ -6,6 +6,7 @@ use super::{
     Block, CharProps, CmdError, CmdResult, Document, FieldCode, InlineObject, Paragraph, Path, Pos, Session, SortKey, StoryRef, TabAlign, TabLeader,
     TabStop, Value, delete_selection, heading_letter, p, sel_result, sort_key,
 };
+use std::sync::Arc;
 
 /// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
 /// captions that label's SEQ field numbers, `\a "<label>"` lists them without their label and
@@ -63,6 +64,47 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
         s.doc.insert_block(StoryRef::Body, &Path::top(i.saturating_add(1)), Block::Para(seed))?;
     }
     update_generated(s)
+}
+
+/// Most paragraphs a list held as a field around its entries spans.
+const MAX_WRAPPED: usize = 10_000;
+
+/// A generated list (index, bibliography, table of figures or authorities) held as a complex
+/// field that starts at body block `i` and runs over its entries: its field code and the block
+/// it ends in. `None` for anything else (a TOC has its own update).
+fn wrapped_list(s: &Session, i: usize) -> Option<(String, usize, usize)> {
+    let p = s.doc.body.get(i)?.as_para()?;
+    let (k, off, instr) = p.objects_with_offsets().enumerate().find_map(|(k, (off, o))| match o {
+        InlineObject::FieldStart { instr, .. } => {
+            let t = instr.trim_start();
+            (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some())
+                .then(|| (k, off, t.to_string()))
+        }
+        _ => None,
+    })?;
+    // Only when it starts the paragraph: text before it is the document's, not the list's.
+    if !p.text.get(..off).is_some_and(|t| t.chars().all(|c| c.is_whitespace() || c == wordcraft_doc::para::OBJ)) {
+        return None;
+    }
+    // Where it ends: the field end that closes it, nested fields counted from its own start (a
+    // field before it in its paragraph, an empty `PAGE`…, closes before it and isn't it).
+    let mut depth = 0usize;
+    for (j, b) in s.doc.body.iter().enumerate().skip(i).take(MAX_WRAPPED) {
+        let Some(q) = b.as_para() else { continue };
+        for (at, o) in q.objects_with_offsets().skip(if j == i { k } else { 0 }) {
+            match o {
+                InlineObject::FieldStart { .. } => depth += 1,
+                InlineObject::FieldEnd => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((instr, j, at + wordcraft_doc::para::OBJ.len_utf8()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 fn list_kind(p: &Paragraph) -> Option<String> {
@@ -152,6 +194,43 @@ pub(super) const ENTRY_STYLE: &str = "ListEntry";
 pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
     let mut i = 0;
     while i < s.doc.body.len() {
+        // A list held as a field around its entries (as Word and ODT files hold them): made the
+        // field's own paragraph, as WordCraft inserts one, its old entries rebuilt below.
+        // What follows its closing field end, and its first paragraph's properties and section
+        // break, are the document's and stay.
+        if let Some((instr, last, end)) = wrapped_list(s, i) {
+            // The entries between its first and last paragraphs go.
+            for _ in i.saturating_add(1)..last {
+                s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
+            }
+            // Its first paragraph keeps only the field; its last (or, ending in its first, the
+            // same) loses what is up to and through the field end, and goes when nothing is left
+            // of it and it ends no section.
+            let first_end = if last > i {
+                let q = s.doc.para_mut(StoryRef::Body, &Path::top(i + 1))?;
+                q.delete(0, end)?;
+                if q.is_empty() && q.section.is_none() {
+                    s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
+                }
+                s.doc.para_mut(StoryRef::Body, &Path::top(i))?.len()
+            } else {
+                end
+            };
+            let p = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+            p.delete(0, first_end)?;
+            p.insert_object(
+                0,
+                InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+                &Default::default(),
+            )?;
+            // What followed the field end in its own paragraph comes after the list, in a
+            // paragraph of its own that takes the section break.
+            let field = wordcraft_doc::para::OBJ.len_utf8();
+            if p.len() > field {
+                let rest = p.split_off(field)?;
+                s.doc.insert_block(StoryRef::Body, &Path::top(i + 1), Block::Para(rest))?;
+            }
+        }
         let kind = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind);
         let Some(kind) = kind else {
             i += 1;
@@ -222,7 +301,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
 /// layout cache starts over (and the saved file would gain a style it doesn't use).
 fn add_entry_style(s: &mut Session) {
     if s.doc.styles.get(ENTRY_STYLE).is_none() {
-        s.doc.styles.upsert(wordcraft_doc::Style {
+        Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
             id: ENTRY_STYLE.into(),
             name: "List Entry".into(),
             kind: wordcraft_doc::StyleKind::Paragraph,
@@ -331,4 +410,81 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A field before a list's in its paragraph (an empty `PAGE`) closes first: the list still
+    /// ends at its own field end, paragraphs below, not in its first paragraph.
+    #[test]
+    fn a_wrapped_list_ends_at_its_own_field_end() {
+        let mut d = Document::from_text("Old one\nOld two\nAfter");
+        let props = CharProps::default();
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+        }
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(1)) {
+            let n = p.len();
+            p.insert_object(n, InlineObject::FieldEnd, &props).unwrap();
+        }
+        let s = Session::new(d);
+        assert_eq!(wrapped_list(&s, 0).map(|(instr, last, _)| (instr, last)), Some(("BIBLIOGRAPHY".to_string(), 1)));
+    }
+
+    /// A wrapped list as a session holds it: the field starting paragraph `first`'s text, ending
+    /// in paragraph `last` at byte `at`.
+    fn wrapped(text: &str, first: usize, last: usize, at: usize) -> Session {
+        let mut d = Document::from_text(text);
+        let props = CharProps::default();
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(last)) {
+            p.insert_object(at, InlineObject::FieldEnd, &props).unwrap();
+        }
+        if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(first)) {
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+        }
+        Session::new(d)
+    }
+
+    fn texts(s: &Session) -> Vec<String> {
+        s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect()
+    }
+
+    /// What follows a wrapped list's closing field end, in its last paragraph or in its only one,
+    /// stays, after the list; the last paragraph's section break stays too.
+    #[test]
+    fn what_follows_a_wrapped_lists_end_stays() {
+        // Ending in a later paragraph, with text after the end and a section break.
+        let mut s = wrapped("Old one\nOld two\nOld three. After\nBelow", 0, 2, "Old three.".len());
+        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(2)) {
+            p.section = Some(Box::default());
+        }
+        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
+            p.props.indent_left = Some(9.0);
+        }
+        update_generated(&mut s).unwrap();
+        let t = texts(&s);
+        assert!(t.iter().all(|t| !t.contains("Old")), "{t:?}");
+        assert!(t.iter().any(|t| t == " After"), "{t:?}");
+        assert_eq!(t.last().map(String::as_str), Some("Below"));
+        let after = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == " After");
+        assert!(after.is_some_and(|p| p.section.is_some()), "the section break went");
+        let first = s.doc.body.first().and_then(|b| b.as_para());
+        assert!(first.is_some_and(|p| p.props.indent_left == Some(9.0) && list_kind(p).is_some()), "{first:?}");
+        // An empty last paragraph without a section break goes.
+        let mut s = wrapped("Old one\nOld two\nBelow", 0, 1, "Old two".len());
+        update_generated(&mut s).unwrap();
+        // (The field's paragraph shows nothing: there are no sources to list.)
+        assert_eq!(texts(&s), ["", "Below"]);
+        // Ending in its own paragraph: what follows comes after the list.
+        let mut s = wrapped("Old entry. Then this\nBelow", 0, 0, "Old entry.".len());
+        update_generated(&mut s).unwrap();
+        let t = texts(&s);
+        assert!(t.first().is_some_and(|t| !t.contains("Old")), "{t:?}");
+        assert_eq!(t.get(1).map(String::as_str), Some(" Then this"), "{t:?}");
+        assert_eq!(t.last().map(String::as_str), Some("Below"));
+    }
 }

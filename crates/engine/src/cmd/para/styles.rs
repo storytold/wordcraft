@@ -1,6 +1,7 @@
 use super::format::fmt;
 use super::lists::touch_all;
 use super::{CharProps, CmdError, CmdResult, ParaProps, Session, Style, StyleKind, Value, json, p, sel_result};
+use std::sync::Arc;
 
 pub(super) fn style_id(s: &Session, name: &str) -> Result<String, CmdError> {
     s.doc.styles.find(name).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no style `{name}`")))
@@ -101,7 +102,7 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.fmt_change = None;
         st.para = st.para.formatting();
     }
-    s.doc.styles.upsert(st);
+    Arc::make_mut(&mut s.doc.styles).upsert(st);
     apply_style(s, &json!({"style": id}))?;
     Ok(json!({"id": id}))
 }
@@ -113,7 +114,7 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
         st.chr.overlay(&c);
     }
@@ -175,7 +176,7 @@ pub(super) fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
     };
     let chr = retarget(&target.chr, &have_c, &want_c, CHAR_KEEP)?;
     let pp = if target.kind == StyleKind::Paragraph { retarget(&target.para, &have_p, &want_p, PARA_KEEP)? } else { target.para.clone() };
-    if let Some(st) = s.doc.styles.get_mut(&id) {
+    if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
         st.chr = chr;
         st.para = pp;
     }
@@ -263,7 +264,7 @@ pub(super) fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     let mut changed = 0;
     for g in &gone {
-        s.doc.styles.remove(&g.id);
+        Arc::make_mut(&mut s.doc.styles).remove(&g.id);
         // Fall back to the base only while it is a style of the same kind that still exists.
         let base = g.based_on.clone().filter(|b| s.doc.styles.get(b).is_some_and(|x| x.kind == g.kind));
         changed += s.doc.restyle(&g.id, base);
@@ -279,7 +280,7 @@ pub(super) fn set_visibility(s: &mut Session, v: &Value) -> CmdResult {
     if gallery.is_none() && hidden.is_none() {
         return Err(CmdError::Params("give `gallery` and/or `hidden`".into()));
     }
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
     if let Some(h) = hidden {
         st.hidden = h;
     }
