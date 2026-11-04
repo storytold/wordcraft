@@ -63,13 +63,7 @@ fn an_empty_paragraph_with_only_a_bottom_border_is_still_a_rule() {
 
 #[test]
 fn borders_and_background_round_trip() {
-    let line = Border {
-        style: BorderStyle::Double,
-        width: 1.5,
-        color: Some(Rgb(200, 0, 0)),
-        space: 3.0,
-        ..Default::default()
-    };
+    let line = Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(200, 0, 0)), space: 3.0, ..Default::default() };
     let want = ParaProps {
         borders: Some(Borders { top: Some(line), left: Some(line), bottom: Some(line), right: Some(line), ..Default::default() }),
         shading: Some(Rgb(255, 255, 204)),
