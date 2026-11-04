@@ -6139,17 +6139,17 @@ fn body_line_starts(d: &Document, m: f32) -> Vec<usize> {
 /// mark and before it.
 #[test]
 fn a_note_mark_stays_with_the_text_before_it() {
-    let text = "The kilns were fired twice a week (in winter). Glazes came from the coast, and the ash glaze ran thin.";
+    let text = "The kilns were fired twice a week (in winter). Glazes came from the coast, and the ash- and soda-glaze ran thin.";
     let mut d = Document::from_text(text);
-    // Back to front, so the earlier offsets stay put: after "thin.", after "coast", before "from"
-    // (after a space), after "(in winter)."
-    let marks = [text.len(), text.find(", and").unwrap(), text.find("from").unwrap(), text.find(" Glazes").unwrap()];
+    // Back to front, so the earlier offsets stay put: after "thin.", after the hyphen of "ash-",
+    // after "coast", before "from" (after a space), after "(in winter)."
+    let marks = [text.len(), text.find(" and soda").unwrap(), text.find(", and").unwrap(), text.find("from").unwrap(), text.find(" Glazes").unwrap()];
     for &at in &marks {
         footnote(&mut d, &Pos::body(0, at), "A note.");
     }
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
     let refs: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
-    assert_eq!(refs.len(), 4);
+    assert_eq!(refs.len(), 5);
     let after_space = |r: usize| p.text[..r].ends_with(' ');
     let obj = wordcraft_doc::para::OBJ.len_utf8();
     let (mut wrapped, mut broke_before_spaced_mark) = (0, false);
