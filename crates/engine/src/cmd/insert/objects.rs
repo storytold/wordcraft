@@ -137,7 +137,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let key = s.doc.add_media(bytes, ext);
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
-        let k = want.max(4.0) / w.max(1.0);
+        // At most 22 inches, as for icons: a huge width made the height of a tall picture infinite.
+        let k = want.clamp(4.0, 1584.0) / w.max(1.0);
         w *= k;
         h *= k;
     }
