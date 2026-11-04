@@ -9793,6 +9793,73 @@ fn column_texts(s: &Session) -> Vec<String> {
     t.rows.iter().map(|r| r.cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<String>()).collect()
 }
 
+#[test]
+fn table_sort_rejects_invalid_columns_without_changing_rows_or_history() {
+    for column in [
+        json!(-1),
+        json!(0.5),
+        json!(0.0),
+        json!("0"),
+        json!(null),
+        json!(true),
+        json!([]),
+        json!({}),
+        json!(1),
+        json!(u32::MAX as u64 + 1),
+        json!(u64::MAX),
+    ] {
+        let mut s = column_table("en-US", &["Charlie", "Alpha", "Bravo"]);
+        s.close_typing();
+        run(&mut s, "text.insert", json!({"text": "!"}));
+        let before = s.doc.clone();
+        let selection = s.sel.clone();
+        let dirty = s.dirty;
+        assert!(s.run("table.sort", &json!({"column": column, "header": false})).is_err(), "column {column}");
+        assert_eq!(s.doc, before, "column {column}");
+        assert_eq!(s.sel, selection, "column {column}");
+        assert_eq!(s.dirty, dirty, "column {column}");
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(column_texts(&s), ["Charlie", "Alpha", "Bravo"], "column {column}: refusal must not consume Undo");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(s.doc, before, "column {column}: Redo must restore the preceding edit");
+    }
+}
+
+#[test]
+fn table_sort_keeps_default_and_valid_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    for (k, value) in ["Charlie", "1", "Alpha", "3", "Bravo", "2"].into_iter().enumerate() {
+        if k > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        run(&mut s, "text.insert", json!({"text": value}));
+    }
+    let original = s.doc.clone();
+    for params in [json!({"header": false}), json!({"column": 0, "header": false})] {
+        run(&mut s, "table.sort", params);
+        assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc, original);
+    }
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false, "descending": true}));
+    assert_eq!(column_texts(&s), ["Alpha", "Bravo", "Charlie"]);
+    // A column may be missing in some rows. Its present cells still sort normally.
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap();
+    table.rows[0].cells.remove(1);
+    run(&mut s, "table.sort", json!({"column": 1, "header": false}));
+    assert_eq!(column_texts(&s), ["Charlie", "Bravo", "Alpha"]);
+
+    let mut s = column_table("en-US", &["Title", "3", "1", "2"]);
+    let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![at])).unwrap().rows[0].props.header = true;
+    run(&mut s, "table.sort", json!({"column": 0}));
+    assert_eq!(column_texts(&s), ["Title", "1", "2", "3"]);
+}
+
 /// #836: table sort reads numbers in the text's language: `1,5` is one and a half in Polish.
 #[test]
 fn table_sort_reads_decimal_comma_in_polish() {
