@@ -563,7 +563,8 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
 /// page: its preview has its red outline and nothing dark inside.
 #[test]
 fn a_dragged_shape_leaves_the_text_behind_it() {
-    use crate::table_resize::tests::{H, button, steps};
+    use crate::table_resize::tests::{H, button, gpu_turn, steps};
+    let _gpu = gpu_turn();
     let text = "MMMMMMMMMMMM ".repeat(12);
     let mut a = WordApp::new(wordcraft_engine::Session::new(Document::from_text(&text)), Default::default());
     let shape = InlineObject::Shape {
@@ -758,7 +759,8 @@ fn rotation_window(app: WordApp) -> crate::table_resize::tests::H {
 /// pictures whose cached preview already contains a rotation and either reflection.
 #[test]
 fn rotation_drag_turns_picture_pixels_live_and_commits_once_or_cancels() {
-    use crate::table_resize::tests::{H, button, steps};
+    use crate::table_resize::tests::{H, button, gpu_turn, steps};
+    let _gpu = gpu_turn();
     for (initial, flip_h, flip_v) in [(0.0, false, false), (30.0, true, false), (90.0, false, true), (315.0, true, true)] {
         // Four original colour quadrants make both accidental extra rotation and reflected
         // UVs observable. Sample near the long ends after a quarter turn, outside the old

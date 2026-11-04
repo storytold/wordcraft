@@ -104,8 +104,10 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
             s.pop();
         }
         s.finish();
-        for a in ex.annotations(fit) {
-            kp.add_annotation(a);
+        if opts.links {
+            for a in ex.annotations(fit) {
+                kp.add_annotation(a);
+            }
         }
         kp.finish();
     }
