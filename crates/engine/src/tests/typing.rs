@@ -1465,12 +1465,7 @@ fn shift_enter_does_not_copy_clear_from_the_previous_break() {
     let mut s = typed("One");
     let path = Pos::body(0, 0).path;
     let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
-    p.insert_text(
-        p.len(),
-        "\n",
-        &CharProps { break_clear: Some(BreakClear::Left), ..Default::default() },
-    )
-    .unwrap();
+    p.insert_text(p.len(), "\n", &CharProps { break_clear: Some(BreakClear::Left), ..Default::default() }).unwrap();
     s.sel = crate::Selection::caret(Pos::body(0, 4));
 
     run(&mut s, "text.lineBreak", json!({}));
