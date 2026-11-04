@@ -266,4 +266,109 @@ mod tests {
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
     }
+
+    /// CJK caret units follow UAX #29 extended graphemes: one step per ideograph or kana.
+    /// (`joins_cluster` does not apply to Han/kana; see module docs.)
+    #[test]
+    fn japanese_and_chinese_text_steps_one_character_at_a_time() {
+        // 「春はあけぼの。」— representative classical Japanese (Pillow Book opening).
+        let ja = "春はあけぼの。";
+        let starts = cluster_starts(ja);
+        assert_eq!(split(ja, &starts), vec!["春", "は", "あ", "け", "ぼ", "の", "。"]);
+        let mut off = 0;
+        for expected in ["春", "は", "あ", "け", "ぼ", "の", "。"] {
+            let next = next_cluster(ja, off);
+            assert_eq!(&ja[off..next], expected);
+            assert!(is_cluster_boundary(ja, off));
+            off = next;
+        }
+        assert_eq!(off, ja.len());
+        assert_eq!(prev_cluster(ja, ja.len()), ja.char_indices().last().unwrap().0);
+
+        // 「学而时习之」— short Classical Chinese phrase.
+        let zh = "学而时习之";
+        assert_eq!(split(zh, &cluster_starts(zh)), vec!["学", "而", "时", "习", "之"]);
+        assert!(!backspaces_by_char('春') && !backspaces_by_char('学') && !backspaces_by_char('。'));
+    }
+
+    /// Mixed Latin and CJK: each scalar (or Latin grapheme) is its own caret stop.
+    #[test]
+    fn mixed_latin_and_cjk_keep_grapheme_boundaries() {
+        let t = "Hello、世界";
+        assert_eq!(split(t, &cluster_starts(t)), vec!["H", "e", "l", "l", "o", "、", "世", "界"]);
+        // From the end of "Hello", left should land before "、", then before "o".
+        let after_hello = "Hello".len();
+        assert_eq!(prev_cluster(t, after_hello + "、".len()), after_hello);
+        assert_eq!(prev_cluster(t, after_hello), after_hello - 1);
+    }
+
+    /// Supplementary Ideographic Plane (U+20000..) is one Rust char and one caret cluster.
+    #[test]
+    fn supplementary_plane_ideograph_is_one_cluster() {
+        // U+20000 (𠀀), first character of Extension B.
+        let sip = "\u{20000}";
+        assert_eq!(sip.len(), 4);
+        assert_eq!(cluster_starts(sip), vec![0]);
+        assert_eq!(next_cluster(sip, 0), 4);
+        assert_eq!(prev_cluster(sip, 4), 0);
+        let mixed = format!("漢{sip}字");
+        assert_eq!(split(&mixed, &cluster_starts(&mixed)), vec!["漢", sip, "字"]);
+    }
+
+    /// Ideographic Variation Sequences: base + VS (U+E0100..) is one UAX #29 grapheme.
+    /// This pins cluster boundaries only; variation-glyph selection is not verified (see docs/cjk-typography-audit.md).
+    #[test]
+    fn ideographic_variation_sequence_is_one_grapheme_cluster() {
+        // U+8FBA (辺) + VS17 (U+E0100) — a common IVS example shape.
+        let ivs = "\u{8FBA}\u{E0100}";
+        assert_eq!(cluster_starts(ivs), vec![0]);
+        assert_eq!(next_cluster(ivs, 0), ivs.len());
+        assert!(!is_cluster_boundary(ivs, '\u{8FBA}'.len_utf8()));
+        let with_neighbors = format!("東{ivs}西");
+        assert_eq!(split(&with_neighbors, &cluster_starts(&with_neighbors)), vec!["東", ivs, "西"]);
+    }
+
+    /// Caret units (left/right) for sequences where CJK differs from Latin. Expected values come
+    /// from UAX #29 (Extend, ZWJ and Hangul L/V/T rules), not from what the code did. Backspace and
+    /// Delete are deliberately not asserted here: Word's behaviour for these needs observing.
+    fn assert_caret_units(text: &str, expected: &[&str]) {
+        assert_eq!(split(text, &cluster_starts(text)), expected, "cluster_starts of {text:?}");
+        let mut off = 0;
+        for unit in expected {
+            let next = next_cluster(text, off);
+            assert_eq!(text.get(off..next), Some(*unit), "next_cluster from {off} in {text:?}");
+            assert_eq!(prev_cluster(text, next), off, "prev_cluster from {next} in {text:?}");
+            off = next;
+        }
+        assert_eq!(off, text.len());
+    }
+
+    /// か + U+3099 (combining voiced sound mark) is one unit, with kana on either side.
+    #[test]
+    fn kana_with_combining_voiced_mark_is_one_cluster() {
+        let ka = "か\u{3099}";
+        assert_caret_units(&format!("あ{ka}い"), &["あ", ka, "い"]);
+    }
+
+    /// Halfwidth katakana plus its separate sound mark (ﾊ + U+FF9E) is one unit.
+    #[test]
+    fn halfwidth_katakana_with_sound_mark_is_one_cluster() {
+        let ba = "\u{FF8A}\u{FF9E}";
+        assert_caret_units(&format!("\u{FF76}{ba}\u{FF72}"), &["\u{FF76}", ba, "\u{FF72}"]);
+    }
+
+    /// An emoji ZWJ sequence next to kana is one unit and does not absorb its neighbours.
+    #[test]
+    fn emoji_zwj_sequence_next_to_kana_is_one_cluster() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_caret_units(&format!("あ{family}い"), &["あ", family, "い"]);
+    }
+
+    /// Decomposed Hangul syllables (conjoining jamo L+V and L+V+T) are one unit each.
+    #[test]
+    fn decomposed_hangul_syllables_are_one_cluster() {
+        let han = "\u{1112}\u{1161}\u{11AB}"; // ᄒ ᅡ ᆫ → 한
+        let geul = "\u{1100}\u{1173}"; // ᄀ ᅳ → 그 (no final)
+        assert_caret_units(&format!("{han}{geul}"), &[han, geul]);
+    }
 }

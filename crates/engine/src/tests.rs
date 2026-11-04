@@ -10,6 +10,7 @@ use wordcraft_doc::{Pos, StoryRef};
 use crate::{Session, cmd};
 
 mod bidi;
+mod cjk;
 mod documents;
 mod font_sizes;
 mod fonts;
