@@ -74,7 +74,6 @@ the two partial ones (real-world .docx, printing) complete, roughly.
 
 | Area | Parity | Hours |
 |---|---|---|
-| 2026-11-03 | trivial | Progress log: direct table and row-exception band-size values round-trip through JSON and two DOCX saves; stripe geometry remains open |
 | Typing, selection, clipboard, undo, find/replace | 85% | 8–12 |
 | Character and paragraph formatting | 82% | 8–12 |
 | Lists | 78% | 5–8 |
@@ -714,6 +713,7 @@ Direct table band sizes serialize before `w:tblW`, and row-exception band sizes 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Progress log: direct table and row-exception band-size values round-trip through JSON and two DOCX saves; stripe geometry remains open |
 | 2026-11-03 | trivial | Progress log: Language pack languages in every language list (CP4.3) |
 | 2026-11-03 | trivial | Progress log: the missing-pack bar on a fresh install, the caret's typing language, and the spelling menu heading in the interface language (CP4.3) |
 | 2026-11-03 | trivial | Progress log: Options › Language and Proofing redesign (CP4.3) |
