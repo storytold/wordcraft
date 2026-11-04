@@ -710,7 +710,7 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     for width in [1600.0, 1100.0] {
         let drawn = frame_at(&ctx, &mut app, width);
         let settings = x_of(&drawn, "Save these pages as PDF…");
-        let indicator = super::tr(ar, "Page {page} of {pages}").split('{').next().unwrap_or_default();
+        let indicator = super::tr(ar, "Sheet {page} of {pages}").split('{').next().unwrap_or_default();
         // (The status bar's page count is drawn under the page too, at the right: take the leftmost.)
         let preview = drawn.iter().filter(|(t, _)| t.starts_with(indicator)).map(|(_, x)| *x).fold(f32::MAX, f32::min);
         assert!(preview < f32::MAX, "the preview's page indicator is drawn");
