@@ -35,7 +35,7 @@ pub struct Prefs {
     /// tag like `pl-PL`, File › Options › Advanced › Region); `None` follows the system.
     pub region: Option<String>,
     /// A folder searched for Hunspell dictionaries before the system locations (File › Options ›
-    /// Proofing, #1063): an app started from Finder or the Dock doesn't see
+    /// Language, #1063): an app started from Finder or the Dock doesn't see
     /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
     pub dictionaries_folder: Option<String>,
     /// The user templates folder File › New lists personal templates from and Save as Word
