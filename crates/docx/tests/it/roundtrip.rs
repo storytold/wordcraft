@@ -164,13 +164,17 @@ fn adjacent_ungrouped_fit_text_runs_remain_separate_after_round_trips() {
         ..Default::default()
     };
     let doc = doc_with(vec![para_runs(&[("first", props.clone()), ("second", props)])]);
-    let first = rt(&doc);
+    assert_eq!(paras(&doc)[0].text, "firstsecond");
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let xml = part_xml(&bytes, "word/document.xml");
+    let first = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(paras(&first)[0].text, "firstsecond", "{xml}");
     let second = rt(&first);
     let p = paras(&second)[0];
-    assert_eq!(p.text, "firstsecond");
+    let xml = part_xml(&wordcraft_docx::write(&second).unwrap(), "word/document.xml");
+    assert_eq!(p.text, "firstsecond", "{xml}");
     assert_eq!(p.runs.len(), 2);
     assert!(p.runs.iter().all(|run| run.props.fit_text.as_ref().is_some_and(|fit| fit.id.is_none())));
-    let xml = part_xml(&wordcraft_docx::write(&second).unwrap(), "word/document.xml");
     assert_eq!(xml.matches("<w:fitText").count(), 2);
     assert!(!xml.contains("w:id="));
 }

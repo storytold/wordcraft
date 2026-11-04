@@ -232,7 +232,7 @@ impl Writer<'_> {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
                     while let Some((pc, pr)) = pieces.get(j) {
-                        if matches!(pc, Piece::Obj(..)) || !wordcraft_doc::para::runs_can_merge(pr, props) {
+                        if matches!(pc, Piece::Obj(..)) || (j > i && !wordcraft_doc::para::runs_can_merge(pr, props)) {
                             break;
                         }
                         j += 1;
