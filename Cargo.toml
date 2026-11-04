@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -91,6 +91,8 @@ zeroize = "1"
 # Unix open flags (O_NONBLOCK for the engine's checked file reads, #3666); already in the lock as a
 # dependency of other crates.
 libc = "0.2"
+
+# time
 
 # ui
 egui = "0.37"

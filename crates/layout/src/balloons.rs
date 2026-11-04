@@ -44,6 +44,9 @@ const MAX_PARENT_CHAIN: usize = 64;
 /// Path given to the synthetic author-name paragraphs: no paragraph of the comment's story has it.
 const HEADER_PATH: u32 = u32::MAX;
 
+#[cfg(test)]
+mod anchor_tests;
+
 /// One comment's balloon before it is positioned: items relative to the card's top-left.
 struct Card {
     page: usize,
@@ -74,8 +77,8 @@ pub fn anchors(doc: &Document) -> Vec<(u32, Pos)> {
     let mut out = Vec::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        for off in p.object_offsets() {
-            let Some(InlineObject::CommentStart { id }) = p.object_at(off) else { continue };
+        for (off, object) in p.objects_with_offsets() {
+            let InlineObject::CommentStart { id } = object else { continue };
             if !doc.comments.contains_key(id) || root(doc, *id) != *id || !seen.insert(*id) {
                 continue;
             }
