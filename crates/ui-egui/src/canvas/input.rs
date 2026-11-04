@@ -109,6 +109,14 @@ pub(super) fn clamped_scroll(before: egui::Vec2, delta: egui::Vec2, max: egui::V
     (before - delta).clamp(egui::Vec2::ZERO, max)
 }
 
+/// Paint the selection with the Format Painter's formatting, when it is armed and something is
+/// selected.
+fn apply_format_painter(app: &mut WordApp) {
+    if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
+        let _ = app.run("edit.pasteFormat", json!({}));
+    }
+}
+
 /// Routes pointer input: pen or eraser ink, object and crop drags, table border, selection and move
 /// handles, then page hit testing, outlines, headers and footers, equations, selection and caret
 /// interaction.
@@ -269,9 +277,7 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
             }
             _ => app.canvas.multi_drag = None,
         }
-        if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
-            let _ = app.run("edit.pasteFormat", json!({}));
-        }
+        apply_format_painter(app);
     }
     show_hover_link(app, &pointer);
 }
@@ -475,6 +481,9 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
     if released_clicks > 0 && app.canvas.unit_drag.as_ref().is_some_and(|d| d.clicks == released_clicks) {
         app.canvas.unit_drag = None;
         app.canvas.dragging = false;
+        // Double-clicking a word (or triple-clicking a paragraph) with the Format Painter armed
+        // paints it, as dragging across it does (#4410).
+        apply_format_painter(app);
         return true;
     }
     // The press of a Ctrl/⌘+double-click already added the word.

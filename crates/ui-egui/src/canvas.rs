@@ -1203,7 +1203,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     if open {
         app.escape_free = false;
     }
-    let menu = egui::Popup::menu(&resp).open_bool(&mut shown);
+    let menu = crate::rtl::menu(&resp).open_bool(&mut shown);
     let menu = menu.at_position(app.canvas.context_menu_at.unwrap_or(out.inner_rect.left_top()));
     let with_toolbar = crate::mini_toolbar::context_menu_visible(app);
     let menu = if with_toolbar { menu.frame(egui::Frame::NONE).close_behavior(egui::PopupCloseBehavior::IgnoreClicks) } else { menu };
@@ -1550,6 +1550,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         ui.ctx(),
                         app.fonts_hans,
                         app.fonts_korean,
+                        app.fonts_hant,
                         app.fonts_system_cjk,
                         &app.canvas.ime_faces,
                     );
