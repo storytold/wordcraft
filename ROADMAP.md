@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-04: The parity assessment now keeps its 2026-10-27 catalog snapshot (505 of 520 features) with source commit 4b8b06fe; later estimates remain dated.
+- 2026-10-30: Layout resource caps (#3867, #4385) and linear-time passes (#3866, #4392): repeated table-header rows are capped by item counts, a clipped group counting every nested member, the wrap cache by decoded pixels and the widths a linked text box chain lays out by their lines and items; PDF export, hit testing, tracked-change and clipped-table costs, and long endnote selections no longer grow quadratically. Synthetic regression tests only; no new Word comparison.
 - 2026-11-03: Proofing (CP4.3): craft-proof moves to craft-libs main with #589 and #590. French spelling suggestions offer the elided form first (`Jadore` → `J'adore`, before `J adore`), and Valencian text (`ca-ES-valencia`) is proofed with the `ca-valencia` pack instead of plain Catalan. Readiness unchanged.
 - 2026-11-03: A long comment no longer grows its card or balloon without limit (#3382). Its field in the Comments pane and in a selected balloon stops at ten lines and scrolls, keeping the caret in view; a balloon that isn't selected shows the first ten lines of the comment and of each reply, and clicking it opens the scrolling field. The buttons and the next comment stay in view.
 - 2026-11-03: Security: pasting text boxes charges each copied story for its formatting too (run, mark, paragraph and section properties), not only its text and objects, so a story with huge style or font names can't copy past the paste's 32 MiB text box budget. Readiness unchanged.
@@ -709,6 +710,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | Kept the 2026-10-27 catalog parity snapshot with its source commit; removed the older hand-counted test and line totals from the parity page. |
+| 2026-10-30 | trivial | Progress log: layout resource caps — repeated table headers are bounded by item counts, the wrap cache by decoded pixels and linked text box layout by its lines and items; PDF export, hit testing, tracked changes, clipped tables and long endnote selections cost linear time (#3867, #3866) |
 | 2026-11-03 | trivial | Progress log: craft-proof pin, French elision suggestions and Valencian (CP4.3) |
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
