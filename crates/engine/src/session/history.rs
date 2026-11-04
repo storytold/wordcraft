@@ -5,6 +5,9 @@ impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
     /// already in an open step is not a new one.
     pub fn checkpoint(&mut self, label: &str) -> bool {
+        if self.applying_remote {
+            return false;
+        }
         if label == "Typing" && self.typing_open {
             return false;
         }
@@ -29,6 +32,9 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
+        if self.applying_remote {
+            return;
+        }
         self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);

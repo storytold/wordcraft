@@ -9,6 +9,14 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
+# The printing controls and the shared menus. Pinned by revision to storytold/craft-libs, which is
+# how this repository already reached craft-print: a real, reviewable storytold commit, not a
+# personal fork.
+#
+# No `cloud` feature: that feature, and the `craft-cloud` crate, only exist on an unmerged fork
+# (storytold/craft-libs#160, the CollabCraft fold-in). Pinning to the fork is exactly the
+# structural problem a storytold maintainer flagged on sibling app PRs, so this crate carries a
+# small local, inert stand-in instead (see `cloud`) until #160 lands.
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in

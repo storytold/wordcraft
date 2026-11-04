@@ -163,6 +163,8 @@ impl Session {
             column,
             column_mode,
             widened,
+            collab: None,
+            applying_remote: false,
             edit_marks,
             go_back_step,
             others: Vec::new(),

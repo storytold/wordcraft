@@ -275,6 +275,10 @@ impl Session {
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
             ime_origin: _,
+            // The collaboration layer and whether a remote edit is being applied: host wiring,
+            // shared by every open document.
+            collab: _,
+            applying_remote: _,
             others: _,
             order: _,
             untitled_count: _,

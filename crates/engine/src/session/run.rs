@@ -18,6 +18,9 @@ struct SuccessContext<'a> {
     ime_caret_before: ImeCaretState,
     rev_before: u64,
     sel_before: &'a Selection,
+    /// `kept()` from [`Session::run`]: the command's params with the password stripped, the same
+    /// thing a recorded macro and Repeat get. What a collaboration sink sees, if one is attached.
+    kept_params: Value,
 }
 
 struct ElsewhereContext {
@@ -222,6 +225,7 @@ impl Session {
                 ime_caret_before,
                 rev_before,
                 sel_before: &sel_before,
+                kept_params: kept(),
             }),
             Err(e) => {
                 self.ime_edit_outcome = ImeEditOutcome::default();
@@ -290,6 +294,7 @@ impl Session {
             ime_caret_before,
             rev_before,
             sel_before,
+            kept_params,
         } = context;
         let mut no_op = false;
         if spec.mutates {
@@ -392,6 +397,23 @@ impl Session {
             self.also_selected.clear();
         }
         self.note_typing(id, before_doc.as_ref().map(|b| &b.0), sel_before);
+        // `spec.mutates` with a result means the document changed, which is exactly what
+        // another peer needs to see. Caret movement, view commands and saves do not
+        // mutate and are not shared. The selection goes with it because a WordCraft
+        // command carries no address of its own: Bold means "here". The Arc is cloned so
+        // the sink can be called without holding a borrow of `self`.
+        if spec.mutates
+            && !self.applying_remote
+            // Undo, Redo and Repeat act on this peer's own history, which no other peer shares.
+            && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat")
+            // A command that only opened a dialog changed nothing another peer needs.
+            && before_doc.as_ref().is_some_and(|(d, ..)| d != &self.doc)
+            && let Some(sink) = self.collab.clone()
+        {
+            // `kept_params`, which is also what a recorded macro and Repeat get: a password
+            // never leaves this machine.
+            sink.on_local(id, &kept_params, sel_before, &crate::collab::scope_of(&sel_before.focus));
+        }
     }
 
     /// The end of [`Session::run`] for a command that ended up in another document than it
@@ -441,5 +463,69 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Runs a command that arrived from another peer.
+    ///
+    /// Three things differ from [`Session::run`]. It is not reported to the
+    /// [`CollabSink`](crate::CollabSink), which is what stops an edit bouncing between two peers
+    /// forever. It only accepts a [`crate::collab::shareable`] command, so a peer cannot open,
+    /// save or undo on this machine. And it runs against `at`, the selection the sender had,
+    /// because a WordCraft command says only "here": applying somebody else's Backspace at the
+    /// reader's own caret would delete the reader's own text.
+    ///
+    /// The reader's selection is put back afterwards, moved by whatever the edit did to the text
+    /// before it in the same paragraph (see [`crate::collab::follow`]). An edit that split or
+    /// joined paragraphs cannot be followed that way, and the caret is clamped rather than
+    /// guessed at.
+    ///
+    /// Undo stays local. The remote edit is not recorded on this peer's stack, and local history
+    /// is cleared because a snapshot taken before it would wipe it if restored.
+    pub fn apply_remote(&mut self, id: &str, params: &Value, at: Option<Selection>) -> Result<Value, CmdError> {
+        let mutates = self.registry.get(id).map(|s| s.mutates).unwrap_or(false);
+        if !crate::collab::shareable(id, mutates) {
+            return Err(CmdError::Failed(format!("{id} is not a shared edit")));
+        }
+        let was = std::mem::replace(&mut self.applying_remote, true);
+        // The reader's own state: a remote edit is not theirs to repeat, record or go back to,
+        // and never joins their typing.
+        let last_command = self.last_command.clone();
+        let recording_len = self.recording.as_ref().map(|(_, s)| s.len());
+        let (marks, step) = (self.edit_marks.clone(), self.go_back_step);
+        self.typing_open = false;
+        let mine = self.sel.clone();
+        let there = at.unwrap_or_else(|| mine.clone());
+        let edit = there.ordered().0;
+        // Read before the edit and again after it: the difference is how much text appeared or
+        // went away, whatever the command was. Only the reader's own paragraph matters.
+        let same = mine.focus.story == edit.story && mine.focus.path == edit.path;
+        let before = if same { self.para_len(&mine.focus) } else { None };
+        self.sel = there;
+        self.clamp_selection();
+        let out = self.run(id, params);
+        self.typing_open = false;
+        self.last_command = last_command;
+        if let (Some((_, steps)), Some(n)) = (self.recording.as_mut(), recording_len) {
+            steps.truncate(n);
+        }
+        self.edit_marks = marks;
+        self.go_back_step = step;
+        let grew = match (before, self.para_len(&mine.focus)) {
+            (Some(before), Some(after)) => (after as isize) - (before as isize),
+            _ => 0,
+        };
+        self.sel = crate::collab::follow(mine, &edit, grew);
+        self.clamp_selection();
+        self.applying_remote = was;
+        if out.is_ok() {
+            self.history.clear();
+            self.redo.clear();
+        }
+        out
+    }
+
+    /// How long the paragraph a position names is, when it names one.
+    fn para_len(&self, at: &Pos) -> Option<usize> {
+        self.doc.para_at(at).map(|p| p.len())
     }
 }

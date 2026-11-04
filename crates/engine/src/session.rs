@@ -223,6 +223,12 @@ pub struct Session {
     /// A selection widened to whole table cells or rows, and where it really runs (see
     /// [`Session::sel_ends`]).
     pub(crate) widened: Option<Widened>,
+    /// Hears about every local command that changed the document, when a collaboration layer is
+    /// attached. `None` is the ordinary single-writer case and costs nothing.
+    pub collab: Option<Arc<dyn crate::collab::CollabSink>>,
+    /// Set while a remote command is being applied, so it is not sent back to the peer that sent
+    /// it. Without this, one edit echoes forever.
+    applying_remote: bool,
     /// Where the last edits happened, oldest first (at most [`EDIT_MARKS`]), for Go Back
     /// (Shift+F5). Positions aren't mapped through later edits; they're clamped when used.
     edit_marks: Vec<Pos>,
