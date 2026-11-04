@@ -226,14 +226,15 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
         });
         ui.end_row();
 
-        ui.label(tl!("Type"));
+        let type_label = ui.label(tl!("Type"));
         let t = type_of(&g.kind);
         let mut pick = t;
-        craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("format_shape.type").selected_text(tl!(TYPES[t].0)).show_ui(ui, |ui| {
             for (i, (label, _)) in TYPES.iter().enumerate() {
                 ui.selectable_value(&mut pick, i, tl!(label));
             }
         });
+        combo.response.labelled_by(type_label.id);
         if pick != t {
             let (angle, focus) = match g.kind {
                 GradientKind::Linear { angle, .. } => (angle, [50.0; 4]),
