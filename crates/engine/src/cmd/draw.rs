@@ -880,6 +880,7 @@ fn set_shape(s: &mut Session, pos: &Pos, found: &InkShape) -> Result<(), CmdErro
     };
     *kind = new_kind;
     *freeform = geometry;
+    extra.odf_geometry = None;
     *fill = None;
     let [_, _, raw_w, raw_h] = found.bounds();
     (*w, *h) = if matches!(found, InkShape::Arrow { .. }) { (raw_w, raw_h) } else { (bw, bh) };

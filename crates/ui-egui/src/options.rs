@@ -140,8 +140,9 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    let rtl = crate::rtl::on();
+    let body = |ui: &mut Ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(170.0);
             for id in PANES {
                 let label = tl!(pane_label(id));
@@ -155,7 +156,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 }
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
+                ui.painter().with_clip_rect(r).text(
+                    egui::pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y),
+                    crate::rtl::lead_center(rtl),
+                    label,
+                    font,
+                    t.text,
+                );
                 if resp.clicked() {
                     app.ui.options_pane = id.to_string();
                 }
@@ -165,7 +172,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
         let (line, _) = ui.allocate_exact_size(vec2(1.0, 420.0), egui::Sense::hover());
         ui.painter().rect_filled(line, 0.0, t.border);
         ui.add_space(20.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_max_width(640.0);
             match current.as_str() {
                 "display" => display(app, ui),
@@ -178,7 +185,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 _ => general(app, ui),
             }
         });
-    });
+    };
+    // Right to left the pane list is on the right and the settings fill in from it.
+    if rtl {
+        ui.with_layout(crate::rtl::row_layout(ui, egui::Align::Min), body)
+    } else {
+        crate::rtl::horizontal_top(ui, body)
+    };
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -237,27 +250,38 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Personalize");
-    egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        let user_label = ui.label(tl!("User name:"));
-        let mut n = app.session.author.clone();
-        let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
-        if ui.add_enabled(!protected, egui::TextEdit::singleline(&mut n).desired_width(260.0)).labelled_by(user_label.id).changed() && !protected {
-            app.session.author = n;
-        }
-        ui.end_row();
-        let initials_label = ui.label(tl!("Initials:"));
-        let mut i = app.session.initials.clone();
-        let hint = app.session.user_initials();
-        if ui
-            .add(
-                egui::TextEdit::singleline(&mut i).desired_width(80.0).char_limit(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).hint_text(hint),
-            )
-            .labelled_by(initials_label.id)
-            .changed()
-        {
-            set(app, json!({"initials": i}));
-        }
-        ui.end_row();
+    crate::rtl::Table::new("options_user").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let user_label = r.cell(|ui| ui.label(tl!("User name:")));
+            r.cell(|ui| {
+                let mut n = app.session.author.clone();
+                let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
+                if ui.add_enabled(!protected, egui::TextEdit::singleline(&mut n).desired_width(260.0)).labelled_by(user_label.id).changed()
+                    && !protected
+                {
+                    app.session.author = n;
+                }
+            });
+        });
+        t.row(|r| {
+            let initials_label = r.cell(|ui| ui.label(tl!("Initials:")));
+            r.cell(|ui| {
+                let mut i = app.session.initials.clone();
+                let hint = app.session.user_initials();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut i)
+                            .desired_width(80.0)
+                            .char_limit(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS)
+                            .hint_text(hint),
+                    )
+                    .labelled_by(initials_label.id)
+                    .changed()
+                {
+                    set(app, json!({"initials": i}));
+                }
+            });
+        });
     });
     note(ui, "New comments and tracked changes are recorded under this name and these initials.");
 }
@@ -313,15 +337,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings, and the dictionary each language found. An app started
-/// from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`, so this is how it finds a
-/// dictionary kept in a folder of the user's own.
+/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
+/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
+/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
+/// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
     let id = egui::Id::unique("options_dictionaries_folder");
@@ -349,6 +371,15 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    note(ui, "An installed Language pack is used after this folder.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Dictionary files")).strong());
+    dictionary_files(ui);
+}
+
+/// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
+/// couldn't be read, looked up again after the folder changes.
+fn dictionary_files(ui: &mut Ui) {
     // The dictionary each language found, looked up again after the folder changes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
@@ -369,10 +400,11 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     };
     for (language, file, error) in found {
         let line = match (file, error) {
-            (Some(f), Some(e)) => {
-                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
-            }
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
+            (Some(f), Some(e)) => crate::i18n::fmt(
+                tl!("{language}: {file} (unreadable: {reason})"),
+                &[("language", &language), ("file", &crate::i18n::isolate_path(&f)), ("reason", &e)],
+            ),
+            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &crate::i18n::isolate_path(&f))]),
             (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
         };
         ui.add(egui::Label::new(RichText::new(line).small()).truncate());
@@ -396,7 +428,14 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Es419 => tl!("Spanish (Latin America)"),
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
         // English uses its bundled word list; Bulgarian and German have no dictionary yet.
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+        ProofLang::En
+        | ProofLang::EnGb
+        | ProofLang::EnCa
+        | ProofLang::EnAu
+        | ProofLang::Bg
+        | ProofLang::De
+        | ProofLang::Pack(_)
+        | ProofLang::Other => "",
     }
 }
 
@@ -442,7 +481,7 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
     let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
     let mut autosave = app.autosave && !browser;
-    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
+    let r = ui.add_enabled_ui(!browser, |ui| ui.checkbox(&mut autosave, tl!("AutoSave documents you have saved in WordCraft"))).inner;
     if browser {
         r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
     } else if r.changed() {
@@ -486,6 +525,12 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
             .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
     };
     ui.label(RichText::new(text).small().weak());
+    ui.add_space(8.0);
+    crate::language_packs::your_languages_section(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Dictionaries");
+    dictionaries(app, ui);
+    crate::language_packs::add_language_window(app, &ui.ctx().clone());
 }
 
 /// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
@@ -528,51 +573,61 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Display");
-    egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        let recent_label = ui.label(tl!("Recent documents to show:"));
-        let mut n = app.ui.recent_shown();
-        if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
-            app.ui.recent_count = n;
-        }
-        ui.end_row();
-        let units_label = ui.label(tl!("Measurement units:"));
-        // The user's choice, else the region's (#838): Automatic follows the region.
-        let units = app.session.units();
-        let auto = app.session.prefs.units.is_none();
-        let name = UNITS.iter().find(|(u, _)| *u == units).map_or("Inches", |(_, n)| n);
-        let shown = if auto { format!("{} ({})", tl!("Automatic"), tl!(name)) } else { tl!(name).to_string() };
-        let combo = craft_ui::ComboBox::from_id_salt("options_units").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            if ui.selectable_label(auto, tl!("Automatic")).clicked() {
-                set(app, json!({"units": "auto"}));
-            }
-            for (u, label) in UNITS {
-                if ui.selectable_label(!auto && units == u, tl!(label)).clicked() {
-                    set(app, json!({"units": u}));
+    crate::rtl::Table::new("options_display").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let recent_label = r.cell(|ui| ui.label(tl!("Recent documents to show:")));
+            r.cell(|ui| {
+                let mut n = app.ui.recent_shown();
+                if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
+                    app.ui.recent_count = n;
                 }
-            }
+            });
         });
-        combo.response.labelled_by(units_label.id);
-        ui.end_row();
+        t.row(|r| {
+            let units_label = r.cell(|ui| ui.label(tl!("Measurement units:")));
+            r.cell(|ui| {
+                // The user's choice, else the region's (#838): Automatic follows the region.
+                let units = app.session.units();
+                let auto = app.session.prefs.units.is_none();
+                let name = UNITS.iter().find(|(u, _)| *u == units).map_or("Inches", |(_, n)| n);
+                let shown = if auto { format!("{} ({})", tl!("Automatic"), tl!(name)) } else { tl!(name).to_string() };
+                let combo = craft_ui::ComboBox::from_id_salt("options_units").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(auto, tl!("Automatic")).clicked() {
+                        set(app, json!({"units": "auto"}));
+                    }
+                    for (u, label) in UNITS {
+                        if ui.selectable_label(!auto && units == u, tl!(label)).clicked() {
+                            set(app, json!({"units": u}));
+                        }
+                    }
+                });
+                combo.response.labelled_by(units_label.id);
+            });
+        });
         // The region new documents, units and the decimal separator follow; Automatic is the
         // system's (#838).
-        let region_label = ui.label(tl!("Region:"));
-        let chosen = app.session.prefs.region.clone();
-        let system = &app.session.system_region;
-        let system_tag = if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
-        let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
-        let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
-        let combo = craft_ui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
-                set(app, json!({"region": "auto"}));
-            }
-            for tag in REGIONS {
-                if ui.selectable_label(chosen.as_deref() == Some(tag), tag).clicked() {
-                    set(app, json!({"region": tag}));
-                }
-            }
+        t.row(|r| {
+            let region_label = r.cell(|ui| ui.label(tl!("Region:")));
+            r.cell(|ui| {
+                let chosen = app.session.prefs.region.clone();
+                let system = &app.session.system_region;
+                let system_tag =
+                    if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
+                let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
+                let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
+                let combo = craft_ui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
+                        set(app, json!({"region": "auto"}));
+                    }
+                    for tag in REGIONS {
+                        if ui.selectable_label(chosen.as_deref() == Some(tag), tag).clicked() {
+                            set(app, json!({"region": tag}));
+                        }
+                    }
+                });
+                combo.response.labelled_by(region_label.id);
+            });
         });
-        combo.response.labelled_by(region_label.id);
-        ui.end_row();
     });
     let mut keytips = app.ui.keytips_enabled;
     if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
@@ -597,6 +652,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "OpenDocument files");
+    odf_files(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -610,6 +668,98 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("tools.customizeRibbon", json!({}));
         }
     });
+}
+
+/// How OpenDocument files opened from now on fill in what the standard leaves to the
+/// application (docs/odf-interpretation.md): in Microsoft Word's style, in LibreOffice's, or with
+/// the user's own choice for each case.
+fn odf_files(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::odf_profile::{MAX_LENGTH, OdfPreset};
+    let profile = app.session.prefs.odf.clone();
+    // The preset as a drop-down, like the units and region above.
+    // The two display styles, then Custom for the user's own choices.
+    let presets = [OdfPreset::Word, OdfPreset::LibreOffice, OdfPreset::Custom];
+    let shown = profile.preset.label();
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Where the standard leaves the look open, follow:"));
+        let combo = craft_ui::ComboBox::from_id_salt("options_odf_preset").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
+            for preset in presets {
+                if ui.selectable_label(profile.preset == preset, tl!(preset.label())).clicked() && profile.preset != preset {
+                    chosen = Some(preset);
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    if let Some(preset) = chosen {
+        // Custom starts from the choices in use.
+        let mut odf = if preset == OdfPreset::Custom { serde_json::to_value(profile.effective()).unwrap_or_default() } else { json!({}) };
+        if let Some(o) = odf.as_object_mut() {
+            o.insert("preset".into(), json!(preset.id()));
+        }
+        set(app, json!({ "odf": odf }));
+    }
+    note(ui, "Applies to OpenDocument files opened from now on. What the standard defines is always followed.");
+    if profile.preset != OdfPreset::Custom {
+        return;
+    }
+    let e = profile.effective();
+    let u = unit();
+    let k = u.pt_per_unit();
+    egui::Grid::new("options_odf").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        for (key, label, pt) in [
+            ("pageMargin", "Page margins:", e.page_margin),
+            ("headerMinHeight", "Header and footer height:", e.header_min_height),
+            ("columnGap", "Gap between columns:", e.column_gap),
+        ] {
+            let id = ui.label(tl!(label)).id;
+            let mut v = pt / k;
+            if ui.add(egui::DragValue::new(&mut v).speed(0.5 / k).range(0.0..=MAX_LENGTH / k).measure(u).max_decimals(2)).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: (v * k).clamp(0.0, MAX_LENGTH)}}));
+            }
+            ui.end_row();
+        }
+        // Line widths in points, as the ribbon shows them: a hairline is a fraction of a point.
+        let id = ui.label(tl!("Shape line width:")).id;
+        let mut w = e.hairline;
+        if ui
+            .add(egui::DragValue::new(&mut w).speed(0.05).range(0.05..=24.0).max_decimals(2).suffix(format!(" {}", tl!("pt"))))
+            .labelled_by(id)
+            .changed()
+        {
+            set(app, json!({"odf": {"hairline": w}}));
+        }
+        ui.end_row();
+        for (key, label, rgb) in [("shapeFill", "Shape fill colour:", e.shape_fill), ("shapeLine", "Shape line colour:", e.shape_line)] {
+            let id = ui.label(tl!(label)).id;
+            let mut c = [rgb.0, rgb.1, rgb.2];
+            if egui::color_picker::color_edit_button_srgb(ui, &mut c).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: wordcraft_doc::props::Rgb(c[0], c[1], c[2]).hex()}}));
+            }
+            ui.end_row();
+        }
+    });
+    for (key, label, value) in [
+        ("headerHeightIncludesSpacing", "A header's height includes its spacing from the text", e.header_height_includes_spacing),
+        ("dynamicSpacing", "A tall header uses up its spacing from the text", e.dynamic_spacing),
+        ("tabsFromIndent", "Tab stops are measured from the paragraph's indent", e.tabs_from_indent),
+        ("pageFrameParagraphIsPage", "A page frame placed against a paragraph is placed against the page edge", e.page_frame_paragraph_is_page),
+        (
+            "inlineInvalidRelationIsBaseline",
+            "An in-line frame placed against a paragraph or the page is placed against the baseline",
+            e.inline_invalid_relation_is_baseline,
+        ),
+        ("pictureLinesFitPictures", "A line holding only pictures is as tall as the pictures", e.picture_lines_fit_pictures),
+        ("balanceSectionColumns", "A section's columns end balanced at the end of the document too", e.balance_section_columns),
+        ("sumParagraphSpacing", "The space between paragraphs is the space after plus the space before", e.sum_paragraph_spacing),
+        ("widowControl", "Widow and orphan control when no style says", e.widow_control),
+    ] {
+        let mut v = value;
+        if ui.checkbox(&mut v, tl!(label)).changed() {
+            set(app, json!({"odf": {key: v}}));
+        }
+    }
 }
 
 /// The user templates folder (#2852): where File › New finds personal templates and Save as Word
@@ -669,7 +819,10 @@ fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
+    // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
+    // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())])
+        .replace("\u{2069}%", "%\u{2069}");
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
@@ -726,6 +879,7 @@ fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
+    app.want_system_arabic = true;
     let system = crate::i18n::system_lang();
     let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
     let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
