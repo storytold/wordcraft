@@ -112,6 +112,30 @@ The checks hold for every thread of the server process. A path is checked, then 
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
 
+## Preferences
+
+With `--connect`, an agent works in the user's own app, whose preferences are saved and used for
+every later document. An agent can change them when asked to, unless the user has turned on File ›
+Options › Agents › **Keep agents from changing my preferences** (`file.options`
+`protectPreferences`). While that is on, its commands can't change the user name and initials,
+AutoCorrect, keyboard shortcuts, the ribbon and Quick Access Toolbar, or the File › Options
+settings (including the default proofing language, Check Spelling as You Type, Print Markup, how
+tracked changes are shown, the window's own settings such as the theme and the Start screen, and
+the setting itself). A command that would is refused with an error naming the setting, and what
+that command did is undone, document edits included (#3622). Reading them still works:
+`tools.customizeKeyboard` with `command` or `key`, and `file.options` without settings, which
+returns them.
+
+The lock covers commands only. The `click` and `key` tools send synthetic input, which the app
+plays back after the request, so an agent clicking through File › Options can still change a
+setting; words added to the user dictionary aren't covered yet either, a macro whose later step
+is refused keeps its earlier steps' edits, and view switches, Read Aloud settings and Draw pens
+aren't locked. See
+[Preferences](control-protocol.md#preferences) for the full list.
+
+A headless server (`wordcraft-cli mcp`) saves no preferences: whatever its agent sets lasts until
+the server exits, so it isn't restricted.
+
 ## Language packs
 
 Spelling and hyphenation for languages other than English come as Language packs, installed into

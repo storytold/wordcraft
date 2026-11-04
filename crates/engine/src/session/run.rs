@@ -1,7 +1,7 @@
 use super::doc_state::{ColumnBlock, Selection};
 use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
-use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
+use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, PREFERENCES_LOCKED, Pos, Session, StoryRef, Value, document_id_mark};
 use crate::CommandSpec;
 
 struct SuccessContext<'a> {
@@ -20,6 +20,26 @@ struct SuccessContext<'a> {
     sel_before: &'a Selection,
 }
 
+/// What the front end saves between runs from the session (`WordApp::prefs`) and every later
+/// document is edited with: the user name and initials, the editing preferences (AutoCorrect,
+/// the default proofing language…), the keyboard shortcuts, the ribbon and Check Spelling as You
+/// Type. [`Session::preferences_locked`] keeps commands from changing it (#3622). What the front
+/// end also keeps but that only changes how the window looks or carries live state of its own
+/// (the Navigation pane, Dark page, where panes sit, the Read Aloud settings, the Draw gallery's
+/// pens) isn't included.
+struct KeptPrefs {
+    author: String,
+    initials: String,
+    prefs: crate::Prefs,
+    keymap: crate::KeyMap,
+    ribbon: crate::RibbonLayout,
+    /// Check Spelling as You Type as the window shows it is the active document's view: it is
+    /// compared and put back only while the command's own document is still the active one, as
+    /// another document (one it opened or switched to) has a view of its own.
+    document: u64,
+    proofing: bool,
+}
+
 struct ElsewhereContext {
     home: u64,
     mark: u64,
@@ -30,6 +50,56 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    fn kept_prefs(&self) -> KeptPrefs {
+        KeptPrefs {
+            author: self.author.clone(),
+            initials: self.initials.clone(),
+            prefs: self.prefs.clone(),
+            keymap: self.keymap.clone(),
+            ribbon: self.ribbon.clone(),
+            document: self.document_id,
+            proofing: self.view.proofing,
+        }
+    }
+
+    fn kept_prefs_changed(&self, before: &KeptPrefs) -> bool {
+        self.author != before.author
+            || self.initials != before.initials
+            || self.prefs != before.prefs
+            || self.keymap != before.keymap
+            || self.ribbon != before.ribbon
+            || (self.document_id == before.document && self.view.proofing != before.proofing)
+    }
+
+    fn restore_kept_prefs(&mut self, kept: KeptPrefs) {
+        // The dictionaries folder is searched process-wide as soon as it is set.
+        if kept.prefs.dictionaries_folder != self.prefs.dictionaries_folder {
+            crate::cmd::options::use_dictionaries_folder(kept.prefs.dictionaries_folder.as_deref());
+        }
+        let KeptPrefs { author, initials, prefs, keymap, ribbon, document, proofing } = kept;
+        self.author = author;
+        self.initials = initials;
+        self.prefs = prefs;
+        self.keymap = keymap;
+        self.ribbon = ribbon;
+        if self.document_id == document {
+            self.view.proofing = proofing;
+        }
+    }
+
+    /// With the preferences locked (`before` taken), puts back what the command changed and turns
+    /// its success into a refusal.
+    fn refuse_preference_changes(&mut self, id: &str, before: Option<KeptPrefs>, result: &mut Result<Value, CmdError>) {
+        let Some(before) = before else { return };
+        if !self.kept_prefs_changed(&before) {
+            return;
+        }
+        self.restore_kept_prefs(before);
+        if result.is_ok() {
+            *result = Err(CmdError::Disabled(format!("{id}: {PREFERENCES_LOCKED}")));
+        }
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -181,6 +251,7 @@ impl Session {
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
+        let kept_before = self.preferences_locked.then(|| self.kept_prefs());
         let run = spec.run;
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
@@ -193,6 +264,9 @@ impl Session {
                 Err(CmdError::Failed(format!("{id} panicked: {msg}")))
             }
         };
+        // Locked preferences (automation, #3622): a command that changed them is refused, and the
+        // rollback below undoes whatever else it did.
+        self.refuse_preference_changes(id, kept_before, &mut result);
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
                 ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },

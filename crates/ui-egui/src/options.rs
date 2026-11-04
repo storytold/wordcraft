@@ -181,7 +181,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 "language" => language(app, ui),
                 "accessibility" => accessibility(app, ui),
                 "advanced" => advanced(app, ui),
-                "agents" => agents(ui),
+                "agents" => agents(app, ui),
                 _ => general(app, ui),
             }
         });
@@ -697,9 +697,18 @@ fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     note(ui, "File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.");
 }
 
-fn agents(ui: &mut Ui) {
+/// Draws Agents options: how agents reach WordCraft, and whether they may change preferences
+/// (#3622).
+fn agents(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Agents");
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+    ui.add_space(8.0);
+    let protect = app.session.prefs.protect_preferences;
+    flag(app, ui, "Keep agents from changing my preferences", "protectPreferences", protect);
+    note(
+        ui,
+        "On: agents driving this window (`--control`, `wordcraft-cli mcp --connect`) can't change your user name, AutoCorrect, keyboard shortcuts, the ribbon or these options, nor turn this off. A request that would is refused and undone.",
+    );
 }
 
 /// Interface theme: Light, Dark, or follow the system's appearance (#115).

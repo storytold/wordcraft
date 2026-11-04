@@ -2315,6 +2315,42 @@ fn undoing_a_sentence_capital_adds_a_first_letter_exception() {
 }
 
 #[test]
+fn locked_autocorrect_undo_keeps_document_history_and_preferences_consistent() {
+    for (command, params) in [("edit.undo", json!({})), ("edit.undoTo", json!({"count": 1}))] {
+        for (input, undone) in [("hello there. world ", "Hello there. world "), ("so TWo ", "So TWo ")] {
+            let mut s = typed(input);
+            let corrected = s.doc.plain_text(StoryRef::Body);
+            let prefs = s.prefs.clone();
+            let depth = s.undo_depth();
+            s.preferences_locked = true;
+            s.run(command, &params).unwrap_or_else(|e| panic!("{command}: Undo must succeed without learning: {e}"));
+            assert_eq!(s.doc.plain_text(StoryRef::Body), undone, "{command}: {input}");
+            assert_eq!(s.prefs, prefs, "{command}: no persistent exception is learned");
+            assert_eq!(s.undo_depth(), depth - 1);
+            assert!(s.can_redo());
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.plain_text(StoryRef::Body), corrected);
+            assert_eq!(s.undo_depth(), depth);
+            assert_eq!(s.prefs, prefs);
+        }
+    }
+}
+
+#[test]
+fn locked_autocorrect_retyping_honours_the_correction_without_learning() {
+    let mut s = typed("hello there. world ");
+    let prefs = s.prefs.clone();
+    s.preferences_locked = true;
+    typ(&mut s, "\u{8}\u{8}\u{8}\u{8}\u{8}\u{8}world ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello there. world ");
+    assert_eq!(s.prefs, prefs, "the immediate correction does not become a saved exception");
+    s.preferences_locked = false;
+    run(&mut s, "text.newParagraph", json!({}));
+    typ(&mut s, "x there. world ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello there. world \nX there. World ", "later typing still has no saved exception");
+}
+
+#[test]
 fn backspacing_a_sentence_capital_and_retyping_adds_a_first_letter_exception() {
     let mut s = typed("hello there. world ");
     typ(&mut s, "\u{8}\u{8}\u{8}\u{8}\u{8}\u{8}world ");

@@ -153,6 +153,7 @@ impl Session {
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
             ribbon: crate::RibbonLayout::default(),
+            preferences_locked: false,
             editing_lang: None,
             read_aloud: Default::default(),
             password,

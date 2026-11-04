@@ -120,3 +120,71 @@ fn closing_an_addressed_document_keeps_unsaved_work_unless_forced() {
     assert!(!a.session.is_open(clean) && a.session.is_open(second));
     assert_eq!(a.session.document_id(), active);
 }
+
+/// What `ui.json` would get from the session, without the process-wide user dictionary (other
+/// tests add words to it while this one runs).
+fn saved(a: &WordApp) -> Value {
+    let mut v = serde_json::to_value(a.prefs()).unwrap_or_default();
+    if let Some(m) = v.as_object_mut() {
+        m.remove("dictionary");
+    }
+    v
+}
+
+/// #3622: each open document has its own Check Spelling as You Type view; an agent switching to
+/// one opened before the user turned spelling off neither is refused nor changes the saved choice.
+#[test]
+fn switching_documents_keeps_the_saved_spelling_choice() {
+    let mut a = app();
+    assert!(a.execute("file.options", json!({"protectPreferences": true})).is_ok());
+    let (first, _) = two_documents(&mut a);
+    assert!(a.execute("review.proofing", json!({"value": false})).is_ok());
+    let before = saved(&a);
+    let r = exec(&mut a, "view.switchWindows", json!({"id": first}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.session.document_id(), first);
+    assert!(a.session.view.proofing, "the first document keeps its own view");
+    assert_eq!(saved(&a), before, "the user's choice is what is saved");
+    assert_eq!(saved(&a)["checkSpelling"], false);
+}
+
+/// #3622: with File › Options › Agents › Keep agents from changing my preferences on, control
+/// requests can't change the user's saved preferences, whichever way they name the command
+/// (`engine.execute`, the bare id, or addressed to a background document), nor turn the setting
+/// off, and the lock lifts after each request. Off (the default), they go through.
+#[test]
+fn control_requests_cannot_change_saved_preferences() {
+    let mut a = app();
+    assert!(a.execute("file.options", json!({"protectPreferences": true})).is_ok());
+    let (first, _) = two_documents(&mut a);
+    let before = saved(&a);
+    let refused = |r: &Value| r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("File › Options › Agents"));
+    let r = exec(&mut a, "file.options", json!({"protectPreferences": false}));
+    assert!(refused(&r), "{r}");
+    let r = exec(&mut a, "tools.autocorrect", json!({"add": {"from": "invoice", "to": "pay to 12-3456"}}));
+    assert!(refused(&r), "{r}");
+    let r = send(&mut a, "tools.customizeKeyboard", json!({"assign": {"command": "edit.undo", "key": "Mod+S"}}));
+    assert!(refused(&r), "{r}");
+    let r = send(&mut a, "engine.execute", json!({"command": "file.setAuthor", "params": {"name": "Mallory"}, "doc": first}));
+    assert!(refused(&r), "{r}");
+    // The window's own File › Options settings (`ui.*` commands, which don't go through the
+    // session) are refused too; reading one still answers.
+    let r = exec(&mut a, "ui.startScreen", json!({"value": false}));
+    assert!(refused(&r), "{r}");
+    let dark = if a.ui.theme == crate::theme::Appearance::Dark { "light" } else { "dark" };
+    let r = send(&mut a, "ui.theme", json!({"value": dark}));
+    assert!(refused(&r), "{r}");
+    let r = exec(&mut a, "ui.startScreen", json!({}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(saved(&a), before);
+    // Ordinary automation still works, and the user's own changes after a request go through.
+    assert_eq!(exec(&mut a, "text.insert", json!({"text": " more"}))["ok"], true);
+    assert!(!a.session.preferences_locked);
+    assert!(a.execute("file.setAuthor", json!({"name": "Ana"})).is_ok());
+    assert_eq!(a.session.author, "Ana");
+
+    let mut a = app();
+    let r = exec(&mut a, "file.setAuthor", json!({"name": "Agent"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.session.author, "Agent");
+}

@@ -178,9 +178,12 @@ impl Session {
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
         // Undoing the automatic capitalisation's own step makes its word an exception; any
-        // other Undo forgets the capital.
+        // other Undo forgets the capital. Locked automation can undo the document without
+        // learning a persistent preference from that Undo.
         let steps = self.history.len() as u64 + self.undo_evicted;
-        if let Some(c) = self.autocap.take().filter(|c| c.depth == steps) {
+        if let Some(c) = self.autocap.take().filter(|c| c.depth == steps)
+            && !self.preferences_locked
+        {
             c.add_exceptions(&mut self.prefs.autocorrect);
         }
         let Some(u) = self.history.pop().map(Arc::unwrap_or_clone) else { return false };

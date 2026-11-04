@@ -1,11 +1,14 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--sample] [files…]`; `--help` prints `USAGE`.
+//! Usage: `wordcraft [--control <port>] [--sample] [files…]`;
+//! `--help` prints `USAGE`.
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
 //! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`.
+//! removed on exit). See `docs/control-protocol.md`. While File › Options › Agents › Keep agents
+//! from changing my preferences is on, its requests can't change the user's saved preferences
+//! (user name, AutoCorrect, shortcuts, ribbon, options; #3622).
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
