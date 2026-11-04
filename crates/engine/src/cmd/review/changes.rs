@@ -71,13 +71,7 @@ fn resolve_para(
 /// cell's own. Returns whether there were any.
 fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
     let Some((tp, r, c)) = path.cell() else { return Ok(false) };
-    let has = s.doc.table(story, &tp).is_some_and(|t| {
-        let row = t.rows.get(r);
-        t.props.fmt_change.is_some()
-            || row.is_some_and(|x| x.props.fmt_change.is_some())
-            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
-    });
-    if !has {
+    if !cell_has_change(s, story, path) {
         return Ok(false);
     }
     let t = s.doc.table_mut(story, &tp)?;
@@ -89,6 +83,17 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
         }
     }
     Ok(true)
+}
+
+/// Whether the table cell `path` is in has changes of its own: the table's, its row's or the cell's.
+fn cell_has_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> bool {
+    let Some((tp, r, c)) = path.cell() else { return false };
+    s.doc.table(story, &tp).is_some_and(|t| {
+        let row = t.rows.get(r);
+        t.props.fmt_change.is_some()
+            || row.is_some_and(|x| x.props.fmt_change.is_some())
+            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
+    })
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
@@ -257,6 +262,50 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+/// What Accept or Reject resolves at a caret, in the order it looks: the tracked run around it,
+/// else the paragraph mark right after it, else the paragraph's formatting, else the table cell's.
+enum CaretChange {
+    Run(std::ops::Range<usize>),
+    Mark,
+    Props,
+    Cell,
+}
+
+fn caret_change(s: &Session, a: &Pos) -> Option<CaretChange> {
+    let p = s.doc.para_at(a);
+    if let Some(r) = p.and_then(|p| revision_span(p, a.off)) {
+        return Some(CaretChange::Run(r));
+    }
+    let mark_fmt = p.is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
+    if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == *a) {
+        return Some(CaretChange::Mark);
+    }
+    if p.is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some()) {
+        return Some(CaretChange::Props);
+    }
+    cell_has_change(s, a.story, &a.path).then_some(CaretChange::Cell)
+}
+
+/// Whether Accept or Reject would resolve a change where the selection is, rather than move on to
+/// the next one: the change at a caret, or any change a range touches. The canvas context menu
+/// offers Accept and Reject only then.
+pub fn change_at_selection(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    if a == b {
+        return caret_change(s, &a).is_some();
+    }
+    s.doc.paths_between(&a, &b).iter().any(|path| {
+        let Some(p) = s.doc.para(a.story, path) else { return false };
+        let from = if *path == a.path { a.off } else { 0 };
+        let to = if *path == b.path { b.off } else { p.len() };
+        let run = p.run_ranges().any(|(r, c)| r.start < to && from < r.end && (c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some()));
+        // As in resolve_sel: the mark when the range goes on past it, the formatting when it has text.
+        let mark = *path != b.path && (p.mark.ins.is_some() || p.mark.del.is_some() || p.mark.fmt_change.is_some());
+        let props = (*path != b.path || to > from) && (p.props.fmt_change.is_some() || p.props.num_change.is_some());
+        run || mark || props || cell_has_change(s, a.story, path)
+    })
+}
+
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
@@ -265,27 +314,21 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let mut caret_props = None;
     let ranged = a != b;
     let (a, b) = if a == b {
-        // The change at the caret: the run around it, else the paragraph mark right after it,
-        // else the paragraph's formatting, else the table cell's.
-        let found = s.doc.para_at(&a).and_then(|p| revision_span(p, a.off));
-        let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some());
-        let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
-        match found {
-            Some(r) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
-            None if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == a) => {
+        match caret_change(s, &a) {
+            Some(CaretChange::Run(r)) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
+            Some(CaretChange::Mark) => {
                 caret_mark = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None if para_fmt => {
+            Some(CaretChange::Props) => {
                 caret_props = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None => {
-                if resolve_cell(s, a.story, &a.path, accept)? {
-                    return if next { select_next_unresolved(s) } else { sel_result(s) };
-                }
-                return nav_change(s, 1);
+            Some(CaretChange::Cell) => {
+                resolve_cell(s, a.story, &a.path, accept)?;
+                return if next { select_next_unresolved(s) } else { sel_result(s) };
             }
+            None => return nav_change(s, 1),
         }
     } else {
         (a, b)
