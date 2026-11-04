@@ -53,10 +53,14 @@ fn invalid_section_metadata_is_ignored_and_missing_values_stay_missing() {
     let bytes = docx(
         r#"<w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="65536" w:other="-1"/><w15:footnoteColumns w:val="0"/><w:pgNumType w:chapStyle="256" w:chapSep="invalid"/></w:sectPr>"#,
     );
-    let d = wordcraft_docx::read(&bytes).unwrap();
+    let mut d = wordcraft_docx::read(&bytes).unwrap();
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
     assert!(!xml.contains("paperSrc"), "{xml}");
     assert!(!xml.contains("footnoteColumns"), "{xml}");
     assert!(!xml.contains("chapStyle") && !xml.contains("chapSep"), "{xml}");
     assert!(!xml.contains("noEndnote"), "{xml}");
+
+    d.last_section.footnote_columns = Some(0);
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert!(!xml.contains("footnoteColumns"), "{xml}");
 }

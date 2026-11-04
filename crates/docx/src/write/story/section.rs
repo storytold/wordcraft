@@ -128,7 +128,7 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = ca.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:cols", &refs);
         }
-        if let Some(count) = s.footnote_columns {
+        if let Some(count) = s.footnote_columns.filter(|count| *count > 0) {
             w.empty("w15:footnoteColumns", &[("w:val", &count.clamp(1, 45).to_string())]);
         }
         if let Some(on) = s.form_prot {
