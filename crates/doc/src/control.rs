@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 
 use crate::para::OBJ;
-use crate::{Block, Blocks, Document, InlineObject, Path, Pos, StoryRef};
+use crate::{Block, Blocks, Document, InlineObject, Part, PartKind, Path, Pos, StoryRef};
 
 /// Deepest table nesting scanned (matches `walk` in the crate root).
 const MAX_DEPTH: usize = 16;
@@ -495,9 +495,259 @@ fn balance_list(bl: &mut Blocks) -> usize {
     removed
 }
 
+/// Deepest content-control nesting editing creates. A control is two XML levels in a `.docx`,
+/// whose reader stops at 256: 124 nested controls reopen, 88 inside 24 nested tables (#3618).
+pub const MAX_CONTROL_NESTING: usize = 64;
+/// Deepest table nesting the nesting walks follow (past what any reader opens).
+const MAX_WALK: usize = 128;
+/// Text boxes inside text boxes followed (commands make none; pasted shapes may).
+const MAX_BOX_HOPS: usize = 4;
+
+/// Call `f(path, off, depth, peak)` at the start of each paragraph and just after each control
+/// marker or text box, in document order: `depth` controls are open there; `peak` also counts
+/// the deepest nesting in a text box just passed. Table, row and cell wraps count inside them.
+fn nesting_walk(
+    bl: &Blocks,
+    stories: &mut Stories,
+    prefix: &mut Vec<u32>,
+    mut depth: usize,
+    level: usize,
+    hops: usize,
+    f: &mut dyn FnMut(&[u32], usize, usize, usize),
+) {
+    if level > MAX_WALK {
+        return;
+    }
+    let w = OBJ.len_utf8();
+    for (i, b) in bl.iter().enumerate() {
+        prefix.push(u32::try_from(i).unwrap_or(u32::MAX));
+        match &**b {
+            Block::Para(p) => {
+                f(prefix, 0, depth, depth);
+                for (off, o) in p.objects_with_offsets() {
+                    let peak = match o {
+                        InlineObject::ControlStart { .. } => {
+                            depth = depth.saturating_add(1);
+                            depth
+                        }
+                        InlineObject::ControlEnd => {
+                            depth = depth.saturating_sub(1);
+                            depth
+                        }
+                        _ => match o.text_boxes().into_iter().map(|id| stories.peak(id, hops)).max() {
+                            Some(inner) => depth.saturating_add(inner),
+                            None => continue,
+                        },
+                    };
+                    f(prefix, off + w, depth, peak);
+                }
+            }
+            Block::Table(t) => {
+                depth = depth.saturating_add(t.controls.open.len());
+                let mut row_depth = depth;
+                for (r, row) in t.rows.iter().enumerate() {
+                    row_depth = row_depth.saturating_add(row.controls.open.len());
+                    let mut cell_depth = row_depth;
+                    for (c, cell) in row.cells.iter().enumerate() {
+                        cell_depth = cell_depth.saturating_add(cell.controls.open.len());
+                        prefix.push(u32::try_from(r).unwrap_or(u32::MAX));
+                        prefix.push(u32::try_from(c).unwrap_or(u32::MAX));
+                        nesting_walk(&cell.blocks, stories, prefix, cell_depth, level + 1, hops, f);
+                        prefix.pop();
+                        prefix.pop();
+                        cell_depth = cell_depth.saturating_sub(cell.controls.close as usize);
+                    }
+                    row_depth = row_depth.saturating_sub(row.controls.close as usize);
+                }
+                depth = depth.saturating_sub(t.controls.close as usize);
+            }
+        }
+        prefix.pop();
+    }
+}
+
+/// Text box stories, with the peak found in each, by story and hops (shapes may share one).
+struct Stories<'a> {
+    parts: &'a BTreeMap<u32, Part>,
+    peaks: BTreeMap<(u32, usize), usize>,
+}
+
+impl<'a> Stories<'a> {
+    fn new(parts: &'a BTreeMap<u32, Part>) -> Self {
+        Self { parts, peaks: BTreeMap::new() }
+    }
+
+    /// The deepest control nesting in text box story `id`, walked once per `hops`.
+    fn peak(&mut self, id: u32, hops: usize) -> usize {
+        if let Some(&p) = self.peaks.get(&(id, hops)) {
+            return p;
+        }
+        let parts = self.parts;
+        let Some(part) = parts.get(&id).filter(|_| hops < MAX_BOX_HOPS) else { return 0 };
+        let mut peak = 0;
+        nesting_walk(&part.blocks, self, &mut Vec::new(), 0, 0, hops + 1, &mut |_, _, _, p| peak = peak.max(p));
+        self.peaks.insert((id, hops), peak);
+        peak
+    }
+}
+
+/// The deepest control nesting in a list of blocks (a fragment), its text boxes included.
+pub fn nesting_peak(bl: &Blocks, parts: &BTreeMap<u32, Part>) -> usize {
+    let mut peak = 0;
+    nesting_walk(bl, &mut Stories::new(parts), &mut Vec::new(), 0, 0, 0, &mut |_, _, _, p| peak = peak.max(p));
+    peak
+}
+
+/// Drop the markers of the controls in `bl` that would nest more than `room` deep when `depth`
+/// are open around it; their content stays. Notes the room left at each text box in `boxes`.
+fn trim_list(bl: &mut Blocks, mut depth: usize, room: usize, level: usize, boxes: &mut BTreeMap<u32, usize>) -> usize {
+    if level > MAX_WALK {
+        return 0;
+    }
+    let w = OBJ.len_utf8();
+    // Whether each open control lost its markers, innermost last.
+    let mut stack: Vec<bool> = Vec::new();
+    let mut removed = 0;
+    for b in bl.iter_mut() {
+        if let Block::Para(p) = &**b {
+            let mut cut = Vec::new();
+            for (off, o) in p.objects_with_offsets() {
+                match o {
+                    InlineObject::ControlStart { .. } => {
+                        let drop = depth >= room;
+                        stack.push(drop);
+                        if drop {
+                            cut.push(off);
+                            removed += 1;
+                        } else {
+                            depth += 1;
+                        }
+                    }
+                    InlineObject::ControlEnd => match stack.pop() {
+                        Some(true) => cut.push(off),
+                        Some(false) => depth = depth.saturating_sub(1),
+                        None => {}
+                    },
+                    _ => {
+                        for id in o.text_boxes() {
+                            let left = room.saturating_sub(depth);
+                            boxes.entry(id).and_modify(|r| *r = (*r).min(left)).or_insert(left);
+                        }
+                    }
+                }
+            }
+            if !cut.is_empty()
+                && let Block::Para(p) = std::sync::Arc::make_mut(b)
+            {
+                for off in cut.into_iter().rev() {
+                    let _ = p.delete(off, off + w);
+                }
+            }
+        } else if let Block::Table(t) = std::sync::Arc::make_mut(b) {
+            removed += open_wrap(&mut t.controls, &mut stack, &mut depth, room);
+            let (mut row_stack, mut row_depth) = (Vec::new(), depth);
+            for row in &mut t.rows {
+                removed += open_wrap(&mut row.controls, &mut row_stack, &mut row_depth, room);
+                let (mut cell_stack, mut cell_depth) = (Vec::new(), row_depth);
+                for cell in &mut row.cells {
+                    removed += open_wrap(&mut cell.controls, &mut cell_stack, &mut cell_depth, room);
+                    removed += trim_list(&mut cell.blocks, cell_depth, room, level + 1, boxes);
+                    close_wrap(&mut cell.controls, &mut cell_stack, &mut cell_depth);
+                }
+                close_wrap(&mut row.controls, &mut row_stack, &mut row_depth);
+            }
+            close_wrap(&mut t.controls, &mut stack, &mut depth);
+        }
+    }
+    removed
+}
+
+/// The opens of a table, row or cell wrap past `room` go; returns how many.
+fn open_wrap(wrap: &mut ControlWrap, stack: &mut Vec<bool>, depth: &mut usize, room: usize) -> usize {
+    let before = wrap.open.len();
+    wrap.open.retain(|_| {
+        let drop = *depth >= room;
+        stack.push(drop);
+        if !drop {
+            *depth += 1;
+        }
+        !drop
+    });
+    before - wrap.open.len()
+}
+
+/// A wrap's closes, less those of opens that went.
+fn close_wrap(wrap: &mut ControlWrap, stack: &mut Vec<bool>, depth: &mut usize) {
+    let mut kept = 0;
+    for _ in 0..wrap.close.min(10_000) {
+        match stack.pop() {
+            Some(true) => {}
+            Some(false) => {
+                *depth = depth.saturating_sub(1);
+                kept += 1;
+            }
+            None => kept += 1,
+        }
+    }
+    wrap.close = kept;
+}
+
+/// Drop the markers of the controls in a fragment (`bl` and the text box stories in `parts` its
+/// shapes show) that would nest more than `room` deep; their content stays. Returns how many.
+pub fn trim_nesting(bl: &mut Blocks, parts: &mut BTreeMap<u32, Part>, room: usize) -> usize {
+    let mut boxes = BTreeMap::new();
+    let mut removed = trim_list(bl, 0, room, 0, &mut boxes);
+    // The room each story was trimmed to: a shared story met again with less is trimmed again.
+    let mut done: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut todo: Vec<u32> = boxes.keys().copied().collect();
+    while let Some(id) = todo.pop() {
+        let Some(&left) = boxes.get(&id) else { continue };
+        if done.get(&id).is_some_and(|d| *d <= left) {
+            continue;
+        }
+        done.insert(id, left);
+        if let Some(part) = parts.get_mut(&id) {
+            let mut inner = BTreeMap::new();
+            removed += trim_list(&mut part.blocks, 0, left, 0, &mut inner);
+            for (b, l) in inner {
+                boxes.entry(b).and_modify(|r| *r = (*r).min(l)).or_insert(l);
+                todo.push(b);
+            }
+        }
+    }
+    removed
+}
+
 impl Document {
     fn control_stories(&self) -> Vec<StoryRef> {
         std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k))).collect()
+    }
+
+    /// The deepest control nesting in `a..b` (one story; `a..a` is how many are open at `a`):
+    /// markers, table, row and cell wraps, text boxes in the range, and for a text box story the
+    /// controls around its shape, since a `.docx` writes the box inside them.
+    pub fn control_nesting(&self, a: &Pos, b: &Pos) -> usize {
+        self.nesting_hops(a, b, 0)
+    }
+
+    fn nesting_hops(&self, a: &Pos, b: &Pos, hops: usize) -> usize {
+        let Some(bl) = self.story(a.story) else { return 0 };
+        let (from, to) = ((a.path.0.as_slice(), a.off), (b.path.0.as_slice(), b.off));
+        let (mut at, mut peak) = (0, 0);
+        nesting_walk(bl, &mut Stories::new(&self.parts), &mut Vec::new(), 0, 0, hops, &mut |path, off, depth, p| {
+            if (path, off) <= from {
+                at = depth;
+            } else if (path, off) <= to {
+                peak = peak.max(p);
+            }
+        });
+        let outer = match a.story {
+            StoryRef::Part(id) if hops < MAX_BOX_HOPS && self.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox) => {
+                self.text_box_anchor(id).map(|p| self.nesting_hops(&p, &p, hops + 1)).unwrap_or(0)
+            }
+            _ => 0,
+        };
+        outer + at.max(peak)
     }
 
     /// The whole content controls of a story (around paragraph content), in the order they close.
