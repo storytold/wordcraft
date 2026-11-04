@@ -143,6 +143,9 @@ pub fn set_backend(backend: Option<Arc<dyn Backend>>) {
     let dir = backend.as_ref().and_then(|b| b.packs_dir());
     *BACKEND.write().unwrap_or_else(PoisonError::into_inner) = backend;
     set_index(None);
+    FETCHED.store(false, Ordering::Relaxed);
+    AUTO_REFRESHED.store(false, Ordering::Relaxed);
+    WANTED.lock().unwrap_or_else(PoisonError::into_inner).clear();
     jobs().errors.clear();
     wordcraft_proof::packs::set_packs_dir(dir);
 }
@@ -219,6 +222,8 @@ pub fn refresh(cancel: &Cancel) -> Result<Vec<Pack>, String> {
     }
     let index = clean_index(b.fetch_index(cancel)?);
     set_index(Some(index.clone()));
+    FETCHED.store(true, Ordering::Relaxed);
+    install_wanted(&index);
     Ok(index)
 }
 
@@ -706,8 +711,33 @@ fn has_pack_for_tag(tag: &str) -> bool {
     PACK_LOOKUP.lock().unwrap_or_else(PoisonError::into_inner).get(generation, tag, || pack_for_tag(tag, &available()).is_some())
 }
 
-/// The packs the document's text asks for that are available and not installed: what the
-/// missing-pack bar offers. Never a language without a pack, nor one proofing can't use.
+/// The language new text at the caret gets (its typing language, resolved through the styles
+/// and the document default), unless it is marked Do not check spelling or grammar: choosing a
+/// language with nothing selected asks for its pack before anything is typed in it.
+pub fn caret_language(s: &Session) -> Option<String> {
+    let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
+    let rc = s.doc.styles.resolve_char(style, &s.typing_props());
+    if rc.no_proof {
+        return None;
+    }
+    Some(rc.lang.unwrap_or_else(|| "en-US".into()))
+}
+
+/// The languages the missing-pack bar looks at: the body text's ([`document_languages`]), then
+/// the caret's typing language ([`caret_language`]).
+pub fn wanted_languages(s: &Session) -> Vec<String> {
+    let mut out = document_languages(s);
+    if let Some(tag) = caret_language(s)
+        && !out.contains(&tag)
+    {
+        out.push(tag);
+    }
+    out
+}
+
+/// The packs the document's text (or the caret's typing language) asks for that are available
+/// and not installed: what the missing-pack bar offers. Never a language without a pack, nor one
+/// proofing can't use.
 pub fn missing(s: &Session) -> Vec<Pack> {
     let packs = available();
     if packs.is_empty() {
@@ -715,7 +745,7 @@ pub fn missing(s: &Session) -> Vec<Pack> {
     }
     let installed = installed();
     let mut out: Vec<Pack> = Vec::new();
-    for tag in document_languages(s) {
+    for tag in wanted_languages(s) {
         if proofable(&tag)
             && let Some(p) = pack_for_tag(&tag, &packs)
             && !installed.iter().any(|i| i.locale == p.locale)
@@ -725,6 +755,113 @@ pub fn missing(s: &Session) -> Vec<Pack> {
         }
     }
     out
+}
+
+/// The index was fetched this session (since the backend was set): what it lists is then the
+/// whole answer, even when it lists nothing.
+static FETCHED: AtomicBool = AtomicBool::new(false);
+/// The automatic fetch of a missing or stale list ([`refresh_if_stale`]) was tried.
+static AUTO_REFRESHED: AtomicBool = AtomicBool::new(false);
+/// Languages (document tags) whose pack the person asked for before the list was known
+/// ([`start_get`]): installed once a fetch lists one.
+static WANTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether the index was fetched since the backend was set.
+pub fn fetched() -> bool {
+    FETCHED.load(Ordering::Relaxed)
+}
+
+/// The languages the document (or the caret) asks for while there is no list of packs yet (a
+/// fresh install, or a list cached for an older pin): proofable, not English, with no dictionary
+/// and no pack installed, one per proofing language, as the document tags them (`tr-TR`). The
+/// bar offers to get them: the list is fetched first, and the language then installed if it has
+/// a pack. Nothing once a list is known or was fetched this session ([`missing`] then answers).
+pub fn unlisted(s: &Session) -> Vec<String> {
+    if backend().is_none() || fetched() || available_len() > 0 {
+        return Vec::new();
+    }
+    let installed = installed();
+    let mut seen: Vec<wordcraft_proof::ProofLang> = Vec::new();
+    let mut out = Vec::new();
+    for tag in wanted_languages(s) {
+        let base = tag.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        let lang = wordcraft_proof::ProofLang::from_tag(Some(&tag));
+        if base.is_empty()
+            || base == "en"
+            || !proofable(&tag)
+            || wordcraft_proof::missing_dictionary(Some(&tag)).is_none()
+            || seen.contains(&lang)
+            || installed.iter().any(|i| i.locale == base || tag.eq_ignore_ascii_case(&i.locale))
+        {
+            continue;
+        }
+        seen.push(lang);
+        out.push(tag);
+    }
+    out
+}
+
+/// The person asked for `tag`'s pack before the list was known (the bar's Install, after their
+/// consent turned downloading on): fetch the list ([`start_refresh`]), then install the pack it
+/// lists for `tag`, if any; with none, the bar stops offering it. Downloading must be on.
+/// Returns whether it is still running.
+pub fn start_get(tag: &str) -> Result<bool, String> {
+    let tag = tag.trim();
+    if tag.is_empty() || tag.len() > MAX_LOCALE_LEN {
+        return Err(format!("`{tag}` isn't a language tag"));
+    }
+    if let Some(p) = pack_for_tag(tag, &available()) {
+        return start_install(&p.locale);
+    }
+    let b = backend().ok_or_else(no_store)?;
+    if !b.network_on() {
+        // Never queued: a later fetch mustn't install what was refused.
+        return Err(network_off());
+    }
+    let queued = {
+        let mut w = WANTED.lock().unwrap_or_else(PoisonError::into_inner);
+        let new = !w.iter().any(|t| t == tag) && w.len() < MAX_DOC_LANGUAGES;
+        if new {
+            w.push(tag.to_string());
+        }
+        new
+    };
+    let r = start_refresh();
+    if r.is_err() && queued {
+        WANTED.lock().unwrap_or_else(PoisonError::into_inner).retain(|t| t != tag);
+    }
+    r
+}
+
+/// After a fetch: install the packs asked for before the list was known ([`start_get`]).
+fn install_wanted(index: &[Pack]) {
+    let wanted = std::mem::take(&mut *WANTED.lock().unwrap_or_else(PoisonError::into_inner));
+    for tag in wanted {
+        let Some(p) = pack_for_tag(&tag, index) else { continue };
+        if is_installed(&p.locale) {
+            continue;
+        }
+        if let Err(e) = start_install(&p.locale) {
+            set_error(&p.locale, Some(e));
+        }
+    }
+}
+
+/// Once a session (the first time it is asked once requests run on a thread, [`runs_in_background`]:
+/// the window), with downloading already on and no list (none cached, or one cached for an older
+/// pin): fetch it in the background, so the bar can offer packs. The person's consent is the
+/// downloading setting itself; nothing is asked. Its failure is recorded for Options (""). The
+/// window asks every frame: after the first time this reads nothing (the downloading setting is
+/// a file). Returns whether a fetch was started.
+pub fn refresh_if_stale() -> bool {
+    let Some(b) = backend() else { return false };
+    if !runs_in_background() || AUTO_REFRESHED.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    if !b.network_on() || fetched() || fetching() || available_len() > 0 {
+        return false;
+    }
+    start_refresh().is_ok()
 }
 
 /// A backend with a fixed list and installs that only record themselves: tests and `ui_shot`.
