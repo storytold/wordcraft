@@ -154,7 +154,7 @@ fn index_marks_are_xe_fields_and_written_back() {
     assert_eq!(xe, [r#"XE "Fruit:apple""#, r#"XE "bananas""#, r#"XE "a quoted one here""#]);
     // The marked text stays text.
     assert!(d.body.iter().filter_map(|b| b.as_para()).any(|p| p.text.contains("bananas too.")));
-    let c = crate::odt::tests::content_of(&export(&d).unwrap());
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
     assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="apple" text:key1="Fruit"/>"#), "{c}");
     assert!(c.contains(r#"<text:alphabetical-index-mark text:string-value="bananas"/>"#), "{c}");
 }

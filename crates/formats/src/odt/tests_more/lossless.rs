@@ -305,8 +305,17 @@ const LISTS: Sample = Sample {
     meta: "",
 };
 
+/// Index marks over text, a plugin in a frame, and a form's data source: what a check of the
+/// schema's every element found no file holding.
+const MARKS: Sample = Sample {
+    name: "marks",
+    content: r##"<office:body><office:text><office:forms><form:form form:name="Orders"><form:connection-resource xlink:href="sdbc:embedded:orders"/></form:form></office:forms><text:p>A <text:toc-mark-start text:id="t1" text:outline-level="2"/>marked heading<text:toc-mark-end text:id="t1"/>, a <text:user-index-mark-start text:id="u1" text:index-name="Terms"/>term<text:user-index-mark-end text:id="u1"/> and a <text:alphabetical-index-mark-start text:id="a1" text:key1="fruit"/>pear<text:alphabetical-index-mark-end text:id="a1"/>.</text:p><text:p>A plugin <draw:frame draw:name="Player" text:anchor-type="as-char" svg:width="1in" svg:height="1in"><draw:plugin xlink:href="https://example.org/clip" xlink:type="simple" draw:mime-type="application/x-example"><draw:param draw:name="loop" draw:value="true"/></draw:plugin></draw:frame> here.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 16] = [
+const SAMPLES: [Sample; 17] = [
     TEXT,
     STYLES,
     META,
@@ -323,6 +332,7 @@ const SAMPLES: [Sample; 16] = [
     BOOKMARKS,
     NOTES_AND_FORMULAS,
     LISTS,
+    MARKS,
 ];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
@@ -748,6 +758,15 @@ fn a_reference_mark_is_written_as_one_and_as_a_bookmark() {
     // references, written from the model, are `text:bookmark-ref`): both are written.
     let content = r##"<office:body><office:text><text:p>See <text:reference-mark-start text:name="intro"/>the introduction<text:reference-mark-end text:name="intro"/> and <text:reference-mark text:name="point"/>here.</text:p><text:p>As said in <text:reference-ref text:reference-format="text" text:ref-name="intro">the introduction</text:reference-ref>.</text:p></office:text></office:body>"##;
     let d = import(&package(&Sample { name: "reference marks", content, styles: "", meta: "" })).unwrap();
+    // Unedited: as read.
+    let c = content_of(&export(&d).unwrap());
+    assert!(c.contains(r#"<text:reference-mark-start text:name="intro"/>the introduction<text:reference-mark-end text:name="intro"/>"#), "{c}");
+    // Its paragraph edited, written from the model: both.
+    let mut d = d;
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.style = Some("Edited".into());
+        p.touch();
+    }
     let saved = export(&d).unwrap();
     assert!(parts_well_formed(&saved).is_ok());
     let c = content_of(&saved);

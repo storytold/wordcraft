@@ -421,7 +421,7 @@ pub(super) fn with_kept_meta(meta: String, defs: &BTreeMap<String, Arc<str>>, or
 /// Whether a child of a `form:form` is a form control (else the form's own properties or
 /// event listeners).
 fn is_control(q: &str) -> bool {
-    q.starts_with("form:") && !matches!(q, "form:properties" | "form:form")
+    q.starts_with("form:") && !matches!(q, "form:properties" | "form:form" | "form:connection-resource")
 }
 
 /// The children `depth` deep in `xml` (the root is 1): each one's element, `form:name` and

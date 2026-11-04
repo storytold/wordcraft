@@ -585,7 +585,9 @@ impl<'a> Body<'a> {
             Ev::Start(q, a) => match &mut self.kept_open {
                 Some(k) => {
                     // Comments and tracked changes paired in it.
-                    let paired = q.starts_with("office:annotation") || matches!(q.as_str(), "text:change" | "text:change-start" | "text:change-end");
+                    let paired = q.starts_with("office:annotation")
+                        || matches!(q.as_str(), "text:change" | "text:change-start" | "text:change-end")
+                        || mark_pair(q).is_some();
                     k.clean &= (paired || keepable(q)) && k.comments.start(q, a, self.depth + 1, self.paras_done);
                 }
                 None if (q == "text:p" || q == "text:h")
@@ -1899,6 +1901,23 @@ impl KeptComments {
                 _ => false,
             },
             "text:change" => get(a, "text:change-id").is_some(),
+            // An index or reference mark over text (§6.6.2, §8.1.10): its start and end in it.
+            q if mark_pair(q).is_some() => {
+                let Some((kind, attr, start)) = mark_pair(q) else { return false };
+                let Some(key) = get(a, attr).map(|k| format!("\u{2}{kind}\u{2}{k}")) else { return false };
+                if start {
+                    if self.opened.len() >= 64 {
+                        return false;
+                    }
+                    self.opened.push(key);
+                    true
+                } else if self.opened.contains(&key) {
+                    self.ended.push(key);
+                    true
+                } else {
+                    false
+                }
+            }
             // A text box continuing in another box, or continued from one: their names tie them.
             "draw:text-box" if get(a, "draw:chain-next-name").is_some() => false,
             // A drawing or a note: the paragraphs of its text (a text box's, a shape's, the
@@ -1933,12 +1952,13 @@ impl KeptComments {
 /// Whether markup holding element `q` can be kept as read. Pictures, shapes and text boxes can
 /// (their text is a story of its own, kept while it is as read: see `KeptComments`), and
 /// embedded objects (a formula's text and a chart's data are the paragraph's, an object's files
-/// are kept with it); form controls (named afresh in the forms) and plugins can't, nor
+/// are kept with it), plugins and floating frames; form controls (named afresh in the forms)
+/// can't, nor
 /// marks that pair up with others elsewhere by ids the writer gives (comments and tracked
 /// changes are paired apart). Bookmarks can: their names are kept, so either end may be
 /// written as read and the other from the model.
 fn keepable(q: &str) -> bool {
-    !(matches!(q, "draw:control" | "draw:plugin" | "draw:applet" | "draw:floating-frame")
+    !(q == "draw:control"
         || q.starts_with("office:annotation")
         || q.starts_with("text:change")
         || q.starts_with("form:")
@@ -1974,6 +1994,17 @@ fn hide(blocks: &mut [FBlock], depth: usize) {
             }
             FBlock::Table(_) => {}
         }
+    }
+}
+
+/// For an index or reference mark's start or end (`q`): its kind, the attribute naming it, and
+/// whether it starts.
+fn mark_pair(q: &str) -> Option<(&str, &'static str, bool)> {
+    let (kind, start) = if let Some(k) = q.strip_suffix("-start") { (k, true) } else { (q.strip_suffix("-end")?, false) };
+    match kind {
+        "text:toc-mark" | "text:user-index-mark" | "text:alphabetical-index-mark" => Some((kind, "text:id", start)),
+        "text:reference-mark" => Some((kind, "text:name", start)),
+        _ => None,
     }
 }
 
