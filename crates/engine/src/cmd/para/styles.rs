@@ -106,6 +106,7 @@ pub(super) fn create_style(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"id": id}))
 }
 
+/// Modify a style's character and paragraph formatting, display name or next-paragraph style.
 pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
     let chr: Option<CharProps> = v.get("chr").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
@@ -113,8 +114,19 @@ pub(super) fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
+    let d = &s.doc.styles.default_chr;
+    let (eff_b, eff_b_cs, eff_i, eff_i_cs) =
+        s.doc.styles.chain(&id).into_iter().fold((d.bold, d.bold_cs, d.italic, d.italic_cs), |(b, b_cs, i, i_cs), st| {
+            (st.chr.bold.or(b), st.chr.bold_cs.or(b_cs), st.chr.italic.or(i), st.chr.italic_cs.or(i_cs))
+        });
     let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
-    if let Some(c) = chr {
+    if let Some(mut c) = chr {
+        if eff_b_cs.filter(|&cs| Some(cs) != eff_b).is_none() {
+            c.bold_cs = c.bold_cs.or(c.bold);
+        }
+        if eff_i_cs.filter(|&cs| Some(cs) != eff_i).is_none() {
+            c.italic_cs = c.italic_cs.or(c.italic);
+        }
         st.chr.overlay(&c);
     }
     if let Some(pp) = para {

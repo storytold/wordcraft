@@ -544,7 +544,7 @@ impl StyleSheet {
                     outline_level: Some(i as u8),
                     ..para()
                 },
-                chr: CharProps { font: Some(font.into()), size: Some(size), italic, color: color(c), ..chr() },
+                chr: CharProps { font: Some(font.into()), size: Some(size), italic, italic_cs: italic, color: color(c), ..chr() },
                 priority: Some(9 + n as u32),
                 quick: n <= 3,
                 ..p_style()
@@ -582,17 +582,27 @@ impl StyleSheet {
             builtin: true,
             ..Default::default()
         };
-        add(c_style("SubtleEmphasis", "Subtle Emphasis", 19, CharProps { italic: Some(true), color: color(Rgb(0x40, 0x40, 0x40)), ..chr() }));
-        add(c_style("Emphasis", "Emphasis", 20, CharProps { italic: Some(true), ..chr() }));
-        add(c_style("IntenseEmphasis", "Intense Emphasis", 21, CharProps { italic: Some(true), color: color(HEADING_BLUE), ..chr() }));
-        add(c_style("Strong", "Strong", 22, CharProps { bold: Some(true), ..chr() }));
+        add(c_style(
+            "SubtleEmphasis",
+            "Subtle Emphasis",
+            19,
+            CharProps { italic: Some(true), italic_cs: Some(true), color: color(Rgb(0x40, 0x40, 0x40)), ..chr() },
+        ));
+        add(c_style("Emphasis", "Emphasis", 20, CharProps { italic: Some(true), italic_cs: Some(true), ..chr() }));
+        add(c_style(
+            "IntenseEmphasis",
+            "Intense Emphasis",
+            21,
+            CharProps { italic: Some(true), italic_cs: Some(true), color: color(HEADING_BLUE), ..chr() },
+        ));
+        add(c_style("Strong", "Strong", 22, CharProps { bold: Some(true), bold_cs: Some(true), ..chr() }));
         add(Style {
             id: "Quote".into(),
             name: "Quote".into(),
             based_on: Some("Normal".into()),
             next: Some("Normal".into()),
             para: ParaProps { align: Some(Align::Center), space_before: Some(8.0), ..para() },
-            chr: CharProps { italic: Some(true), color: color(Rgb(0x40, 0x40, 0x40)), ..chr() },
+            chr: CharProps { italic: Some(true), italic_cs: Some(true), color: color(Rgb(0x40, 0x40, 0x40)), ..chr() },
             priority: Some(29),
             quick: true,
             ..p_style()
@@ -612,7 +622,7 @@ impl StyleSheet {
                 borders: Some(Borders { top: Some(blue_line), bottom: Some(blue_line), ..Default::default() }),
                 ..para()
             },
-            chr: CharProps { italic: Some(true), color: color(HEADING_BLUE), ..chr() },
+            chr: CharProps { italic: Some(true), italic_cs: Some(true), color: color(HEADING_BLUE), ..chr() },
             priority: Some(30),
             quick: true,
             ..p_style()
@@ -622,9 +632,14 @@ impl StyleSheet {
             "IntenseReference",
             "Intense Reference",
             32,
-            CharProps { bold: Some(true), small_caps: Some(true), spacing: Some(0.25), color: color(HEADING_BLUE), ..chr() },
+            CharProps { bold: Some(true), bold_cs: Some(true), small_caps: Some(true), spacing: Some(0.25), color: color(HEADING_BLUE), ..chr() },
         ));
-        add(c_style("BookTitle", "Book Title", 33, CharProps { bold: Some(true), italic: Some(true), spacing: Some(0.25), ..chr() }));
+        add(c_style(
+            "BookTitle",
+            "Book Title",
+            33,
+            CharProps { bold: Some(true), bold_cs: Some(true), italic: Some(true), italic_cs: Some(true), spacing: Some(0.25), ..chr() },
+        ));
         add(Style {
             id: "ListParagraph".into(),
             name: "List Paragraph".into(),
@@ -644,7 +659,7 @@ impl StyleSheet {
             based_on: Some("Normal".into()),
             next: Some("Normal".into()),
             para: ParaProps { space_after: Some(10.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..para() },
-            chr: CharProps { italic: Some(true), size: Some(9.0), color: color(Rgb(0x0E, 0x28, 0x41)), ..chr() },
+            chr: CharProps { italic: Some(true), italic_cs: Some(true), size: Some(9.0), color: color(Rgb(0x0E, 0x28, 0x41)), ..chr() },
             priority: Some(35),
             ..p_style()
         });
@@ -884,9 +899,9 @@ fn table_styles() -> Vec<Style> {
             "Plain Table 1",
             TableStyleParts {
                 borders: Some(Borders::all(thin(Rgb(0xBF, 0xBF, 0xBF)))),
-                header_chr: CharProps { bold: Some(true), ..CharProps::default() },
+                header_chr: CharProps { bold: Some(true), bold_cs: Some(true), ..CharProps::default() },
                 band_fill: Some(Rgb(0xF2, 0xF2, 0xF2)),
-                first_col_chr: CharProps { bold: Some(true), ..CharProps::default() },
+                first_col_chr: CharProps { bold: Some(true), bold_cs: Some(true), ..CharProps::default() },
                 ..Default::default()
             },
         ),
@@ -895,8 +910,8 @@ fn table_styles() -> Vec<Style> {
             "Grid Table 1 Light",
             TableStyleParts {
                 borders: Some(Borders::all(thin(Rgb(0x99, 0x99, 0x99)))),
-                header_chr: CharProps { bold: Some(true), ..CharProps::default() },
-                first_col_chr: CharProps { bold: Some(true), ..CharProps::default() },
+                header_chr: CharProps { bold: Some(true), bold_cs: Some(true), ..CharProps::default() },
+                first_col_chr: CharProps { bold: Some(true), bold_cs: Some(true), ..CharProps::default() },
                 ..Default::default()
             },
         ),
@@ -908,9 +923,9 @@ fn table_styles() -> Vec<Style> {
             TableStyleParts {
                 borders: Some(Borders::all(thin(light))),
                 header_fill: Some(dark),
-                header_chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb::WHITE)), ..CharProps::default() },
+                header_chr: CharProps { bold: Some(true), bold_cs: Some(true), color: Some(TextColor::Rgb(Rgb::WHITE)), ..CharProps::default() },
                 band_fill: Some(light),
-                first_col_chr: CharProps { bold: Some(true), ..CharProps::default() },
+                first_col_chr: CharProps { bold: Some(true), bold_cs: Some(true), ..CharProps::default() },
                 ..Default::default()
             },
         ));
@@ -920,7 +935,7 @@ fn table_styles() -> Vec<Style> {
             TableStyleParts {
                 borders: Some(Borders::box_(thin(dark))),
                 header_fill: Some(dark),
-                header_chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb::WHITE)), ..CharProps::default() },
+                header_chr: CharProps { bold: Some(true), bold_cs: Some(true), color: Some(TextColor::Rgb(Rgb::WHITE)), ..CharProps::default() },
                 total_border_top: Some(thin(dark)),
                 ..Default::default()
             },
@@ -1047,11 +1062,32 @@ mod tests {
         assert!(s.table_style("RedGrid").is_some());
     }
 
+    /// Derived style ids strip non-alphanumeric characters and append a counter when taken.
     #[test]
     fn new_ids_unique() {
         let s = StyleSheet::builtin();
         assert_eq!(s.new_id("My Style"), "MyStyle");
         assert_eq!(s.new_id("Normal"), "Normal1");
         assert_eq!(s.new_id("!!!"), "Style");
+    }
+
+    /// #4198: Word and LibreOffice make a complex-script (Arabic, Hebrew…) run bold or italic only
+    /// through `w:bCs` / `w:iCs`, so every built-in style and table-style part that sets `bold` or
+    /// `italic` sets `bold_cs` or `italic_cs` alongside it.
+    #[test]
+    fn builtin_styles_pair_complex_script_bold_and_italic() {
+        let s = StyleSheet::builtin();
+        for st in &s.styles {
+            assert_eq!(st.chr.bold_cs, st.chr.bold, "{}: chr.bold", st.id);
+            assert_eq!(st.chr.italic_cs, st.chr.italic, "{}: chr.italic", st.id);
+            for part in TablePart::ALL {
+                let f = st.table_part(part);
+                assert_eq!(f.chr.bold_cs, f.chr.bold, "{} {part:?}: bold", st.id);
+                assert_eq!(f.chr.italic_cs, f.chr.italic, "{} {part:?}: italic", st.id);
+            }
+        }
+        let blue = s.get("GridTable4AccentBlue").unwrap();
+        assert_eq!((blue.table_part(TablePart::FirstRow).chr.bold, blue.table_part(TablePart::FirstRow).chr.bold_cs), (Some(true), Some(true)));
+        assert_eq!((blue.table_part(TablePart::FirstCol).chr.bold, blue.table_part(TablePart::FirstCol).chr.bold_cs), (Some(true), Some(true)));
     }
 }
