@@ -72,6 +72,9 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     None
 }
 
+/// Said when the text comes after another document or window was brought forward.
+pub(crate) const CANCELLED: &str = "the paste was cancelled: another document or window is active";
+
 /// How long a deferred Paste waits for egui's text before saying there is none.
 const PASTE_WAIT_SECS: f64 = 1.0;
 /// Frames a deferred Paste lets go by before asking egui: the menu it came from closes first.
@@ -89,8 +92,9 @@ pub(crate) struct PendingPaste {
     settle: u8,
     /// The text egui read, claimed from the raw input ([`claim`]), pasted next frame.
     text: Option<String>,
-    /// The document the Paste was chosen in: the text goes there or nowhere.
+    /// The document and window the Paste was chosen in: the text goes there or nowhere.
     document: u64,
+    window: u64,
 }
 
 /// When the host can't open the system clipboard at all (GNOME's Wayland has no data-control
@@ -98,9 +102,14 @@ pub(crate) struct PendingPaste {
 /// no text and failed while Ctrl+V worked: Ctrl+V's text comes through egui's own Wayland
 /// clipboard. Ask egui for a paste the same way and run the command when its text arrives
 /// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special keeps its
-/// dialog's own path.
+/// dialog's own path. Only the main window waits: egui answers in the input of the window that
+/// asked, and only the main window's input passes through [`claim`] (a window opened with View ›
+/// New Window keeps the old behaviour).
 fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    if id == "edit.pasteSpecial" || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
+    if id == "edit.pasteSpecial"
+        || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f())
+        || app.active_viewport() != egui::ViewportId::ROOT
+    {
         return None;
     }
     let ctx = app.ctx.clone()?;
@@ -112,6 +121,7 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
         settle: PASTE_SETTLE_FRAMES,
         text: None,
         document: app.session.document_id(),
+        window: app.windows.shown(),
     });
     ctx.request_repaint();
     Some(Ok(serde_json::json!({"pending": "paste"})))
@@ -133,15 +143,16 @@ pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
 }
 
 /// Run the waiting Paste with the text egui read. `false` when nothing was waiting. Another
-/// document shown since the Paste was chosen (another window brought forward, a document opened)
-/// cancels it rather than pasting there.
+/// document or window active since the Paste was chosen (another window brought forward, even
+/// one on the same document with its own caret; a document opened) cancels it rather than
+/// pasting there.
 fn deliver(app: &mut WordApp, text: &str) -> bool {
-    let Some(PendingPaste { id, mut params, document, .. }) = app.pending_paste.take() else {
+    let Some(PendingPaste { id, mut params, document, window, .. }) = app.pending_paste.take() else {
         return false;
     };
-    if app.session.document_id() != document {
-        log::debug!("{id}: another document is shown; the paste is cancelled");
-        app.status("the paste was cancelled: another document is shown".to_string());
+    if app.session.document_id() != document || app.windows.shown() != window || app.active_viewport() != egui::ViewportId::ROOT {
+        log::debug!("{id}: another document or window is active; the paste is cancelled");
+        app.status(CANCELLED.to_string());
         return true;
     }
     log::debug!("{id}: egui read {} bytes of text", text.len());
@@ -485,7 +496,7 @@ mod tests {
         assert!(left.is_empty(), "the text was the menu Paste's, not a new Ctrl+V");
         assert!(a.pending_paste.is_none());
         assert_eq!(first_para(&a), "", "not pasted into the document shown now");
-        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some("the paste was cancelled: another document is shown"));
+        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(CANCELLED));
         a.session.switch_document(first).unwrap();
         assert_eq!(first_para(&a), "", "nor into the one it was meant for, unseen");
     }
