@@ -540,8 +540,8 @@ mod tests {
         a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
         let stops = json!([{"pos": 0, "color": "FFFFFF"}, {"pos": 100, "color": "156082"}]);
         a.run("shape.fill", json!({"gradient": {"stops": stops, "angle": 359.95}})).unwrap();
-        a.run("view.formatShapePane", json!({"value": true})).unwrap();
         let (doc, depth) = (a.session.doc.clone(), a.session.undo_depth());
+        a.run("view.formatShapePane", json!({"value": true})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
