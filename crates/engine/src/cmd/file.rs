@@ -269,10 +269,13 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     };
     // Plain text and Markdown carry no language: they are in the editing language.
     let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
-    {
-        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    if matches!(ext.as_str(), "txt" | "text" | "md" | "markdown") {
+        if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
+            Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+        }
+        if s.prefs.default_no_proof {
+            Arc::make_mut(&mut doc.styles).default_chr.no_proof = Some(true);
+        }
     }
     match s.used_because() {
         None => s.set_document(doc),
