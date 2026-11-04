@@ -239,6 +239,7 @@ impl Session {
             }
             None => self.caret_props(),
         };
+        c.break_clear = None;
         c.rtl = None;
         c
     }
