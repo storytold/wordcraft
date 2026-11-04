@@ -316,8 +316,10 @@ mod tests {
         let mut h = dropdown_harness();
         let at = h.state().controls.button.as_ref().expect("the list button is shown").0.center();
         h.event(Event::PointerMoved(at));
-        h.event(press(at));
-        h.event(release(at));
+        h.step();
+        // `Harness::event` runs a frame per event, so both go into the frame's input directly.
+        h.input_mut().events.extend([press(at), release(at)]);
+        h.step();
         for _ in 0..3 {
             h.step();
         }
