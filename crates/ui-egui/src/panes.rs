@@ -27,8 +27,12 @@ mod state;
 #[cfg(test)]
 pub(crate) use comments::comment_draft;
 use comments::comments;
-pub(crate) use comments::{CommentDrafts, comment_editor, commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, reply_editor};
+pub(crate) use comments::{
+    COMMENT_ROWS, CommentDrafts, comment_editor, commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, reply_editor,
+};
 use host::Content;
+#[cfg(test)]
+pub(crate) use host::apply;
 pub use host::show;
 pub(crate) use host::{dock_command, overlay_open};
 pub(crate) use inspector::describe_props;
@@ -153,7 +157,7 @@ impl PaneContent<Pane> for Content<'_> {
 
     fn body(&mut self, ui: &mut Ui, pane: &Pane) {
         let app = &mut *self.app;
-        match pane {
+        crate::rtl::root(ui, |ui| match pane {
             Pane::SmartArtText => crate::dialogs_smart_art::text_pane(app, ui),
             Pane::Navigation => nav(app, ui),
             Pane::Clipboard => clipboard(app, ui),
@@ -167,7 +171,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
             Pane::Proofing => crate::proofing_pane::show(app, ui),
             Pane::Comments => comments(app, ui),
-        }
+        })
     }
 
     fn default_state(&self, pane: &Pane) -> PaneState {

@@ -228,6 +228,11 @@ fn block_cost(b: &Block) -> (usize, bool) {
             .saturating_add(p.objects.len().saturating_mul(std::mem::size_of::<InlineObject>()));
         let objects = p.objects.iter().fold(0usize, |n, o| n.saturating_add(object_cost(o)));
         cost = cost.saturating_add(p.text.len()).saturating_add(items).saturating_add(objects);
+        // The formatting a clone copies too: style ids, font names and the like in the runs,
+        // the mark and the paragraph's properties.
+        let runs = p.runs.iter().filter(|r| !r.props.is_empty()).fold(0usize, |n, r| n.saturating_add(serialized_len(&r.props)));
+        let props = serialized_len(&p.props).saturating_add(serialized_len(&p.mark)).saturating_add(p.section.as_ref().map_or(0, serialized_len));
+        cost = cost.saturating_add(runs).saturating_add(props);
         boxes |= box_ids(p).next().is_some();
     });
     (cost, boxes)
