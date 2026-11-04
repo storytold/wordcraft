@@ -58,7 +58,7 @@ fn hyperlink_target(instr: &str) -> Option<String> {
 }
 
 /// A field code's words: the field's name, its switches and its arguments, each with whether
-/// it was quoted. In quotes, `\"` is a quote and `\\` a backslash.
+/// it was quoted. In quotes, a backslash escapes the next character.
 fn field_args(instr: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut chars = instr.chars().peekable();
@@ -71,7 +71,10 @@ fn field_args(instr: &str) -> Vec<(String, bool)> {
             while let Some(c) = chars.next() {
                 match c {
                     '"' => break,
-                    '\\' if matches!(chars.peek(), Some('"' | '\\')) => word.extend(chars.next()),
+                    '\\' => match chars.next() {
+                        Some(escaped) => word.push(escaped),
+                        None => word.push('\\'),
+                    },
                     _ => word.push(c),
                 }
             }
