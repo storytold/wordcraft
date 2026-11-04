@@ -30,6 +30,16 @@ struct ElsewhereContext {
 }
 
 impl Session {
+    /// Filling in a form field goes on through typing and deleting; any other edit, caret
+    /// movement, selection, field navigation or undo ends it (#5525). Queries keep it.
+    fn end_form_fill_for_command(&mut self, id: &str, mutates: bool) {
+        if !matches!(id, "text.insert" | "text.backspace" | "text.delete")
+            && (mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)))
+        {
+            self.form_fill = None;
+        }
+    }
+
     fn leave_math_for_command(&mut self, id: &str) {
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
@@ -103,6 +113,7 @@ impl Session {
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
         self.leave_math_for_command(id);
+        self.end_form_fill_for_command(id, spec.mutates);
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
         let ime_epoch_before = spec.mutates.then_some(self.ime_body_epoch);

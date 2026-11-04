@@ -78,7 +78,8 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         selection_changed: false,
     };
     let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
-    if raw || !trigger {
+    // Text typed into a form field's result is not the paragraph's: no AutoCorrect over it (#5525).
+    if raw || !trigger || s.form_fill.is_some() {
         s.set_ime_edit_outcome(outcome);
         return sel_result(s);
     }

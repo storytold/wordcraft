@@ -29,9 +29,32 @@ fn remove_number(s: &mut Session, f: &Pos, n: NumRef) -> CmdResult {
     sel_result(s)
 }
 
+/// Backspace or Delete inside a form field being filled in (#5525): `None` when there is none.
+fn form_fill_delete(s: &mut Session, forward: bool) -> Option<CmdResult> {
+    match crate::cmd::form_fill_delete(s, forward) {
+        Ok(None) => None,
+        Ok(Some(changed)) => {
+            if changed {
+                s.set_ime_edit_outcome(crate::ImeEditOutcome {
+                    classified: true,
+                    content_changed: true,
+                    state_changed: true,
+                    transformed: false,
+                    selection_changed: false,
+                });
+            }
+            Some(sel_result(s))
+        }
+        Err(e) => Some(Err(e)),
+    }
+}
+
 fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
+    if let Some(r) = form_fill_delete(s, false) {
+        return r;
+    }
     if !s.sel.is_collapsed() {
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
@@ -144,6 +167,9 @@ pub(super) fn delete(s: &mut Session, v: &Value) -> CmdResult {
 fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
+    if let Some(r) = form_fill_delete(s, true) {
+        return r;
+    }
     if !s.sel.is_collapsed() {
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
