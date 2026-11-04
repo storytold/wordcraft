@@ -531,6 +531,32 @@ pub(crate) fn fresh_status(app: &WordApp) -> Option<&str> {
     app.status_msg.as_ref().filter(|(_, at)| crate::now_ms() - at < 6000.0).map(|(msg, _)| msg.as_str())
 }
 
+/// Paint the fresh status message in the screen bar, from its left edge up to `limit`
+/// (the centred control: the ribbon button in Focus, the search box in Full Screen View),
+/// shortened to fit, the whole message on hover — and registered as an accessible label,
+/// so a screen reader can read what the bar only paints. The status bar that shows the
+/// message on the Normal screen is drawn on neither of these screens (#5548, PR #5551).
+fn screen_status(ui: &mut Ui, app: &WordApp, bar: Rect, limit: f32, color: egui::Color32) {
+    let Some(msg) = fresh_status(app) else { return };
+    let room = limit - (bar.min.x + 10.0);
+    if room <= 0.0 {
+        return;
+    }
+    let font = TypeRung::Caption.regular();
+    let track = TypeRung::Caption.tracking();
+    let shown = fit_text(ui.painter(), msg, &font, track, color, room);
+    if shown.is_empty() {
+        return;
+    }
+    let w = text_width(ui.painter(), &shown, &font, track, color);
+    let at = pos2(bar.min.x + 10.0, bar.center().y - TypeRung::Caption.line_height() / 2.0);
+    let rect = Rect::from_min_size(at, vec2(w + 1.0, TypeRung::Caption.line_height()));
+    let resp = ui.interact(rect, status_message_id(), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, msg));
+    let _ = resp.on_hover_text(msg.to_string());
+    paint_text(ui.painter(), rect.min, Align2::LEFT_TOP, &shown, &font, track, color);
+}
+
 pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
     let t = Tokens::get(ui.ctx());
     let fill = if screen == Screen::Focus { FOCUS_CANVAS } else { t.title_bar };
@@ -546,31 +572,18 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             if resp.on_hover_text(tl!("Show the ribbon")).clicked() {
                 let _ = app.run("ui.focusRibbon", json!({}));
             }
-            // The status message, while it is fresh: the status bar that draws it in the other
-            // screens does not exist in Focus, so without this a refusal reported through
-            // app.status (the Convert Text to Table section-break refusal, #5548) is invisible
-            // here. It runs from the bar's left edge up to the ribbon button, shortened to fit,
-            // with the whole message on hover, as in the status bar.
-            if let Some(msg) = fresh_status(app) {
-                let font = TypeRung::Caption.regular();
-                let track = TypeRung::Caption.tracking();
-                let color = egui::Color32::from_gray(220);
-                let room = (r.min.x - 8.0) - (full.min.x + 10.0);
-                if room > 0.0 {
-                    let shown = fit_text(ui.painter(), msg, &font, track, color, room);
-                    if !shown.is_empty() {
-                        let w = text_width(ui.painter(), &shown, &font, track, color);
-                        let at = pos2(full.min.x + 10.0, full.center().y - TypeRung::Caption.line_height() / 2.0);
-                        let rect = Rect::from_min_size(at, vec2(w + 1.0, TypeRung::Caption.line_height()));
-                        let _ = ui.interact(rect, status_message_id(), Sense::hover()).on_hover_text(msg.to_string());
-                        paint_text(ui.painter(), rect.min, Align2::LEFT_TOP, &shown, &font, track, color);
-                    }
-                }
-            }
+            // The status message, while it is fresh: the status bar that draws it on the
+            // Normal screen does not exist in Focus, so a refusal reported through
+            // app.status (the Convert Text to Table section-break refusal, #5548) would
+            // be invisible here.
+            screen_status(ui, app, full, r.min.x - 8.0, egui::Color32::from_gray(220));
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
                 search_box(app, ui, 22.0);
             });
+            // Full Screen View has no status bar either, and its search runs any command —
+            // a refusal (the section-break one, #5548) must show here too.
+            screen_status(ui, app, full, full.center().x - 130.0 - 8.0, t.accent_text);
         }
     });
 }
@@ -801,7 +814,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let rect = Rect::from_min_size(at, vec2(w + 1.0, TypeRung::Caption.line_height()));
                             // The whole message is in the tooltip; the bar only has room for the
                             // beginning of it (#2402).
-                            let _ = ui.interact(rect, status_message_id(), Sense::hover()).on_hover_text(msg.clone());
+                            let resp = ui.interact(rect, status_message_id(), Sense::hover());
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, msg.as_str()));
+                            let _ = resp.on_hover_text(msg.clone());
                             paint_text(ui.painter(), rect.min, Align2::LEFT_TOP, &msg_shown, &font, track, t.accent_text);
                             ui.allocate_space(vec2(w + 1.0, TypeRung::Caption.line_height()));
                         }

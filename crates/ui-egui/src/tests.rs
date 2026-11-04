@@ -7219,6 +7219,24 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
 }
 
 #[test]
+#[test]
+fn the_status_message_is_shown_and_spoken_in_focus_and_full_screen() {
+    use egui_kittest::kittest::Queryable;
+    // The two screens that replace the status bar with the slim screen bar: a refusal
+    // reported through app.status must be drawn there, and exposed to a screen reader
+    // as a label with the whole message (PR #5551 review rounds 2-3).
+    for (focus, full_screen) in [(true, false), (false, true)] {
+        let mut a = app();
+        a.session.view.focus_mode = focus;
+        a.session.view.full_screen_view = full_screen;
+        a.status_msg = Some(("the selection crosses a section break".to_string(), crate::now_ms()));
+        let mut h = harness(a);
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Label, "the selection crosses a section break");
+    }
+}
+
+#[test]
 fn fresh_status_follows_the_six_second_rule() {
     let mut a = app();
     assert_eq!(crate::chrome::fresh_status(&a), None, "no message, nothing to show");
