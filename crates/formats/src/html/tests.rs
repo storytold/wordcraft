@@ -647,6 +647,80 @@ fn a_page_opens_as_word_opens_one() {
 }
 
 #[test]
+fn zero_rowspan_keeps_following_cells_in_their_columns() {
+    // HTML rowspan=0 grows through the remaining rows of its row group.
+    for (open, close) in [("", ""), ("<tbody>", "</tbody>"), ("<thead>", "</thead>"), ("<tfoot>", "</tfoot>")] {
+        for tag in ["td", "th"] {
+            let f = parse(&format!("<table>{open}<tr><{tag} rowspan=0>Shared</{tag}><td>First</td></tr><tr><td>Second</td></tr>{close}</table>"));
+            let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+            assert_eq!(t.rows[0][0].rowspan, 2, "{open} {tag}");
+            assert_eq!(t.rows[1].len(), 2);
+            assert!(t.rows[1][0].covered);
+            assert_eq!(t.rows[1][1].text(), "Second");
+        }
+    }
+}
+
+#[test]
+fn zero_rowspan_stops_at_explicit_and_implicit_row_group_ends() {
+    for groups in [
+        "<thead><tr><th rowspan=0>Head<th>First<tr><th>Second<tbody><tr><td>Body<td>Last</tbody>",
+        "<tbody><tr><td rowspan=0>Head<td>First<tr><td>Second<tbody><tr><td>Body<td>Last</tbody>",
+        "<tbody><tr><td rowspan=0>Head<td>First<tr><td>Second</tbody><tfoot><tr><td>Body<td>Last</tfoot>",
+        "<tr><td rowspan=0>Head<td>First<tr><td>Second<tbody><tr><td>Body<td>Last</tbody>",
+        "<tbody><tr><td rowspan=0>Head<td>First<tr><td>Second</tbody><tr><td>Body<td>Last",
+    ] {
+        let f = parse(&format!("<table>{groups}</table>"));
+        let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+        assert_eq!(t.rows.len(), 3, "{groups}");
+        assert_eq!(t.rows[0][0].rowspan, 2, "{groups}");
+        assert!(t.rows[1][0].covered);
+        assert_eq!(t.rows[2].len(), 2);
+        assert!(!t.rows[2][0].covered);
+        assert_eq!(t.rows[2][0].text(), "Body");
+    }
+}
+
+#[test]
+fn zero_rowspan_uses_its_own_table_and_preserves_other_spans() {
+    let f = parse(
+        "<table><tbody><tr><td rowspan=0>Outer<td><table><tbody><tr><td rowspan=0>Inner<td>A<tr><td>B</tbody></table>\
+         <tr><td>After</tbody><tbody><tr><td colspan=2>End</tbody></table>",
+    );
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.rows[0][0].rowspan, 2);
+    assert!(t.rows[1][0].covered);
+    assert_eq!(t.rows[1][1].text(), "After");
+    assert_eq!(t.rows[2][0].colspan, 2);
+    let FBlock::Table(inner) = &t.rows[0][1].blocks[0] else { panic!() };
+    assert_eq!(inner.rows[0][0].rowspan, 2);
+    assert!(inner.rows[1][0].covered);
+    assert_eq!(inner.rows[1][1].text(), "B");
+    for span in ["1", "2", "-1", "bogus"] {
+        let f = parse(&format!("<table><tr><td rowspan='{span}'>A<td>B<tr><td>C</table>"));
+        let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+        assert_eq!(t.rows[0][0].rowspan, if span == "2" { 2 } else { 1 });
+        assert_eq!(t.rows[1][0].covered, span == "2");
+    }
+}
+
+#[test]
+fn zero_rowspan_keeps_the_existing_span_limit() {
+    let mut html = String::from("<table><tbody><tr><td rowspan=0>Shared<td>First");
+    for _ in 0..1001 {
+        html.push_str("<tr><td>Next");
+    }
+    html.push_str("</tbody></table>");
+    let f = parse(&html);
+    let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+    assert_eq!(t.rows.len(), 1002);
+    assert_eq!(t.rows[0][0].rowspan, 1000);
+    assert!(t.rows[999][0].covered);
+    assert!(!t.rows[1000][0].covered);
+    assert!(t.rows.iter().all(|r| r.len() <= 2));
+}
+
+#[test]
 fn cells_give_their_columns_widths() {
     let f = parse(
         "<style>td.n { width: 42px }</style><table border=1><tr><td colspan=3>t</td></tr><tr><td class=n>1</td><td width=200>a</td><td style='width: 2in'>b</td></tr></table>",
