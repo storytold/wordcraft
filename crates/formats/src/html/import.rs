@@ -1,5 +1,5 @@
 use super::builder::{Builder, ImageLoader, parse_sheet};
-use super::lexer::{Lexer, Tok};
+use super::lexer::{Lexer, Tok, skip_math_fallback};
 use super::math_ruby::{read_math, read_ruby};
 use super::{Document, Flow, Inline, model};
 
@@ -68,9 +68,39 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
                 b.start(&name, &attrs, self_close);
             }
             Tok::End(name) => b.end(&name),
+            Tok::OfficeMath(markup) => {
+                skip_math_fallback(&mut lx);
+                if b.in_head() {
+                    continue;
+                }
+                for el in parse_office_math(&markup) {
+                    if let Some((linear, display)) = crate::omml::read(&el) {
+                        b.start_para().inlines.push(Inline::Equation { linear, display });
+                    }
+                }
+            }
         }
     }
     b.finish()
+}
+
+/// The `m:oMathPara` and `m:oMath` elements (outermost only) in the markup of an
+/// `msEquation` conditional comment (#5582), read as trees.
+pub(crate) fn parse_office_math(markup: &str) -> Vec<crate::mathml::El> {
+    /// Most equations one comment brings in.
+    const MAX_EQUATIONS: usize = 256;
+    let mut lx = Lexer { s: markup, pos: 0 };
+    let mut out = Vec::new();
+    while out.len() < MAX_EQUATIONS
+        && let Some(t) = lx.next()
+    {
+        if let Tok::Start { name, attrs, self_close: false } = t
+            && matches!(crate::mathml::local(&name), "omath" | "omathpara")
+        {
+            out.push(read_math(&mut lx, name, attrs));
+        }
+    }
+    out
 }
 
 /// Collapse white space inside ruby markup as body text does (HTML's white space only: an

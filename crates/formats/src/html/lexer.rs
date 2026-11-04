@@ -6,8 +6,15 @@ use super::entity::unescape;
 #[derive(Debug)]
 pub(super) enum Tok {
     Text(String),
-    Start { name: String, attrs: Vec<(String, String)>, self_close: bool },
+    Start {
+        name: String,
+        attrs: Vec<(String, String)>,
+        self_close: bool,
+    },
     End(String),
+    /// The markup inside an `<!--[if gte msEquation 12]>…<![endif]-->` conditional comment: Word's
+    /// Office Math for readers that understand it (#5582).
+    OfficeMath(String),
 }
 
 pub(super) struct Lexer<'a> {
@@ -78,7 +85,12 @@ impl Lexer<'_> {
                 self.pos += 6;
             } else {
                 self.pos += 4;
-                self.skip_past("-->");
+                let from = self.pos;
+                let to = self.skip_past("-->");
+                let body = self.s.get(from..to).unwrap_or("");
+                if let Some(math) = office_math(body) {
+                    return Some(Tok::OfficeMath(math.to_string()));
+                }
             }
             return Some(Tok::Text(String::new()));
         }
@@ -172,5 +184,32 @@ impl Lexer<'_> {
         }
         self.pos += i.min(rest.len());
         Some(Tok::Start { name, attrs, self_close })
+    }
+}
+
+/// The markup of a comment body that is Word's `[if gte msEquation …]>…<![endif]` conditional
+/// section (an unclosed one runs to the comment's end).
+fn office_math(body: &str) -> Option<&str> {
+    const OPEN: &str = "[if gte msequation";
+    let head = body.get(..OPEN.len())?;
+    if !head.eq_ignore_ascii_case(OPEN) {
+        return None;
+    }
+    let inner = body.get(body.find(']')?.checked_add(1)?..)?;
+    let inner = inner.strip_prefix('>').unwrap_or(inner);
+    let end = inner.as_bytes().windows(9).rposition(|w| w.eq_ignore_ascii_case(b"<![endif]")).unwrap_or(inner.len());
+    inner.get(..end)
+}
+
+/// Skip a Word fallback for Office Math right after it (`<![if !msEquation]>…<![endif]>`: the
+/// picture written for readers without math), leaving `lx` past it; anything else is left alone.
+pub(super) fn skip_math_fallback(lx: &mut Lexer) {
+    const OPEN: &[u8] = b"<![if !msequation]>";
+    let rest = lx.rest();
+    let ws = rest.len() - rest.trim_start().len();
+    let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
+    if after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) {
+        lx.pos += ws + OPEN.len();
+        lx.skip_past("<![endif]>");
     }
 }
