@@ -21,7 +21,7 @@ pub(super) fn length(v: &str) -> Option<f32> {
     }
 }
 
-pub(super) type Attrs = Vec<(String, String)>;
+pub(crate) type Attrs = Vec<(String, String)>;
 
 fn attrs_of(e: &BytesStart<'_>) -> Attrs {
     let mut v = Vec::new();
@@ -34,22 +34,22 @@ fn attrs_of(e: &BytesStart<'_>) -> Attrs {
     v
 }
 
-pub(super) fn get<'a>(a: &'a Attrs, k: &str) -> Option<&'a str> {
+pub(crate) fn get<'a>(a: &'a Attrs, k: &str) -> Option<&'a str> {
     a.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
 }
 
-pub(super) fn local(q: &str) -> &str {
+pub(crate) fn local(q: &str) -> &str {
     q.rsplit(':').next().unwrap_or(q)
 }
 
-pub(super) enum Ev {
+pub(crate) enum Ev {
     Start(String, Attrs),
     End(String),
     Text(String),
 }
 
 /// Stream XML events (empty elements become start + end). Malformed XML ends the stream.
-pub(super) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
+pub(crate) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
