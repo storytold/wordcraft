@@ -575,15 +575,50 @@ pub fn licence_texts() -> Vec<(String, String)> {
 /// About › Language data's title for SCOWL's notices.
 pub const SCOWL_TITLE: &str = "English spelling dictionaries (SCOWL)";
 
-/// The pack locale for a document language tag: the whole tag (`pt-pt`), else its language
-/// (`nl` for `nl-NL`), whichever the index has. `None` for English and tags with no pack.
+/// The pack locale for a document language tag: the whole tag (`pt-pt`), else each shorter
+/// prefix of it (`sr-latn` for `sr-Latn-RS`, `nl` for `nl-NL`), the first the index has. A
+/// variant after the region is also tried without the region, before the region alone
+/// (`ca-ES-valencia` is the `ca-valencia` pack's), as craft-proof looks its dictionary up. `None`
+/// for English and tags with no pack.
 pub fn pack_for_tag<'a>(tag: &str, packs: &'a [Pack]) -> Option<&'a Pack> {
-    let tag = tag.trim().replace('_', "-").to_ascii_lowercase();
-    let base = tag.split('-').next().unwrap_or("");
+    pack_candidates(tag).iter().find_map(|c| packs.iter().find(|p| &p.locale == c))
+}
+
+/// Is `subtag` a region, as it follows a tag's language (and script): two letters (`NL`) or
+/// three digits (`419`)? The one test of what a region is; the lists, the menus and
+/// [`pack_for_tag`] all use it.
+pub fn is_region(subtag: &str) -> bool {
+    (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic())) || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `tag` without its region subtags (`nl-NL` is `nl`, `sr-Latn-RS` is `sr-Latn`, `ca-ES-valencia`
+/// is `ca-valencia`), joined with `-` whichever of `-` and `_` separated them; the case is kept.
+/// The language itself (the first subtag) is never a region.
+pub fn without_region(tag: &str) -> String {
+    tag.split(['-', '_']).enumerate().filter(|(i, p)| *i == 0 || !is_region(p)).map(|(_, p)| p).collect::<Vec<&str>>().join("-")
+}
+
+/// The pack locales [`pack_for_tag`] tries for `tag`, best first.
+fn pack_candidates(tag: &str) -> Vec<String> {
+    // A tag is a handful of short subtags; anything longer is junk and only its start is read.
+    let tag: String = tag.trim().chars().take(64).collect::<String>().replace('_', "-").to_ascii_lowercase();
+    let parts: Vec<&str> = tag.split('-').collect();
+    let base = parts.first().copied().unwrap_or("");
     if base.is_empty() || base == "en" {
-        return None;
+        return Vec::new();
     }
-    packs.iter().find(|p| p.locale == tag).or_else(|| packs.iter().find(|p| p.locale == base))
+    let mut out: Vec<String> = Vec::new();
+    for n in (1..=parts.len()).rev() {
+        let prefix = parts.get(..n).unwrap_or_default().join("-");
+        // The prefix, then without its region: the variant's pack before the region alone.
+        let stripped = without_region(&prefix);
+        for c in [prefix, stripped] {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// The languages (`w:lang`, resolved through the styles) of the body text, in first-seen order.
