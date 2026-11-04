@@ -70,6 +70,11 @@ pub fn start() {
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    let provider = wordcraft_ui_egui::file_providers::Host::default();
+                    if let Err(error) = crate::file_providers::install(provider.clone(), cc.egui_ctx.clone()) {
+                        log::error!("file providers are unavailable: {error:?}");
+                    }
+                    services.file_providers = Some(provider);
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -156,6 +161,9 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ctx);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
@@ -198,6 +206,9 @@ impl eframe::App for WebShell {
             }
         }
         self.app.ui(ui);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ui.ctx());
+        }
     }
 }
 
@@ -255,6 +266,10 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     let font_ctx = ctx.clone();
     let font_messages = messages.clone();
     Services {
+        provider_download: Some(Box::new(|name, bytes| {
+            let window = web_sys::window().ok_or_else(|| "No browser window is available".to_string())?;
+            trigger_anchor_download(&window, name, bytes)
+        })),
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();

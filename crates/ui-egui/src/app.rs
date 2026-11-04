@@ -18,6 +18,7 @@ mod frame;
 mod input;
 mod pictures;
 mod prefs;
+mod provider_files;
 
 pub(crate) use commands::{discards_document, works_without_document};
 pub(crate) use input::control_click_as_secondary;
@@ -223,6 +224,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.provider_tick();
         updates_ui::tick(self, ctx);
         crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
@@ -437,6 +439,9 @@ impl WordApp {
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);
+            if let Some(host) = &self.services.file_providers {
+                host.clear_recent_open_error();
+            }
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
