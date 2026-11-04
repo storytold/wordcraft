@@ -133,8 +133,11 @@ fn stories_display(
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
+            // A line in a clipped cell is drawn in its clip; in a turned text box, with the box's
+            // other lines (clipped there), so it is drawn once.
             if let Placed::Lines { story, path, .. } = it
                 && let Some(rect) = cell_clip(clips, *story, &path.0)
+                && turned_frame(&frames, it).is_none()
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, authors, a, &mut inner);
@@ -166,7 +169,15 @@ fn stories_display(
                         if let Some((_, rect, spin)) = frames.get(k) {
                             let mut inner = Vec::new();
                             for line in items.iter().filter(|i| turned_frame(&frames, i) == Some(k)) {
-                                item(doc, line, opts, authors, a, &mut inner);
+                                if let Placed::Lines { story, path, .. } = line
+                                    && let Some(rect) = cell_clip(clips, *story, &path.0)
+                                {
+                                    let mut clipped = Vec::new();
+                                    item(doc, line, opts, authors, a, &mut clipped);
+                                    inner.push(Draw::Clip { rect, items: clipped });
+                                } else {
+                                    item(doc, line, opts, authors, a, &mut inner);
+                                }
                             }
                             super::objects::spun(*spin, *rect, inner, out);
                         }
