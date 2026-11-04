@@ -511,3 +511,353 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
+
+/// Output (PDF, print, page images) shows the body's unlocked SEQ, STYLEREF and REF fields with
+/// their fresh results, as Word fills them in when it prints or exports even with "Update fields
+/// before printing" off; NUMWORDS and a locked field keep their stored results there, and the
+/// editor and the document keep every stored result.
+#[test]
+fn output_shows_fresh_seq_styleref_and_ref_results() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Refs\nChapter One\nTarget words"));
+    s.run("select.text", &json!({"text": "Chapter One"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("select.text", &json!({"text": "Target words"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for (instr, result) in [
+        (r#"SEQ Figure \* ARABIC"#, "7"),
+        (r#"STYLEREF "Heading 1""#, "stale style"),
+        ("REF Mark \\h", "stale text"),
+        ("NUMWORDS", "999"),
+        (r#"SEQ Table \* ARABIC"#, "9"),
+    ] {
+        s.run("insert.field", &json!({"instr": instr, "result": result})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    // Stale stored results (inserting a field computes its result), the last field locked.
+    let stored = ["7", "stale style", "stale text", "999", "9"];
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    let mut stale = stored.iter();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, locked, .. } = o {
+            *result = stale.next().unwrap().to_string();
+            *locked = stale.len() == 0;
+        }
+    }
+    para.touch();
+    let shown = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages
+            .iter()
+            .flat_map(|pg| &pg.items)
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(shown(&s.export_layout()), ["1", "Chapter One", "Target words", "999", "9"]);
+    assert_eq!(shown(&s.layout()), stored, "the editor shows the stored results");
+    assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), stored, "the document keeps them");
+    let pdf = s.print_pdf(&json!({})).unwrap().0;
+    assert!(pdf.len() > 1000);
+    // Once the fields are current, output copies nothing.
+    update_seq(&mut s).unwrap();
+    update_fields(&mut s).unwrap();
+    assert!(output_fields(&s.doc).is_none());
+}
+
+#[test]
+fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
+    // Measured in Word for Windows, every SEQ result stored as a stale 9: output numbers a text
+    // box's SEQ field where the box is anchored (box B before C in its paragraph, box F after E),
+    // and a REF to a bookmark in a box shows the box's text as stored.
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml""#;
+    let run = |t: &str| format!(r#"<w:r><w:t xml:space="preserve">{t}</w:t></w:r>"#);
+    let field = |instr: &str, stored: &str| {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            run(stored)
+        )
+    };
+    let seq = |label: &str| format!("{}{}", run(&format!("{label} Fig ")), field("SEQ Fig \\* ARABIC", "9"));
+    let text_box = |inner: String| {
+        format!(
+            r##"<w:r><w:pict><v:shape type="#_x0000_t202" style="position:absolute;margin-left:300pt;width:150pt;height:30pt"><v:textbox><w:txbxContent><w:p>{inner}</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"##
+        )
+    };
+    let marked = format!(r#"<w:bookmarkStart w:id="1" w:name="boxmark"/>{}<w:bookmarkEnd w:id="1"/>"#, seq("B"));
+    let paras = [
+        seq("A"),
+        format!("{}{}{}", run("anchor first: "), text_box(marked), seq("C")),
+        seq("D"),
+        format!("{}{}", seq("E"), text_box(seq("F"))),
+        seq("G"),
+        format!("{}{}", run("ref: "), field("REF boxmark \\h", "stored")),
+    ];
+    let body: String = paras.iter().map(|p| format!("<w:p>{p}</w:p>")).collect();
+    let document = format!("<w:document {ns}><w:body>{body}<w:sectPr/></w:body></w:document>");
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in [("_rels/.rels", root), ("word/document.xml", document.as_str())] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+    }
+    let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh numbers");
+    // The SEQ and REF results in reading order, text boxes where they are anchored.
+    let mut results = Vec::new();
+    out.objects_in_reading_order(&mut |o| {
+        if let InlineObject::Field { instr, result, .. } = o {
+            results.push((instr.split_whitespace().next().unwrap_or("").to_string(), result.clone()));
+        }
+    });
+    let seqs: Vec<&str> = results.iter().filter(|(n, _)| n == "SEQ").map(|(_, r)| r.as_str()).collect();
+    assert_eq!(seqs, ["1", "2", "3", "4", "5", "6", "7"], "{results:?}");
+    let refs: Vec<&str> = results.iter().filter(|(n, _)| n == "REF").map(|(_, r)| r.as_str()).collect();
+    assert_eq!(refs, ["B Fig 9"], "{results:?}");
+}
+
+/// Printed or exported, a body REF to a bookmark in a header, footer, footnote, endnote or
+/// comment shows the bookmarked text, as Word's output does (measured in Word for Windows, each
+/// REF stored as "stale"), rather than Word's missing-bookmark error.
+#[test]
+fn output_shows_references_to_bookmarks_outside_the_body() {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let mark = |name: &str, id: u32| {
+        format!(r#"<w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>Target {name}</w:t></w:r><w:bookmarkEnd w:id="{id}"/>"#)
+    };
+    let field = |name: &str| {
+        format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF {name} \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stale</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        )
+    };
+    let names = ["HDR", "FTR", "FN", "EN", "CMT"];
+    let refs: String = names.iter().map(|n| field(n)).collect();
+    let document = format!(
+        r#"<w:document {ns}><w:body>{refs}<w:p><w:r><w:t>Body </w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r><w:commentRangeStart w:id="0"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/></w:sectPr></w:body></w:document>"#
+    );
+    let header = format!(r#"<w:hdr {ns}><w:p>{}</w:p></w:hdr>"#, mark("HDR", 1));
+    let footer = format!(r#"<w:ftr {ns}><w:p>{}</w:p></w:ftr>"#, mark("FTR", 2));
+    let footnotes =
+        format!(r#"<w:footnotes {ns}><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r>{}</w:p></w:footnote></w:footnotes>"#, mark("FN", 3));
+    let endnotes = format!(r#"<w:endnotes {ns}><w:endnote w:id="1"><w:p><w:r><w:endnoteRef/></w:r>{}</w:p></w:endnote></w:endnotes>"#, mark("EN", 4));
+    let comments = format!(r#"<w:comments {ns}><w:comment w:id="0" w:author="probe"><w:p>{}</w:p></w:comment></w:comments>"#, mark("CMT", 5));
+    let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="{rel}/header" Target="header1.xml"/><Relationship Id="rIdF" Type="{rel}/footer" Target="footer1.xml"/><Relationship Id="rIdN" Type="{rel}/footnotes" Target="footnotes.xml"/><Relationship Id="rIdE" Type="{rel}/endnotes" Target="endnotes.xml"/><Relationship Id="rIdC" Type="{rel}/comments" Target="comments.xml"/></Relationships>"#
+    );
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let files = [
+        ("_rels/.rels", root.to_string()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/document.xml", document),
+        ("word/header1.xml", header),
+        ("word/footer1.xml", footer),
+        ("word/footnotes.xml", footnotes),
+        ("word/endnotes.xml", endnotes),
+        ("word/comments.xml", comments),
+    ];
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, text) in &files {
+        zw.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+    }
+    let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
+    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh references");
+    let mut results = Vec::new();
+    for path in out.para_paths(StoryRef::Body) {
+        for o in &out.para(StoryRef::Body, &path).unwrap().objects {
+            if let InlineObject::Field { result, .. } = o {
+                results.push(result.clone());
+            }
+        }
+    }
+    let expected: Vec<String> = names.iter().map(|n| format!("Target {n}")).collect();
+    assert_eq!(results, expected);
+}
+
+/// Printed or exported, a REF to a bookmark the document doesn't have shows Word's error
+/// (measured in Word for Windows: "Error! Reference source not found."); the editor and the
+/// document keep the stored result, and a REF showing "above" or "below" (`\p`) keeps it too.
+#[test]
+fn output_shows_words_error_for_a_reference_to_a_missing_bookmark() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("See "));
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF NoSuchMark \\h", "REF NoSuchMark \\p"] {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "stale".into();
+        }
+    }
+    para.touch();
+    let shown = |l: &wordcraft_layout::DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .flat_map(|it| match it {
+                wordcraft_layout::Placed::Lines { para, .. } => para.shown.iter().map(|s| s.1.clone()).collect(),
+                _ => vec![],
+            })
+            .collect()
+    };
+    assert_eq!(shown(&s.export_layout()), [REFERENCE_NOT_FOUND, "stale"]);
+    assert_eq!(shown(&s.layout()), ["stale", "stale"], "the editor shows the stored result");
+    assert_eq!(fields(&s).iter().map(|f| f.1.as_str()).collect::<Vec<_>>(), ["stale", "stale"], "the document keeps it");
+}
+
+/// A REF showing the bookmarked paragraph's number (`\r`, `\n`, `\w`), which output doesn't
+/// compute, keeps its stored number when printed or exported rather than show the paragraph's
+/// text; a plain REF to the same bookmark is filled in.
+#[test]
+fn output_keeps_paragraph_number_references_as_stored() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Target heading\nRefs "));
+    s.run("select.text", &json!({"text": "Target heading"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Mark"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let instrs = ["REF Mark \\r \\h", "REF Mark \\n", "REF Mark \\w \\h", "REF Mark \\h"];
+    for instr in instrs {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "2.1".into();
+        }
+    }
+    para.touch();
+    let out = output_fields(&s.doc).expect("the plain REF changes");
+    let results: Vec<String> = out
+        .para(StoryRef::Body, &last)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["2.1", "2.1", "2.1", "Target heading"]);
+}
+
+/// The results of the fields in the paragraph at `path` of `d`.
+fn results_in(d: &wordcraft_doc::Document, path: &wordcraft_doc::Path) -> Vec<String> {
+    d.para(StoryRef::Body, path)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Set every field result in the last body paragraph of `s` to `stale`; that paragraph's path.
+fn stale_last_paragraph(s: &mut Session, stale: &str) -> wordcraft_doc::Path {
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = stale.into();
+        }
+    }
+    para.touch();
+    last
+}
+
+/// Word shows a REF to a bookmark that ends in a later paragraph as paragraphs of the result
+/// (measured in Word for Windows: "one" and "Beta" on two lines for a bookmark from "one" to
+/// "Beta"), which a field's one-paragraph result can't hold: output keeps the stored result
+/// rather than show the first paragraph's part alone.
+#[test]
+fn output_keeps_a_reference_to_a_bookmark_over_paragraphs_as_stored() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha one\nBeta two\nShort mark\nRefs "));
+    let at = |block: usize, off: usize| wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    s.sel = crate::Selection { anchor: at(0, 6), focus: at(1, 4) };
+    s.run("insert.bookmark", &json!({"name": "Span"})).unwrap();
+    s.run("select.text", &json!({"text": "Short mark"})).unwrap();
+    s.run("insert.bookmark", &json!({"name": "Short"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    for instr in ["REF Span \\h", "REF Short \\h"] {
+        s.run("insert.field", &json!({"instr": instr, "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = stale_last_paragraph(&mut s, "stored");
+    let out = output_fields(&s.doc).expect("the short bookmark's REF changes");
+    assert_eq!(results_in(&out, &last), ["stored", "Short mark"]);
+}
+
+/// A STYLEREF to a heading holding a SEQ field shows the heading with the SEQ field's new number,
+/// in output and after F9: the numbers are filled in before the style references read them.
+#[test]
+fn a_style_reference_reads_the_headings_new_sequence_number() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Chapter \nBody\nRefs "));
+    s.run("select.text", &json!({"text": "Chapter "})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 8 });
+    s.run("insert.field", &json!({"instr": "SEQ Chapter \\* ARABIC", "result": "x"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\"", "result": "x"})).unwrap();
+    // Stale stored results: the heading's number 9, the reference "stale".
+    let heading = wordcraft_doc::Path::top(0);
+    let para = s.doc.para_mut(StoryRef::Body, &heading).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "9".into();
+        }
+    }
+    para.touch();
+    let last = stale_last_paragraph(&mut s, "stale");
+    let out = output_fields(&s.doc).expect("the fields change");
+    assert_eq!(results_in(&out, &heading), ["1"]);
+    assert_eq!(results_in(&out, &last), ["Chapter 1"]);
+    update_seq(&mut s).unwrap();
+    assert_eq!(results_in(&s.doc, &last), ["Chapter 1"], "F9's renumbering too");
+}
+
+/// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
+/// bookmark, fields to others, and one to a bookmark the document lacks each show what
+/// `bookmark_text` (F9's lookup) gives, or Word's error.
+#[test]
+fn output_gives_every_reference_its_bookmarks_text() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First target\nSecond target\nRefs "));
+    for (text, name) in [("First target", "A"), ("Second target", "B")] {
+        s.run("select.text", &json!({"text": text})).unwrap();
+        s.run("insert.bookmark", &json!({"name": name})).unwrap();
+    }
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let targets = ["A", "B", "A", "Missing", "A"];
+    for t in targets {
+        s.run("insert.field", &json!({"instr": format!("REF {t} \\h"), "result": "x"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+    }
+    let last = s.doc.para_paths(StoryRef::Body).pop().unwrap();
+    let para = s.doc.para_mut(StoryRef::Body, &last).unwrap();
+    for o in &mut para.objects {
+        if let InlineObject::Field { result, .. } = o {
+            *result = "stale".into();
+        }
+    }
+    para.touch();
+    let out = output_fields(&s.doc).expect("the stale results change");
+    let results: Vec<String> = out
+        .para(StoryRef::Body, &last)
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<String> = targets.iter().map(|t| super::bookmark_text(&s.doc, t).unwrap_or_else(|| REFERENCE_NOT_FOUND.to_string())).collect();
+    assert_eq!(results, expected);
+    assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
+}
