@@ -3,8 +3,8 @@ use super::page::{PageBuilder, PageFrame};
 use super::placed::Placed;
 use super::table_flow::footer_table_wraps;
 use super::{
-    Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect,
-    SectionProps, Spin, StoryRef, Wrap, WrapText, contour, display, para, textbox,
+    Anchor, Arc, CharProps, Document, Float, FloatAlign, HashMap, HideDeleted, InlineObject, Level, ParaLayout, Paragraph, Path, Point, Rect, Spin,
+    StoryRef, Wrap, WrapText, contour, display, para, textbox,
 };
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
@@ -80,15 +80,23 @@ pub(crate) fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: 
         };
         Some((start - shift, extent))
     };
-    let page_y = |s: &SectionProps| match float.v_rel {
-        Anchor::Page => Some((0.0, s.page_h)),
-        Anchor::Margin => Some((s.margin_top, s.page_h - s.margin_top - s.margin_bottom)),
-        Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
-        Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
-        _ => None,
+    let page_y = |f: &PageFrame| {
+        let s = f.sect;
+        let top = f.margin_top.unwrap_or(s.margin_top);
+        match float.v_rel {
+            Anchor::Page => Some((0.0, s.page_h)),
+            Anchor::Margin => {
+                let mut reference = s.clone();
+                reference.margin_top = top;
+                Some((top, reference.text_height()))
+            }
+            Anchor::TopMargin | Anchor::InsideMargin => Some((0.0, s.margin_top)),
+            Anchor::BottomMargin | Anchor::OutsideMargin => Some((s.page_h - s.margin_bottom, s.margin_bottom)),
+            _ => None,
+        }
     };
     let hx = frame.and_then(|f| page_x(&f).map(|(a, e)| (a - f.origin.0, e))).unwrap_or(col);
-    let vy = frame.and_then(|f| page_y(f.sect).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
+    let vy = frame.and_then(|f| page_y(&f).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
     let h_align = PageFrame::h_align(frame.as_ref(), float.h_align);
     // Without a frame (a cell) `vy` has no height to align in: the object starts at the anchor
     // line instead of being pushed up by half its height or more.
@@ -250,7 +258,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                 effects: *effects,
                 freeform: freeform.clone(),
                 spin,
-                extra: extra.clone(),
+                extra: Box::new(extra.clone()),
                 object: Some(object),
                 alt: shape_figure_alt(o).unwrap_or_default().to_string(),
             }]
@@ -346,7 +354,7 @@ pub(crate) fn anchor_floats(
         // The paragraph's top, and whether text was placed before it on the page.
         let top = y0 - before;
         let text_before = top > pb.top + 0.5 || pb.col > 0;
-        let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
@@ -355,6 +363,7 @@ pub(crate) fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let h = ctx.float_height(o, w, h);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -480,10 +489,16 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                match floats.get(&oi) {
+                    Some(r) => *r,
+                    None => {
+                        let h = ctx.float_height(obj, w, h);
+                        float_rect(at.page, at.col, at.para_y, w, h, float)
+                    }
+                }
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
-                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
+                display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k))
             };
             let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
