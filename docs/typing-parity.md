@@ -65,7 +65,9 @@ A fill continues across keystrokes until the selection moves or another edit int
 Backspace and Delete edit inside the result and never remove the field (at its edges they
 end the fill and step out). Line and paragraph breaks are not taken into the result, the
 field's `w:maxLength` caps the whole result, and AutoCorrect and AutoFormat stay out of a
-fill in progress. Re-selecting a field replaces its result again. With Track Changes on,
+fill in progress, copying does not end a fill, and a quote typed into a
+selected field stays straight instead of taking its opening/closing from the
+paragraph text. Re-selecting a field replaces its result again. With Track Changes on,
 typing over a selected field remains a tracked replacement of the selection.
 
 Regressions: `typing_into_text_form_field_keeps_the_field`,
@@ -73,7 +75,10 @@ Regressions: `typing_into_text_form_field_keeps_the_field`,
 `backspace_and_delete_edit_inside_a_form_field_and_never_remove_it`,
 `reselecting_a_form_field_replaces_its_result`,
 `form_field_max_length_caps_the_whole_result_across_keystrokes` and
-`undo_ends_a_form_field_fill` (`crates/engine/src/cmd/fields.rs`). Synthetic command
+`undo_ends_a_form_field_fill` and `copy_during_a_form_field_fill_keeps_the_fill`
+(`crates/engine/src/cmd/fields.rs`), and
+`typing_into_text_form_field_fills_it_through_the_command_path` and
+`typing_a_quote_into_a_text_form_field_stays_straight` (`crates/engine/src/tests/typing.rs`). Synthetic command
 qualification; native Word comparison has not been performed for this change.
 
 ## Sample text (#1067)
