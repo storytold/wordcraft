@@ -86,6 +86,9 @@ fn convert_rejects_malformed_format_options_before_file_access() {
         argv.extend(args(&options));
         assert_eq!(run(&argv), Err(error.into()), "{options:?}");
     }
+    // A valid single value reaches file access, rather than a format-option error.
+    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
+    assert!(error.starts_with("missing.docx:"), "{error}");
 }
 
 #[test]
