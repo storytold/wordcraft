@@ -345,6 +345,12 @@ the caret's paragraph, and drops it once the caret is anywhere else or the word 
 (`crates/engine/src/session.rs`), so a caret move without an edit lays only that paragraph out
 again.
 
+With File › Options › Proofing › Ignore web and file addresses on (the default), a web or e-mail
+address is not marked, also when the space before it is a no-break space, a narrow no-break space
+(U+202F), a figure space (U+2007) or an ideographic space. With the option off, the words in the
+address are checked (`address_after_a_wide_space_is_an_internet_token`, in craft-libs'
+`crates/proof/src/lib.rs`).
+
 ## Editing options (File › Options › Advanced)
 
 | Keys / setting | Result | Test |
