@@ -817,3 +817,13 @@ fn other_comments_and_hostile_ms_equation_comments_stay_harmless() {
     let head = "<html><head><!--[if gte msEquation 12]><m:oMath><m:r><m:t>h</m:t></m:r></m:oMath><![endif]--></head><body><p>x</p></body></html>";
     assert_eq!(inline_marks(&parse(head)), ["x"]);
 }
+
+#[test]
+fn ms_equation_fallback_stays_when_no_equation_is_read_or_it_is_unclosed() {
+    // An Office Math comment that reads as nothing leaves the fallback picture in its place.
+    let empty = r#"<p>a<!--[if gte msEquation 12]><m:oMath></m:oMath><![endif]--><![if !msEquation]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(empty)), ["a<img>b"]);
+    // A fallback opener without its end doesn't swallow the rest of the page.
+    let unclosed = "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c</p>";
+    assert_eq!(inline_marks(&parse(unclosed)), ["a[q]b", "c"]);
+}

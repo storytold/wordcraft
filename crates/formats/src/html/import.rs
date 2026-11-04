@@ -69,14 +69,20 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
             }
             Tok::End(name) => b.end(&name),
             Tok::OfficeMath(markup) => {
-                skip_math_fallback(&mut lx);
-                if b.in_head() {
-                    continue;
-                }
-                for el in parse_office_math(&markup) {
-                    if let Some((linear, display)) = crate::omml::read(&el) {
-                        b.start_para().inlines.push(Inline::Equation { linear, display });
+                // The fallback picture goes only when the equation took its place (or in the
+                // head, where neither is content): an equation that reads as nothing keeps it.
+                let in_head = b.in_head();
+                let mut imported = false;
+                if !in_head {
+                    for el in parse_office_math(&markup) {
+                        if let Some((linear, display)) = crate::omml::read(&el) {
+                            b.start_para().inlines.push(Inline::Equation { linear, display });
+                            imported = true;
+                        }
                     }
+                }
+                if imported || in_head {
+                    skip_math_fallback(&mut lx);
                 }
             }
         }

@@ -202,13 +202,16 @@ fn office_math(body: &str) -> Option<&str> {
 }
 
 /// Skip a Word fallback for Office Math right after it (`<![if !msEquation]>…<![endif]>`: the
-/// picture written for readers without math), leaving `lx` past it; anything else is left alone.
+/// picture written for readers without math), leaving `lx` past it; anything else, and a fallback
+/// that is never closed, is left alone.
 pub(super) fn skip_math_fallback(lx: &mut Lexer) {
     const OPEN: &[u8] = b"<![if !msequation]>";
+    const END: &[u8] = b"<![endif]>";
     let rest = lx.rest();
     let ws = rest.len() - rest.trim_start().len();
     let after = rest.as_bytes().get(ws..).unwrap_or(&[]);
-    if after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) {
+    let body = after.get(OPEN.len()..).unwrap_or(&[]);
+    if after.get(..OPEN.len()).is_some_and(|h| h.eq_ignore_ascii_case(OPEN)) && body.windows(END.len()).any(|w| w.eq_ignore_ascii_case(END)) {
         lx.pos += ws + OPEN.len();
         lx.skip_past("<![endif]>");
     }
