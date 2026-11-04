@@ -41,6 +41,7 @@ pub mod math_symbols;
 pub mod numbering;
 pub mod odf_profile;
 pub mod para;
+pub mod picfx;
 pub mod props;
 pub mod resolve;
 pub mod section;
