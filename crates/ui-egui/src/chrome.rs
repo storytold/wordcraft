@@ -470,8 +470,11 @@ pub(crate) fn open_title_search(app: &mut WordApp) -> bool {
         return false;
     }
     let id = app.window_id("title_search");
-    // Only Alt+Q may send its `q` as text after it; a click sends none.
-    let swallow = ctx.input(|i| i.modifiers.alt);
+    // Only Alt+Q may send its `q` as text after it; a click sends none. Alt is read from the
+    // shortcut's key event too: the box takes the keys from its first frame, that same text
+    // included.
+    let swallow =
+        ctx.input(|i| i.modifiers.alt || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, modifiers, .. } if modifiers.alt)));
     ctx.data_mut(|d| d.insert_temp(id, TitleSearch { swallow, ..Default::default() }));
     ctx.request_repaint();
     true
@@ -508,22 +511,31 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
         ui.ctx().input_mut(|i| i.events.retain(|e| !crate::dialogs::swallow_shortcut_text(&mut s.swallow, e)));
     }
     let ph = tl!("Search commands and help");
+    // The box takes the keys from its first frame: focused before it reads this frame's input,
+    // so what is typed straight after Alt+Q goes into it. Only when it lacks focus, and not
+    // while a press on a result is under way (#2986).
+    let id = app.window_id("title_search_edit");
+    if !ui.memory(|m| m.has_focus(id)) && !ui.input(|i| i.pointer.any_down()) {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
     let edit = ui.add_sized(
         vec2(SEARCH_BOX_W, control_h),
-        egui::TextEdit::singleline(&mut s.query).hint_text(ph).align(if crate::rtl::on() { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }),
+        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
+            Align2::RIGHT_CENTER
+        } else {
+            Align2::LEFT_CENTER
+        }),
     );
     let r = edit.rect;
-    let (enter, escape, pressed_at) = ui.input(|i| {
+    // Enter runs the first result here, and is used up: a dialog that result opens (Word Count)
+    // mustn't take the same Enter as its OK.
+    let (enter, escape, pressed_at) = ui.input_mut(|i| {
         let pressed = i.pointer.any_pressed().then(|| i.pointer.press_origin()).flatten();
-        (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), pressed)
+        (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.key_pressed(egui::Key::Escape), pressed)
     });
     let inside = |p: egui::Pos2| r.contains(p) || s.results.is_some_and(|x| x.contains(p));
     if escape || pressed_at.is_some_and(|p| !inside(p)) {
         return false;
-    }
-    // Only when it lacks focus, and not while a press on a result is under way (#2986).
-    if !edit.has_focus() && !ui.input(|i| i.pointer.any_down()) {
-        edit.request_focus();
     }
     let rtl = crate::rtl::on();
     let (pivot, at) = if rtl { (Align2::RIGHT_TOP, r.right_bottom()) } else { (Align2::LEFT_TOP, r.left_bottom()) };
