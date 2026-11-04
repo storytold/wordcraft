@@ -498,6 +498,9 @@ pub struct BordersForm {
     pub para: LineForm,
     /// Borders apply to the selected text (a character border) instead of the paragraphs.
     pub to_text: bool,
+    /// Shadow and frame belong to the character border, not the paragraph border.
+    #[serde(skip)]
+    text_border: Option<Border>,
     pub page: LineForm,
     /// Page borders apply to the whole document instead of this section.
     pub whole_doc: bool,
@@ -512,11 +515,13 @@ impl BordersForm {
     pub fn read(app: &WordApp, tab: u8) -> Option<BordersForm> {
         let s = &app.session;
         let rp = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props))?;
+        let text_border = s.doc.para_at(&s.sel.focus).and_then(|p| p.props_at(s.sel.focus.off).border);
         let sect = wordcraft_engine::cmd::page::sect(s);
         let mut f = BordersForm {
             tab: tab.min(2),
             para: LineForm::read(rp.borders.as_ref()),
             to_text: false,
+            text_border,
             page: LineForm::read(sect.page_borders.as_ref()),
             whole_doc: true,
             fill: rp.shading.map(Rgb::hex).unwrap_or_default(),
@@ -535,10 +540,12 @@ impl BordersForm {
         if self.para != b.para || self.to_text != b.to_text {
             if self.to_text {
                 let first = [TOP, LEFT, BOTTOM, RIGHT].into_iter().find(|i| self.para.sides.get(*i).copied().unwrap_or(false));
-                let border = match first {
+                let mut border = match first {
                     Some(i) => self.para.border(i),
                     None => Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0, ..Default::default() },
                 };
+                border.shadow = self.text_border.and_then(|b| b.shadow);
+                border.frame = self.text_border.and_then(|b| b.frame);
                 out.push(("format.set", json!({"props": {"border": border}})));
             } else {
                 out.push(("para.borders", json!({"sides": self.para.sides_param()})));
@@ -860,6 +867,28 @@ mod tests {
         assert_eq!(borders.top.and_then(|side| side.frame), Some(true));
         assert_eq!(borders.right.and_then(|side| side.shadow), Some(true));
         assert_eq!(borders.right.and_then(|side| side.frame), Some(false));
+    }
+
+    #[test]
+    fn borders_dialog_uses_text_border_flags_for_text_edits() {
+        let mut app = app_with("Border flags");
+        let _ = app.run(
+            "para.borders",
+            json!({"sides": {"top": {"style": "single", "shadow": true, "frame": false}}}),
+        );
+        let _ = app.run("select.text", json!({"text": "Border flags"}));
+        let _ = app.run("format.set", json!({"props": {"border": {
+            "style": "single", "width": 0.5, "shadow": false, "frame": true
+        }}}));
+        let _ = app.run("para.borders", json!({}));
+        let Some(Dialog::Borders { form }) = app.dialog.take() else { panic!("Borders and Shading opens without params") };
+        let mut form = *form;
+        form.to_text = true;
+        form.para.width = 1.0;
+        form.apply(&mut app);
+
+        let border = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props_at(app.session.sel.focus.off).border).unwrap_or_default();
+        assert_eq!((border.width, border.shadow, border.frame), (1.0, Some(false), Some(true)));
     }
 
     /// #320: the Tabs dialog opens from the Paragraph dialog's command path, and the table's
