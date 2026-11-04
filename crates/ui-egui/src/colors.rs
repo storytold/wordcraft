@@ -233,6 +233,7 @@ fn current_of(app: &mut WordApp, target: &Target) -> Option<Rgb> {
             let st = app.session.run("format.state", &json!({})).ok()?;
             st.get("color").and_then(Value::as_str).and_then(parse)
         }
+        "ui.tablePen" => app.canvas.table_pen.color.as_deref().and_then(parse),
         _ => None,
     }
 }
