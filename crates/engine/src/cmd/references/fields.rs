@@ -121,8 +121,11 @@ fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
 
 /// Number the SEQ fields of paragraph `p` (at `path` in `story`) and of the text boxes anchored in it.
 fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Paragraph, count: &mut SeqCount) {
-    let deleted = p.deleted_ranges();
+    // The runs come in order and the objects by offset, so one cursor walks the deleted ranges.
+    let mut deleted = p.deleted_ranges().into_iter().peekable();
     for (k, (off, o)) in p.objects_with_offsets().enumerate() {
+        while deleted.next_if(|r| r.end <= off).is_some() {}
+        let in_deletion = deleted.peek().is_some_and(|r| r.contains(&off));
         for id in o.text_boxes() {
             if count.boxes.insert(id) {
                 let part = StoryRef::Part(id);
@@ -135,7 +138,7 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
         }
         let InlineObject::Field { instr, locked, .. } = o else { continue };
         let f = FieldCode::parse(instr);
-        if f.name != "SEQ" || deleted.iter().any(|r| r.contains(&off)) {
+        if f.name != "SEQ" || in_deletion {
             continue;
         }
         let Some(id) = f.args.first() else { continue };
