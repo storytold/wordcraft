@@ -77,10 +77,7 @@ pub fn start() {
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
-                    app.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
-                    if let Some(share) = collabcraft_share::CollabCraft::from_env() {
-                        app.share.connect(share.for_app("wordcraft"));
-                    }
+                    // No cloud/share backend ships right now; see `wordcraft_ui_egui::cloud`.
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());

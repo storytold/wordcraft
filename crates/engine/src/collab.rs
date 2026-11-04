@@ -36,6 +36,15 @@ pub trait CollabSink: Send + Sync {
     fn on_local(&self, id: &str, params: &Json, at: &Selection, scope: &str);
 }
 
+/// Whether a command may leave this machine, or be applied if it arrives.
+///
+/// A mutating command is necessary but not enough. Undo, redo and repeat act on this peer's
+/// own history. File commands are marked pure and would not be forwarded locally; they are
+/// still refused on the way in, so a peer cannot open or save a path on this machine.
+pub fn shareable(id: &str, mutates: bool) -> bool {
+    mutates && !id.starts_with("file.") && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat")
+}
+
 /// The region a command acted on, as a lock scope.
 ///
 /// The paragraph is the unit. Two people writing in different paragraphs are never about the same
@@ -65,7 +74,8 @@ pub(crate) fn shifted(mut at: Pos, edit: &Pos, grew: isize) -> Pos {
     if at.story != edit.story || at.path != edit.path || at.off < edit.off {
         return at;
     }
-    at.off = at.off.saturating_add_signed(grew);
+    // A caret inside removed text lands where the removal happened, never before it.
+    at.off = at.off.saturating_add_signed(grew).max(edit.off);
     at
 }
 
@@ -159,12 +169,43 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_edit_can_be_undone_locally_like_any_other() {
+    fn a_remote_edit_is_not_on_the_local_undo_stack() {
         let (mut session, _heard) = two_paragraphs();
         session.apply_remote("text.insert", &json!({"text": "AB"}), Some(Selection::caret(Pos::body(0, 0)))).unwrap();
         assert_eq!(text(&session), "ABFirst\nSecond");
+        assert!(!session.can_undo(), "a peer's edit is not ours to undo");
         session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(text(&session), "ABFirst\nSecond", "empty undo is a no-op");
+    }
+
+    #[test]
+    fn a_local_edit_after_a_remote_one_is_still_ours_to_undo() {
+        let (mut session, _heard) = two_paragraphs();
+        session.apply_remote("text.insert", &json!({"text": "AB"}), Some(Selection::caret(Pos::body(0, 0)))).unwrap();
+        session.sel = Selection::caret(Pos::body(0, 7));
+        session.run("text.insert", &json!({"text": "Y"})).unwrap();
+        assert_eq!(text(&session), "ABFirstY\nSecond");
+        session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(text(&session), "ABFirst\nSecond", "undo reverts the local typing, not the peer's insert");
+    }
+
+    #[test]
+    fn a_remote_file_command_is_refused_and_does_not_run() {
+        let (mut session, heard) = two_paragraphs();
+        let err = session.apply_remote("file.new", &json!({}), None).unwrap_err().to_string();
+        assert!(err.contains("not a shared edit"), "{err}");
         assert_eq!(text(&session), "First\nSecond");
+        assert!(heard.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_local_undo_is_not_sent_to_peers() {
+        let (mut session, heard) = two_paragraphs();
+        session.run("text.insert", &json!({"text": "X"})).unwrap();
+        session.run("edit.undo", &json!({})).unwrap();
+        let heard = heard.0.lock().unwrap();
+        assert_eq!(heard.len(), 1, "the insert is shared; the undo is not");
+        assert_eq!(heard[0].0, "text.insert");
     }
 
     #[test]

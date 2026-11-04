@@ -9,26 +9,19 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-# The printing controls, the share dialog, and the Open and Save pages for cloud storage, so
-# WordCraft offers the same ones as every other Craft app. Pinned by revision, which is how this
-# repository already reached craft-print. The interface half opens no socket, so this builds for
-# the web. The host application supplies the backend that reaches the service (see `cloud`).
+# The printing controls and the shared menus. Pinned by revision to storytold/craft-libs, which is
+# how this repository already reached craft-print: a real, reviewable storytold commit, not a
+# personal fork.
 #
-# NOTE: pinned by rev to storytold/craft-libs (one source, per this commit's intent). That rev
-# (289d562c) is fork content reachable through storytold's URL only because GitHub shares git
-# objects across a fork network; it is not actually on storytold/craft-libs's own main (the
-# craft-libs#123 CollabCraft fold-in has not landed there for real) and does not include
-# craft-i18n/craft-window. craft-i18n and craft-window below are pinned to a real, later
-# storytold/main commit instead, so there is still no single commit with everything; this only
-# collapses the `cloud`/`craft-cloud` pins from two remotes down to one.
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["cloud"] }
-# The vendor-neutral cloud types (a file entry, a capability). Types and contracts only: the crate
-# opens no socket and names no provider, so this builds for the web too.
-craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454" }
+# No `cloud` feature: that feature, and the `craft-cloud` crate, only exist on an unmerged fork
+# (storytold/craft-libs#160, the CollabCraft fold-in). Pinning to the fork is exactly the
+# structural problem a storytold maintainer flagged on sibling app PRs, so this crate carries a
+# small local, inert stand-in instead (see `cloud`) until #160 lands.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
-# `craft-i18n.rev`). It brings lazy per-locale parsing (storytold/craft-libs#247), ICU4X plural
-# rules and bidi isolates around inserted values.
+# `craft-i18n.rev`). Same craft-libs rev as craft-ui; it brings lazy per-locale parsing
+# (storytold/craft-libs#247), ICU4X plural rules and bidi isolates around inserted values.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
 # One native window per open document: the window list, the Window menu and the egui viewports.
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }

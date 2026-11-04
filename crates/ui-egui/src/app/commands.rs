@@ -869,7 +869,7 @@ impl WordApp {
                     if !cloud::available(self) {
                         return Some(Err(cloud::UNAVAILABLE.to_owned()));
                     }
-                    cloud::CloudApp::go_to_save_as(self);
+                    cloud::go_to_save_as(self);
                     cloud::status(self)
                 }
             },

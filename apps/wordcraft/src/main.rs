@@ -62,10 +62,6 @@ impl eframe::App for App {
         apple_events::poll(&self.events, &mut self.doc, ctx);
         if let Some(link) = &mut self.collab {
             link.pump(&mut self.doc.session);
-            // Who else is here, straight from the relay's roster. The whole set is handed over
-            // rather than a change, so somebody who left stops being shown without waiting for a
-            // reconnection.
-            self.doc.presence.set(link.roster.iter().map(|(id, display)| craft_ui::presence::Peer::new(id.clone(), display.clone())).collect());
             for notice in std::mem::take(&mut link.notices) {
                 self.doc.status(notice);
             }
@@ -519,14 +515,9 @@ fn main() -> eframe::Result {
                 let doc = app.session.blank_document();
                 app.replace_startup_document(doc);
             }
-            // Open and Save against cloud storage, when a CollabCraft service is configured.
-            // Every call it makes blocks, so it runs on a worker and answers reach the window on a
-            // channel. Without a service the application is local-only and offers nothing
-            // cloud-shaped.
-            if let Some(backend) = cloud::service(cc.egui_ctx.clone()) {
-                app.cloud.connect(backend);
-            }
-            app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client));
+            // Open, Save and Share against cloud storage: no backend ships right now (see
+            // `wordcraft_ui_egui::cloud`), so the application is local-only and offers nothing
+            // cloud-shaped until storytold/craft-libs#160 lands.
             app.watch_desktop_theme(&cc.egui_ctx);
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()

@@ -156,9 +156,6 @@ impl WordApp {
 /// progress, until one of these arrives.
 fn share_save(app: &mut WordApp) {
     if let Some(request) = app.share.take_save_request() {
-        // One destination today. `request.destination` names which, and is carried through so a
-        // second provider needs no change here.
-        let _ = request.destination;
         // The name the copy is saved under is also the format it is written in (see
         // `cloud::target_name`), so the pages hold it while the bytes are made.
         app.cloud.save_name = request.name.clone();

@@ -483,20 +483,14 @@ pub struct WordApp {
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
     /// Open and Save against cloud storage: the account, the folder being browsed, transfers in
-    /// flight, and where the open document came from. The pages are `craft_ui`'s, so every Craft
-    /// app offers the same ones. Inert until the host connects a backend (see [`cloud`]).
+    /// flight, and where the open document came from. Local and inert: see [`cloud`] (no real
+    /// backend ships until storytold/craft-libs#160 lands).
     pub cloud: cloud::CloudFiles,
     /// What each cloud save in flight encoded. Only WordCraft knows what a version of its
     /// document is, so the pages do not hold these.
     pub(crate) cloud_sent: cloud::Sent,
-    /// A cloud open a prompt stood in the way of (see [`cloud`]).
-    pub(crate) cloud_opening: Option<cloud::Opening>,
-    /// Giving other people access to this document. The dialog is `craft_ui`'s, so every Craft app
-    /// offers the same one. Inert until the host connects a backend, and unavailable until that
-    /// service says sharing exists.
-    pub share: craft_ui::share::ShareDialog,
-    /// Who else is in this document. Draws nothing when nobody is.
-    pub presence: craft_ui::presence::PresenceBar,
+    /// Giving other people access to this document. Local and inert: see [`cloud::ShareState`].
+    pub share: cloud::ShareState,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).

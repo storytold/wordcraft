@@ -404,6 +404,10 @@ impl Session {
         // the sink can be called without holding a borrow of `self`.
         if spec.mutates
             && !self.applying_remote
+            // Undo, Redo and Repeat act on this peer's own history, which no other peer shares.
+            && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat")
+            // A command that only opened a dialog changed nothing another peer needs.
+            && before_doc.as_ref().is_some_and(|(d, ..)| d != &self.doc)
             && let Some(sink) = self.collab.clone()
         {
             // `kept_params`, which is also what a recorded macro and Repeat get: a password
@@ -463,22 +467,32 @@ impl Session {
 
     /// Runs a command that arrived from another peer.
     ///
-    /// Two things differ from [`Session::run`]. It is not reported to the
+    /// Three things differ from [`Session::run`]. It is not reported to the
     /// [`CollabSink`](crate::CollabSink), which is what stops an edit bouncing between two peers
-    /// forever. And it runs against `at`, the selection the sender had, because a WordCraft
-    /// command says only "here": applying somebody else's Backspace at the reader's own caret
-    /// would delete the reader's own text.
+    /// forever. It only accepts a [`crate::collab::shareable`] command, so a peer cannot open,
+    /// save or undo on this machine. And it runs against `at`, the selection the sender had,
+    /// because a WordCraft command says only "here": applying somebody else's Backspace at the
+    /// reader's own caret would delete the reader's own text.
     ///
     /// The reader's selection is put back afterwards, moved by whatever the edit did to the text
     /// before it in the same paragraph (see [`crate::collab::follow`]). An edit that split or
     /// joined paragraphs cannot be followed that way, and the caret is clamped rather than
     /// guessed at.
     ///
-    /// It journals and records undo history like any other command, so a remote edit can be
-    /// undone locally. Both peers applied the same ordered sequence, so both hold the same undo
-    /// stack, and an Undo one of them shares undoes the same step on each.
+    /// Undo stays local. The remote edit is not recorded on this peer's stack, and local history
+    /// is cleared because a snapshot taken before it would wipe it if restored.
     pub fn apply_remote(&mut self, id: &str, params: &Value, at: Option<Selection>) -> Result<Value, CmdError> {
+        let mutates = self.registry.get(id).map(|s| s.mutates).unwrap_or(false);
+        if !crate::collab::shareable(id, mutates) {
+            return Err(CmdError::Failed(format!("{id} is not a shared edit")));
+        }
         let was = std::mem::replace(&mut self.applying_remote, true);
+        // The reader's own state: a remote edit is not theirs to repeat, record or go back to,
+        // and never joins their typing.
+        let last_command = self.last_command.clone();
+        let recording_len = self.recording.as_ref().map(|(_, s)| s.len());
+        let (marks, step) = (self.edit_marks.clone(), self.go_back_step);
+        self.typing_open = false;
         let mine = self.sel.clone();
         let there = at.unwrap_or_else(|| mine.clone());
         let edit = there.ordered().0;
@@ -489,6 +503,13 @@ impl Session {
         self.sel = there;
         self.clamp_selection();
         let out = self.run(id, params);
+        self.typing_open = false;
+        self.last_command = last_command;
+        if let (Some((_, steps)), Some(n)) = (self.recording.as_mut(), recording_len) {
+            steps.truncate(n);
+        }
+        self.edit_marks = marks;
+        self.go_back_step = step;
         let grew = match (before, self.para_len(&mine.focus)) {
             (Some(before), Some(after)) => (after as isize) - (before as isize),
             _ => 0,
@@ -496,6 +517,10 @@ impl Session {
         self.sel = crate::collab::follow(mine, &edit, grew);
         self.clamp_selection();
         self.applying_remote = was;
+        if out.is_ok() {
+            self.history.clear();
+            self.redo.clear();
+        }
         out
     }
 
