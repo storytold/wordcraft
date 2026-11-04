@@ -213,19 +213,26 @@ fn header<'a>(h: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 /// A `; name=value` parameter of a header value (quotes removed), name case-insensitive.
 fn param<'a>(value: &'a str, name: &str) -> Option<&'a str> {
-    // Semicolons inside a quoted value belong to that parameter (RFC 2045 §5.1).
+    // Split outside quoted strings and comments (RFC 2045 §5.1, RFC 822 §3.3).
     let mut quoted = false;
     let mut escaped = false;
+    let mut comment_depth = 0usize;
     value
         .split(|c| {
             if escaped {
                 escaped = false;
-            } else if quoted && c == '\\' {
+            } else if (quoted || comment_depth > 0) && c == '\\' {
                 escaped = true;
+            } else if !quoted && c == '(' {
+                comment_depth = comment_depth.saturating_add(1);
+            } else if comment_depth > 0 {
+                if c == ')' {
+                    comment_depth -= 1;
+                }
             } else if c == '"' {
                 quoted = !quoted;
             }
-            c == ';' && !quoted
+            c == ';' && !quoted && comment_depth == 0
         })
         .skip(1)
         .find_map(|p| {
@@ -417,11 +424,21 @@ mod tests {
 
     #[test]
     fn quoted_parameters_do_not_supply_a_false_boundary() {
-        for name in [r#"name="notes; boundary=wrong""#, r#"name="notes\"; boundary=wrong""#] {
+        for name in [r#"name="notes; boundary=wrong""#, r#"name="notes\"; boundary=wrong""#, r#"name="notes (10\" screen; boundary=wrong""#] {
             let page = "Content-Type: text/html\r\n\r\n<p>Kept content</p>";
             let message = message(page).replace("multipart/related; boundary=", &format!("multipart/related; {name}; boundary="));
             let doc = import(message.as_bytes());
             assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept content", "{name}");
+        }
+    }
+
+    #[test]
+    fn quotes_in_comments_do_not_hide_the_boundary() {
+        for comment in [r#"(10" screen)"#, r#"(outer (10" screen); boundary=wrong)"#, r#"(10\)" screen; boundary=wrong)"#] {
+            let page = "Content-Type: text/html\r\n\r\n<p>Kept content</p>";
+            let message = message(page).replace("multipart/related; boundary=", &format!("multipart/related {comment}; boundary="));
+            let doc = import(message.as_bytes());
+            assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept content", "{comment}");
         }
     }
 
