@@ -236,6 +236,8 @@ impl Body<'_> {
         let Some(n) = self.note.take() else { return };
         self.tables.truncate(n.tables);
         self.cells.truncate(n.cells);
+        self.formulas.truncate(n.cells);
+        self.cell_tops.truncate(n.cells);
         self.lists_saved.truncate(n.lists_saved);
         self.containers.truncate(n.containers + 1);
         let blocks = if self.containers.len() > n.containers { self.containers.pop().unwrap_or_default() } else { Vec::new() };
@@ -344,5 +346,36 @@ impl Body<'_> {
             }
         }
         self.xml_space_end = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::odt::{Body, Pages, Styles, events};
+
+    /// The cell stacks after reading `xml`: (cells, formulas, cell tops).
+    fn stacks_after(xml: &str) -> (usize, usize, usize) {
+        let (styles, pages) = (Styles::default(), Pages::default());
+        let mut none = |_: &str| None;
+        let mut b = Body::new(&styles, &pages, &mut none);
+        b.in_text = true;
+        events(xml.as_bytes(), |ev| b.feed(ev));
+        (b.cells.len(), b.formulas.len(), b.cell_tops.len())
+    }
+
+    /// A formula cell a note or a deletion leaves open (malformed) goes with it: nothing of it is
+    /// left for the cell round the note, or for the next cell read.
+    #[test]
+    fn a_cell_a_note_or_deletion_leaves_open_takes_its_formula_with_it() {
+        // The cell, its row and its table end with tags that are none of theirs.
+        let open_cell = r#"<table:table><table:table-row><table:table-cell table:formula="ooow:1+1" office:value-type="float"><text:p>2</text:p></wcx:x></wcx:x></wcx:x>"#;
+        let in_note = format!(
+            "<office:text><table:table><table:table-row><table:table-cell><text:p>a<text:note text:note-class=\"footnote\"><text:note-citation>1</text:note-citation><text:note-body>{open_cell}</text:note-body></text:note></text:p></table:table-cell></table:table-row></table:table></office:text>"
+        );
+        assert_eq!(stacks_after(&in_note), (0, 0, 0));
+        let in_deletion = format!(
+            "<office:text><text:tracked-changes><text:changed-region text:id=\"c1\"><text:deletion><office:change-info><dc:creator>A</dc:creator></office:change-info>{open_cell}</text:deletion></text:changed-region></text:tracked-changes><text:p>b</text:p></office:text>"
+        );
+        assert_eq!(stacks_after(&in_deletion), (0, 0, 0));
     }
 }

@@ -324,24 +324,51 @@ const MAX_FILES: usize = 1000;
 /// The package files `defs` refer to (`xlink:href` to a path inside the package, as a style's
 /// fill picture; to a folder, as an embedded object in a header: the files in it), read with
 /// `fetch` (`entries`: the package's paths): a definition written as read needs them.
-pub(super) fn files(defs: &[(String, Arc<str>)], entries: &[String], fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec<(String, Vec<u8>)> {
+/// Also the paths linked to that are in the package but couldn't be read (over the picture
+/// budget, unreadable): markup linking to one can't be written as read.
+pub(super) fn files(
+    defs: &[(String, Arc<str>)],
+    entries: &[String],
+    fetch: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
+) -> (Vec<(String, Vec<u8>)>, BTreeSet<String>) {
     let mut paths = BTreeSet::new();
     for (_, xml) in defs {
         hrefs(xml, &mut paths);
     }
     let mut out = Vec::new();
+    let mut missing = BTreeSet::new();
     for p in paths {
         if entries.contains(&p) {
-            out.extend(fetch(&p).map(|b| (p, b)));
+            match fetch(&p) {
+                Some(b) => out.push((p, b)),
+                None => {
+                    missing.insert(p);
+                }
+            }
         } else {
             // A folder (an object): the files in it.
             let dir = format!("{}/", p.trim_end_matches('/'));
             for e in entries.iter().filter(|e| e.starts_with(&dir) && !e.ends_with('/')).take(MAX_FILES) {
-                out.extend(fetch(e).map(|b| (e.clone(), b)));
+                match fetch(e) {
+                    Some(b) => out.push((e.clone(), b)),
+                    None => {
+                        missing.insert(p.clone());
+                    }
+                }
             }
         }
     }
-    out
+    (out, missing)
+}
+
+/// Whether markup `xml` links to one of the package files in `missing` (see [`files`]).
+pub(super) fn links_to(xml: &str, missing: &BTreeSet<String>) -> bool {
+    if missing.is_empty() {
+        return false;
+    }
+    let mut paths = BTreeSet::new();
+    hrefs(xml, &mut paths);
+    paths.iter().any(|p| missing.contains(p))
 }
 
 /// The package files `xml` links to (`xlink:href` to a path inside the package), added to

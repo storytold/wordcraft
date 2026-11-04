@@ -438,6 +438,16 @@ fn content_of(bytes: &[u8]) -> String {
     s
 }
 
+/// The declarations at the start of the text are written in the schema's order: variables,
+/// sequences, then user fields.
+#[test]
+fn the_text_declarations_are_written_in_the_schemas_order() {
+    let c = content_of(&export(&import(&package(&DECLS)).unwrap()).unwrap());
+    let at = |el: &str| c.find(el).unwrap_or_else(|| panic!("no {el} in {c}"));
+    assert!(at("<text:variable-decls") < at("<text:sequence-decls"), "{c}");
+    assert!(at("<text:sequence-decls") < at("<text:user-field-decls"), "{c}");
+}
+
 #[test]
 fn a_section_in_a_text_box_closes_in_it_whatever_is_edited() {
     // The paragraph closing the box's section edited (its wrapper gone): the section still
@@ -484,6 +494,23 @@ fn a_picture_kept_as_read_is_written_with_its_paragraph_only() {
     let (names, dot) = files(&saved);
     assert!(dot.is_none(), "{names:?}");
     assert!(!content_of(&saved).contains("dot.png"));
+}
+
+/// A picture that can't be read (its entry is corrupt) isn't pointed at by markup kept as read:
+/// what showed it is written from the model, and the saved file links to nothing it hasn't got.
+#[test]
+fn markup_kept_as_read_never_links_to_a_picture_that_could_not_be_read() {
+    let mut bytes = package(&DRAWINGS);
+    let at = bytes.windows(DOT.len()).position(|w| w == DOT).unwrap();
+    // The first copy is `Pictures/dot.png`'s: one byte changed fails its checksum.
+    bytes[at + 20] ^= 0xff;
+    let d = import(&bytes).unwrap();
+    let saved = export(&d).unwrap();
+    let c = content_of(&saved);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.clone())).unwrap();
+    assert!(!c.contains("Pictures/dot.png") || z.by_name("Pictures/dot.png").is_ok(), "{c}");
+    // The text round it stays.
+    assert!(c.contains("A picture"), "{c}");
 }
 
 #[test]

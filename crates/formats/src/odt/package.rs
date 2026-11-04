@@ -1057,7 +1057,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let scripts = kept.and_then(|k| k.defs.get("top:office:scripts")).map(|d| d.to_string()).unwrap_or_default();
     let soft = soft_page_breaks(kept, &body);
     let content = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text{soft}>\n{}{tracked}{var_decls}{user_decls}{decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-content {NS}>{scripts}{}<office:body><office:text{soft}>\n{}{tracked}{var_decls}{decls}{user_decls}{other_decls}{body}</office:text></office:body></office:document-content>\n",
         w.automatic_styles(),
         // The file's forms as read, with the document's controls.
         super::kept::merge_forms(kept.and_then(|k| k.defs.get("forms")).map(|d| &**d), super::forms::forms_xml(&w.forms, &hidden_controls(doc)))
@@ -1208,7 +1208,9 @@ fn page_borders(b: Option<wordcraft_doc::props::Borders>, margins: [f32; 4]) -> 
     let mut attrs = String::new();
     for (i, (side, edge)) in [("top", b.top), ("bottom", b.bottom), ("left", b.left), ("right", b.right)].into_iter().enumerate() {
         let (Some(e), Some(m)) = (edge.filter(|e| e.is_visible()), out.get_mut(i)) else { continue };
-        let at = if e.space.is_finite() { e.space.clamp(0.0, *m) } else { 0.0 };
+        // A hostile margin (negative or not a number) leaves no room, so clamp cannot panic.
+        let room = if m.is_finite() { m.max(0.0) } else { 0.0 };
+        let at = if e.space.is_finite() { e.space.clamp(0.0, room) } else { 0.0 };
         let pad = (*m - at - e.width).max(0.0);
         *m = at;
         attrs.push_str(&format!(" fo:border-{side}=\"{}\" fo:padding-{side}=\"{}\"", super::writer::odf_border(Some(e)), pt(pad)));
@@ -1422,6 +1424,21 @@ fn font_kind(family: &str) -> (&'static str, &'static str) {
 
 #[cfg(test)]
 mod setting_tests {
+    /// A page border round a page whose margin is negative or not a number is written at no
+    /// distance, instead of panicking.
+    #[test]
+    fn a_page_border_round_a_hostile_margin_is_written_at_no_distance() {
+        let mut edge = wordcraft_doc::props::Border::single(1.0);
+        edge.space = 12.0;
+        let b = wordcraft_doc::props::Borders::all(edge);
+        let (attrs, out) = super::page_borders(Some(b), [-10.0, f32::NAN, 36.0, 5.0]);
+        assert!(attrs.contains("fo:border-top="), "{attrs}");
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[1], 0.0);
+        assert_eq!(out[2], 12.0);
+        assert_eq!(out[3], 5.0);
+    }
+
     /// A self-closed setting is replaced whole, leaving the item after it as it was.
     #[test]
     fn a_self_closed_setting_is_replaced_whole() {

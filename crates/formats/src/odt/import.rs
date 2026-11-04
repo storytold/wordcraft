@@ -583,6 +583,33 @@ fn kept_markup(blocks: &[FBlock], depth: usize, out: &mut Vec<(String, std::sync
     }
 }
 
+/// Drop the markup kept as read (of paragraphs and tables, as [`kept_markup`] finds it) that
+/// links to one of the package files in `missing`.
+fn unkeep_linking(blocks: &mut [FBlock], depth: usize, missing: &std::collections::BTreeSet<String>) {
+    if missing.is_empty() {
+        return;
+    }
+    for b in blocks {
+        match b {
+            FBlock::Para(p) => {
+                if p.kept.as_deref().is_some_and(|x| super::kept::links_to(x, missing)) {
+                    p.kept = None;
+                }
+            }
+            FBlock::Table(t) => {
+                if t.kept.as_deref().is_some_and(|x| super::kept::links_to(x, missing)) {
+                    t.kept = None;
+                }
+                if t.kept.is_none() && depth < crate::model::MAX_DEPTH {
+                    for c in t.rows.iter_mut().flatten() {
+                        unkeep_linking(&mut c.blocks, depth + 1, missing);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// What [`parse_tracked`] reads besides the flow.
 struct Parsed {
     flow: Flow,
@@ -795,7 +822,13 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     for b in parts.blocks_mut() {
         kept_markup(b, 0, &mut linking);
     }
-    let kept_files = super::kept::files(&linking, &entries, &mut fetch);
+    let (kept_files, missing) = super::kept::files(&linking, &entries, &mut fetch);
+    // Markup linking to a file that couldn't be read is written from the model: as read, it
+    // would point at a file the saved package hasn't got.
+    unkeep_linking(&mut blocks, 0, &missing);
+    for b in parts.blocks_mut() {
+        unkeep_linking(b, 0, &missing);
+    }
     // Their manifest entries, and their folders' (an object's says what it is).
     for (path, _) in &kept_files {
         let dir = path.rsplit_once('/').map(|(d, _)| format!("{d}/"));

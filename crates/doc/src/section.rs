@@ -733,8 +733,9 @@ pub struct SectionProps {
     /// Distance from the page edge to the header / footer.
     pub header: f32,
     pub footer: f32,
-    /// The space kept between a header too tall for the top margin and the body, and between
-    /// the body and such a footer, points (ODF's header and footer spacing; Word keeps none).
+    /// The space kept between a header and the body, and between the body and a footer, points
+    /// (ODF's header and footer spacing; Word keeps none). The margin already holds the band and
+    /// its spacing, so it only moves the body once content and spacing reach past the margin.
     #[serde(skip_serializing_if = "is_zero")]
     pub header_gap: f32,
     #[serde(skip_serializing_if = "is_zero")]
