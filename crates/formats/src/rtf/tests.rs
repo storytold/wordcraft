@@ -1229,6 +1229,40 @@ fn a_code_paragraph_round_trips_without_a_direct_code_font() {
     assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
 }
 
+/// Escaped semicolons in a font name stop at the limit, as other characters do (review of #3862).
+#[test]
+fn escaped_semicolons_in_a_font_name_stop_at_the_limit() {
+    let mut r = reader::Reader::default();
+    r.st.dest = state::Dest::FontTbl;
+    for _ in 0..100_000 {
+        r.ch(';');
+    }
+    assert_eq!(r.font_name.len(), model::MAX_FONT_NAME + 1);
+    let rtf = format!(r"{{\rtf1{{\fonttbl{{\f0 {};}}}}\f0 x\par}}", r"\'3b".repeat(model::MAX_FONT_NAME + 1));
+    let runs = text_runs(rtf.as_bytes());
+    assert_eq!(run_fmt(&runs, "x").font, None);
+}
+
+#[test]
+fn a_semicolon_in_a_font_name_round_trips() {
+    // `;` ends a `\fonttbl` entry, so it is written `\'3b` and read back as part of the name (#3740).
+    let fonts = [("one", "Semi;Colon"), ("two", "Semi;Other"), ("three", "Tail;"), ("four", "Line\nBreak")];
+    let mut p = Para::default();
+    for (t, font) in fonts {
+        p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
+    }
+    let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+    let rtf = export(&model::to_doc(&flow));
+    assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
+    let runs = text_runs(rtf.as_bytes());
+    for (t, font) in fonts {
+        assert_eq!(run_fmt(&runs, t).font.as_deref(), Some(font.replace('\n', "").as_str()), "{rtf}");
+    }
+    // A Unicode escape is part of the name too, in a multibyte code page as well; a literal `;` ends it.
+    let runs = text_runs(br"{\rtf1\ansi\ansicpg932{\fonttbl{\f0 A\u59?B;}{\f1 C\'3bD;}}\f0 x {\f1 y}\par}");
+    assert_eq!((run_fmt(&runs, "x ").font.as_deref(), run_fmt(&runs, "y").font.as_deref()), (Some("A;B"), Some("C;D")));
+}
+
 #[test]
 fn a_stylesheet_entry_without_a_number_is_normal() {
     // An entry without `\sN` is style 0; it doesn't replace the entry before it.
