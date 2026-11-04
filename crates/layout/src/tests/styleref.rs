@@ -103,8 +103,8 @@ fn character_styles_and_paragraph_numbers() {
 #[test]
 fn full_context_keeps_the_parent_of_a_none_level_heading() {
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 2" \w"#, r#"STYLEREF "Heading 2" \r"#]);
-    let num = d.numbering.add_list(ListKind::Numbered);
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == num) {
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
         let note = wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: "Note".into(), ..Default::default() };
         n.level_overrides = vec![(1, note)];
     }
@@ -120,8 +120,8 @@ fn full_context_keeps_the_parent_of_a_none_level_heading() {
 fn a_none_level_heading_s_number_has_no_text_and_no_trailing_period() {
     let numbered = |text: &str, codes: &[&str]| {
         let mut d = doc(CHAPTERS, codes);
-        let num = d.numbering.add_list(ListKind::Numbered);
-        if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == num) {
+        let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+        if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == num) {
             let level = wordcraft_doc::numbering::Level { format: wordcraft_doc::section::NumFormat::None, text: text.into(), ..Default::default() };
             n.level_overrides = vec![(1, level)];
         }

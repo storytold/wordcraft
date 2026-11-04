@@ -1770,8 +1770,8 @@ fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
     use wordcraft_doc::section::NumFormat;
     for (text, indent, hanging, want) in [("RESPONSE:", 72.0, 72.0, 144.0), ("", 72.0, 72.0, 144.0), ("", 0.0, 0.0, 72.0), ("", 50.0, 0.0, 122.0)] {
         let mut d = Document::from_text("X");
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        for a in &mut d.numbering.abstracts {
+        let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut std::sync::Arc::make_mut(&mut d.numbering).abstracts {
             if let Some(l) = a.levels.first_mut() {
                 l.format = NumFormat::None;
                 l.text = text.into();
