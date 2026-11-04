@@ -30,6 +30,7 @@ mod builder;
 mod css;
 mod entity;
 mod export;
+mod fields;
 mod import;
 mod lexer;
 mod math_ruby;

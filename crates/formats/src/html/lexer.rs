@@ -15,6 +15,9 @@ pub(super) enum Tok {
     /// The markup inside an `<!--[if gte msEquation 12]>…<![endif]-->` conditional comment: Word's
     /// Office Math for readers that understand it (#5582).
     OfficeMath(String),
+    /// The markup inside an `<!--[if supportFields]>…<![endif]-->` conditional comment: Word's
+    /// field marks, codes and (from Better Notes for Zotero) results (#5581).
+    SupportFields(String),
 }
 
 pub(super) struct Lexer<'a> {
@@ -88,8 +91,11 @@ impl Lexer<'_> {
                 let from = self.pos;
                 let to = self.skip_past("-->");
                 let body = self.s.get(from..to).unwrap_or("");
-                if let Some(math) = office_math(body) {
+                if let Some(math) = conditional(body, "[if gte msequation") {
                     return Some(Tok::OfficeMath(math.to_string()));
+                }
+                if let Some(fields) = conditional(body, "[if supportfields]") {
+                    return Some(Tok::SupportFields(fields.to_string()));
                 }
             }
             return Some(Tok::Text(String::new()));
@@ -187,12 +193,12 @@ impl Lexer<'_> {
     }
 }
 
-/// The markup of a comment body that is Word's `[if gte msEquation …]>…<![endif]` conditional
-/// section (an unclosed one runs to the comment's end).
-fn office_math(body: &str) -> Option<&str> {
-    const OPEN: &str = "[if gte msequation";
-    let head = body.get(..OPEN.len())?;
-    if !head.eq_ignore_ascii_case(OPEN) {
+/// The markup of a comment body that is a Word conditional section opening with `open` (lower
+/// case: `[if gte msequation`, `[if supportfields]`), up to its `<![endif]` (an unclosed one runs
+/// to the comment's end).
+fn conditional<'a>(body: &'a str, open: &str) -> Option<&'a str> {
+    let head = body.get(..open.len())?;
+    if !head.eq_ignore_ascii_case(open) {
         return None;
     }
     let inner = body.get(body.find(']')?.checked_add(1)?..)?;

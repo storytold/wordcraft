@@ -1,4 +1,5 @@
 use super::builder::{Builder, ImageLoader, parse_sheet};
+use super::fields::Fields;
 use super::lexer::{Lexer, Tok, skip_math_fallback};
 use super::math_ruby::{read_math, read_ruby};
 use super::{Document, Flow, Inline, model};
@@ -31,12 +32,14 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     let s: &str = &normalized;
     let mut lx = Lexer { s, pos: 0 };
     let mut b = Builder::new(images, page);
+    let mut fields = Fields::default();
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;
         if guard > 50_000_000 {
             break;
         }
+        let Some(t) = fields.take(t, &mut lx, &mut b) else { continue };
         match t {
             Tok::Text(t) => b.text(&t),
             Tok::Start { name, attrs, self_close } => {
@@ -85,9 +88,13 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
                     skip_math_fallback(&mut lx);
                 }
             }
+            // Taken by `fields` above.
+            Tok::SupportFields(_) => {}
         }
     }
-    b.finish()
+    let mut flow = b.finish();
+    fields.finish(&mut flow);
+    flow
 }
 
 /// The `m:oMathPara` and `m:oMath` elements (outermost only) in the markup of an

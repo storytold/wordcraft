@@ -770,6 +770,8 @@ fn inline_marks(f: &Flow) -> Vec<String> {
                     Inline::Equation { linear, display: false } => format!("[{linear}]"),
                     Inline::Equation { linear, display: true } => format!("[[{linear}]]"),
                     Inline::Image(_) => "<img>".into(),
+                    Inline::FieldStart(code) => format!("{{{code}|"),
+                    Inline::FieldEnd => "}".into(),
                     _ => String::new(),
                 })
                 .collect::<String>()
@@ -826,4 +828,71 @@ fn ms_equation_fallback_stays_when_no_equation_is_read_or_it_is_unclosed() {
     // A fallback opener without its end doesn't swallow the rest of the page.
     let unclosed = "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c</p>";
     assert_eq!(inline_marks(&parse(unclosed)), ["a[q]b", "c"]);
+}
+
+#[test]
+fn support_fields_comments_import_as_fields_around_their_result() {
+    // #5581's reproduction (Better Notes for Zotero): the whole field in one comment.
+    let html = r#"<!DOCTYPE html><html><body>
+<p>Before <!--[if supportFields]>
+<span style='mso-element:field-begin'></span>
+ADDIN ZOTERO_ITEM CSL_CITATION {&quot;citationID&quot;:&quot;a&quot;,&quot;citationItems&quot;:[]}
+<span style='mso-element:field-separator'></span>
+<span>(Cached, 2021)</span>
+<span style='mso-element:field-end'></span>
+<![endif]--> after</p>
+</body></html>"#;
+    let marks = inline_marks(&parse(html));
+    assert_eq!(marks.len(), 1, "{marks:?}");
+    let m = &marks[0];
+    assert!(m.starts_with("Before {ADDIN ZOTERO_ITEM CSL_CITATION {\"citationID\":\"a\",\"citationItems\":[]}|"), "{m}");
+    assert!(m.contains("(Cached, 2021)") && m.ends_with("} after"), "{m}");
+}
+
+#[test]
+fn word_pages_keep_a_fields_result_between_two_comments() {
+    // Word's own web pages: the result is ordinary HTML between the comments, with its formatting.
+    let html = "<p>Page <!--[if supportFields]><span style='mso-element:field-begin'></span><span style='mso-spacerun:yes'> </span>PAGE <span style='mso-element:field-separator'></span><![endif]--><b>3</b><!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--> of</p>";
+    let f = parse(html);
+    assert_eq!(inline_marks(&f), ["Page {PAGE|3} of"]);
+    let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph") };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == "3" && fmt.bold)), "{:?}", p.inlines);
+}
+
+#[test]
+fn support_fields_edge_cases_stay_balanced() {
+    // A field without a separator has an empty result; one nested in another's code is part of
+    // that code; a field the page leaves open ends with it; a mark's empty span doesn't close an
+    // enclosing span.
+    let no_sep =
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>AUTHOR<span style='mso-element:field-end'></span><![endif]-->b</p>";
+    assert_eq!(inline_marks(&parse(no_sep)), ["a{AUTHOR|}b"]);
+    let nested = "<p><!--[if supportFields]><span style='mso-element:field-begin'></span>IF <span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span>2<span style='mso-element:field-end'></span> = 2 yes<span style='mso-element:field-separator'></span><![endif]-->yes<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]--></p>";
+    assert_eq!(inline_marks(&parse(nested)), ["{IF PAGE2 = 2 yes|yes}"]);
+    let open = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>DATE<span style='mso-element:field-separator'></span><![endif]-->today</p>";
+    assert_eq!(inline_marks(&parse(open)), ["a{DATE|today}"]);
+    let wrapped = "<p><i>x<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span><![endif]-->1<!--[if supportFields]><span style='mso-element:field-end'></span><![endif]-->y</i></p>";
+    let f = parse(wrapped);
+    assert_eq!(inline_marks(&f), ["x{PAGE|1}y"]);
+    let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph") };
+    assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fmt) if t == "y" && fmt.italic)), "{:?}", p.inlines);
+    // Junk: stray ends and separators, no code, unclosed comments, many begins.
+    for html in [
+        "<p>a<!--[if supportFields]><span style='mso-element:field-end'></span><span style='mso-element:field-separator'></span><![endif]-->b</p>",
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span><span style='mso-element:field-separator'></span>r<span style='mso-element:field-end'></span><![endif]-->b</p>",
+        "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE",
+        "<p>a<!--[if supportFields]>",
+    ] {
+        let marks = inline_marks(&parse(html));
+        let opens = marks.iter().map(|m| m.matches('{').count()).sum::<usize>();
+        let closes = marks.iter().map(|m| m.matches('}').count()).sum::<usize>();
+        assert_eq!(opens, closes, "{html}: {marks:?}");
+    }
+    let many = format!(
+        "<p><!--[if supportFields]>{}<![endif]-->z</p>",
+        "<span style='mso-element:field-begin'></span>F<span style='mso-element:field-separator'></span>".repeat(200)
+    );
+    let marks = inline_marks(&parse(&many));
+    assert_eq!(marks.iter().map(|m| m.matches('{').count()).sum::<usize>(), 64);
+    assert_eq!(marks.iter().map(|m| m.matches('}').count()).sum::<usize>(), 64);
 }
