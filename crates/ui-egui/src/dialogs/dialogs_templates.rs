@@ -67,9 +67,9 @@ pub fn templates(app: &mut WordApp, ui: &mut Ui, f: &mut TemplatesForm) -> bool 
     if let Some(p) = app.dialog_pick.take() {
         f.path = p;
     }
-    ui.label(egui::RichText::new(tl!("Document template:")).font(semibold(12.5)));
+    let label = ui.label(egui::RichText::new(tl!("Document template:")).font(semibold(12.5)));
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0));
+        ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0)).labelled_by(label.id);
         if ui.add_enabled(can_pick(app), egui::Button::new(tl!("Attach…"))).clicked() {
             pick(app);
         }
