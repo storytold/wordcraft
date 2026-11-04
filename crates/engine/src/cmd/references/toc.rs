@@ -392,6 +392,7 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
         // its paragraph ending the title's section, and the new entries follow in their columns.
         Some((start, _)) if title_above_break(s, start).is_some() => {
             replace_toc_above_break(s, v, start, &tabs)?;
+            caret_after_toc(s)?;
             return sel_result(s);
         }
         Some((start, end)) => {
@@ -425,18 +426,29 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.insert_block(StoryRef::Body, &Path::top(i), Block::Para(head))?;
     let leader = leader(p::str(v, "tabLeader").unwrap_or("dot"));
     regenerate_toc(s, Some(leader), &tabs)?;
-    // Like Word, the caret lands in a paragraph right after the table, ready to keep typing —
-    // not inside the table's own title or entries, where typing (or Enter) would corrupt them.
+    caret_after_toc(s)?;
+    sel_result(s)
+}
+
+/// Like Word, the caret lands in the paragraph right after the table, ready to keep typing — not
+/// inside the table's own title or entries, where typing (or Enter) would corrupt them. When a
+/// table (or nothing) follows, a paragraph is added there first, and the entries are rebuilt so
+/// their page numbers count it.
+fn caret_after_toc(s: &mut Session) -> Result<(), CmdError> {
     if let Some((_, end)) = toc_range(s) {
         let after = end + 1;
-        let is_para = s.doc.body.get(after).is_some_and(|b| b.as_para().is_some());
-        if !is_para {
+        if !s.doc.body.get(after).is_some_and(|b| b.as_para().is_some()) {
             s.doc.insert_block(StoryRef::Body, &Path::top(after), Block::Para(Paragraph::new()))?;
+            // Rebuilt as they now are (their leader and tabs), only the page numbers can change.
+            let tabs = cached_toc_tabs(s);
+            regenerate_toc(s, None, &tabs)?;
         }
-        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(after), off: 0 });
+        if let Some((_, end)) = toc_range(s) {
+            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(end + 1), off: 0 });
+        }
     }
     s.clamp_selection();
-    sel_result(s)
+    Ok(())
 }
 
 /// Replaces a TOC whose title sits above the section break its field's paragraph ends

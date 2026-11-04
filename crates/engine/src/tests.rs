@@ -4190,6 +4190,22 @@ fn replacing_a_toc_keeps_its_title_above_the_section_break() {
     assert_eq!(toc_layout(&s), before, "{}", text(&s));
 }
 
+/// Replacing Word's TOC whose title sits above a section break leaves the caret after the table,
+/// as a plain replacement does: with the caret in the title, typing went into the title.
+#[test]
+fn replacing_a_toc_above_a_section_break_leaves_the_caret_after_it() {
+    let mut s = word_toc_above_a_section_break("TOCHeading");
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 2 });
+    run(&mut s, "references.toc", json!({"levels": 1}));
+    // Past the last entry, not in the title or the entries.
+    let last_entry = s.doc.body.iter().rposition(|b| b.as_para().is_some_and(|p| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC"))));
+    assert!(last_entry.is_some_and(|e| s.sel.focus.path.last() > e), "{:?}: {}", s.sel.focus, text(&s));
+    run(&mut s, "text.insert", json!({"text": "typed"}));
+    let (paras, _) = toc_layout(&s);
+    assert_eq!(paras.first().map(|(_, _, t)| t.as_str()), Some("Contents"), "the title is untouched: {paras:?}");
+    assert!(paras.iter().any(|(st, _, t)| t == "typed" && !st.starts_with("TOC")), "{paras:?}");
+}
+
 /// #4041: removing Word's TOC whose title sits above a section break takes the title, the blank
 /// paragraph ending its section and that break with the entries, as Word's Remove Table of
 /// Contents does (observed in Word for Mac): the empty paragraph after the table, ending the
