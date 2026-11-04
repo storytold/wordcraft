@@ -109,6 +109,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if p.page_break {
         out.page_break_before = Some(true);
     }
+    if p.keep_next {
+        out.keep_next = Some(true);
+    }
     out
 }
 
@@ -185,9 +188,6 @@ impl<'a> Builder<'a> {
         }
         if let Some(f) = &p.mark {
             out.mark = self.budget(char_props(f));
-        }
-        if p.keep_next {
-            out.props.keep_next = Some(true);
         }
         out.section.clone_from(&p.section);
         // Inlines are appended in order, so build the runs directly: inserting each one through
