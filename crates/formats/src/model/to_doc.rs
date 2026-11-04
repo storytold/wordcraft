@@ -378,6 +378,8 @@ impl<'a> Builder<'a> {
                     ole,
                     stroke: None,
                     stroke_width: 0.0,
+                    dash: Default::default(),
+                    compound: Default::default(),
                 })
             }
             // Its drawing is made from the chart by the program that opens the document

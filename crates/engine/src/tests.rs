@@ -8270,6 +8270,8 @@ fn convert_text_to_table_keeps_inline_content() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         p.insert_object(5, img, &Default::default()).unwrap();
     }
@@ -12363,6 +12365,8 @@ fn text_from_file_brings_the_files_pictures() {
         fx: Default::default(),
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, image, &Default::default()).unwrap();
     let path = dir.join("pictures.docx");

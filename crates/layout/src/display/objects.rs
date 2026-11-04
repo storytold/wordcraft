@@ -2,6 +2,7 @@ use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
 use wordcraft_doc::connector::ArrowStyle;
+use wordcraft_doc::line_dash::{CompoundLine, LineDash};
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -395,21 +396,29 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 /// A picture `image` in `rect` and its outline (Picture Border, #5544), `stroke` of `width`
 /// points, stroked on the picture's frame as a rectangle's outline is: turned with it when it is
 /// drawn inside its spin. No outline without a colour; a width of 0 is a hairline, which
-/// the backends draw at their minimum width.
-pub(super) fn picture_draws(rect: Rect, image: Draw, stroke: Option<Rgb>, width: f32) -> Vec<Draw> {
+/// the backends draw at their minimum width, whatever its compound type or dash.
+///
+/// The outline's band is `width` wide, centred on the frame's edge. A compound outline splits
+/// the band into its parallel lines ([`CompoundLine::lines`]): each is its own rectangle,
+/// grown or shrunk from the frame so its centre sits where its share of the band does, and
+/// dashed in multiples of its own width, as Word draws them.
+pub(super) fn picture_draws(rect: Rect, image: Draw, stroke: Option<Rgb>, width: f32, dash: &LineDash, compound: CompoundLine) -> Vec<Draw> {
     let width = wordcraft_geom::finite(width).clamp(0.0, 100.0);
-    let outline = stroke.map(|c| Draw::Shape {
-        rect,
+    let mut out = vec![image];
+    let Some(c) = stroke else { return out };
+    let lines = if width > 0.0 { compound.lines(width) } else { vec![(0.0, 0.0)] };
+    out.extend(lines.into_iter().map(|(offset, w)| Draw::Shape {
+        rect: rect.expand(offset),
         kind: ShapeKind::Rectangle,
         fill: None,
         stroke: Some(c),
-        stroke_width: width,
+        stroke_width: w,
         effects: Default::default(),
         corner: None,
-        dash: Vec::new(),
+        dash: if w > 0.0 { dash.pattern(w) } else { Vec::new() },
         cap: Default::default(),
-    });
-    std::iter::once(image).chain(outline).collect()
+    }));
+    out
 }
 
 /// A picture, shape or group drawn in `rect` (its unturned frame), turned by its own spin about
@@ -418,11 +427,11 @@ pub(super) fn picture_draws(rect: Rect, image: Draw, stroke: Option<Rgb>, width:
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, fx, stroke, stroke_width, .. } => {
+        InlineObject::Image { media, crop, alt, fx, stroke, stroke_width, dash, compound, .. } => {
             let alpha = alpha * fx.opacity();
             let decorative = o.is_decorative();
             let image = Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx: *fx, decorative };
-            spun(own, rect, picture_draws(rect, image, *stroke, *stroke_width), out)
+            spun(own, rect, picture_draws(rect, image, *stroke, *stroke_width, dash, *compound), out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));

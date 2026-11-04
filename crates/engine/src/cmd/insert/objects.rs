@@ -157,6 +157,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     // A selected Drawing Canvas takes it in.
     if let Some(i) = crate::cmd::canvas::add_member(s, obj.clone())? {

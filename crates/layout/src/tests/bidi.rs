@@ -442,6 +442,8 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(off, pic, &Default::default()).unwrap();
     let l = lay(&d);

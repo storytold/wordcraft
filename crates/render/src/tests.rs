@@ -547,6 +547,8 @@ fn dimmed_header_image_renders() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
@@ -581,6 +583,8 @@ fn picture_brightness_contrast_transparency() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let mut p = wordcraft_doc::Paragraph::new();
     p.insert_object(0, pic(PicFx::default(), 100.0), &Default::default()).unwrap();
@@ -611,16 +615,94 @@ fn picture_brightness_contrast_transparency() {
 
 /// A document of one red picture, `w` × `h`, placed by `float`, with the outline `stroke` 6 pt wide.
 fn outlined_picture(w: f32, h: f32, float: wordcraft_doc::para::Float, stroke: Option<Rgb>) -> Document {
+    outlined_picture_styled(w, h, float, stroke, Default::default(), Default::default())
+}
+
+/// [`outlined_picture`] with the outline's `dash` and `compound` type.
+fn outlined_picture_styled(
+    w: f32,
+    h: f32,
+    float: wordcraft_doc::para::Float,
+    stroke: Option<Rgb>,
+    dash: wordcraft_doc::line_dash::LineDash,
+    compound: wordcraft_doc::line_dash::CompoundLine,
+) -> Document {
     let mut d = Document::new();
     let mut png = Vec::new();
     image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let media = d.add_media(png, "png");
     let mut p = wordcraft_doc::Paragraph::new();
     let stroke_width = if stroke.is_some() { 6.0 } else { 0.0 };
-    let obj = wordcraft_doc::para::InlineObject::Image { media, w, h, alt: String::new(), float, crop: [0.0; 4], fx: Default::default(), ole: None, stroke, stroke_width };
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w,
+        h,
+        alt: String::new(),
+        float,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        stroke,
+        stroke_width,
+        dash,
+        compound,
+    };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
     d
+}
+
+/// The rect of the first picture on `d`'s first page, and the page rendered at 1 px per point.
+fn picture_and_render(d: &Document) -> (wordcraft_geom::Rect, Rendered) {
+    let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    (rect, render_page(d, &l.pages[0], 1.0, &opts))
+}
+
+/// #5544: a double (`dbl`) outline 6 pt wide is two 2 pt lines with a 2 pt gap centred on the
+/// frame's edge: the gap shows the picture just inside the edge and the paper just outside, and
+/// each line carries the outline's colour.
+#[test]
+fn a_double_picture_outline_paints_two_lines() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(70.0, 70.0, Default::default(), Some(green), LineDash::Solid, CompoundLine::Double);
+    let (rect, img) = picture_and_render(&d);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    // Along a row, the lines cover [-3, -1] and [1, 3] points from the left edge and the gap
+    // [-1, 1]. The pixel starting at floor(x + o) lies wholly within 1 pt of x + o, so these
+    // samples are each inside one line or the gap, wherever the frame falls on the pixel grid.
+    let outer = img.pixel((rect.x - 2.0) as u32, y);
+    let inner = img.pixel((rect.x + 2.0) as u32, y);
+    assert!(is_green(outer), "the outer line: {outer:?}");
+    assert!(is_green(inner), "the inner line: {inner:?}");
+    // The gap: the red picture or white paper, with no green over it (red stays high).
+    let gap = img.pixel(rect.x as u32, y);
+    assert!(gap[0] > 150 && !is_green(gap), "the gap between the lines is not painted: {gap:?}");
+}
+
+/// #5544: a dashed outline is drawn in dashes: along the top edge some of the line carries the
+/// outline's colour and some, in the gaps, does not.
+#[test]
+fn a_dashed_picture_outline_has_gaps() {
+    use wordcraft_doc::line_dash::{CompoundLine, LineDash};
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let d = outlined_picture_styled(200.0, 70.0, Default::default(), Some(green), LineDash::Dash, CompoundLine::Single);
+    let (rect, img) = picture_and_render(&d);
+    // Just outside the top edge, inside the 6 pt line's outer half (so the picture never shows).
+    let y = (rect.y - 2.0) as u32;
+    let is_green = |p: [u8; 4]| p[0] < 60 && p[1] > 140;
+    let row: Vec<bool> = ((rect.x + 6.0) as u32..(rect.x + rect.w - 6.0) as u32).map(|x| is_green(img.pixel(x, y))).collect();
+    assert!(row.iter().any(|g| *g), "dashes are drawn");
+    assert!(row.iter().any(|g| !*g), "with gaps between them");
 }
 
 /// #5544: a picture's outline (Picture Border) is stroked on its frame, half outside it and half
@@ -673,9 +755,12 @@ fn a_zero_width_picture_outline_is_a_hairline() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
         stroke: Some(green),
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1086,6 +1171,8 @@ fn metafile_picture_is_drawn_as_vectors() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1132,6 +1219,8 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
                 ole: None,
                 stroke: None,
                 stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
@@ -1172,6 +1261,8 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1221,6 +1312,8 @@ fn metafile_text_records_are_painted() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1270,6 +1363,8 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -1311,6 +1406,8 @@ fn unreadable_metafile_keeps_the_grey_box() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];

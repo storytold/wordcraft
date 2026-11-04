@@ -531,6 +531,8 @@ fn reset_never_borrows_another_pictures_corrections() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         p.insert_object(0, pic, &Default::default()).unwrap();
     }

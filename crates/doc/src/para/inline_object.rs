@@ -28,13 +28,18 @@ pub enum InlineObject {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
         /// The picture's outline (Picture Format › Picture Border, DrawingML's `a:ln` in
-        /// `pic:spPr`): its colour, `None` for no outline. A compound or dashed outline is kept
-        /// as one solid line of its colour and total width.
+        /// `pic:spPr`): its colour, `None` for no outline.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<crate::props::Rgb>,
-        /// Outline width, points.
+        /// Outline width, points: the total width of a compound outline's lines and gaps.
         #[serde(default, skip_serializing_if = "super::float::is_zero")]
         stroke_width: f32,
+        /// The outline's dash pattern; absent in older saved documents means solid.
+        #[serde(default, skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
+        dash: crate::line_dash::LineDash,
+        /// The outline's compound type (`a:ln/@cmpd`); absent means one line.
+        #[serde(default, skip_serializing_if = "crate::line_dash::CompoundLine::is_single")]
+        compound: crate::line_dash::CompoundLine,
     },
     /// A chart or SmartArt diagram (see [`crate::graphic`]).
     Graphic {

@@ -38,9 +38,11 @@ pub enum Placed {
         spin: Spin,
         /// Brightness, contrast and transparency (see [`wordcraft_doc::picfx`]).
         fx: wordcraft_doc::picfx::PicFx,
-        /// Its outline (Picture Border) and the outline's width, points.
+        /// Its outline (Picture Border), the outline's width, points, its dash and compound type.
         stroke: Option<Rgb>,
         stroke_width: f32,
+        dash: wordcraft_doc::line_dash::LineDash,
+        compound: wordcraft_doc::line_dash::CompoundLine,
     },
     Shape {
         rect: Rect,

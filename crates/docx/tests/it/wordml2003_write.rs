@@ -80,6 +80,8 @@ fn sample() -> Document {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -214,6 +216,8 @@ fn picture_brightness_and_contrast_round_trip() {
                 ole: None,
                 stroke: None,
                 stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             };
             p.insert_object(0, pic, &CharProps::default()).unwrap();
             para_block(p)

@@ -106,6 +106,8 @@ fn sample() -> Document {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -245,6 +247,8 @@ fn hostile_documents_export() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -262,6 +266,8 @@ fn hostile_documents_export() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1068,7 +1074,20 @@ fn a_picture_outline_is_exported_as_a_stroke() {
         let media = d.add_media(png(), "png");
         let stroke_width = if stroke.is_some() { 6.0 } else { 0.0 };
         let mut p = Paragraph::new();
-        let obj = InlineObject::Image { media, w: 100.0, h: 40.0, alt: String::new(), float, crop: [0.0; 4], fx: Default::default(), ole: None, stroke, stroke_width };
+        let obj = InlineObject::Image {
+            media,
+            w: 100.0,
+            h: 40.0,
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+            stroke,
+            stroke_width,
+            dash: Default::default(),
+            compound: Default::default(),
+        };
         p.insert_object(0, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
         let pdf = hayro_syntax::Pdf::new(export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap()).expect("parse");
@@ -1119,6 +1138,8 @@ fn metafile_pictures_are_drawn_as_vector_paths() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1177,6 +1198,8 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
                 ole: None,
                 stroke: None,
                 stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             },
             &CharProps::default(),
         )
@@ -1248,6 +1271,8 @@ fn inline_picture_figure_keeps_its_alt_text() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
@@ -1276,6 +1301,8 @@ fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(n, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
@@ -1322,6 +1349,8 @@ fn rotated_group_tags_each_picture_on_its_own() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let decorative = Float { alt: AltText { decorative: true, ..Default::default() }, ..Default::default() };
     let group = InlineObject::Group {
@@ -1391,6 +1420,8 @@ fn metafile_strokes_use_round_caps_and_joins() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1433,6 +1464,8 @@ fn metafile_fill_items_carry_no_stroke_state() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1468,6 +1501,8 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1517,6 +1552,8 @@ fn metafile_text_records_are_drawn_as_text() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -1715,6 +1752,8 @@ fn outline_keeps_visible_objects() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
     ] {
         let mut d = base.clone();
@@ -2270,6 +2309,8 @@ fn picture_fx_is_baked_into_the_embedded_image() {
                 ole: None,
                 stroke: None,
                 stroke_width: 0.0,
+                dash: Default::default(),
+                compound: Default::default(),
             };
             p.insert_object(0, pic, &CharProps::default()).unwrap();
         }
@@ -2357,6 +2398,8 @@ fn hostile_picture_header_is_refused_without_allocating() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let mut p = Paragraph::new();
     p.insert_object(0, pic, &CharProps::default()).unwrap();

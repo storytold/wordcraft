@@ -76,6 +76,8 @@ fn sample() -> Document {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )
@@ -710,6 +712,8 @@ fn decorative_picture_exports_with_empty_alt_text() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         let mut p = Paragraph::with_text("Logo: ", CharProps::default());
         let n = p.len();
@@ -924,6 +928,8 @@ fn hidden_drawings_are_left_out_of_exports() {
             ole: None,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         d.insert_object(&wordcraft_doc::Pos::body(0, 0), image, &Default::default()).unwrap();
     }

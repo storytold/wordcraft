@@ -4782,6 +4782,8 @@ fn context_menu_crop_item_activates_crop_mode() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     let end = Pos::body(0, OBJ.len_utf8());
@@ -4827,6 +4829,8 @@ fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
     // Caret is collapsed right at pos 0 (adjacent to the picture).
@@ -4961,6 +4965,8 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
         ole: None,
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     p.insert_object(0, pic, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
@@ -4989,6 +4995,8 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
             fx,
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         }],
         ..Default::default()
     };

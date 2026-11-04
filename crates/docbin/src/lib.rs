@@ -691,6 +691,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                             ole: None,
                             stroke: None,
                             stroke_width: 0.0,
+                            dash: Default::default(),
+                            compound: Default::default(),
                         });
                     }
                     None => pics.dropped(cp),

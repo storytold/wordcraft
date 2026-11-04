@@ -328,6 +328,8 @@ fn a_chunks_pictures_come_with_it() {
             fx: Default::default(),
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         para.insert_object(0, image, &Default::default()).unwrap();
         d.body = vec![std::sync::Arc::new(Block::Para(para))];

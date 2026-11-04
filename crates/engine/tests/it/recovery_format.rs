@@ -33,6 +33,8 @@ fn complete_document() -> Document {
             ole: Some(source.clone()),
             stroke: None,
             stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         },
         &CharProps::default(),
     )

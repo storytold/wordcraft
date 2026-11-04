@@ -1297,6 +1297,8 @@ fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: Stor
         fx: Default::default(),
         stroke: None,
         stroke_width: 0.0,
+        dash: Default::default(),
+        compound: Default::default(),
     };
     let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
     match pic.repeat {

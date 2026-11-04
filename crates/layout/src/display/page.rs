@@ -457,10 +457,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, spin, fx, stroke, stroke_width, .. } => {
+        Placed::Image { rect, media, crop, spin, fx, stroke, stroke_width, dash, compound, .. } => {
             let alpha = alpha * fx.opacity();
             let image = Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx: *fx, decorative: false };
-            spun(*spin, *rect, picture_draws(*rect, image, *stroke, *stroke_width), out)
+            spun(*spin, *rect, picture_draws(*rect, image, *stroke, *stroke_width, dash, *compound), out)
         }
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
             let mut items = Vec::new();
