@@ -897,3 +897,84 @@ fn output_gives_every_reference_its_bookmarks_text() {
     assert_eq!(results, expected);
     assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
 }
+
+/// #3129: a floating picture's caption goes in a text box right under it (over it with
+/// Above), as wide as it and wrapped like it, not in a paragraph of the body. Captions in text
+/// boxes count where they are anchored.
+#[test]
+fn caption_for_a_floating_picture_goes_in_a_text_box_under_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Before\nAfter"));
+    s.run("select.text", &json!({"text": "Before"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    let (at, _) = crate::cmd::objects::selected(&s).expect("the shape is selected");
+    let end = Pos { off: at.off + OBJ.len_utf8(), ..at.clone() };
+    let pic = s.layout().object(&at, 0).unwrap().rect;
+    s.run("references.caption", &json!({"label": "Figure", "text": "Kiln"})).unwrap();
+    assert_eq!(s.doc.body.len(), 2, "no caption paragraph in the body");
+    let caption = |s: &Session| match s.doc.para_at(&end).and_then(|p| p.object_at(end.off)) {
+        Some(InlineObject::Shape { kind: ShapeKind::TextBox, story: Some(id), fill: None, stroke: None, float, .. }) => (*id, float.wrap),
+        o => panic!("no caption text box after the shape: {o:?}"),
+    };
+    let (id, wrap) = caption(&s);
+    assert_eq!((s.doc.plain_text(StoryRef::Part(id)).as_str(), wrap), ("Figure 1: Kiln", Wrap::Square));
+    assert_eq!(s.sel.focus.story, StoryRef::Part(id), "the caret is in the caption");
+    let r = s.layout().object(&end, 0).unwrap().rect;
+    assert!((r.x - pic.x).abs() < 0.5 && (r.w - pic.w).abs() < 0.5 && (r.y - pic.bottom()).abs() < 0.5, "{r:?} under {pic:?}");
+    // The box is as tall as its line.
+    let story = StoryRef::Part(id);
+    let line = s.layout().selection_rects(&s.doc, &s.doc.start_of(story), &s.doc.end_of(story), 0)[0].1;
+    assert!((r.bottom() - line.bottom()).abs() < 0.5, "{r:?} fits {line:?}");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.doc.para_at(&end).and_then(|p| p.object_at(end.off)).is_none(), "one undo takes the caption away");
+    s.run("edit.redo", &json!({})).unwrap();
+    // A caption further on counts on; one above the picture counts first.
+    s.sel = Selection::caret(Pos::body(1, 0));
+    s.run("references.caption", &json!({"label": "Figure", "text": "Lid"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Figure 2: Lid"));
+    s.sel = Selection { anchor: at.clone(), focus: end.clone() };
+    s.run("references.caption", &json!({"label": "Figure", "text": "Top", "position": "above"})).unwrap();
+    let (id, _) = caption(&s);
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Figure 1: Top");
+    let r = s.layout().object(&end, 0).unwrap().rect;
+    assert!((r.bottom() - pic.y).abs() < 0.5, "{r:?} over {pic:?}");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Figure 3: Lid"));
+    // In a text box, a floating shape's caption is a paragraph of the box: no box in a box.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let id = s.run("insert.textBox", &json!({"width": 200, "height": 200})).unwrap()["story"].as_u64().unwrap() as u32;
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "Kiln"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Part(id)).ends_with("Figure 1: Kiln"), "{:?}", s.doc.plain_text(StoryRef::Part(id)));
+}
+
+/// A floating shape that isn't laid out (hidden text) still gets its caption, as a paragraph.
+#[test]
+fn caption_for_a_floating_shape_left_out_of_the_layout_goes_next_to_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Before"));
+    s.run("select.text", &json!({"text": "Before"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("format.hidden", &json!({})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "Kiln"})).unwrap();
+    assert_eq!(s.doc.body.get(1).and_then(|b| b.as_para()).map(|p| p.plain_text()).as_deref(), Some("Figure 1: Kiln"));
+}
+
+/// #3129: a floating picture's caption takes its chapter number from the heading before its
+/// anchor, as a caption in the text does.
+#[test]
+fn caption_for_a_floating_picture_shows_its_chapter_number() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One\nKilns\nTwo\nLids"));
+    for t in ["One", "Two"] {
+        s.run("select.text", &json!({"text": t})).unwrap();
+        s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    }
+    s.run("select.text", &json!({"text": "Lids"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "Lid", "chapter": 1})).unwrap();
+    assert_eq!(s.doc.plain_text(s.sel.focus.story), "Figure 2-1: Lid");
+}

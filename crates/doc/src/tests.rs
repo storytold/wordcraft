@@ -386,6 +386,39 @@ fn counted_stories_survive_self_nested_boxes() {
 }
 
 #[test]
+fn body_para_paths_follow_each_paragraph_with_its_text_boxes() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let texts = |d: &Document| d.body_para_paths().iter().map(|(s, p)| d.para(*s, p).unwrap().plain_text()).collect::<Vec<String>>();
+    let mut d = Document::from_text("one\ntwo");
+    let a = d.add_part(PartKind::TextBox, para_of("box"));
+    let hdr = d.add_part(PartKind::Header, para_of("header"));
+    d.insert_object(&Pos::body(0, 0), shape(a), &CharProps::default()).unwrap();
+    // A damaged file's shape showing a header is no text box of the body.
+    d.insert_object(&Pos::body(1, 0), shape(hdr), &CharProps::default()).unwrap();
+    assert_eq!(texts(&d), ["one", "box", "two"]);
+    // A box shown again, a box inside it, and a box inside itself: each comes once, where first shown.
+    let inner = d.add_part(PartKind::TextBox, para_of("inner"));
+    d.insert_object(&Pos::body(1, 0), shape(a), &CharProps::default()).unwrap();
+    let in_box = |off| Pos { story: StoryRef::Part(a), path: Path::top(0), off };
+    d.insert_object(&in_box(0), shape(inner), &CharProps::default()).unwrap();
+    d.insert_object(&in_box(0), shape(a), &CharProps::default()).unwrap();
+    assert_eq!(texts(&d), ["one", "box", "inner", "two"]);
+}
+
+#[test]
 fn prune_text_boxes_drops_only_unshown_ones() {
     let shape = |story| InlineObject::Shape {
         kind: para::ShapeKind::TextBox,

@@ -433,8 +433,9 @@ impl DocLayout {
     }
 
     /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
-    /// border (within `edge` points either side; inside is its text, whatever lies under the
-    /// box). Topmost first; objects behind the text only where there's no text.
+    /// border (within `edge` points either side, or only outside a box too small for that, such as
+    /// a one-line caption; inside is its text, whatever lies under the box). Topmost first; objects
+    /// behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         self.object_at_in(page, x, y, edge, StoryRef::Body)
     }
@@ -447,7 +448,8 @@ impl DocLayout {
         // A rotated object is grabbed on its rotated shape: the point is taken into its frame.
         let grabs = |o: &ObjectHit| {
             let pt = o.unspin(x, y);
-            o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
+            let inner = if o.rect.w.min(o.rect.h) <= edge * 3.0 { 0.0 } else { edge };
+            o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-inner).contains(pt))
         };
         let cands: Vec<ObjectHit> = match story {
             StoryRef::Body => objects(p, page).collect(),

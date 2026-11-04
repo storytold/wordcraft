@@ -785,3 +785,61 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
 }
+
+/// #3129: a floating picture's caption is in a text box; cross-references, the Table of
+/// Figures and bookmarks find it there like a caption paragraph in the body.
+#[test]
+fn captions_in_text_boxes_are_found() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nKilns\nSee "));
+    s.run("select.text", &json!({"text": "Intro"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("select.text", &json!({"text": "Kilns"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "The kiln"})).unwrap();
+    let story = s.sel.focus.story;
+    assert!(matches!(story, StoryRef::Part(_)), "the caption is in a text box");
+    assert_eq!(caption_labels(&s), ["Figure"]);
+    assert_eq!(ref_targets(&s, "label:Figure").len(), 1);
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    let list = s.run("insert.crossReference", &json!({"to": "figure"})).unwrap();
+    assert_eq!(list, json!(["Figure 1: The kiln"]));
+    s.run("insert.crossReference", &json!({"to": "figure", "target": "Figure 1", "show": "number"})).unwrap();
+    s.run("insert.crossReference", &json!({"to": "figure", "target": "Figure 1", "show": "page"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Figure 12"), "{}", s.doc.plain_text(StoryRef::Body));
+    let refs: Vec<(String, Pos)> = s.doc.bookmarks().into_iter().filter(|(n, _)| n.starts_with("_Ref")).collect();
+    assert!(!refs.is_empty() && refs.iter().all(|(_, at)| at.story == story), "the references' bookmarks are in the text box: {refs:?}");
+    assert!(refs.iter().any(|(n, _)| crate::cmd::references::bookmark_text(&s.doc, n).as_deref() == Some("Figure 1")));
+    // A bookmark of the person's own in the text box.
+    let end = s.doc.end_of(story);
+    let off = s.doc.para(story, &end.path).unwrap().text.rfind("kiln").unwrap();
+    s.sel = Selection { anchor: Pos { off, ..end.clone() }, focus: Pos { off: off + "kiln".len(), ..end } };
+    s.run("insert.bookmark", &json!({"name": "Kiln"})).unwrap();
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.crossReference", &json!({"to": "bookmark", "target": "Kiln"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Figure 12kiln"), "{}", s.doc.plain_text(StoryRef::Body));
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.tableOfFigures", &json!({})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Figure 1: The kiln\t2"), "{}", s.doc.plain_text(StoryRef::Body));
+}
+
+/// #3129: "above" or "below" a caption in a text box goes by the paragraph the box is anchored
+/// in, not by the box coming after the whole body.
+#[test]
+fn above_or_below_a_caption_in_a_text_box_goes_by_its_anchor() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nKilns\nSee "));
+    s.run("select.text", &json!({"text": "Kilns"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("references.caption", &json!({"label": "Figure", "text": "The kiln"})).unwrap();
+    let above_below = json!({"to": "figure", "target": "Figure 1", "show": "aboveBelow"});
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Body));
+    s.run("insert.crossReference", &above_below).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).ends_with("See above"), "{}", s.doc.plain_text(StoryRef::Body));
+    s.sel = Selection::caret(Pos::body(0, 0));
+    s.run("insert.crossReference", &above_below).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).starts_with("belowIntro"), "{}", s.doc.plain_text(StoryRef::Body));
+}

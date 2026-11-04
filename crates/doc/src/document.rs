@@ -897,14 +897,32 @@ impl Document {
         out
     }
 
-    /// Bookmark names in the body, in order.
+    /// Paths of the body's paragraphs in document order, each followed by those of the text boxes
+    /// anchored in it. A box shown twice, or inside itself, comes once.
+    pub fn body_para_paths(&self) -> Vec<(StoryRef, Path)> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut todo: Vec<(StoryRef, Path)> = self.para_paths(StoryRef::Body).into_iter().rev().map(|p| (StoryRef::Body, p)).collect();
+        while let Some((story, path)) = todo.pop() {
+            let boxes: Vec<u32> = self.para(story, &path).map(|p| p.objects.iter().flat_map(InlineObject::text_boxes).collect()).unwrap_or_default();
+            out.push((story, path));
+            let new: Vec<u32> =
+                boxes.into_iter().filter(|id| self.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox) && seen.insert(*id)).collect();
+            for id in new.into_iter().rev() {
+                todo.extend(self.para_paths(StoryRef::Part(id)).into_iter().rev().map(|p| (StoryRef::Part(id), p)));
+            }
+        }
+        out
+    }
+
+    /// Bookmark names in the body and its text boxes, in order.
     pub fn bookmarks(&self) -> Vec<(String, Pos)> {
         let mut out = Vec::new();
-        for path in self.para_paths(StoryRef::Body) {
-            if let Some(p) = self.para(StoryRef::Body, &path) {
+        for (story, path) in self.body_para_paths() {
+            if let Some(p) = self.para(story, &path) {
                 for (off, o) in p.objects_with_offsets() {
                     if let InlineObject::BookmarkStart { name } = o {
-                        out.push((name.clone(), Pos { story: StoryRef::Body, path: path.clone(), off }));
+                        out.push((name.clone(), Pos { story, path: path.clone(), off }));
                     }
                 }
             }

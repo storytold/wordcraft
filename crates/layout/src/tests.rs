@@ -4823,6 +4823,14 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
     // Plain text: nothing.
     let c = l.caret(&Pos::body(0, 10)).unwrap();
     assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
+    // A one-line box (#3129): all of its inside is its text; just outside its border grabs it.
+    let mut d = Document::from_text("Words before the caption.");
+    let id = text_box(&mut d, 0, "Figure 1", 144.0, 12.0, Default::default());
+    let l = lay(&d);
+    let b = box_rect(&l, id);
+    assert!(l.object_at(0, b.x + 1.0, b.y + 1.0, 5.0).is_none(), "{b:?}");
+    assert!(l.object_at(0, b.x + b.w / 2.0, b.bottom() - 1.0, 5.0).is_none());
+    assert_eq!(l.object_at(0, b.x + b.w / 2.0, b.y - 2.0, 5.0).and_then(|o| o.text_box), Some(id));
 }
 
 #[test]
