@@ -1,0 +1,412 @@
+use super::*;
+
+fn ctx() -> egui::Context {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+    ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+    ctx
+}
+
+fn frame(ctx: &egui::Context, n: &mut u32, events: Vec<egui::Event>, a: &mut WordApp) {
+    *n += 1;
+    let input = egui::RawInput { time: Some(f64::from(*n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+    ctx.run_ui(input, |ui| title_bar(a, ui)).drop_without_applying_deltas();
+}
+
+fn click(ctx: &egui::Context, n: &mut u32, pos: egui::Pos2, a: &mut WordApp) {
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    frame(ctx, n, vec![egui::Event::PointerMoved(pos), button(true)], a);
+    frame(ctx, n, vec![button(false)], a);
+}
+
+/// #701: the arrow beside Undo lists the session's undo steps, newest first; clicking the third
+/// row undoes three steps at once.
+#[test]
+fn undo_list_matches_the_session_and_undoes_up_to_the_clicked_row() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("format.italic", json!({})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("text.insert", json!({"text": " world"})).unwrap();
+    let session: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+    assert_eq!(session, ["Typing", "Italic", "Bold", "Typing"]);
+    assert_eq!(undo_list_rows(&a), session);
+    assert_eq!(undo_list_footer(0), "Cancel");
+    assert_eq!(undo_list_footer(1), "Undo 1 Action");
+    assert_eq!(undo_list_footer(3), "Undo 3 Actions");
+
+    let (ctx, mut n) = (ctx(), 0);
+    frame(&ctx, &mut n, vec![], &mut a);
+    let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+    let popup = egui::Popup::default_response_id(&arrow);
+    click(&ctx, &mut n, arrow.rect.center(), &mut a);
+    assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+    frame(&ctx, &mut n, vec![], &mut a);
+    for i in 0..4 {
+        assert!(ctx.read_response(undo_list_row_id(i)).is_some(), "row {i} is drawn");
+    }
+    assert!(ctx.read_response(undo_list_row_id(4)).is_none(), "one row per step");
+    let third = ctx.read_response(undo_list_row_id(2)).unwrap();
+    click(&ctx, &mut n, third.rect.center(), &mut a);
+    assert_eq!(a.session.undo_history(), ["Typing"], "three steps undone in one go");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
+    frame(&ctx, &mut n, vec![], &mut a);
+    assert!(!egui::Popup::is_id_open(&ctx, popup), "the list closes");
+}
+
+/// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
+/// left must not shift with it.
+#[test]
+fn status_bar_controls_hold_still_across_zoom_levels() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let names = ["Focus", "Print Layout", "Web Layout"];
+    let mut seen: Vec<(f32, Vec<f64>)> = Vec::new();
+    for (n, zoom) in [10.0_f32, 9.0, 100.0, 500.0].into_iter().enumerate() {
+        a.canvas.scale = zoom / 100.0 * crate::canvas::PX_PER_PT;
+        let input = egui::RawInput {
+            time: Some(n as f64 / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| status_bar(&mut a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take().unwrap();
+        let xs: Vec<f64> = names
+            .iter()
+            .map(|name| {
+                let node = update.nodes.iter().find(|(_, node)| node.label() == Some(*name)).unwrap_or_else(|| panic!("{name} is drawn")).1.clone();
+                node.bounds().unwrap().x0
+            })
+            .collect();
+        seen.push((zoom, xs));
+    }
+    let first = &seen[0].1;
+    for (zoom, xs) in &seen {
+        assert_eq!(xs, first, "status bar controls moved at {zoom}% zoom");
+    }
+}
+
+/// #2402: a long message (the path of a file that isn't there) is shortened so that it stops
+/// before the controls on the right, instead of being drawn over the Focus button.
+#[test]
+fn a_long_status_message_stops_before_the_controls() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let long = "C:\\Test\\Documents\\Reports\\Final individual test folder\\Second level folder\\Project - Gadgets and sleep of teenagers.docx: The system cannot find the path specified. (os error 3)";
+    a.status_msg = Some((long.to_string(), crate::now_ms()));
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let input =
+        egui::RawInput { time: Some(0.0), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))), ..Default::default() };
+    let mut whole = 0.0;
+    let mut out = ctx.run_ui(input, |ui| {
+        status_bar(&mut a, ui);
+        // The width the whole message would take, unshortened.
+        let t = Tokens::get(ui.ctx());
+        let font = TypeRung::Caption.regular();
+        let track = TypeRung::Caption.tracking();
+        whole = text_width(ui.painter(), long, &font, track, t.accent_text);
+    });
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.take().unwrap();
+    let focus = update.nodes.iter().find(|(_, node)| node.label() == Some("Focus")).unwrap_or_else(|| panic!("Focus is drawn")).1.bounds().unwrap();
+    let msg = ctx.read_response(status_message_id()).expect("the message is drawn");
+    assert!(msg.rect.width() < whole, "the message is shortened: {:?} of {whole}", msg.rect);
+    assert!(f64::from(msg.rect.right()) <= focus.x0, "the message stops before the Focus button: {:?} vs {}", msg.rect, focus.x0);
+}
+
+/// The status bar's "editing a non-body story" line named every one of them "Editing
+/// header/footer", footnotes and endnotes included — it only ever checked "not the body,
+/// not a text box", with no regard for which kind of part it actually was.
+#[test]
+fn status_bar_names_the_actual_part_being_edited() {
+    let label = |a: &mut WordApp| {
+        let ctx = ctx();
+        ctx.enable_accesskit();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.take().unwrap();
+        for prefix in ["Editing footnote", "Editing endnote", "Editing header/footer"] {
+            if update.nodes.iter().any(|(_, node)| node.label().is_some_and(|l| l == prefix)) {
+                return prefix.to_string();
+            }
+        }
+        "(none shown)".to_string()
+    };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Body text"})).unwrap();
+    a.run("references.footnote", json!({})).unwrap();
+    assert_eq!(label(&mut a), "Editing footnote");
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("references.endnote", json!({})).unwrap();
+    assert_eq!(label(&mut a), "Editing endnote");
+    a.run("insert.createHeader", json!({})).unwrap();
+    assert_eq!(label(&mut a), "Editing header/footer");
+}
+
+/// #1903: the footer's Cancel row closes the Undo list without undoing anything.
+#[test]
+fn undo_list_cancel_closes_without_undoing() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    let before: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+    assert!(!before.is_empty());
+
+    let (ctx, mut n) = (ctx(), 0);
+    frame(&ctx, &mut n, vec![], &mut a);
+    let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+    let popup = egui::Popup::default_response_id(&arrow);
+    click(&ctx, &mut n, arrow.rect.center(), &mut a);
+    assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+    frame(&ctx, &mut n, vec![], &mut a);
+    let cancel = ctx.read_response(undo_list_cancel_id()).expect("Cancel is drawn");
+    click(&ctx, &mut n, cancel.rect.center(), &mut a);
+    let after: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+    assert_eq!(after, before, "nothing undone");
+    frame(&ctx, &mut n, vec![], &mut a);
+    assert!(!egui::Popup::is_id_open(&ctx, popup), "Cancel closes the list");
+}
+
+#[test]
+fn mac_title_bar_centres_and_clears_the_traffic_lights() {
+    // The lights are centred in the bar, and content keeps the same gap after them.
+    let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+    let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+    assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+    // `egui::Margin` is in `i8`.
+    assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
+}
+
+#[test]
+fn mac_title_bar_follows_the_measured_lights() {
+    // The standard lights give the standard bar.
+    let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+    assert_eq!(MacTitleBar::around_lights(lights_end, MAC_TITLE_BAR / 2.0, MAC_LIGHT), MacTitleBar::default());
+    // Larger, lower lights (macOS 26): a taller bar, and content clear of the green button.
+    let bar = MacTitleBar::around_lights(78.0, 18.0, 14.0);
+    assert_eq!(bar.height, 36.0);
+    assert_eq!(bar.content_left, 89.0);
+    // Never tighter than the standard layout.
+    assert_eq!(MacTitleBar::around_lights(40.0, 10.0, 12.0), MacTitleBar::default());
+}
+
+/// #1945: Hide Quick Access Toolbar, the last item of the toolbar's menu, takes the toolbar's
+/// buttons and its … button out of the title bar, which keeps its title; the command brings
+/// them back.
+#[test]
+fn hide_quick_access_toolbar_takes_the_toolbar_out_of_the_title_bar() {
+    use egui_kittest::kittest::Queryable;
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // The fonts `logic` installs take effect on the next frame, as `WordApp::ui` waits.
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let drawn = |h: &egui_kittest::Harness<'static, WordApp>, id: &str| h.ctx.read_response(qat_button_id(id)).is_some();
+    for id in ["file.save", "edit.undo", "edit.redo"] {
+        assert!(drawn(&h, id), "{id} is on the toolbar");
+    }
+    let at = h.ctx.read_response(qat_menu_button_id()).expect("the … button").rect.center();
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(2);
+    h.get_by_label("Hide Quick Access Toolbar").click();
+    // `read_response` also reads the frame before last, so run two frames past the change.
+    h.run_steps(3);
+    assert!(!h.state().ui.quick_access_toolbar, "the menu's last item hides the toolbar");
+    assert!(h.query_by_label("Hide Quick Access Toolbar").is_none(), "and closes the menu");
+    for id in ["file.save", "edit.undo", "edit.redo"] {
+        assert!(!drawn(&h, id), "{id} is gone");
+    }
+    assert!(h.ctx.read_response(qat_menu_button_id()).is_none(), "so is the … button");
+    assert!(h.query_by_label_contains("Not saved").is_some(), "the title is still drawn");
+    h.state_mut().run("ui.quickAccessToolbar", json!({"value": true})).unwrap();
+    h.run_steps(2);
+    for id in ["file.save", "edit.undo", "edit.redo"] {
+        assert!(drawn(&h, id), "{id} is back");
+    }
+    assert!(h.ctx.read_response(qat_menu_button_id()).is_some());
+}
+
+/// #3040: clicking a row in the Undo list hands the keyboard back to the document.
+#[test]
+fn undo_list_row_returns_focus_to_the_document() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    assert_eq!(a.session.undo_history().len(), 1);
+
+    let (ctx, mut n) = (ctx(), 0);
+    frame(&ctx, &mut n, vec![], &mut a);
+    let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+    let popup = egui::Popup::default_response_id(&arrow);
+    click(&ctx, &mut n, arrow.rect.center(), &mut a);
+    assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+    frame(&ctx, &mut n, vec![], &mut a);
+    let row = ctx.read_response(undo_list_row_id(0)).unwrap();
+    a.canvas.want_focus = false;
+    click(&ctx, &mut n, row.rect.center(), &mut a);
+    assert!(a.canvas.want_focus, "the row click returns focus to the document");
+    assert!(a.session.undo_history().is_empty(), "the step was undone");
+}
+
+/// A saved .docx (so AutoSave can cover it) with the title bar drawn over it.
+fn autosave_harness() -> (egui_kittest::Harness<'static, WordApp>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-autosave-label-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("draft.docx");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(a.autosaves(), "a saved .docx is covered by AutoSave");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            // The fonts `logic` installs take effect on the next frame, as `WordApp::ui` waits.
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    (h, dir)
+}
+
+/// #3370: the AutoSave text is part of the switch, not a caption beside it: clicking the text
+/// toggles AutoSave, as clicking the switch does.
+#[test]
+fn clicking_the_autosave_label_toggles_autosave() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, dir) = autosave_harness();
+    assert!(h.state().autosaves());
+    h.get_by_label("AutoSave").click();
+    h.run_steps(2);
+    assert!(!h.state().autosaves(), "clicking the text turns AutoSave off");
+    h.get_by_label("AutoSave").click();
+    h.run_steps(2);
+    assert!(h.state().autosaves(), "and clicking it again turns it back on");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_font_box_warns_where_the_status_bar_does_and_before_typing() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let missing = "Wordcraft Nowhere Face";
+    // An empty paragraph in a missing font: no letters show it yet, still worth a warning.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": missing})).unwrap();
+    assert!(a.font_box_warning(missing).is_some(), "an empty paragraph warns");
+    // Text in it: the status bar's list decides.
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    let l = a.session.layout();
+    let (list, _) = a.cached_missing_fonts(&l);
+    assert!(list.iter().any(|f| f.font == missing), "{list:?}");
+    assert!(a.font_box_warning(missing).is_some());
+    // A missing font just picked at the end of text in an installed one: the next letter will be
+    // drawn in a substitute, so the box warns before it is typed.
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    a.session.run("caret.docEnd", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Just Picked"})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Just Picked").is_some(), "picked at the caret");
+    // Over a selection the box shows the selected text's font, which the list decides.
+    a.session.run("select.all", &json!({})).unwrap();
+    assert!(a.font_box_warning("Wordcraft Half Typed").is_none());
+}
+
+#[test]
+fn the_east_asian_font_box_names_the_face_its_text_is_drawn_in() {
+    // MS Mincho is roman in many font tables; the run's font is drawn in Cambria then, but CJK
+    // text never is: it goes to the run's font or a fallback face.
+    let mincho = "Wordcraft Mincho Gone";
+    let mut doc = wordcraft_doc::Document::new();
+    doc.settings.roman_fonts = vec![mincho.into()];
+    let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, mincho, "JetBrains Mono");
+    assert!(want.is_some(), "not installed");
+    assert_eq!(a.east_asian_font_box_warning(mincho, "JetBrains Mono"), want, "an empty paragraph warns");
+}
+
+#[test]
+fn a_screen_reader_hears_the_font_box_warning() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "Wordcraft Nowhere Face"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let described = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.accesskit_node().description())
+        .any(|d| d.contains("Wordcraft Nowhere Face") && d.contains("isn't installed"));
+    assert!(described, "the font box describes its warning");
+}
+
+#[test]
+fn the_font_dialog_warns_for_a_missing_font_over_a_selection() {
+    // Selected Latin text: no East Asian text shows the Asian font, and none shows a font just
+    // typed into the dialog, so the list has neither; OK would apply them all the same.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": "JetBrains Mono"})).unwrap();
+    assert!(a.east_asian_font_box_warning("Wordcraft Mincho Gone", "JetBrains Mono").is_some(), "the Asian box");
+    assert!(a.font_dialog_warning("Wordcraft Dialog Gone").is_some(), "the Latin box");
+    assert!(a.font_dialog_warning("JetBrains Mono").is_none(), "an installed font");
+    // The ribbon's box over the selection shows the selected text's font: the list decides.
+    assert!(a.font_box_warning("Wordcraft Dialog Gone").is_none());
+}
+
+#[test]
+fn the_asian_box_names_the_face_cjk_text_gets_even_for_a_font_latin_text_uses() {
+    // The status bar lists the font with the face its Latin text is drawn in; Chinese, Japanese
+    // and Korean text in it would go to the Latin text font or a fallback face instead.
+    let gone = "Wordcraft Both Ways Gone";
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.session.run("text.insert", &json!({"text": "Hello"})).unwrap();
+    a.session.run("select.all", &json!({})).unwrap();
+    a.session.run("format.font", &json!({"name": gone})).unwrap();
+    assert!(a.font_box_warning(gone).is_some(), "listed for its Latin text");
+    let want = wordcraft_engine::cmd::font::east_asian_shown_as(&a.session.doc, gone, "JetBrains Mono");
+    assert!(want.is_some());
+    assert_eq!(a.east_asian_font_box_warning(gone, "JetBrains Mono"), want);
+}
+
+/// The AutoSave knob is at the right when the switch is on and at the left when it is off; a
+/// right-to-left interface mirrors that.
+#[test]
+fn the_autosave_knob_sits_right_when_on_and_mirrors_right_to_left() {
+    let track = Rect::from_min_max(egui::pos2(100.0, 0.0), egui::pos2(130.0, 16.0));
+    assert_eq!(autosave_knob_x(false, true, track), 122.0, "left to right, on: right");
+    assert_eq!(autosave_knob_x(false, false, track), 108.0, "left to right, off: left");
+    assert_eq!(autosave_knob_x(true, true, track), 108.0, "right to left, on: left");
+    assert_eq!(autosave_knob_x(true, false, track), 122.0, "right to left, off: right");
+}

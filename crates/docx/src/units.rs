@@ -13,13 +13,39 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     if t.is_empty() || t.len() > 40 {
         return None;
     }
-    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')).unwrap_or(t.len());
+    let bytes = t.as_bytes();
+    let mut split = t.len();
+    let mut in_exp = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b.is_ascii_digit() || b == b'.' {
+            in_exp = false;
+            continue;
+        }
+        if (b == b'-' || b == b'+') && (i == 0 || in_exp) {
+            in_exp = false;
+            continue;
+        }
+        if b == b'e' || b == b'E' {
+            let rest = &bytes[i + 1..];
+            let after_sign = match rest.first() {
+                Some(&s) if s == b'+' || s == b'-' => &rest[1..],
+                _ => rest,
+            };
+            if after_sign.first().is_some_and(u8::is_ascii_digit) {
+                in_exp = true;
+                continue;
+            }
+        }
+        split = i;
+        break;
+    }
     let (num, unit) = t.split_at(split);
     let v: f64 = num.parse().ok()?;
     if !v.is_finite() {
         return None;
     }
-    let pt = match unit.trim() {
+    let unit_lower = unit.trim().to_ascii_lowercase();
+    let pt = match unit_lower.as_str() {
         "" => v / per_pt as f64,
         "pt" => v,
         "in" => v * 72.0,
@@ -32,6 +58,17 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     };
     let pt = pt as f32;
     pt.is_finite().then_some(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT))
+}
+
+/// `w:line` under `lineRule="auto"`: the multiple of single line spacing, in 240ths (240 =
+/// single). Without a unit the value already is that — the transitional form. A universal
+/// measure is a height (strict OOXML writes `w:line="13.90pt"`, ISO 29500
+/// `ST_SignedTwipsMeasure`), so it goes through twips as Word reads it: × 20 ÷ 240 (13.90 pt =
+/// 278 twips, the 1.1583 multiple Word renders).
+pub fn line_multiple(s: &str) -> Option<f32> {
+    let t = s.trim();
+    let measured = t.ends_with(|c: char| c.is_ascii_alphabetic());
+    measure(t, 240.0).map(|v| if measured { v * 20.0 / 240.0 } else { v })
 }
 
 /// Plain integer (accepts decimals, rounds; clamps into i64 range).
@@ -98,6 +135,25 @@ mod tests {
         assert_eq!(measure("1e400", 20.0), None);
         assert_eq!(measure("99999999999999", 20.0), Some(MAX_LEN_PT));
         assert_eq!(measure("x", 20.0), None);
+        // `w:line` auto: the multiple in 240ths without a unit, through twips with one (#2329).
+        assert_eq!(line_multiple("240"), Some(1.0));
+        assert_eq!(line_multiple("276"), Some(1.15));
+        assert_eq!(line_multiple("0"), Some(0.0));
+        let strict = line_multiple("13.90pt").expect("strict line height");
+        assert!((strict - 278.0 / 240.0).abs() < 1e-5, "{strict}");
+        let inches = line_multiple("1.2in").expect("inches");
+        assert!((inches - 7.2).abs() < 1e-5, "{inches}");
+        assert_eq!(line_multiple("junk"), None);
+        assert_eq!(line_multiple(""), None);
+        assert_eq!(measure("12700emu", 20.0), Some(1.0));
+        assert_eq!(measure("25400EMU", 20.0), Some(2.0));
+        assert_eq!(measure("1IN", 20.0), Some(72.0));
+        assert_eq!(measure("12PT", 2.0), Some(12.0));
+        assert_eq!(measure("2.54CM", 20.0), Some(72.0));
+        assert_eq!(measure("25.4MM", 20.0), Some(72.0));
+        assert_eq!(measure("10PX", 20.0), Some(7.5));
+        assert_eq!(measure("1e2pt", 20.0), Some(100.0));
+        assert_eq!(measure("1e+2pt", 20.0), Some(100.0));
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
     }

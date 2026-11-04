@@ -10,6 +10,8 @@ use crate::fields;
 use crate::wire::{self, Call, Frame};
 use crate::{Bridge, Command, Headless, ZoteroError};
 
+mod limits;
+
 const CITE: &str = r#"ITEM CSL_CITATION {"citationID":"k1","properties":{"formattedCitation":"(Doe, 2020)"},"citationItems":[{"id":7}]}"#;
 const BIBL: &str = r#"BIBL {"uncited":[],"omitted":[],"custom":[]} CSL_BIBLIOGRAPHY"#;
 const PREFS: &str = r#"<data data-version="3" zotero-version="7.0"><session id="s1"/><style id="http://www.zotero.org/styles/apa" hasBibliography="1" bibliographyStyleHasBeenSet="1"/><prefs><pref name="fieldType" value="ReferenceMark"/></prefs></data>"#;
@@ -563,4 +565,26 @@ fn a_citation_added_just_after_another_is_not_nested_in_it() {
     assert_eq!(z.text(), "Cats purr (Doe 2020)(Roe 2019)");
     let r = z.s.doc.field_ranges(StoryRef::Body);
     assert_eq!(r.iter().map(|f| f.depth).collect::<Vec<_>>(), [0, 0]);
+}
+
+#[test]
+fn citation_at_document_end_stays_closed() {
+    // #898: citing at the very end, typing after it, saving and reloading must all keep
+    // the field's end marker in place.
+    let mut z = Z::new("Hello", 5);
+    z.begin();
+    let id = z.cite(0, r"{\rtf  (Doe, {\i{}2020})}");
+    z.ok("Document_complete", json!([1]));
+    // Type right after the citation, at the very end of the document.
+    z.s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert_eq!(z.text(), "Hello (Doe, 2020)!");
+    let ranges = z.s.doc.field_ranges(StoryRef::Body);
+    assert_eq!(ranges.len(), 1);
+    assert!(z.s.sel.focus.off > ranges[0].end.off, "typed text lands outside the field");
+    let f = z.ok("Document_getFields", json!([1, "ReferenceMark"]));
+    assert_eq!(f, json!([[id], [CITE], [0]]));
+    // Save and reload: the end marker must survive the round trip.
+    let bytes = wordcraft_engine::io::save_bytes("probe.docx", &z.s.doc).unwrap();
+    let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
+    assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
 }

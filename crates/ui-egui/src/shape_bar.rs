@@ -83,7 +83,7 @@ pub fn update(app: &mut WordApp, ctx: &egui::Context, menu: Option<Rect>, viewpo
 
 fn show(app: &mut WordApp, ctx: &egui::Context, bar: Rect) {
     let t = Tokens::get(ctx);
-    let area = egui::Area::new(Id::new("wc_shape_bar")).order(Order::Foreground).interactable(true).fixed_pos(bar.min);
+    let area = egui::Area::new(Id::unique("wc_shape_bar")).order(Order::Foreground).interactable(true).fixed_pos(bar.min);
     let mut popup = false;
     area.show(ctx, |ui| {
         let painter = ui.painter();
@@ -116,13 +116,13 @@ fn show(app: &mut WordApp, ctx: &egui::Context, bar: Rect) {
 
 /// Where the bar was drawn last frame, for tests.
 pub fn shown_id() -> Id {
-    Id::new("wc_shape_bar").with("shown")
+    Id::unique("wc_shape_bar").with("shown")
 }
 
 /// The selected shape's fill and outline, for the swatches under Fill and Outline.
 fn current(app: &WordApp) -> (Option<Rgb>, Option<Rgb>) {
     match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, InlineObject::Shape { fill, stroke, .. })) => (fill, stroke),
+        Some((_, InlineObject::Shape { fill, stroke, .. })) => (fill.map(|f| f.main_color()), stroke),
         _ => (None, None),
     }
 }
@@ -130,7 +130,7 @@ fn current(app: &WordApp) -> (Option<Rgb>, Option<Rgb>) {
 /// One of the bar's buttons; `swatch` (Fill, Outline) shows the colour it has now under the icon.
 fn button(ui: &mut Ui, t: &Tokens, r: Rect, i: usize, icon: &str, label: &str, swatch: Option<Option<Rgb>>) -> egui::Response {
     let text = crate::tl!(label);
-    let resp = ui.interact(r, Id::new(("wc_shape_bar", i)), Sense::click());
+    let resp = ui.interact(r, Id::unique(("wc_shape_bar", i)), Sense::click());
     let p = ui.painter();
     if resp.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp)) {
         p.rect_filled(r, CornerRadius::same(4), t.hover);
@@ -155,7 +155,7 @@ fn button(ui: &mut Ui, t: &Tokens, r: Rect, i: usize, icon: &str, label: &str, s
     let y = r.max.y - 9.0;
     p.text(pos2(left, y), Align2::LEFT_CENTER, text, font, t.text);
     icons::paint(p, Rect::from_center_size(pos2(left + w + 2.0 + arrow / 2.0, y), vec2(arrow, arrow)), "dropdown", t.icon, t.icon);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     resp.on_hover_text(text)
 }
 
@@ -182,7 +182,7 @@ fn style_menu(ui: &mut Ui, app: &mut WordApp) {
                     p.rect_stroke(box_r, 2.0, Stroke::new(st.width.clamp(1.0, 2.0), c32(s)), egui::StrokeKind::Inside);
                 }
                 let tip = format!("{}, {}", crate::tl!(style_name), crate::tl!(color_name));
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tip));
                 if resp.on_hover_text(&tip).clicked() {
                     let _ = app.run("shape.style", json!({"style": style, "color": color}));
                     ui.close();
