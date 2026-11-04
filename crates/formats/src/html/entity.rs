@@ -8,10 +8,11 @@ pub fn decode_entity(name: &str) -> Option<String> {
             Some(h) => (h, 16),
             None => (num, 10),
         };
-        if !digits.chars().all(|c| c.is_digit(radix)) {
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
             return None;
         }
-        let v = u32::from_str_radix(digits, radix).ok()?;
+        // With nonempty digits validated, a parse error means the value is outside Unicode.
+        let v = u32::from_str_radix(digits, radix).unwrap_or(u32::MAX);
         let c = match v {
             0 => '\u{FFFD}',
             0x80..=0x9F => crate::txt::cp1252(v as u8),
