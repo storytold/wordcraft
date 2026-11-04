@@ -37,6 +37,11 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     if s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi) {
         t.props.bidi_visual = true;
     }
+    // With Track Changes on, a new table is a tracked insertion of its rows, as in Word.
+    if s.doc.settings.track_changes {
+        let rid = crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Insert);
+        t.rows.iter_mut().for_each(|r| r.props.ins = Some(rid));
+    }
     let story = s.sel.focus.story;
     let path = insert_block_at_caret(s, Block::Table(t))?;
     let mut first = path.0.clone();

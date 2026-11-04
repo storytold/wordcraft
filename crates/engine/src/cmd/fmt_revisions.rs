@@ -186,7 +186,7 @@ fn strip_table(t: &TableProps) -> TableProps {
     TableProps { fmt_change: None, ..t.clone() }
 }
 fn strip_row(r: &RowProps) -> RowProps {
-    RowProps { fmt_change: None, ..r.clone() }
+    RowProps { fmt_change: None, ins: None, del: None, ..r.clone() }
 }
 fn strip_cell(c: &CellProps) -> CellProps {
     CellProps { fmt_change: None, span: 0, vmerge: VMerge::None, ..c.clone() }
@@ -339,7 +339,30 @@ pub fn resolve_containers(blocks: &mut Blocks, accept: bool, depth: usize) {
                         resolve_containers(&mut c.blocks, accept, depth + 1);
                     }
                 }
+                resolve_row_marks(t, accept);
             }
+        }
+    }
+    // A table whose every row was accepted as deleted goes; a container keeps a paragraph.
+    blocks.retain(|b| !matches!(&**b, Block::Table(t) if t.rows.is_empty()));
+    if blocks.is_empty() {
+        blocks.push(Arc::new(Block::Para(Default::default())));
+    }
+}
+
+/// Accept or reject every row marked as a tracked insertion or deletion: an accepted deletion or
+/// a rejected insertion removes the row; otherwise the row stays and loses its mark.
+pub fn resolve_row_marks(t: &mut Table, accept: bool) {
+    for r in (0..t.rows.len()).rev() {
+        let Some(row) = t.rows.get_mut(r) else { continue };
+        if row.props.ins.is_none() && row.props.del.is_none() {
+            continue;
+        }
+        let goes = if accept { row.props.del.is_some() } else { row.props.ins.is_some() };
+        if goes {
+            t.delete_row(r);
+        } else {
+            (row.props.ins, row.props.del) = (None, None);
         }
     }
 }
@@ -354,7 +377,9 @@ pub fn resolve_table(t: &mut Table, accept: bool) {
 /// Accept or reject a row's change.
 pub fn resolve_row(r: &mut Row, accept: bool) {
     if let Some(ch) = r.props.fmt_change.take().filter(|_| !accept) {
-        r.props = RowProps { fmt_change: None, ..ch.old };
+        // The row's own insertion or deletion isn't formatting: it stays for the rows' turn.
+        let (ins, del) = (r.props.ins, r.props.del);
+        r.props = RowProps { fmt_change: None, ins, del, ..ch.old };
     }
 }
 
@@ -384,7 +409,12 @@ pub fn table_diff(t: &TableProps) -> Vec<Value> {
 pub fn row_diff(r: &RowProps) -> Vec<Value> {
     r.fmt_change
         .as_ref()
-        .map(|ch| diff(&RowProps { fmt_change: None, ..ch.old.clone() }, &RowProps { fmt_change: None, ..r.clone() }))
+        .map(|ch| {
+            diff(
+                &RowProps { fmt_change: None, ins: None, del: None, ..ch.old.clone() },
+                &RowProps { fmt_change: None, ins: None, del: None, ..r.clone() },
+            )
+        })
         .unwrap_or_default()
 }
 pub fn cell_diff(c: &CellProps) -> Vec<Value> {
