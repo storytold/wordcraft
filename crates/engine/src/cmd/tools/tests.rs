@@ -367,6 +367,30 @@ fn compare_adopts_the_revised_documents_comments() {
 }
 
 #[test]
+fn compare_keeps_a_reply_the_result_still_anchors_when_its_root_goes() {
+    // The original's root comment on "Alpha" is the same in both documents, so the result
+    // shows the revised one's and the original's goes. Its reply carries its own range over
+    // "Beta" (a comment read from a file can have both a parent and a range), and that range
+    // survives in the result — so the reply stays, detached, instead of leaving its anchor
+    // naming a comment the result lacks.
+    let mut o = Session::new(Document::from_text("Alpha one.\nBeta two."));
+    comment_on(&mut o, "Alpha", "root note");
+    let reply = o.run("review.reply", &json!({"id": 0, "text": "anchored reply"})).unwrap()["id"].as_u64().unwrap() as u32;
+    let props = Default::default();
+    o.doc.insert_object(&Pos::body(1, 4), InlineObject::CommentEnd { id: reply }, &props).unwrap();
+    o.doc.insert_object(&Pos::body(1, 0), InlineObject::CommentStart { id: reply }, &props).unwrap();
+    let mut r = Session::new(Document::from_text("Alpha one.\nBeta 2."));
+    comment_on(&mut r, "Alpha", "root note");
+    let s = compare_files("anchoredreply", &o.doc, &r.doc);
+    // anchored_comments panics if an anchor names a comment the result lacks.
+    let t = |t: &str, del| (t.to_string(), del);
+    assert_eq!(anchored_comments(&s.doc), [t("anchored reply", true), t("root note", false)]);
+    let kept =
+        s.doc.comments.values().find(|c| s.doc.plain_text(StoryRef::Part(c.part)).trim() == "anchored reply").expect("the anchored reply is kept");
+    assert_eq!(kept.parent, None, "its root went, so the parent clearing detaches it");
+}
+
+#[test]
 fn compare_keeps_a_styles_list_when_only_its_definition_changed() {
     use wordcraft_doc::styles::{Style, StyleKind};
     // Both documents define the style "Listy" numbering by list 1; only the definition behind

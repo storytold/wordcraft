@@ -234,11 +234,17 @@ fn note_and_comment_refs(doc: &Document) -> (BTreeSet<u32>, BTreeSet<u32>) {
 fn drop_unshown(doc: &mut Document, before: &(BTreeSet<u32>, BTreeSet<u32>)) {
     let (notes, comments) = note_and_comment_refs(doc);
     // Replies to a dropped comment go with it; left behind, the parent clearing below would
-    // surface them as unrelated top-level comments.
+    // surface them as unrelated top-level comments. A reply the result still anchors (one
+    // read from a file can carry its own range) stays, though: dropping it would leave its
+    // anchor naming a comment the result lacks, and the parent clearing detaches it instead.
     let mut gone: BTreeSet<u32> = before.1.difference(&comments).copied().collect();
     loop {
-        let more: Vec<u32> =
-            doc.comments.iter().filter(|(id, c)| !gone.contains(id) && c.parent.is_some_and(|p| gone.contains(&p))).map(|(id, _)| *id).collect();
+        let more: Vec<u32> = doc
+            .comments
+            .iter()
+            .filter(|(id, c)| !gone.contains(id) && !comments.contains(id) && c.parent.is_some_and(|p| gone.contains(&p)))
+            .map(|(id, _)| *id)
+            .collect();
         if more.is_empty() {
             break;
         }
