@@ -283,6 +283,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | trivial | Page- and margin-anchored frames inside table cells run with the cell's text as in Word, instead of being placed apart outside the cell (`layout::tests::a_page_anchored_frame_inside_a_cell_flows_with_its_text`) |
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |
 | 2026-11-01 | trivial | SEQ, STYLEREF and REF fields show fresh results in output; readiness estimates unchanged |
 | 2026-10-29 | trivial | Print Markup balloon anchor discovery walks paragraph objects once (#3614); readiness estimates unchanged |

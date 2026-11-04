@@ -219,7 +219,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let mut prev_style: Option<(String, bool)> = None;
     let mut last_top = 0.0f32;
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
-    // runs with the box's text (#2357).
+    // runs with the box's text (#2357). In a table cell, a paragraph cannot be anchored to
+    // the page or its margins (there is no page frame in a cell; page coordinates would push
+    // text outside the cell and stretch row heights to the page): it runs with the cell's text.
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     // The bottom of the last paragraph's lines.
     let mut prev_end = 0.0f32;
@@ -236,19 +238,26 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 // floating object, and the text after it wraps around it; it takes no room in
                 // the flow.
                 if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
-                    let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
-                    let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
-                    let h = match fr.h {
-                        Some(h) if fr.h_exact => h,
-                        Some(h) => h.max(pf.height),
-                        None => pf.height,
-                    };
-                    let float = frame_float(&fr);
-                    let r = float_rect(frame, (0.0, width), y, fw, h, &float);
-                    push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
-                    excl.extend(wrap_area(r, &float, None));
-                    float_tables.push(r);
-                    continue;
+                    if in_cell
+                        && (matches!(fr.h_anchor.as_str(), "page" | "margin")
+                            || matches!(fr.v_anchor.as_str(), "page" | "margin"))
+                    {
+                        // Word ignores page- and margin-anchored frames inside table cells.
+                    } else {
+                        let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
+                        let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
+                        let h = match fr.h {
+                            Some(h) if fr.h_exact => h,
+                            Some(h) => h.max(pf.height),
+                            None => pf.height,
+                        };
+                        let float = frame_float(&fr);
+                        let r = float_rect(frame, (0.0, width), y, fw, h, &float);
+                        push_para(&mut items, (story, &path), &pf, (0, pf.lines.len()), (r.x, r.y), fw, Edges::own(&pf, 0, pf.lines.len()));
+                        excl.extend(wrap_area(r, &float, None));
+                        float_tables.push(r);
+                        continue;
+                    }
                 }
                 let (ctxl, before) = paragraph_spacing(ParagraphSpacing {
                     index: i,

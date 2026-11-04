@@ -9058,6 +9058,36 @@ fn a_frame_inside_a_text_box_flows_with_its_text() {
     assert!(commissioner > secretary + 5.0, "the text after them follows: {commissioner} vs {secretary}");
 }
 
+/// Word has no page- or margin-anchored frames inside a table cell: a paragraph there whose
+/// frame is anchored to the page (a template style's frame, or a right-side frame property
+/// copied into cell paragraphs) runs in the cell's text like any other. Placing it apart as a
+/// floating object would use page offsets relative to the cell, pushing text outside the table
+/// and stretching rows to page height.
+#[test]
+fn a_page_anchored_frame_inside_a_cell_flows_with_its_text() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Above");
+    let mut t = Table::new(1, 1, 300.0);
+    let mut framed = wordcraft_doc::Paragraph::with_text("Cell text", Default::default());
+    framed.props.frame = Some(TextFrame {
+        x: 400.0,
+        y: -20.0,
+        w: Some(300.0),
+        h: Some(500.0),
+        h_anchor: "page".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    });
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(framed)];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let pos = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }).unwrap();
+    // The text must remain placed inside the table cell (x < 300), not floated to page x=400.
+    assert!(pos.x < 300.0, "text remains inside cell: x is {}, not floated to 400", pos.x);
+    assert_eq!(l.pages.len(), 1, "does not stretch the row or create extra pages");
+}
+
 /// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
 /// `plan/word` R16): the list level's indents go on top of the most derived style that gives the
 /// list, so that style's own indent (and those of styles based on it) win, its base styles' don't
