@@ -2,6 +2,8 @@ use super::{
     Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
     para_block,
 };
+use std::collections::BTreeSet;
+use wordcraft_doc::PartKind;
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
@@ -66,13 +68,14 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
-    let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
-        // The revised document's text boxes get stories of their own in the result, so its
-        // boxes never show a story of the original's (or none at all).
-        s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
-    } else {
-        revised.body.clone()
-    };
+    // The notes and comments the original shows: those the result no longer does go with it.
+    let shown_before = note_and_comment_refs(&s.doc);
+    // Every block of the result that comes from the revised document comes through this one
+    // adoption, before anything is compared or marked: its media, lists, styles, notes,
+    // comments, tracked changes and text boxes (and what their stories refer to) are relinked
+    // to the result, so the comparison sees one document's ids and the marks below index the
+    // result's revisions only.
+    let new: Vec<Arc<Block>> = s.doc.adopt_compared(revised).into_iter().map(Arc::new).collect();
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
@@ -137,7 +140,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
                             }
                             if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
+                                // A tracked insertion the revised document already had stays its
+                                // author's (adopted, so it indexes the result's revisions).
+                                out.push(Arc::new(mark_block(x, &|c| c.ins = c.ins.or(Some(ins)), 0)));
                             }
                         }
                     }
@@ -151,6 +156,8 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     s.doc.body = out;
+    unique_deleted_bookmarks(&mut s.doc, del);
+    drop_unshown(&mut s.doc, &shown_before);
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
@@ -196,6 +203,119 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
             Block::Table(t)
         }
     }
+}
+
+/// The note stories and comments shown anywhere in `doc` (its body and every story part).
+fn note_and_comment_refs(doc: &Document) -> (BTreeSet<u32>, BTreeSet<u32>) {
+    let (mut notes, mut comments) = (BTreeSet::new(), BTreeSet::new());
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|id| StoryRef::Part(*id)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            for o in doc.para(story, &path).map(|p| p.objects.as_slice()).unwrap_or_default() {
+                match o {
+                    // A note's own story starts with its mark: that doesn't show it.
+                    InlineObject::NoteRef { id, .. } if story != StoryRef::Part(*id) => {
+                        notes.insert(*id);
+                    }
+                    InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => {
+                        comments.insert(*id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (notes, comments)
+}
+
+/// Drop the original's notes and comments the result no longer shows: where both documents
+/// have the same note or comment the result shows the revised one's (adopted), and the
+/// original's would be left over, listed but anchored nowhere.
+fn drop_unshown(doc: &mut Document, before: &(BTreeSet<u32>, BTreeSet<u32>)) {
+    let (notes, comments) = note_and_comment_refs(doc);
+    for id in before.1.difference(&comments) {
+        if let Some(c) = doc.comments.remove(id) {
+            doc.parts.remove(&c.part);
+        }
+    }
+    let ids: BTreeSet<u32> = doc.comments.keys().copied().collect();
+    for c in doc.comments.values_mut() {
+        if c.parent.is_some_and(|p| !ids.contains(&p)) {
+            c.parent = None;
+        }
+    }
+    for id in before.0.difference(&notes) {
+        if doc.parts.get(id).is_some_and(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)) {
+            doc.parts.remove(id);
+        }
+    }
+}
+
+/// Word limits bookmark names to 40 characters.
+const MAX_BOOKMARK_NAME: usize = 40;
+
+/// The original's bookmarks the result keeps only as deleted text (marked with compare's
+/// deletion `del`) whose names the result's other text also has (the revised document's) get
+/// names of their own, so no name is bookmarked twice. The revised one keeps the name: fields
+/// and links naming it go to the text the comparison accepts.
+fn unique_deleted_bookmarks(doc: &mut Document, del: u32) {
+    let paths = doc.para_paths(StoryRef::Body);
+    let mut live = BTreeSet::new();
+    let mut taken = BTreeSet::new();
+    let mut deleted = false;
+    for path in &paths {
+        let Some(p) = doc.para(StoryRef::Body, path) else { continue };
+        for (off, o) in p.objects_with_offsets() {
+            if let InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name } = o {
+                taken.insert(name.clone());
+                if p.props_of_char(off).del == Some(del) {
+                    deleted = true;
+                } else if matches!(o, InlineObject::BookmarkStart { .. }) {
+                    live.insert(name.clone());
+                }
+            }
+        }
+    }
+    if !deleted || live.is_empty() {
+        return;
+    }
+    let mut renamed: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for path in &paths {
+        let Ok(p) = doc.para_mut(StoryRef::Body, path) else { continue };
+        let dels: Vec<bool> = p.object_offsets().into_iter().map(|off| p.props_of_char(off).del == Some(del)).collect();
+        let mut changed = false;
+        for (o, deleted) in p.objects.iter_mut().zip(dels) {
+            let (InlineObject::BookmarkStart { name } | InlineObject::BookmarkEnd { name }) = o else { continue };
+            if !deleted || !live.contains(name.as_str()) {
+                continue;
+            }
+            let fresh = match renamed.get(name.as_str()) {
+                Some(f) => f.clone(),
+                None => {
+                    let Some(f) = fresh_bookmark_name(name, &taken) else { continue };
+                    taken.insert(f.clone());
+                    renamed.insert(name.clone(), f.clone());
+                    f
+                }
+            };
+            *name = fresh;
+            changed = true;
+        }
+        if changed {
+            p.touch();
+        }
+    }
+}
+
+/// `name` with a number after it (shortened to fit Word's limit) that no bookmark in `taken` has.
+fn fresh_bookmark_name(name: &str, taken: &BTreeSet<String>) -> Option<String> {
+    (1..=taken.len().saturating_add(1)).find_map(|n| {
+        let suffix = format!("_{n}");
+        let keep = MAX_BOOKMARK_NAME.saturating_sub(suffix.len());
+        let base: String = name.chars().take(keep).collect();
+        let f = format!("{base}{suffix}");
+        (!taken.contains(&f)).then_some(f)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -343,11 +463,29 @@ enum Key {
     Obj(Box<InlineObject>, Vec<String>),
 }
 
+/// Both documents' objects are in the result by the time they're compared (the revised one's
+/// adopted, with ids of their own), so the ids of the stories, notes, comments and editable
+/// ranges they refer to differ even when they're the same: they compare by what those show.
 fn obj_key(doc: &Document, o: &InlineObject) -> Key {
-    let texts = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
+    let mut texts: Vec<String> = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
     let mut o = o.clone();
     for story in o.text_box_slots() {
         *story = None;
+    }
+    match &mut o {
+        InlineObject::NoteRef { id, .. } => {
+            texts.push(doc.plain_text(StoryRef::Part(*id)));
+            *id = 0;
+        }
+        InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => {
+            if let Some(c) = doc.comments.get(id) {
+                texts.push(c.author.clone());
+                texts.push(doc.plain_text(StoryRef::Part(c.part)));
+            }
+            *id = 0;
+        }
+        InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => *id = 0,
+        _ => {}
     }
     Key::Obj(Box::new(o), texts)
 }

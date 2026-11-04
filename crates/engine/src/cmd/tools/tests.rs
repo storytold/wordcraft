@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 #[test]
 fn compare_marks_changes() {
@@ -191,6 +192,324 @@ fn compare_bounds_total_diff_work() {
     assert!(!word_diffed(s.doc.body.last().unwrap()));
     s.run("review.acceptAll", &json!({})).unwrap();
     assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+}
+
+// #5571: what Compare adopts from the revised document is relinked to the result. Each pair is
+// saved and compared as files (`original` and `path`), so both are read the same way and their
+// ids (media keys, story parts, comments, lists, revisions) collide as two versions' do.
+
+/// Compare `orig` with `rev` as .docx files; the result's session.
+fn compare_files(tag: &str, orig: &Document, rev: &Document) -> Session {
+    let dir = std::env::temp_dir();
+    let (o, r) = (dir.join(format!("wc-5571-{tag}-o-{}.docx", std::process::id())), dir.join(format!("wc-5571-{tag}-r-{}.docx", std::process::id())));
+    crate::io::save_path(&o, orig).unwrap();
+    crate::io::save_path(&r, rev).unwrap();
+    let mut s = Session::new(Document::new());
+    let res = s.run("review.compare", &json!({"original": o.to_string_lossy(), "path": r.to_string_lossy(), "author": "Comparer"}));
+    let _ = std::fs::remove_file(&o);
+    let _ = std::fs::remove_file(&r);
+    res.unwrap();
+    s
+}
+
+/// A 2×2 PNG of one colour.
+#[cfg(not(target_arch = "wasm32"))]
+fn png(rgb: [u8; 3]) -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([rgb[0], rgb[1], rgb[2], 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+/// Paragraphs of `text`, with the picture of `bytes` at the end of the paragraphs that have one.
+#[cfg(not(target_arch = "wasm32"))]
+fn with_pictures(paras: &[(&str, Option<&[u8]>)]) -> Document {
+    let mut d = Document::from_text(&paras.iter().map(|p| p.0).collect::<Vec<_>>().join("\n"));
+    for (i, (text, bytes)) in paras.iter().enumerate() {
+        if let Some(bytes) = bytes {
+            let media = d.add_media(bytes.to_vec(), "png");
+            let img = InlineObject::Image { media, w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+            d.para_mut(StoryRef::Body, &Pos::body(i, 0).path).unwrap().insert_object(text.len(), img, &CharProps::default()).unwrap();
+        }
+    }
+    d
+}
+
+/// Every object in a story's paragraphs with whether compare deleted it (its char props' `del`).
+fn objects_in(d: &Document, story: StoryRef) -> Vec<(InlineObject, bool)> {
+    let mut out = Vec::new();
+    for path in d.para_paths(story) {
+        let p = d.para(story, &path).unwrap();
+        for (off, o) in p.objects_with_offsets() {
+            out.push((o.clone(), p.props_of_char(off).del.is_some()));
+        }
+    }
+    out
+}
+
+/// The bytes of every picture in the body, and whether it is deleted, sorted.
+#[cfg(not(target_arch = "wasm32"))]
+fn pictures(d: &Document) -> Vec<(Vec<u8>, bool)> {
+    let mut out: Vec<(Vec<u8>, bool)> = objects_in(d, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::Image { media, .. } => {
+                Some((d.media.get(&media).unwrap_or_else(|| panic!("a picture shows {media}, which the result lacks")).to_vec(), del))
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn compare_shows_each_documents_own_pictures() {
+    // Both documents key their first picture `image1.png`, with different bytes; the revised one
+    // also has a picture only it has, in an inserted paragraph.
+    let (a, b, c) = (png([200, 0, 0]), png([0, 200, 0]), png([0, 0, 200]));
+    let orig = with_pictures(&[("Pic: ", Some(&a)), ("Same.", None)]);
+    let rev = with_pictures(&[("Pic: ", Some(&b)), ("Same.", None), ("Added: ", Some(&c))]);
+    let mut s = compare_files("pictures", &orig, &rev);
+    let mut want = vec![(a.clone(), true), (b.clone(), false), (c.clone(), false)];
+    want.sort();
+    assert_eq!(pictures(&s.doc), want, "the revised pictures show their own bytes, the original's is deleted");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let mut kept = vec![(b, false), (c, false)];
+    kept.sort();
+    assert_eq!(pictures(&s.doc), kept);
+}
+
+#[test]
+fn compare_keeps_the_revised_documents_tracked_changes_attributed() {
+    // The revised document has tracked insertions by Alice: in a paragraph both documents have
+    // (matched whole) and in one only it has (inserted by the comparison).
+    let orig = Document::from_text("Intro.\nKeep.");
+    let mut rev = Document::from_text("Intro.\nKeep.\nAlice added.");
+    rev.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Insert,
+        author: "Alice".into(),
+        date: "2026-01-02T03:04:00Z".into(),
+        move_name: None,
+    });
+    for i in [1usize, 2] {
+        let len = rev.para(StoryRef::Body, &Pos::body(i, 0).path).unwrap().len();
+        rev.format_range(&Pos::body(i, 0), &Pos::body(i, len), &|c| c.ins = Some(0)).unwrap();
+    }
+    let s = compare_files("revisions", &orig, &rev);
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let p = s.doc.para(StoryRef::Body, &path).unwrap();
+        for (r, c) in p.run_ranges() {
+            for id in [c.ins, c.del].into_iter().flatten() {
+                let rv = s
+                    .doc
+                    .revisions
+                    .get(id as usize)
+                    .unwrap_or_else(|| panic!("run {:?} names revision {id}, which the result lacks", &p.text[r.clone()]));
+                assert!(!rv.author.is_empty(), "revision {id} has no author");
+            }
+            let text = &p.text[r];
+            if text.contains("Keep") || text.contains("Alice") {
+                let rv = c.ins.and_then(|id| s.doc.revisions.get(id as usize)).unwrap_or_else(|| panic!("{text:?} lost its insertion"));
+                assert_eq!(rv.author, "Alice", "{text:?}");
+                assert!(rv.date.starts_with("2026-01-02"), "{text:?}: {}", rv.date);
+            }
+        }
+    }
+}
+
+/// Select `text` and comment on it.
+fn comment_on(s: &mut Session, text: &str, body: &str) {
+    s.run("select.text", &json!({"text": text})).unwrap();
+    s.run("review.newComment", &json!({"text": body})).unwrap();
+}
+
+/// The text of every comment anchored in the body (by its start), with whether it is deleted.
+fn anchored_comments(d: &Document) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = objects_in(d, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::CommentStart { id } => {
+                let c = d.comments.get(&id).unwrap_or_else(|| panic!("an anchor names comment {id}, which the result lacks"));
+                Some((d.plain_text(StoryRef::Part(c.part)).trim().to_string(), del))
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn compare_adopts_the_revised_documents_comments() {
+    // Comment 0 is on "Alpha" in both, with different text; both have the same comment on
+    // "Beta"; only the revised document has one on "Gamma" (an id the original doesn't have).
+    let mut o = Session::new(Document::from_text("Alpha one.\nBeta two."));
+    comment_on(&mut o, "Alpha", "original note");
+    comment_on(&mut o, "Beta", "shared note");
+    let mut r = Session::new(Document::from_text("Alpha one.\nBeta two.\nGamma three."));
+    comment_on(&mut r, "Alpha", "revised note");
+    comment_on(&mut r, "Beta", "shared note");
+    comment_on(&mut r, "Gamma", "gamma note");
+    let s = compare_files("comments", &o.doc, &r.doc);
+    let t = |t: &str, del| (t.to_string(), del);
+    assert_eq!(
+        anchored_comments(&s.doc),
+        [t("gamma note", false), t("original note", true), t("revised note", false), t("shared note", false)],
+        "each anchor shows its own document's comment"
+    );
+    // The original's copy of the shared comment isn't left over, anchored nowhere.
+    let texts: Vec<String> = s.doc.comments.values().map(|c| s.doc.plain_text(StoryRef::Part(c.part)).trim().to_string()).collect();
+    assert_eq!(texts.iter().filter(|t| *t == "shared note").count(), 1, "{texts:?}");
+    assert_eq!(texts.len(), 4, "{texts:?}");
+}
+
+#[test]
+fn compare_shows_each_documents_own_notes() {
+    // Both documents' first footnote is on "One." (the same story id when read), with different
+    // text; the revised one adds a note on a new paragraph.
+    let note = |s: &mut Session, para: usize, text: &str| {
+        let len = s.doc.para(StoryRef::Body, &Pos::body(para, 0).path).unwrap().len();
+        s.run("caret.set", &json!({"pos": Pos::body(para, len)})).unwrap();
+        s.run("references.footnote", &json!({"text": text})).unwrap();
+    };
+    let mut o = Session::new(Document::from_text("One.\nTwo."));
+    note(&mut o, 0, "original foot");
+    let mut r = Session::new(Document::from_text("One.\nTwo.\nThree."));
+    note(&mut r, 0, "revised foot");
+    note(&mut r, 2, "new foot");
+    let s = compare_files("notes", &o.doc, &r.doc);
+    let mut notes: Vec<(String, bool)> = objects_in(&s.doc, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::NoteRef { id, .. } => {
+                let part = s.doc.parts.get(&id).unwrap_or_else(|| panic!("a note mark names story {id}, which the result lacks"));
+                assert_eq!(part.kind, wordcraft_doc::PartKind::Footnote);
+                Some((s.doc.plain_text(StoryRef::Part(id)).trim().to_string(), del))
+            }
+            _ => None,
+        })
+        .collect();
+    notes.sort();
+    let t = |t: &str, del| (t.to_string(), del);
+    assert_eq!(notes, [t("new foot", false), t("original foot", true), t("revised foot", false)]);
+}
+
+#[test]
+fn compare_resolves_the_revised_documents_styles_and_lists() {
+    use wordcraft_doc::styles::{Style, StyleKind};
+    // "Fancy" is bold in the original and italic in the revised document; "Plain" is the same in
+    // both. Each has a list on "Item." under the same id: bullets in one, numbers in the other.
+    let build = |chr: CharProps, list: &str| {
+        let mut s = Session::new(Document::from_text("Styled.\nPlain.\nItem."));
+        for (id, chr) in [("Fancy", chr), ("Plain", CharProps { strike: Some(true), ..Default::default() })] {
+            Arc::make_mut(&mut s.doc.styles).upsert(Style { id: id.into(), name: id.into(), kind: StyleKind::Paragraph, chr, ..Default::default() });
+        }
+        s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.style = Some("Fancy".into());
+        s.doc.para_mut(StoryRef::Body, &Pos::body(1, 0).path).unwrap().props.style = Some("Plain".into());
+        s.run("caret.set", &json!({"pos": Pos::body(2, 0)})).unwrap();
+        s.run(list, &json!({})).unwrap();
+        s.doc
+    };
+    let orig = build(CharProps { bold: Some(true), ..Default::default() }, "para.bullets");
+    let rev = build(CharProps { italic: Some(true), ..Default::default() }, "para.numbering");
+    let s = compare_files("styles", &orig, &rev);
+    let para = |i: usize| s.doc.para(StoryRef::Body, &Pos::body(i, 0).path).unwrap();
+    let style = |i: usize| s.doc.styles.get(para(i).props.style.as_deref().unwrap()).unwrap();
+    assert_eq!(style(0).chr.italic, Some(true), "the revised paragraph shows the revised style");
+    assert_ne!(style(0).chr.bold, Some(true));
+    assert!(s.doc.styles.get("Fancy").is_some_and(|st| st.chr.bold == Some(true)), "the original's style stays the original's");
+    assert_eq!(para(1).props.style.as_deref(), Some("Plain"), "a style both define alike stays one");
+    let num = para(2).props.numbering.as_ref().expect("the list paragraph keeps its list");
+    let level = s.doc.numbering.level(num.num, num.level).expect("its list is in the result");
+    let orig_level = orig.numbering.level(1, 0).map(|l| l.text.clone());
+    assert!(level.text.contains("%1"), "the revised list numbers: {:?} (the original's: {orig_level:?})", level.text);
+}
+
+#[test]
+fn compare_never_bookmarks_a_name_twice() {
+    // Both documents bookmark "x", in paragraphs the comparison deletes and inserts whole.
+    let mark = |text: &str, para: usize| {
+        let mut s = Session::new(Document::from_text(text));
+        s.run("caret.set", &json!({"pos": Pos::body(para, 0)})).unwrap();
+        s.run("insert.bookmark", &json!({"name": "x"})).unwrap();
+        s.doc
+    };
+    let s = compare_files("bookmarks", &mark("A.\nGone para.\nB.", 1), &mark("A.\nB.\nFresh para.", 2));
+    let starts: Vec<(String, bool)> = objects_in(&s.doc, StoryRef::Body)
+        .into_iter()
+        .filter_map(|(o, del)| match o {
+            InlineObject::BookmarkStart { name } => Some((name, del)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert!(starts.contains(&("x".to_string(), false)), "the revised bookmark keeps its name: {starts:?}");
+    let names: BTreeSet<&String> = starts.iter().map(|(n, _)| n).collect();
+    assert_eq!(names.len(), 2, "{starts:?}");
+    // Saved and read back, the result still has both, under distinct names.
+    let path = std::env::temp_dir().join(format!("wc-5571-bookmarks-out-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &s.doc).unwrap();
+    let back = crate::io::open_path(&path);
+    let _ = std::fs::remove_file(&path);
+    let names: Vec<String> = back.unwrap().bookmarks().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names.iter().collect::<BTreeSet<_>>().len(), names.len(), "{names:?}");
+    assert_eq!(names.len(), 2, "{names:?}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn compare_relinks_what_text_box_stories_refer_to() {
+    // Both documents have a text box with the same text; inside it a picture both key
+    // `image1.png`, with different bytes.
+    let (a, b) = (png([200, 0, 0]), png([0, 200, 0]));
+    let build = |bytes: &[u8]| {
+        let mut s = Session::new(Document::from_text("Box here."));
+        s.run("caret.set", &json!({"pos": Pos::body(0, "Box here.".len())})).unwrap();
+        let id = s.run("insert.textBox", &json!({"text": "Inside "})).unwrap()["story"].as_u64().unwrap() as u32;
+        let media = s.doc.add_media(bytes.to_vec(), "png");
+        let img = InlineObject::Image { media, w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let p = s.doc.para_mut(StoryRef::Part(id), &Pos::body(0, 0).path).unwrap();
+        let at = p.len();
+        p.insert_object(at, img, &CharProps::default()).unwrap();
+        s.doc
+    };
+    let s = compare_files("boxes", &build(&a), &build(&b));
+    let mut shown = Vec::new();
+    for (o, del) in objects_in(&s.doc, StoryRef::Body) {
+        for id in o.text_boxes() {
+            for (inner, _) in objects_in(&s.doc, StoryRef::Part(id)) {
+                if let InlineObject::Image { media, .. } = inner {
+                    let bytes = s.doc.media.get(&media).unwrap_or_else(|| panic!("a box's picture shows {media}, which the result lacks"));
+                    shown.push((bytes.to_vec(), del));
+                }
+            }
+        }
+    }
+    assert!(shown.contains(&(b.clone(), false)), "the revised box shows its own picture");
+    assert!(!shown.contains(&(a, false)), "the original's picture shows only as deleted, if at all");
+}
+
+#[test]
+fn compare_of_a_document_with_itself_changes_nothing() {
+    // The adoption shares what both versions define alike: lists, styles, pictures, notes and
+    // comments that are the same compare as the same.
+    let mut o = Session::new(Document::from_text("Alpha one.\nBeta two.\nItem."));
+    comment_on(&mut o, "Alpha", "a note");
+    let len = o.doc.para(StoryRef::Body, &Pos::body(1, 0).path).unwrap().len();
+    o.run("caret.set", &json!({"pos": Pos::body(1, len)})).unwrap();
+    o.run("references.footnote", &json!({"text": "foot"})).unwrap();
+    o.run("caret.set", &json!({"pos": Pos::body(2, 0)})).unwrap();
+    o.run("para.numbering", &json!({})).unwrap();
+    let s = compare_files("self", &o.doc, &o.doc);
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let p = s.doc.para(StoryRef::Body, &path).unwrap();
+        assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none() && c.fmt_change.is_none()), "{:?} is marked", p.text);
+        assert!(p.props.fmt_change.is_none(), "{:?} has a formatting change", p.text);
+    }
+    assert_eq!(s.doc.comments.len(), 1, "one comment, not the original's left over beside the revised one's");
 }
 
 #[test]

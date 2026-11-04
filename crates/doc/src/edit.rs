@@ -394,6 +394,91 @@ fn restyle_block(b: &mut Block, from: &str, to: &Option<String>, depth: usize) -
     }
 }
 
+/// What an adoption is for: a paste (or insert) of another document, its styles kept or not, or
+/// Compare's adoption of another version of this document ([`Document::adopt_compared`]).
+#[derive(Clone, Copy, PartialEq)]
+enum Adopt {
+    Paste { keep_styles: bool },
+    Compare,
+}
+
+/// For Compare: the ids of `src`'s styles that come along under a new id. A style we have by id
+/// looks the same unless its other version formats differently (its gallery settings, name and
+/// default flag aside), or is based on (or linked to) one that does. Only styles its content uses
+/// (directly, by their lists or through the styles those are based on, linked to or followed by)
+/// come along: the rest would be unused copies.
+fn compare_renames(ours: &crate::styles::StyleSheet, src: &Document) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let looks_same = |a: &crate::styles::Style, b: &crate::styles::Style| {
+        a.kind == b.kind && a.based_on == b.based_on && a.linked == b.linked && a.para == b.para && a.chr == b.chr && a.table == b.table
+    };
+    let mut differ: HashSet<String> =
+        src.styles.styles.iter().filter(|st| ours.get(&st.id).is_some_and(|o| !looks_same(o, st))).map(|st| st.id.clone()).collect();
+    if differ.is_empty() {
+        return differ;
+    }
+    let limit = src.styles.styles.len();
+    // Based on one that looks different: looks different too (each round adds one or stops).
+    for _ in 0..limit {
+        let more: Vec<String> = src
+            .styles
+            .styles
+            .iter()
+            .filter(|st| !differ.contains(&st.id) && ours.get(&st.id).is_some())
+            .filter(|st| [&st.based_on, &st.linked].into_iter().flatten().any(|b| differ.contains(b)))
+            .map(|st| st.id.clone())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        differ.extend(more);
+    }
+    // The styles its content names, then the ones those name.
+    let mut used: HashSet<String> = HashSet::new();
+    let mut add = |s: &Option<String>| {
+        if let Some(s) = s {
+            used.insert(s.clone());
+        }
+    };
+    let mut todo: Vec<&Block> = src.body.iter().chain(src.parts.values().flat_map(|p| p.blocks.iter())).map(|b| &**b).collect();
+    while let Some(b) = todo.pop() {
+        match b {
+            Block::Para(p) => {
+                add(&p.props.style);
+                add(&p.mark.style);
+                p.runs.iter().for_each(|r| add(&r.props.style));
+                if let Some(f) = &p.props.fmt_change {
+                    add(&f.old.style);
+                }
+            }
+            Block::Table(t) => {
+                add(&t.props.style);
+                todo.extend(t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).map(|b| &**b));
+            }
+        }
+    }
+    for l in src.numbering.abstracts.iter().flat_map(|a| a.levels.iter()) {
+        add(&l.style);
+    }
+    for _ in 0..limit {
+        let more: Vec<String> = src
+            .styles
+            .styles
+            .iter()
+            .filter(|st| used.contains(&st.id))
+            .flat_map(|st| [&st.based_on, &st.linked, &st.next].into_iter().flatten())
+            .filter(|s| !used.contains(*s))
+            .cloned()
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        used.extend(more);
+    }
+    differ.retain(|id| used.contains(id));
+    differ
+}
+
 /// What [`Document::adopt_with`] renumbers in another document's content: media keys, lists,
 /// note and comment stories, comment ids, text boxes (one it doesn't bring is dropped), revisions
 /// (after ours, at `rev`; an id past the `revs` it brings is dropped) and styles (those kept under new ids; unstyled paragraphs take
@@ -1044,32 +1129,56 @@ impl Document {
     /// `w:matchSrc`): a style whose id we already have comes along under a new id, and its
     /// document defaults go into its base styles, which its unstyled paragraphs then use.
     pub fn adopt_with(&mut self, src: Document, keep_styles: bool) -> Fragment {
-        self.adopt_in(src, keep_styles, &mut 0)
+        self.adopt_in(src, Adopt::Paste { keep_styles }, &mut 0)
+    }
+
+    /// Another version of this document, adopted for Compare: its body's blocks, relinked to
+    /// this document exactly as [`Self::adopt`] relinks them (media, lists, notes, comments,
+    /// tracked changes, text boxes and the references inside their stories), so the comparison
+    /// and its result see one document's ids. Two versions share most of their definitions, so
+    /// what both define alike stays one: a style whose id we have keeps it unless the other
+    /// version defines it differently (then it comes along under a new id, as with
+    /// `keep_styles`, if its content uses it), and a list defined alike under the same id is
+    /// the same list. Media with the same bytes is shared ([`Self::add_media`]).
+    pub fn adopt_compared(&mut self, src: Document) -> Vec<Block> {
+        let frag = self.adopt_in(src, Adopt::Compare, &mut 0);
+        self.adopt_fragment(&frag)
     }
 
     /// [`Self::adopt_with`], its permission range ids from at least `perms` on (and past ours);
     /// `perms` moves past them.
-    fn adopt_in(&mut self, mut src: Document, keep_styles: bool, perms: &mut u32) -> Fragment {
+    fn adopt_in(&mut self, mut src: Document, mode: Adopt, perms: &mut u32) -> Fragment {
+        let keep_styles = matches!(mode, Adopt::Paste { keep_styles: true });
+        let compare = mode == Adopt::Compare;
         let mut renamed = BTreeMap::new();
         let mut default_style = None;
-        if keep_styles {
-            if src.styles.get("Normal").is_none() {
-                Arc::make_mut(&mut src.styles).upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
-            }
+        if keep_styles && src.styles.get("Normal").is_none() {
+            Arc::make_mut(&mut src.styles).upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
+        }
+        // The styles that come along under a new id: with `keep_styles` every one whose id we
+        // have; for Compare the ones defined differently (see `Self::adopt_compared`).
+        let rename: std::collections::HashSet<String> = if keep_styles {
+            src.styles.styles.iter().filter(|st| self.styles.get(&st.id).is_some()).map(|st| st.id.clone()).collect()
+        } else if compare {
+            compare_renames(&self.styles, &src)
+        } else {
+            Default::default()
+        };
+        if !rename.is_empty() {
             // Ids given out here are taken too: two styles never get the same new one.
             let mut given = std::collections::HashSet::new();
             let room = src.styles.styles.len().saturating_mul(2).saturating_add(self.styles.styles.len()).saturating_add(1);
-            for st in &src.styles.styles {
-                if self.styles.get(&st.id).is_some() {
-                    let fresh = (1..=room)
-                        .map(|n| format!("{}{n}", st.id))
-                        .find(|id| self.styles.get(id).is_none() && src.styles.get(id).is_none() && !given.contains(id));
-                    if let Some(fresh) = fresh {
-                        given.insert(fresh.clone());
-                        renamed.insert(st.id.clone(), fresh);
-                    }
+            for st in src.styles.styles.iter().filter(|st| rename.contains(&st.id)) {
+                let fresh = (1..=room)
+                    .map(|n| format!("{}{n}", st.id))
+                    .find(|id| self.styles.get(id).is_none() && src.styles.get(id).is_none() && !given.contains(id));
+                if let Some(fresh) = fresh {
+                    given.insert(fresh.clone());
+                    renamed.insert(st.id.clone(), fresh);
                 }
             }
+        }
+        if keep_styles {
             default_style = Some(renamed.get("Normal").cloned().unwrap_or_else(|| "Normal".into()));
         }
         let restyle = |id: &mut Option<String>| {
@@ -1085,21 +1194,30 @@ impl Document {
         let next_abs = self.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
         let mut abs_map = BTreeMap::new();
         for (i, a) in src.numbering.abstracts.iter().enumerate() {
+            let mut a = a.clone();
+            a.levels.iter_mut().for_each(|l| restyle(&mut l.style));
+            // Compare: a list defined alike under the same id is the same list.
+            if compare && self.numbering.abstracts.contains(&a) {
+                abs_map.insert(a.id, a.id);
+                continue;
+            }
             let id = next_abs.saturating_add(i as u32);
             abs_map.insert(a.id, id);
-            let mut a = crate::numbering::AbstractNum { id, ..a.clone() };
-            a.levels.iter_mut().for_each(|l| restyle(&mut l.style));
-            Arc::make_mut(&mut self.numbering).abstracts.push(a);
+            Arc::make_mut(&mut self.numbering).abstracts.push(crate::numbering::AbstractNum { id, ..a });
         }
         let next_num = self.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
         let mut nums = BTreeMap::new();
         for (i, n) in src.numbering.nums.iter().enumerate() {
+            let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
+            let mut n = crate::numbering::Num { abstract_id, ..n.clone() };
+            n.level_overrides.iter_mut().for_each(|(_, l)| restyle(&mut l.style));
+            if compare && self.numbering.nums.contains(&n) {
+                nums.insert(n.id, n.id);
+                continue;
+            }
             let id = next_num.saturating_add(i as u32);
             nums.insert(n.id, id);
-            let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
-            let mut n = crate::numbering::Num { id, abstract_id, ..n.clone() };
-            n.level_overrides.iter_mut().for_each(|(_, l)| restyle(&mut l.style));
-            Arc::make_mut(&mut self.numbering).nums.push(n);
+            Arc::make_mut(&mut self.numbering).nums.push(crate::numbering::Num { id, ..n });
         }
         let renumber = |n: &mut Option<crate::props::NumRef>| {
             if let Some(n) = n.as_mut()
@@ -1118,14 +1236,19 @@ impl Document {
             let mut st = st.clone();
             // Our defaults stay ours.
             st.default = false;
-            if keep_styles {
-                if let Some(new) = renamed.get(&st.id) {
-                    st.name = format!("{} ({new})", st.name);
-                    st.id = new.clone();
-                }
-                restyle(&mut st.based_on);
-                restyle(&mut st.next);
-                restyle(&mut st.linked);
+            // Renamed (only ever with `keep_styles`, or for Compare): it and the styles naming it
+            // come along under its new id.
+            let was_renamed = if let Some(new) = renamed.get(&st.id) {
+                st.name = format!("{} ({new})", st.name);
+                st.id = new.clone();
+                true
+            } else {
+                false
+            };
+            restyle(&mut st.based_on);
+            restyle(&mut st.next);
+            restyle(&mut st.linked);
+            if keep_styles || was_renamed {
                 // A character style's runs get the defaults through their paragraph's style.
                 if st.based_on.is_none() && st.kind != crate::styles::StyleKind::Character {
                     let mut chr = src.styles.default_chr.clone();
@@ -1206,7 +1329,7 @@ impl Document {
     /// id the reader hasn't given out (ranges it holds aren't in this document yet); it moves past
     /// the adopted ones.
     pub fn adopt_blocks(&mut self, src: Document, keep_styles: bool, perms: &mut u32) -> Vec<Block> {
-        let Fragment { mut blocks, parts } = self.adopt_in(src, keep_styles, perms);
+        let Fragment { mut blocks, parts } = self.adopt_in(src, Adopt::Paste { keep_styles }, perms);
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         blocks
