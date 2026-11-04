@@ -446,7 +446,9 @@ pub fn models_ui(ui: &mut egui::Ui) {
     let id = if rtl { "credits_models_rtl" } else { "credits_models" };
     if rtl {
         titles.reverse();
+        // Mirrored alignment: the text columns sit at the reading edge (right), the counts on the left.
         right.reverse();
+        right = right.map(|r| !r);
         grow.reverse();
         for cells in &mut rows {
             cells.reverse();
