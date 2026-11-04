@@ -1,6 +1,6 @@
 use super::block::Blocks;
 use super::position::Pos;
-use super::*;
+use super::{Deserialize, Serialize, props};
 
 /// A free id, `min` or more, for something new (a part, a list, a comment): one past `largest`, the
 /// largest id in use, so ids keep growing; once that would pass `u32::MAX` (a file can use any id),
