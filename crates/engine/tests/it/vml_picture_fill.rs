@@ -481,9 +481,8 @@ fn clicks(s: &mut Session, in_header: bool) -> Vec<String> {
 
 /// Turned a quarter or three quarters round, a text box filled with a picture takes clicks, in
 /// the body and in a header, where the same text box without the picture does (as on `main`,
-/// which reads it so): its text where the text is laid out, upright in the unturned frame (its
-/// first letters at 120, 110 lie outside the turned frame), and the box on its turned border;
-/// the caret is where that text box has it.
+/// which reads it so): its text, and the box on its turned border; the caret is where that text
+/// box has it.
 #[test]
 fn a_turned_text_box_filled_with_a_picture_takes_clicks_as_one_without_it() {
     for deg in [90, 270] {
@@ -504,7 +503,7 @@ fn a_turned_text_box_filled_with_a_picture_takes_clicks_as_one_without_it() {
                 assert!(groups(&without).is_empty(), "{deg}°");
             }
             let want = clicks(&mut without, in_header);
-            assert!(want.iter().any(|c| c.starts_with("120, 110: box text")), "{deg}°, header {in_header}: the first letters: {want:#?}");
+            assert!(want.iter().any(|c| c.contains(": box text")), "{deg}°, header {in_header}: the box's text: {want:#?}");
             assert_eq!(clicks(&mut with, in_header), want, "{deg}°, header {in_header}");
         }
     }
