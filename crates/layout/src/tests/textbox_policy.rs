@@ -34,8 +34,8 @@ fn rectangle(wrap: Wrap, y: f32) -> InlineObject {
 
 fn policy_doc(child: Option<InlineObject>) -> (Document, u32) {
     let mut d = Document::from_text("");
-    d.styles.default_chr.font = Some("Arial".into());
-    d.styles.default_chr.size = Some(10.0);
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.font = Some("Arial".into());
+    std::sync::Arc::make_mut(&mut d.styles).default_chr.size = Some(10.0);
     let root = d.add_part(PartKind::TextBox, vec![para_block(paragraph())]);
     d.parts.get_mut(&root).unwrap().body = TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() };
     if let Some(child) = child {

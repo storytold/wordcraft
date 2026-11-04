@@ -3532,7 +3532,7 @@ fn the_print_preview_fills_the_pane_zooms_and_scrolls_both_ways() {
     let page = |h: &egui_kittest::Harness<'_, WordApp>| h.get(By::new().role(Role::Image)).rect();
     let fit = page(&h);
     assert!(fit.height() > 650.0, "the page fills the pane's height: {fit:?}");
-    assert!(h.query(By::new().role(Role::Label).label("Page 1 of 1")).is_some(), "the page indicator stays");
+    assert!(h.query(By::new().role(Role::Label).label("Sheet 1 of 1")).is_some(), "the sheet indicator stays");
 
     for _ in 0..5 {
         h.get_by_label("Zoom In").click();
@@ -3762,7 +3762,11 @@ fn clicks_on_ribbon_and_status_bar_chrome_keep_typing_in_the_document() {
     h.step();
     h.step();
     assert!(egui::Popup::is_any_open(&h.ctx), "the language menu opened");
-    let elsewhere = egui::pos2(lang.max.x + 40.0, lang.center().y);
+    // Bare status bar: past the language item, and past the missing-fonts item after it when the
+    // document's fonts aren't installed (Aptos Display for Heading 1, on most machines without
+    // Office), however many there are.
+    let right = h.query_by_label_contains(" not installed").map_or(lang.max.x, |n| n.rect().max.x);
+    let elsewhere = egui::pos2(right + 40.0, lang.center().y);
     for pressed in [true, false] {
         h.hover_at(elsewhere);
         h.event(egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
