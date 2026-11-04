@@ -792,3 +792,18 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     assert!(h.state().dialog.is_none(), "Esc cancels the dialog");
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applied");
 }
+
+/// #5548: Convert Text to Table across a section break does not open, and the
+/// refusal shows in the status bar instead of the click silently doing nothing.
+/// Within one section it opens as before.
+#[test]
+fn text_to_table_across_a_section_break_reports_in_the_status_bar() {
+    let mut a = app();
+    assert!(open("textToTable", &mut a).is_some(), "opens within one section");
+    a.session.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section =
+        Some(Box::new(wordcraft_doc::section::SectionProps { page_w: 432.0, page_h: 648.0, ..Default::default() }));
+    a.run("select.all", json!({})).unwrap();
+    assert!(open("textToTable", &mut a).is_none(), "does not open across a section break");
+    let (msg, _) = a.status_msg.clone().expect("the refusal is reported");
+    assert!(msg.contains("section break"), "{msg}");
+}

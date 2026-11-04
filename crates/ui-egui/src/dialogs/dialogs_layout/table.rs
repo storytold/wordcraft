@@ -301,9 +301,10 @@ pub struct TextToTableForm {
 }
 
 impl TextToTableForm {
-    /// The selected paragraphs; none when the selection can't be converted (a table or section break inside it).
-    pub fn read(app: &WordApp) -> Option<TextToTableForm> {
-        let lines = wordcraft_engine::cmd::table::text_table_lines(&app.session).ok()?;
+    /// The selected paragraphs, or why the selection can't be converted (a table or
+    /// section break inside it) — the caller shows the reason in the status bar.
+    pub fn read(app: &WordApp) -> Result<TextToTableForm, String> {
+        let lines = wordcraft_engine::cmd::table::text_table_lines(&app.session).map_err(|e| e.to_string())?;
         // Tabs when the text has them, else paragraphs (Word doesn't guess commas).
         let separator = if lines.iter().any(|l| l.contains('\t')) { "tab" } else { "paragraph" };
         let mut f = TextToTableForm {
@@ -317,7 +318,7 @@ impl TextToTableForm {
             error: None,
         };
         f.guess_columns();
-        Some(f)
+        Ok(f)
     }
 
     fn sep(&self) -> Option<char> {
