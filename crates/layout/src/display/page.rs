@@ -1,9 +1,12 @@
 use super::glyphs::{Authors, upright_east_asian};
-use super::lines::lines;
-use super::objects::{effects_in, graphic_draws, object_draws, shape_draws, spun};
+use super::lines::{LineRender, lines};
+use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
 use super::options::{DisplayOptions, Hidden, MarkupOptions};
 use super::paint::Stroke;
-use super::*;
+use super::{
+    BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
+    Underline,
+};
 
 /// Colour of moved text (both ends of a tracked move).
 pub const MOVE_COLOR: Rgb = Rgb(0x1A, 0x7F, 0x37);
@@ -45,13 +48,16 @@ pub struct ItemDisplay<'a> {
     page: &'a Page,
     authors: Authors<'a>,
     clips: Clips,
+    /// The page's text boxes (see [`text_frames`]): a turned one's lines are drawn turned.
+    turned: Vec<(u32, Rect, Spin)>,
 }
 
 impl<'a> ItemDisplay<'a> {
     pub fn new(doc: &'a Document, page: &'a Page) -> Self {
         let cells: Vec<Placed> =
             page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
-        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+        let turned = [&page.items, &page.header, &page.footer].into_iter().flat_map(|items| text_frames(items)).collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells), turned }
     }
 
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
@@ -61,6 +67,12 @@ impl<'a> ItemDisplay<'a> {
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
         stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        // A line of a turned text box turns with it (as `stories_display` turns them on a page).
+        if let Some((_, rect, spin)) = turned_frame(&self.turned, it).and_then(|k| self.turned.get(k)) {
+            let mut turned = Vec::new();
+            spun(*spin, *rect, std::mem::take(&mut out), &mut turned);
+            out = turned;
+        }
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
     }
@@ -105,6 +117,8 @@ fn stories_display(
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
+        let frames = text_frames(items);
+        let mut spun_frames: Vec<usize> = Vec::new();
         let own;
         let clips = match shared {
             Some(c) => c,
@@ -119,8 +133,11 @@ fn stories_display(
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
+            // A line in a clipped cell is drawn in its clip; in a turned text box, with the box's
+            // other lines (clipped there), so it is drawn once.
             if let Placed::Lines { story, path, .. } = it
                 && let Some(rect) = cell_clip(clips, *story, &path.0)
+                && turned_frame(&frames, it).is_none()
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, authors, a, &mut inner);
@@ -137,13 +154,67 @@ fn stories_display(
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(doc, &lines, *rect, warp, opts, authors, a, out);
+                        warped_text(WarpedText { doc, lines: &lines, rect: *rect, warp, opts, authors, alpha: a }, out);
                     }
                 }
-                _ => item(doc, it, opts, authors, a, out),
+                _ => match turned_frame(&frames, it) {
+                    // A turned text box's lines are drawn together, turned with it about its
+                    // centre, where its first one is. Linked boxes show one story: each line goes
+                    // with the box it was laid out in.
+                    Some(k) => {
+                        if spun_frames.contains(&k) {
+                            continue;
+                        }
+                        spun_frames.push(k);
+                        if let Some((_, rect, spin)) = frames.get(k) {
+                            let mut inner = Vec::new();
+                            for line in items.iter().filter(|i| turned_frame(&frames, i) == Some(k)) {
+                                if let Placed::Lines { story, path, .. } = line
+                                    && let Some(rect) = cell_clip(clips, *story, &path.0)
+                                {
+                                    let mut clipped = Vec::new();
+                                    item(doc, line, opts, authors, a, &mut clipped);
+                                    inner.push(Draw::Clip { rect, items: clipped });
+                                } else {
+                                    item(doc, line, opts, authors, a, &mut inner);
+                                }
+                            }
+                            super::objects::spun(*spin, *rect, inner, out);
+                        }
+                    }
+                    None => item(doc, it, opts, authors, a, out),
+                },
             }
         }
     }
+}
+
+/// The text boxes among `items`: the story each shows, its frame (unturned) and how its text
+/// turns with it (not at all for most). As in Word, the text turns with the box but isn't
+/// mirrored: a box flipped across turns its text upside down, one flipped side to side leaves it
+/// readable. Linked boxes all show the first box's story, so a story can have several frames.
+fn text_frames(items: &[Placed]) -> Vec<(u32, Rect, Spin)> {
+    items
+        .iter()
+        .filter_map(|it| {
+            let Placed::Object { rect, spin, text_box: Some(id), .. } = it else { return None };
+            let text = Spin::new(spin.deg + if spin.flip_v { 180.0 } else { 0.0 }, false, false);
+            Some((*id, *rect, text))
+        })
+        .collect()
+}
+
+/// Which of `frames` the text box line `it` was laid out in, if that frame is turned: of the
+/// frames showing its story, the one it is in (or nearest, for a line on an edge).
+fn turned_frame(frames: &[(u32, Rect, Spin)], it: &Placed) -> Option<usize> {
+    let Placed::Lines { story: StoryRef::Part(id), x, y, .. } = it else { return None };
+    let away = |r: &Rect| {
+        let dx = (r.x - x).max(x - r.right()).max(0.0);
+        let dy = (r.y - y).max(y - r.bottom()).max(0.0);
+        dx * dx + dy * dy
+    };
+    let (k, _) = frames.iter().enumerate().filter(|(_, (s, ..))| s == id).min_by(|(_, (_, a, _)), (_, (_, b, _))| away(a).total_cmp(&away(b)))?;
+    frames.get(k).is_some_and(|(.., spin)| !spin.is_identity()).then_some(k)
 }
 
 /// One object drawn alone, as its page draws it: the picture, shape or group `o` in `rect` (its
@@ -157,7 +228,9 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
-            Some((_, rect, warp)) if !lines.is_empty() => warped_text(doc, &lines, rect, &warp, opts, &authors, 1.0, &mut out),
+            Some((_, rect, warp)) if !lines.is_empty() => {
+                warped_text(WarpedText { doc, lines: &lines, rect, warp: &warp, opts, authors: &authors, alpha: 1.0 }, &mut out)
+            }
             _ => lines.into_iter().for_each(|it| item(doc, it, opts, &authors, 1.0, &mut out)),
         }
     }
@@ -217,16 +290,18 @@ fn warped_boxes(doc: &Document, items: &[Placed]) -> Vec<(u32, Rect, wordcraft_d
 /// The text of a warped text box at `rect`: its lines' letters as outlines bent by `warp`, the
 /// box's text stretched over the frame inside its margins (as WordArt is). Underlines, marks and
 /// other decorations are left out; a warp that is drawn flat leaves the text as it is.
-fn warped_text(
-    doc: &Document,
-    lines: &[&Placed],
+struct WarpedText<'doc, 'opts, 'lines, 'placed, 'authors, 'author_doc> {
+    doc: &'doc Document,
+    lines: &'lines [&'placed Placed],
     rect: Rect,
-    warp: &wordcraft_doc::wordart::TextWarp,
-    opts: &DisplayOptions,
-    authors: &Authors,
+    warp: &'lines wordcraft_doc::wordart::TextWarp,
+    opts: &'opts DisplayOptions,
+    authors: &'authors Authors<'author_doc>,
     alpha: f32,
-    out: &mut Vec<Draw>,
-) {
+}
+
+fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
+    let WarpedText { doc, lines, rect, warp, opts, authors, alpha } = input;
     let mut raw = Vec::new();
     for it in lines {
         item(doc, it, opts, authors, alpha, &mut raw);
@@ -361,16 +436,32 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, spin, .. } => spun(
-            *spin,
-            *rect,
-            vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), decorative: false }],
-            out,
-        ),
+        Placed::Image { rect, media, crop, spin, fx, .. } => {
+            let alpha = alpha * fx.opacity();
+            spun(
+                *spin,
+                *rect,
+                vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), fx: *fx, decorative: false }],
+                out,
+            )
+        }
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
             let mut items = Vec::new();
             let fx = effects_in(*effects, spin.within(outer));
-            shape_draws(*rect, *kind, fill.as_ref(), *stroke, *stroke_width, fx, freeform.as_deref(), extra, opts, &mut items);
+            shape_draws(
+                *rect,
+                &ShapeLook {
+                    kind: *kind,
+                    fill: fill.as_ref(),
+                    stroke: *stroke,
+                    stroke_width: *stroke_width,
+                    effects: fx,
+                    freeform: freeform.as_deref(),
+                    extra,
+                },
+                opts,
+                &mut items,
+            );
             spun(*spin, *rect, items, out)
         }
         Placed::Graphic { rect, graphic, spin, .. } => spun(*spin, *rect, graphic_draws(doc, graphic, *rect, alpha), out),
@@ -384,7 +475,21 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
-            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, authors, alpha, *turn == TextDirection::Down, &mut items);
+            lines(
+                LineRender {
+                    doc,
+                    story: *story,
+                    path,
+                    pl: para,
+                    range: *l0..*l1,
+                    origin: (0.0, 0.0),
+                    opts,
+                    authors,
+                    alpha,
+                    down: *turn == TextDirection::Down,
+                },
+                &mut items,
+            );
             // Link areas are axis-aligned page rectangles: turned text gets none.
             for d in &mut items {
                 if let Draw::Glyphs { link, .. } = d {
@@ -396,7 +501,9 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, authors, alpha, false, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
+            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
+        }
     }
 }
 

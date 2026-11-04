@@ -118,6 +118,13 @@ fn thai_font_installed() -> bool {
     wordcraft_fonts::FontDb::global().fallback_for('\u{0E19}', 0).is_some()
 }
 
+/// Is a Thai font with Latin letters and digits installed (Tahoma, Leelawadee UI, Thonburi, the
+/// TLWG fonts…)? Noto Sans Thai alone has none, so no face covers [`THAI_RUN`]: `false` skips.
+fn thai_latin_font_installed() -> bool {
+    let face = wordcraft_fonts::word::resolve("TH Sarabun New", false, false).face;
+    THAI_RUN.chars().filter(|c| !c.is_whitespace()).all(|c| face.covers(c))
+}
+
 /// Body paragraph 0 of `text`, its run set in `font` at 16 pt (`None` keeps the document's
 /// default font), and the face of every cluster: (cluster start, face).
 fn cluster_faces(text: &str, font: Option<&str>) -> Vec<(usize, wordcraft_fonts::FaceRef)> {
@@ -132,8 +139,8 @@ fn cluster_faces(text: &str, font: Option<&str>) -> Vec<(usize, wordcraft_fonts:
 
 #[test]
 fn a_missing_thai_font_draws_the_whole_run_in_one_thai_face() {
-    if !thai_font_installed() {
-        eprintln!("skipped: no Thai font installed");
+    if !thai_latin_font_installed() {
+        eprintln!("skipped: no Thai font with Latin letters installed");
         return;
     }
     // Word substitutes one font (Cordia New) for a missing Thai font, so the Latin letters, the
@@ -154,8 +161,8 @@ fn a_missing_thai_font_draws_the_whole_run_in_one_thai_face() {
 
 #[test]
 fn a_thai_substitute_without_latin_hands_the_run_to_one_face_covering_it() {
-    if !thai_font_installed() {
-        eprintln!("skipped: no Thai font installed");
+    if !thai_latin_font_installed() {
+        eprintln!("skipped: no Thai font with Latin letters installed");
         return;
     }
     // When the substitute lacks the run's Thai letters (no listed Thai font is installed, so the

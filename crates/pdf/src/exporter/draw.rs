@@ -1,4 +1,9 @@
-use super::*;
+use super::text::GlyphPaint;
+use super::{
+    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
+    append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
+};
+use wordcraft_doc::picfx::PicFx;
 
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
@@ -13,6 +18,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges, x_scale, .. } => {
+                let paint = GlyphPaint { color: *color, alpha: *alpha, bold: *synth_bold, italic: *synth_italic };
                 match glyphs.first().map(|g| g.1).filter(|_| x_scale.is_finite() && *x_scale > 0.0 && (x_scale - 1.0).abs() > 1e-4) {
                     // Scaled letters (`w:w`): drawn stretched across from the run's start, their
                     // positions brought back so the stretch puts each where the layout has it.
@@ -20,10 +26,10 @@ impl Exporter<'_> {
                         let k = *x_scale;
                         let moved: Vec<(u32, f32, f32)> = glyphs.iter().map(|&(g, x, y)| (g, x0 + (x - x0) / k, y)).collect();
                         s.push_transform(&Transform::from_row(k, 0.0, 0.0, 1.0, x0 * (1.0 - k), 0.0));
-                        self.glyphs(s, face, *size, &moved, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
+                        self.glyphs(s, face, *size, &moved, paint, (text, ranges));
                         s.pop();
                     }
-                    None => self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges),
+                    None => self.glyphs(s, face, *size, glyphs, paint, (text, ranges)),
                 }
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
@@ -38,7 +44,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
-            Draw::Image { rect, media, crop, alpha, .. } => self.picture(s, rect, media, crop, *alpha),
+            Draw::Image { rect, media, crop, alpha, fx, .. } => self.picture(s, rect, media, crop, *alpha, *fx),
             Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
@@ -93,15 +99,15 @@ impl Exporter<'_> {
                 let can_fill = *kind != ShapeKind::Line;
                 let fx = effects.sanitized();
                 if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
-                    shape_effects(s, *kind, *corner, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
+                    shape_effects(s, (*kind, *corner), rect, &fx, (f.is_some() && can_fill, stroke.is_some(), *stroke_width));
                 }
                 // Soft edges: the fill fades out toward the outline (which fades with it).
                 if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {
                     let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
                     s.set_stroke(None);
-                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                    for (g, paint) in c.soft_bands(rad) {
                         if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0), *corner) {
-                            s.set_fill(Some(paint_fill(&c.faded(a))));
+                            s.set_fill(Some(paint_fill(&paint)));
                             s.draw_path(&p);
                         }
                     }
@@ -281,6 +287,12 @@ impl Exporter<'_> {
             .media
             .get(&pic.media)
             .and_then(|b| image::ImageReader::new(std::io::Cursor::new(b.as_slice())).with_guessed_format().ok()?.into_dimensions().ok());
+        // Centred once at its natural size (an ODT page background that doesn't repeat).
+        if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("center")) {
+            let (iw, ih) = centred_size(pw, ph, w, h);
+            self.picture(s, &Rect::new((w - iw) / 2.0, (h - ih) / 2.0, iw, ih), &pic.media, &[0.0; 4], 1.0, PicFx::default());
+            return;
+        }
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("tile")) {
             let (tw, th) = (pw as f32 * 0.75, ph as f32 * 0.75);
             if tw >= 1.0 && th >= 1.0 && (w / tw).ceil() * (h / th).ceil() <= MAX_TILES {
@@ -288,7 +300,7 @@ impl Exporter<'_> {
                 while y < h {
                     let mut x = 0.0;
                     while x < w {
-                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0);
+                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0, PicFx::default());
                         x += tw;
                     }
                     y += th;
@@ -296,16 +308,16 @@ impl Exporter<'_> {
                 return;
             }
         }
-        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0);
+        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0, PicFx::default());
     }
 
-    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32) {
+    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, fx: PicFx) {
         let Some(clip) = rect_path(rect) else { return };
         if let Some(v) = self.vector(media) {
             vector_picture(self, s, &v, rect, crop, &clip, alpha);
             return;
         }
-        let Some(img) = self.image(media) else {
+        let Some(img) = self.image(media, fx) else {
             s.set_stroke(None);
             s.set_fill(Some(fill(Rgb(0xD0, 0xD0, 0xD0), 1.0)));
             s.draw_path(&clip);
@@ -327,5 +339,29 @@ impl Exporter<'_> {
         if fade {
             s.pop();
         }
+    }
+}
+
+/// A centred page picture's size: its natural size (pixels at 96 dpi), scaled down by one factor
+/// for both sides when it is more than four pages wide or tall, so it keeps its shape.
+fn centred_size(pw: u32, ph: u32, w: f32, h: f32) -> (f32, f32) {
+    let (nw, nh) = (pw as f32 * 0.75, ph as f32 * 0.75);
+    if !(nw > 0.0 && nh > 0.0) {
+        return (0.0, 0.0);
+    }
+    let k = ((w * 4.0) / nw).min((h * 4.0) / nh).min(1.0);
+    (nw * k, nh * k)
+}
+
+#[cfg(test)]
+mod centred_tests {
+    #[test]
+    fn a_centred_picture_too_big_keeps_its_shape() {
+        // Fits: natural size.
+        assert_eq!(super::centred_size(400, 200, 612.0, 792.0), (300.0, 150.0));
+        // Very wide: scaled by one factor to four pages wide, height in proportion.
+        let (w, h) = super::centred_size(40_000, 1_000, 100.0, 100.0);
+        assert!((w - 400.0).abs() < 0.01 && (h - 10.0).abs() < 0.01, "{w} x {h}");
+        assert_eq!(super::centred_size(0, 10, 100.0, 100.0), (0.0, 0.0));
     }
 }

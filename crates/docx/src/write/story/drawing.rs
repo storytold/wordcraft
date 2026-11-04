@@ -1,10 +1,21 @@
 use super::object::ink_name;
-use super::*;
+use super::{
+    AltText, Anchor, Fill, Float, GradientFlip, GradientKind, InlineObject, PartRels, PathShape, Rgb, ShapeEffects, ShapeKind, W, Wrap, Writer, emu,
+    n, rt,
+};
+
+pub(super) struct DrawingInfo<'a> {
+    pub float: &'a Float,
+    pub size: (f32, f32),
+    pub docpr: &'a str,
+    pub name: &'a str,
+    pub alt: &'a str,
+}
 
 impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -15,7 +26,21 @@ impl Writer<'_> {
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        w.empty("a:blip", &[("r:embed", &rid)]);
+        // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
+        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
+        let fx = fx.clamped();
+        if fx.is_identity() {
+            w.empty("a:blip", &[("r:embed", &rid)]);
+        } else {
+            w.open("a:blip", &[("r:embed", &rid)]);
+            if fx.transparency != 0 {
+                w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
+            }
+            if fx.bright != 0 || fx.contrast != 0 {
+                w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+            }
+            w.close("a:blip");
+        }
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
@@ -198,28 +223,19 @@ impl Writer<'_> {
         w.close("wps:wsp");
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// A `w:drawing` holding `graphic` (an `a:graphic`) in a frame of the object's size and place.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn graphic_frame(
-        &mut self,
-        w: &mut W,
-        float: &Float,
-        (gw, gh): (f32, f32),
-        docpr: &str,
-        name: &str,
-        alt: &str,
-        graphic: &crate::xml::El,
-    ) {
+    pub(super) fn graphic_frame(&mut self, w: &mut W, info: DrawingInfo<'_>, graphic: &crate::xml::El) {
+        let inline = info.float.wrap == Wrap::Inline;
         w.open("w:drawing", &[]);
-        self.drawing_open(w, float, gw, gh, docpr, name, alt);
+        self.drawing_open(w, info);
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.raw(&graphic.to_xml());
-        w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+        w.close(if inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
     }
 
-    pub(super) fn drawing_open(&mut self, w: &mut W, float: &Float, iw: f32, ih: f32, docpr: &str, name: &str, alt: &str) {
+    pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
+        let DrawingInfo { float, size: (iw, ih), docpr, name, alt } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
@@ -380,11 +396,10 @@ fn line_dash(w: &mut W, dash: &wordcraft_doc::line_dash::LineDash) {
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
 /// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57).
 fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra) {
-    if extra.arrow_start {
-        w.empty("a:headEnd", &[("type", "triangle")]);
-    }
-    if extra.arrow_end {
-        w.empty("a:tailEnd", &[("type", "triangle")]);
+    for (on, tag, style) in [(extra.arrow_start, "a:headEnd", extra.start_style), (extra.arrow_end, "a:tailEnd", extra.end_style)] {
+        if on {
+            w.empty(tag, &[("type", style.kind.ooxml()), ("w", style.width.ooxml()), ("len", style.length.ooxml())]);
+        }
     }
 }
 

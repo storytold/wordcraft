@@ -1,5 +1,5 @@
 use super::chrome::close_button;
-use super::*;
+use super::{Dialog, Tokens, Ui, Value, WordApp, json, vec2};
 
 /// Manage Styles' body. Reads the list from `styles.manage`'s data (never re-running the command,
 /// which would ask to open this dialog again) and acts through commands.
@@ -12,7 +12,7 @@ pub(super) fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut b
     }
     ui.horizontal(|ui| {
         ui.label(tl!("Sort order:"));
-        egui::ComboBox::from_id_salt("manage_styles_sort")
+        craft_ui::ComboBox::from_id_salt("manage_styles_sort")
             .selected_text(if *alphabetical { tl!("Alphabetical") } else { tl!("As Recommended") })
             .show_ui(ui, |ui| {
                 ui.selectable_value(alphabetical, false, tl!("As Recommended"));

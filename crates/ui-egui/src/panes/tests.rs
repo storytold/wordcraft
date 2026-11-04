@@ -378,6 +378,37 @@ fn pane_dock_command_docks_floats_and_reads_each_pane() {
     assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Floating, "junk changed nothing");
 }
 
+/// Explicit `left` / `right` stay on the physical window sides in an Arabic (RTL) interface;
+/// defaults still flip to the reading-start side. Covers `ui.paneDock` and `view.stylesPaneDock`.
+#[test]
+fn pane_dock_left_and_right_are_physical_in_rtl() {
+    use craft_ui::panes::{Edge, Place};
+    use serde_json::json;
+    let arabic = crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n");
+    crate::i18n::set_current(arabic);
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    // Defaults: Navigation's Start opens on the physical right (reading start) until set.
+    assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Docked(Edge::End));
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation"})).unwrap()["dock"], "right");
+    // Explicit left stays physical left and is reported as left.
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation", "dock": "left"})).unwrap()["dock"], "left");
+    assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Docked(Edge::Start));
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation"})).unwrap()["dock"], "left");
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "comments", "dock": "right"})).unwrap()["dock"], "right");
+    assert_eq!(super::pane_state(&app, Pane::Comments).place, Place::Docked(Edge::End));
+    // Styles through view.stylesPaneDock — same physical contract.
+    assert_eq!(app.run("view.stylesPaneDock", json!({"dock": "left"})).unwrap()["dock"], "left");
+    assert_eq!(super::pane_state(&app, Pane::Styles).place, Place::Docked(Edge::Start));
+    assert_eq!(app.run("view.stylesPaneDock", json!({})).unwrap()["dock"], "left");
+    assert_eq!(app.run("view.stylesPaneDock", json!({"dock": "right"})).unwrap()["dock"], "right");
+    assert_eq!(super::pane_state(&app, Pane::Styles).place, Place::Docked(Edge::End));
+    // A host Place request (Dock Left menu / drag) saves physical left without flipping.
+    super::apply(&mut app, craft_ui::panes::PaneRequest::Place(Pane::Clipboard, Place::Docked(Edge::Start)));
+    assert_eq!(app.ui.pane_places.get("clipboard").and_then(|p| p.dock), Some(super::SavedDock::Left));
+    assert_eq!(super::pane_state(&app, Pane::Clipboard).place, Place::Docked(Edge::Start));
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
 /// #3032: Delete is greyed out for built-in styles in the Styles pane (the engine refuses
 /// them — `crates/engine/src/cmd/para.rs`), while custom styles keep it enabled.
 #[test]
@@ -413,4 +444,27 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     }
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
+}
+
+/// #3382: a long comment's card in the Comments pane stops at ten lines of text, so its buttons
+/// and the card after it stay in view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = crate::WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+        crate::Services::default(),
+    );
+    app.run("select.text", serde_json::json!({"text": "Alpha"})).unwrap();
+    let long = (1..=200).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    app.run("review.newComment", serde_json::json!({"text": long})).unwrap();
+    app.run("select.text", serde_json::json!({"text": "Beta"})).unwrap();
+    app.run("review.newComment", serde_json::json!({"text": "Short note."})).unwrap();
+    app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+    let h = pane_harness(app);
+    let go_to: Vec<egui::Rect> = h.get_all_by_label("Go to").map(|n| n.rect()).collect();
+    assert_eq!(go_to.len(), 2, "one Go to button per card");
+    assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
 }
