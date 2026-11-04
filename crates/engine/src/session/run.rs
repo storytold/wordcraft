@@ -311,7 +311,21 @@ impl Session {
                 }
                 _ => false,
             };
-            let changed = !unchanged(self);
+            // A Replace that replaced nothing (no match selected, or one in a field's result,
+            // #5552) is Find Next: it moves the selection to the next match but is no edit, so it
+            // marks no unsaved changes and adds no undo step. The selection stays where it went.
+            let found_only = id == "edit.replace"
+                && match (before_doc, pending_before) {
+                    (Some((doc, _, _, _, _, _, column)), Some(pending)) => {
+                        !replaces_document
+                            && self.document_id == document_id_before
+                            && doc.same_content(&self.doc)
+                            && *column == self.column
+                            && *pending == self.pending
+                    }
+                    _ => false,
+                };
+            let changed = !unchanged(self) && !found_only;
             if changed {
                 // The layout the connectors are rerouted against is the new one.
                 self.touch();
@@ -325,7 +339,7 @@ impl Session {
             // step, marks no unsaved changes, forces no relayout and leaves the redo
             // stack alone. What it left behind is compared with what it started from,
             // after the reroute: a reroute that moved a connector is an edit of its own.
-            no_op = !changed && !rerouted && unchanged(self);
+            no_op = !changed && !rerouted && (found_only || unchanged(self));
             if no_op {
                 // The step the dispatch pushed is not an edit: put the stacks back as
                 // they were, so the redo stack survives and no step is evicted. The

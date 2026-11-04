@@ -143,3 +143,29 @@ fn find_matches_legacy_form_field_text() {
     assert_eq!(run(&mut s, "edit.find", json!({"text": "from Graz"}))["count"], 1);
     assert_eq!(run(&mut s, "edit.find", json!({"text": "Vienna"}))["count"], 0);
 }
+
+/// A Replace that replaces nothing (its selected match is in a field, or nothing it would replace
+/// is selected) moves on to the next match like Find Next: the document has no unsaved changes
+/// from it and Undo has no step for it (#5560 review).
+#[test]
+fn a_replace_that_skips_is_no_edit() {
+    let mut s = cited();
+    run(&mut s, "edit.find", json!({"text": "[1]"}));
+    let first = s.sel.ordered();
+    s.dirty = false;
+    let undo = s.undo_depth();
+    run(&mut s, "edit.replace", json!({"with": "[2]"}));
+    assert_ne!(s.sel.ordered(), first, "Replace moved on to the next match");
+    assert!(!s.dirty, "skipping a match in a field is no edit");
+    assert_eq!(s.undo_depth(), undo);
+    // The same for a selection that isn't a match at all.
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "edit.replace", json!({"text": "again", "with": "twice"}));
+    assert!(!s.dirty);
+    assert_eq!(s.undo_depth(), undo);
+    // Replacing the selected plain-text match is an edit.
+    run(&mut s, "edit.replace", json!({"with": "twice"}));
+    assert!(s.dirty);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "See [1] and [1] twice.");
+    assert_eq!(s.undo_depth(), undo + 1);
+}
