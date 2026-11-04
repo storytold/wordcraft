@@ -12047,6 +12047,15 @@ fn a_header_table_is_edited_and_a_copied_table_pastes_into_the_header() {
     assert!(after[0] > before[0] + 20.0, "the header table's first column widened: {before:?} → {after:?}");
     // While the body is edited, the dimmed header's table doesn't take the pointer.
     assert!(crate::cmd::table_resize::resize_target_in(&s.layout(), &s.doc, 0, x, y, 4.0, StoryRef::Body).is_none());
+    // The Draw Table pen splits the header table's cell it crosses, as in the body.
+    let first = s.layout().pages[0].header.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, story, .. } if *story == hf => Some(*rect),
+        _ => None,
+    });
+    let first = first.expect("the header's table is still laid out");
+    let mid = first.x + first.w / 2.0;
+    run(&mut s, "table.draw", json!({"page": 0, "x0": mid, "y0": first.y + 1.0, "x1": mid, "y1": first.bottom() - 1.0}));
+    assert_eq!(grid(&s).len(), 4, "the pen split a column of the header's table");
     // A table copied from the body pastes into the header as a table.
     run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
@@ -12061,6 +12070,6 @@ fn a_header_table_is_edited_and_a_copied_table_pastes_into_the_header() {
     run(&mut s, "edit.paste", json!({}));
     let mut found = tables(&s);
     found.sort();
-    assert_eq!(found, vec![(1, 2), (3, 3)], "{:?}", s.doc.story(hf));
+    assert_eq!(found, vec![(1, 2), (3, 4)], "{:?}", s.doc.story(hf));
     assert!(s.doc.plain_text(hf).contains("Copied"));
 }

@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"page": n, "x": pt, "y": pt, "toX": pt, "toY": pt, "reach"?: pt} (a drag from the move handle past a table's top-left corner: the table floats where it's dropped, the text wrapping around it; tables in the main text only)"#,
         ),
         CommandSpec::new("table.fitColumn", "AutoFit Column by Double-Clicking", "Table Layout › Cell Size", fit_column).params(
-            r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a double-click on a column border: the column left of it fits its contents and the columns right of it keep their widths, moving with the border, so the table narrows or widens (up to the right margin), as in Word)"#,
+            r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a double-click on a column border of a table in the caret's story: the column left of it fits its contents and the columns right of it keep their widths, moving with the border, so the table narrows or widens (up to the right margin), as in Word)"#,
         ),
     ]
 }

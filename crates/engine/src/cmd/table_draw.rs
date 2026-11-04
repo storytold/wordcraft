@@ -29,7 +29,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"page": n, "x0": pt, "y0": pt, "x1": pt, "y1": pt, "story"?: StoryRef} (a pen stroke in page points, 0-based page: a rectangle at least 12 pt each way outside any table inserts a one-cell table of that size at the paragraph under its start; a straight vertical or horizontal line inside a table splits the cells it crosses there. In the app the button turns the pen on.)"#,
         ),
         CommandSpec::new("table.eraser", "Eraser", "Table Layout › Draw", eraser).params(
-            r#"{"page": n, "x": pt, "y": pt} (removes the border between two cells within 4 pt of the point: cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
+            r#"{"page": n, "x": pt, "y": pt, "story"?: StoryRef} (removes the border between two cells within 4 pt of the point, of a table in `story` (default: the caret's; a header's or footer's while one is edited): cells that make one rectangle merge, including cells merged down the same rows; otherwise the border is hidden along the whole edge. In the app the button turns the eraser on.)"#,
         ),
     ]
 }
