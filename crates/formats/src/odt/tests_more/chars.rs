@@ -268,3 +268,19 @@ fn emphasis_marks_are_read_and_written() {
     let back: Vec<Option<E>> = back.body[0].as_para().unwrap().runs.iter().map(|r| r.props.emphasis).collect();
     assert_eq!(back, [Some(E::Dot), Some(E::Comma), Some(E::Circle), Some(E::UnderDot), Some(E::Dot), None]);
 }
+
+#[test]
+fn objects_in_hidden_text_are_kept() {
+    // Hidden text is written, marked hidden: so are the bookmarks and fields it holds.
+    let hidden = CharProps { hidden: Some(true), ..Default::default() };
+    let mut p = Paragraph::with_text("Shown. Hidden words.", CharProps::default());
+    let n = p.len();
+    p.format(7, n, &|c| c.hidden = Some(true)).unwrap();
+    p.insert_object(14, wordcraft_doc::para::InlineObject::BookmarkStart { name: "Secret".into() }, &hidden).unwrap();
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let back = import(&export(&d).unwrap()).unwrap();
+    let p = back.body[0].as_para().unwrap();
+    assert!(p.text.contains("Hidden"), "{:?}", p.text);
+    assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
+}

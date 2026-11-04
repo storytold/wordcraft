@@ -120,8 +120,8 @@ fn cm(v: f32) -> f32 {
 fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
     // ODF puts the header at the page margin and the text below the header's band; Word measures
     // both from the page edge. Whether the band's height takes in its spacing the standard
-    // doesn't say: LibreOffice's does (a 2 cm header with 1 cm spacing puts the text 2 cm below
-    // the margin), WordCraft's adds it.
+    // doesn't say: WordCraft adds it (a 2 cm header with 1 cm spacing puts the text 3 cm below
+    // the margin).
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
@@ -130,10 +130,7 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
         &content,
         Some(&styles_with_header("<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>")),
     );
-    let s = crate::odt::tests::import_as(&with, &wordcraft_doc::odf_profile::OdfProfile::libreoffice()).last_section;
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
-    assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{} {}", s.header, s.margin_top);
-    assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(2.5)), "{} {}", s.footer, s.margin_bottom);
     let s = import(&with).unwrap().last_section;
     assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.75)), "{} {}", s.header, s.margin_top);
     assert!(near(s.footer, cm(1.5)) && near(s.margin_bottom, cm(3.0)), "{} {}", s.footer, s.margin_bottom);
@@ -148,43 +145,30 @@ fn a_header_starts_at_the_page_margin_and_the_text_after_it() {
 fn a_headers_spacing_stays_below_content_taller_than_it() {
     // LibreOffice's report templates: a header taller than its band keeps its spacing below it,
     // unless the spacing is dynamic (taken by the content first, as in Word). A style that
-    // doesn't say is the profile's: both presets keep it; a custom profile may grow into it.
+    // doesn't say keeps it.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
     );
     let hf = "<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>";
-    let lo = wordcraft_doc::odf_profile::OdfProfile::libreoffice();
-    let d = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&styles_with_header(hf))), &lo);
+    let d = import(&crate::odt::tests::package(&content, Some(&styles_with_header(hf)))).unwrap();
     let near = |a: f32, b: f32| (a - b).abs() < 0.05;
     let s = &d.last_section;
     assert!(near(s.header_gap, cm(0.25)) && near(s.footer_gap, cm(0.5)), "{} {}", s.header_gap, s.footer_gap);
     // Written back as the band's spacing, saying it is kept: the same whatever reads it.
     let saved = export(&d).unwrap();
     assert!(crate::odt::tests::entry(&saved, "styles.xml").contains(r#"style:dynamic-spacing="false""#));
-    let back = crate::odt::tests::import_as(&saved, &lo).last_section;
-    assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)) && near(back.margin_top, s.margin_top), "{back:?}");
     let back = import(&saved).unwrap().last_section;
-    assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)), "{back:?}");
+    assert!(near(back.header_gap, cm(0.25)) && near(back.footer_gap, cm(0.5)) && near(back.margin_top, s.margin_top), "{back:?}");
     let dynamic = styles_with_header(hf).replace(r#"fo:margin-bottom="0.25cm""#, r#"fo:margin-bottom="0.25cm" style:dynamic-spacing="true""#);
-    let s = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&dynamic)), &lo).last_section;
+    let s = import(&crate::odt::tests::package(&content, Some(&dynamic))).unwrap().last_section;
     assert_eq!((s.header_gap, near(s.footer_gap, cm(0.5))), (0.0, true));
-    // Unstated: WordCraft's keeps it too; a custom profile can grow into it.
-    let s = import(&crate::odt::tests::package(&content, Some(&styles_with_header(hf)))).unwrap().last_section;
-    assert!(near(s.header_gap, cm(0.25)) && near(s.footer_gap, cm(0.5)), "{s:?}");
-    let grow = wordcraft_doc::odf_profile::OdfProfile {
-        preset: wordcraft_doc::odf_profile::OdfPreset::Custom,
-        dynamic_spacing: true,
-        ..wordcraft_doc::odf_profile::OdfProfile::word()
-    };
-    let s = crate::odt::tests::import_as(&crate::odt::tests::package(&content, Some(&styles_with_header(hf))), &grow).last_section;
-    assert_eq!((s.header_gap, s.footer_gap), (0.0, 0.0));
 }
 
 #[test]
-fn a_header_without_a_stated_height_is_half_a_centimetre() {
+fn a_header_without_a_stated_height_has_no_band() {
     // LibreOffice's letter templates: a header style stating no height, or none at all (the
-    // standard gives none), is LibreOffice's default 0.5 cm band (measured); WordCraft's is none.
+    // standard gives none), has no band: the header is as tall as its text.
     let content = format!(
         r#"<office:document-content {}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"#,
         crate::odt::tests::NS_T
@@ -197,8 +181,6 @@ fn a_header_without_a_stated_height_is_half_a_centimetre() {
             crate::odt::tests::NS_T
         );
         let pkg = crate::odt::tests::package(&content, Some(&styles));
-        let s = crate::odt::tests::import_as(&pkg, &wordcraft_doc::odf_profile::OdfProfile::libreoffice()).last_section;
-        assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.5)), "{band}: {} {}", s.header, s.margin_top);
         let s = import(&pkg).unwrap().last_section;
         assert!(near(s.header, cm(2.0)) && near(s.margin_top, cm(2.0)), "{band}: {} {}", s.header, s.margin_top);
     }
