@@ -708,16 +708,9 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
     const WML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const WML_STRICT: &str = "http://purl.oclc.org/ooxml/wordprocessingml/main";
     const W15: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
-    let transcoded = crate::xml::utf16_to_utf8(bytes);
-    let rewritten = match transcoded.as_deref() {
-        Some(text) => Some(utf8_declaration(text)?),
-        None => None,
-    };
-    let bytes = match rewritten.as_deref() {
-        Some(text) => text.as_bytes(),
-        None if bytes.contains(&0) => return None,
-        None => bytes,
-    };
+    let decoded = decode_xml(bytes)?;
+    let rewritten = utf8_declaration(&decoded)?;
+    let bytes = rewritten.as_bytes();
     let ns_is =
         |r: &ResolveResult, ns: &str| matches!(r, ResolveResult::Bound(n) if quick_xml::escape::unescape(n.as_ref()).is_ok_and(|value| value == ns));
     let wml = |r: &ResolveResult| ns_is(r, WML) || ns_is(r, WML_STRICT);
@@ -778,7 +771,38 @@ fn scrub_private(bytes: &[u8], names: bool, dates: bool) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
-/// Rewrites an XML declaration's encoding after a UTF-16 part has been transcoded to UTF-8.
+/// Decode the XML encodings this reader accepts before quick-xml validates UTF-8 input.
+fn decode_xml(bytes: &[u8]) -> Option<String> {
+    if let Some(text) = crate::xml::utf16_to_utf8(bytes) {
+        return Some(text);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Some(text.to_owned());
+    }
+    let prefix = bytes.get(..bytes.len().min(256))?;
+    let declaration_end = prefix.windows(2).position(|pair| pair == b"?>")? + 2;
+    let declaration = std::str::from_utf8(prefix.get(..declaration_end)?).ok()?;
+    let tail = declaration.strip_prefix("<?xml")?;
+    if !tail.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let end = declaration.find("?>")?;
+    let declaration = &declaration[..end];
+    let start = declaration.find("encoding")? + "encoding".len();
+    let after_equals = declaration[start..].trim_start().strip_prefix('=')?.trim_start();
+    let quote = after_equals.chars().next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let label_end = after_equals[quote.len_utf8()..].find(quote)? + quote.len_utf8();
+    let label = &after_equals[quote.len_utf8()..label_end];
+    let encoding = encoding_rs::Encoding::for_label(label.as_bytes())?;
+    let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
+    (!had_errors).then(|| decoded.into_owned())
+}
+
+/// Rewrites an XML declaration's encoding after a part has been transcoded to UTF-8.
 /// XML declarations are optional; malformed ones fail closed with the enclosing privacy scrub.
 fn utf8_declaration(text: &str) -> Option<String> {
     let Some(tail) = text.strip_prefix("<?xml") else { return Some(text.to_string()) };
@@ -882,6 +906,30 @@ mod tests {
         assert!(scrubbed.contains("encoding=\"UTF-8\""), "{scrubbed}");
         assert!(!scrubbed.contains("presenceInfo") && !scrubbed.contains("private"), "{scrubbed}");
         assert!(scrubbed.contains("opaque"), "{scrubbed}");
+    }
+
+    #[test]
+    fn windows_1252_glossary_is_decoded_before_privacy_scrubbing() {
+        let xml = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?><root><w:p xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:author=\"Private Name\"/><keep>caf\xe9</keep></root>";
+        let decoded = decode_xml(xml).expect("declared Windows-1252 XML decodes");
+        assert!(decoded.contains("café"), "{decoded}");
+        let scrubbed = scrub_private(xml, true, false).expect("declared Windows-1252 XML can be scrubbed");
+        let scrubbed = String::from_utf8(scrubbed).expect("rewritten output is UTF-8");
+        assert!(scrubbed.contains("encoding=\"UTF-8\""), "{scrubbed}");
+        assert!(!scrubbed.contains("Private Name"), "{scrubbed}");
+        assert!(scrubbed.contains("café"), "{scrubbed}");
+    }
+
+    #[test]
+    fn glossary_privacy_scrub_allows_129_namespace_bindings() {
+        let declarations: String = (0..129).map(|i| format!(" xmlns:p{i}=\"urn:p{i}\"")).collect();
+        let xml = format!(
+            "<root xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"{declarations}><keep>opaque</keep><w15:presenceInfo/></root>"
+        );
+        let scrubbed = scrub_private(xml.as_bytes(), true, false).expect("129 namespace bindings can be scrubbed");
+        let scrubbed = String::from_utf8(scrubbed).expect("rewritten output is UTF-8");
+        assert!(scrubbed.contains("opaque"), "{scrubbed}");
+        assert!(!scrubbed.contains("presenceInfo"), "{scrubbed}");
     }
 
     #[test]
