@@ -1,14 +1,14 @@
 use super::export::Fit;
-use super::glyphs::{baseline, cluster_ends, glyph_outlines, left_to_right, split_clusters, visual_order};
+use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_right, split_clusters, visual_order};
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
 use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    GlyphId, HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation,
-    Node, NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash,
-    Surface, Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
+    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
+    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 
 mod draw;
@@ -19,8 +19,8 @@ pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
     pub(crate) opts: &'a PdfOptions,
-    /// Layout page index → output page index.
-    pub(crate) out_index: HashMap<usize, usize>,
+    /// Layout page index to the first output sheet side and its placement transform.
+    pub(crate) out_index: HashMap<usize, (usize, Fit)>,
     /// Embedded fonts by face id (`None`: krilla can't read it).
     pub(crate) fonts: HashMap<u32, (FaceRef, Option<Font>)>,
     pub(crate) font_error: Option<PdfError>,
@@ -346,7 +346,7 @@ impl Exporter<'_> {
                 let end = ends.get(i).copied().unwrap_or(text.len());
                 let start = g.cluster.min(end);
                 KrillaGlyph::new(
-                    GlyphId::new(g.gid),
+                    glyph_id(g.gid),
                     g.x_advance as f32 / upem,
                     g.x_offset as f32 / upem,
                     g.y_offset as f32 / upem,
