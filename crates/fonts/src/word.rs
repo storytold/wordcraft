@@ -421,7 +421,11 @@ pub(crate) fn missing_metric_fonts_in(db: &FontDb) -> Vec<(&'static str, String)
         .iter()
         .filter_map(|(word, twins)| {
             let resolved = resolve_with_db(db, word, false, false);
-            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) { None } else { Some((*word, resolved.face.family.clone())) }
+            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) {
+                None
+            } else {
+                Some((*word, resolved.face.family.clone()))
+            }
         })
         .collect()
 }
@@ -819,6 +823,14 @@ mod tests {
             Some(&("Times New Roman", "Source Serif 4".to_owned()))
         );
         assert_eq!(resolve_with_db(&fallback, "Times New Roman", false, false).face.family, "Source Serif 4");
+
+        let no_carlito = database(Some("DejaVu Sans"));
+        assert!(!no_carlito.has_family("Carlito"));
+        assert_eq!(resolve_with_db(&no_carlito, "Calibri", false, false).face.family, "DejaVu Sans");
+        assert_eq!(
+            missing_metric_fonts_in(&no_carlito).iter().find(|(family, _)| *family == "Calibri"),
+            Some(&("Calibri", "DejaVu Sans".to_owned()))
+        );
     }
 
     #[test]
