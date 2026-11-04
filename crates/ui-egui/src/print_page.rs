@@ -178,6 +178,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let total = lay.pages.len();
     let current = app.session.current_pages(&lay);
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
+    // Opened afresh, the page doesn't repeat how the last job went: that was said once in the
+    // status bar. What the printers are doing (finding them, none found) still shows.
+    let pass = ctx.cumulative_pass_nr();
+    let opened = app.print_page_pass.is_none_or(|last| last.saturating_add(1) < pass);
+    app.print_page_pass = Some(pass);
+    if opened
+        && !app.printing.busy()
+        && matches!(
+            app.printing.message,
+            Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped)
+        )
+    {
+        app.printing.message = None;
+    }
 
     let settings = |app: &mut WordApp, ui: &mut Ui| {
         {
