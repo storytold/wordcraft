@@ -8,8 +8,9 @@ use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
+use crate::boxes::BoxContext;
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxContext, BoxInput, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
