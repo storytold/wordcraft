@@ -428,9 +428,15 @@ fn images_round_trip() {
         w: 72.0,
         h: 48.0,
         alt: "A tiny picture".into(),
-        // Room for a shadow: kept through save and load.
-        float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
-        crop: [0.1, 0.0, 0.25, 0.05],
+        // Room for a shadow: kept through save and load; picture paint/effects are kept too.
+        float: Float {
+            effect: [12.0, 12.0, 27.0, 27.0],
+            pic_stroke: Some(Rgb(0x20, 0x40, 0x60)),
+            pic_stroke_width: 1.0,
+            pic_effects: wordcraft_doc::effects::ShapeEffects { soft_edge: Some(2.0), ..Default::default() },
+            ..Default::default()
+        },
+        crop: [-0.25, 0.0, 0.25, -0.05],
         fx: Default::default(),
         ole: None,
     };

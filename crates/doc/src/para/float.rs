@@ -157,6 +157,13 @@ pub struct Float {
     /// inline or floating: lines and surrounding text keep clear of it. Rotation's own overhang
     /// is not in here: it follows from [`Float::rot`] (see [`Float::spin_pad`]).
     pub effect: [f32; 4],
+    /// Picture outline colour and width, plus DrawingML effects in `pic:spPr`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pic_stroke: Option<crate::props::Rgb>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub pic_stroke_width: f32,
+    #[serde(skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
+    pub pic_effects: crate::effects::ShapeEffects,
     /// Rotation clockwise about the object's centre, degrees (DrawingML `a:xfrm/@rot`). Offsets
     /// and the size stay those of the unrotated frame, as in Word; see [`Float::spin`].
     #[serde(skip_serializing_if = "is_zero")]

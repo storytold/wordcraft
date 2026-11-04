@@ -267,6 +267,11 @@ impl Writer<'_> {
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
         let name = format!("Picture {docpr}");
+        let mut float = float.clone();
+        for (e, fx) in float.effect.iter_mut().zip(float.pic_effects.extent()) {
+            *e = wordcraft_geom::finite(*e).max(fx);
+        }
+        let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);

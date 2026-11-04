@@ -41,8 +41,8 @@ impl Writer<'_> {
             }
             w.close("a:blip");
         }
-        if crop.iter().any(|c| *c > 0.0) {
-            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
+        if crop.iter().any(|c| *c != 0.0) {
+            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(-1.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
         }
         w.open("a:stretch", &[]);
@@ -54,6 +54,14 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        if let Some(c) = float.pic_stroke {
+            w.open("a:ln", &[("w", &emu(float.pic_stroke_width.clamp(0.0, 100.0)))]);
+            w.open("a:solidFill", &[]);
+            w.empty("a:srgbClr", &[("val", &c.hex())]);
+            w.close("a:solidFill");
+            w.close("a:ln");
+        }
+        effect_list(w, &float.pic_effects);
         w.close("pic:spPr");
         w.close("pic:pic");
     }

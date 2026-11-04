@@ -19,7 +19,7 @@ pub(super) const SYS_MISSES_MAX: usize = 65_536;
 
 /// Installed font files larger than this are not searched for fallback characters.
 #[cfg(not(target_arch = "wasm32"))]
-const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
+pub(super) const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
 
 /// Which characters each cataloged font file maps (#605). Before it, every distinct character no
 /// loaded font covered read and parsed every installed font file again: 500 distinct Tangut

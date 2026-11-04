@@ -251,7 +251,12 @@ impl Reader<'_> {
     /// A picture: the first `a:blip` in `pic` and its crop.
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
-        float.set_spin(xfrm_spin(pic.find("pic:spPr")));
+        let sppr = pic.find("pic:spPr");
+        float.set_spin(xfrm_spin(sppr));
+        let paint = shape_paint(sppr, None, &self.doc.settings.theme_colors, &self.theme_fills, self.group_fill.as_ref());
+        float.pic_stroke = paint.stroke;
+        float.pic_stroke_width = paint.stroke_width;
+        float.pic_effects = sppr.and_then(|s| s.child("a:effectLst")).map(|l| effect_list(l, &self.doc.settings.theme_colors)).unwrap_or_default();
         let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
@@ -259,7 +264,7 @@ impl Reader<'_> {
                 if let Some(v) = sr.attr(n).and_then(int)
                     && let Some(slot) = crop.get_mut(i)
                 {
-                    *slot = (v.clamp(0, 100_000) as f32 / 100_000.0).clamp(0.0, 1.0);
+                    *slot = (v.clamp(-100_000, 100_000) as f32 / 100_000.0).clamp(-1.0, 1.0);
                 }
             }
         }
@@ -359,7 +364,7 @@ impl Reader<'_> {
             let x = group_xfrm(sppr);
             let ((ox, oy), (ew, eh)) = (x.off, x.ext);
             if e.name == "wpg:grpSp" || e.name == "wpg:wgp" {
-                if depth >= 8 {
+                if depth >= 64 {
                     continue;
                 }
                 // Its members' space maps onto its own box.
@@ -428,7 +433,7 @@ impl Reader<'_> {
         let (stroke, stroke_width) = (paint.stroke, paint.stroke_width);
         let fill = if kind.is_open() { None } else { paint.fill };
         let ln = sppr.and_then(|s| s.child("a:ln"));
-        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
+        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(|l| effect_list(l, &self.doc.settings.theme_colors)).unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
@@ -696,10 +701,10 @@ fn preset_adj(geom: &El, name: &str) -> Option<i64> {
     gd.attr("fmla")?.trim().strip_prefix("val")?.trim().parse::<i64>().ok()
 }
 
-fn effect_list(l: &El) -> ShapeEffects {
+fn effect_list(l: &El, theme: &[Rgb]) -> ShapeEffects {
     let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
     let shadow = l.child("a:outerShdw").map(|e| {
-        let (color, transparency) = effect_color(e);
+        let (color, transparency) = effect_color(e, theme);
         // `dir`: 60000ths of a degree, clockwise.
         let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
         // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
@@ -707,31 +712,20 @@ fn effect_list(l: &El) -> ShapeEffects {
         Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
     });
     let glow = l.child("a:glow").map(|e| {
-        let (color, transparency) = effect_color(e);
+        let (color, transparency) = effect_color(e, theme);
         Glow { color: color.unwrap_or(Glow::default().color), size: pt(e, "rad"), transparency }
     });
     let soft_edge = l.child("a:softEdge").map(|e| pt(e, "rad"));
     ShapeEffects { shadow, glow, soft_edge }.sanitized()
 }
 
-/// The colour inside an effect (`a:srgbClr`, `a:prstClr`, `a:sysClr`; theme colours aren't
-/// resolved here) and its transparency, percent (from `a:alpha`, opaque when absent).
-fn effect_color(e: &El) -> (Option<Rgb>, f32) {
+/// The colour inside an effect and its transparency, percent (from `a:alpha`, opaque when absent).
+fn effect_color(e: &El, theme: &[Rgb]) -> (Option<Rgb>, f32) {
     let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
     else {
         return (None, 0.0);
     };
-    let rgb = match c.name.as_str() {
-        "a:srgbClr" => c.attr("val").and_then(Rgb::parse),
-        "a:sysClr" => c.attr("lastClr").and_then(Rgb::parse),
-        "a:prstClr" => match c.attr("val").unwrap_or("") {
-            "black" => Some(Rgb::BLACK),
-            "white" => Some(Rgb::WHITE),
-            "gray" | "grey" => Some(Rgb(0x80, 0x80, 0x80)),
-            _ => None,
-        },
-        _ => None,
-    };
+    let rgb = crate::read::drawing_color::color(c, theme);
     // `a:alpha`: opacity in 1000ths of a percent.
     let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
     (rgb, 100.0 - opacity)
