@@ -7,9 +7,12 @@
 //!   ([`crate::caret_glide::ease`]) ([`underline`]).
 //!
 //! What never glides: the underline of a tab that stays active while the strip moves under it (a
-//! resized window, a contextual tab coming or going), and an underline that wasn't drawn the frame
-//! before (coming back from File, or the active tab in the » menu). Our choice; Word wasn't
-//! measured.
+//! resized window, a contextual tab coming or going), going to File and back to the same tab, and
+//! the first underline after the active tab was in the » menu. Our choice; Word wasn't measured.
+//!
+//! One rare glide is left in: Read Mode, Full Screen View and Focus hide the strip, but keytips
+//! still work there, so Alt and a letter can choose another tab unseen. On leaving the mode, the
+//! underline glides to that tab from where it last was. It's cosmetic and over in [`GLIDE_SECS`].
 //!
 //! With animations off (File ▸ Options ▸ Accessibility, or the system's setting: egui's
 //! `animation_time` at 0, as in the headless test harness) both happen at once.
@@ -71,10 +74,11 @@ pub fn underline(ui: &Ui, active: Option<(&str, Rect)>) -> Option<Rect> {
     let now = ctx.input(|i| i.time);
     let secs = if ui.style().animation_time > 0.0 { GLIDE_SECS } else { 0.0 };
     let glide = match ctx.data(|d| d.get_temp::<Glide>(id)) {
-        // The same tab: it follows the strip at once, finishing any glide on its way there.
-        Some(g) if g.tab == tab => Glide { to: target, ..g },
+        // The same tab in the same place: any glide carries on.
+        Some(g) if g.tab == tab && g.to == target => g,
         // Another tab: glide from where the underline is now.
-        Some(g) if secs > 0.0 => Glide { tab: tab.to_string(), from: g.at(now, secs), to: target, start: now },
+        Some(g) if g.tab != tab && secs > 0.0 => Glide { tab: tab.to_string(), from: g.at(now, secs), to: target, start: now },
+        // The first frame, animations off, or the strip moved under the tab: there at once.
         _ => Glide { tab: tab.to_string(), from: target, to: target, start: now },
     };
     let at = glide.at(now, secs);
@@ -97,7 +101,24 @@ mod tests {
     use egui::{pos2, vec2};
     use egui_kittest::kittest::Queryable;
 
-    /// A click on a tab glides the underline there from the active tab whichever side it is on.
+    /// The underline as painted in the last frame: the one accent bar of its height.
+    fn painted_underline(h: &egui_kittest::Harness<'_, crate::WordApp>) -> Rect {
+        let accent = crate::theme::Tokens::get(&h.ctx).accent;
+        let bars: Vec<Rect> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill == accent && (r.rect.height() - 3.0).abs() < 0.01 => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 1, "one underline: {bars:?}");
+        bars[0]
+    }
+
+    /// A click on a tab glides the underline there from the active tab whichever side it is on,
+    /// as painted: from under the old tab, through the space between, to under the one clicked.
     /// A click on a tab left of the active one used to leave no tab active for the frame of the
     /// click (the tabs after it saw the new tab), so the underline appeared under it at once.
     #[test]
@@ -105,7 +126,8 @@ mod tests {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         app.ui.animations = crate::theme::Animations::On;
         app.ui.tab = "View".into();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        // 60 frames a second: the harness's default step is longer than a whole glide.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut crate::WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -116,11 +138,19 @@ mod tests {
         h.run_steps(4);
         for (from, to) in [("View", "Home"), ("Home", "View")] {
             assert_eq!(h.state().ui.tab, from);
+            let start = painted_underline(&h);
+            let clicked = h.get_by_label(to).rect();
             h.get_by_label(to).click();
             h.run_steps(2);
             assert_eq!(h.state().ui.tab, to);
             assert!(glided(&h.ctx, to), "{from} to {to} glides");
+            h.run_steps(2);
+            let mid = painted_underline(&h);
             h.run_steps(20);
+            let end = painted_underline(&h);
+            assert!((end.center().x - clicked.center().x).abs() < 1.0, "{from} to {to} ends under the tab: {end:?}, {clicked:?}");
+            let (low, high) = (start.center().x.min(end.center().x), start.center().x.max(end.center().x));
+            assert!(low + 1.0 < mid.center().x && mid.center().x < high - 1.0, "{from} to {to} passes between: {start:?}, {mid:?}, {end:?}");
         }
     }
 
@@ -175,6 +205,23 @@ mod tests {
         assert_eq!(frame(&ctx, 3.0, true, |ui| underline(ui, Some(("Home", home())))), Some(home()), "back in place");
     }
 
+    /// The active tab moving before its glide has arrived (the strip changed under it) ends the
+    /// glide: the underline is under the tab at once, not somewhere between the tab's old place
+    /// and its new one. Until then, the glide carries on.
+    #[test]
+    fn underline_goes_straight_to_a_tab_that_moves_during_its_glide() {
+        let moved = Rect::from_min_size(pos2(200.0, 27.0), vec2(40.0, 3.0));
+        let ctx = egui::Context::default();
+        frame(&ctx, 0.0, true, |ui| underline(ui, Some(("Home", home()))));
+        frame(&ctx, 1.0, true, |ui| underline(ui, Some(("Insert", insert()))));
+        let mid = frame(&ctx, 1.0 + GLIDE_SECS / 4.0, true, |ui| underline(ui, Some(("Insert", insert())))).unwrap();
+        assert!(mid.min.x > home().min.x && mid.min.x < insert().min.x, "an unmoved tab keeps gliding: {mid:?}");
+        let now = 1.0 + GLIDE_SECS / 2.0;
+        assert_eq!(frame(&ctx, now, true, |ui| underline(ui, Some(("Insert", moved)))), Some(moved), "under the tab at once");
+        assert!(!glided(&ctx, "Insert"), "the glide is over");
+        assert_eq!(frame(&ctx, now + 0.01, true, |ui| underline(ui, Some(("Insert", moved)))), Some(moved), "and stays there");
+    }
+
     /// Every window draws in the same frame and shares the context's memory: two windows on
     /// different tabs keep their own underline, neither gliding towards the other's for ever.
     #[test]
@@ -208,17 +255,34 @@ mod tests {
         assert_eq!(other, Some(insert()), "the second window");
     }
 
-    /// The hover fill fades in with animations on and is all there at once with them off.
+    /// The hover fill fades all the way in and all the way out, step by step, in about egui's
+    /// `animation_time` each way. With animations off it comes and goes at once.
     #[test]
-    fn hover_fades_in_unless_animations_are_off() {
+    fn hover_fades_in_and_out_unless_animations_are_off() {
+        const STEP: f64 = 1.0 / 60.0;
         let fill = Color32::from_rgb(200, 200, 200);
         let id = Id::unique("tab");
+        let alpha = |c: Option<Color32>| c.map_or(0, |c| c.a());
         let ctx = egui::Context::default();
-        assert_eq!(frame(&ctx, 0.0, true, |ui| hover(ui, id, false, fill)), None, "not hovered");
-        let early = frame(&ctx, 0.01, true, |ui| hover(ui, id, true, fill)).unwrap();
-        assert!(early.a() < fill.a(), "fading in: {early:?}");
+        let mut time = 0.0;
+        assert_eq!(frame(&ctx, time, true, |ui| hover(ui, id, false, fill)), None, "not hovered");
+        let most = (f64::from(ctx.global_style().animation_time) / STEP).ceil() as usize + 2;
+        for (on, end) in [(true, fill.a()), (false, 0)] {
+            let mut last = alpha(if on { None } else { Some(fill) });
+            let mut frames = 0;
+            while last != end {
+                time += STEP;
+                frames += 1;
+                assert!(frames <= most, "on={on}: over {most} frames, alpha {last}");
+                let now = alpha(frame(&ctx, time, true, |ui| hover(ui, id, on, fill)));
+                assert!(if on { now > last } else { now < last }, "on={on}: step by step, {last} then {now}");
+                last = now;
+            }
+            assert!(frames >= 2, "on={on}: a fade, not a jump");
+        }
         let ctx = egui::Context::default();
         frame(&ctx, 0.0, false, |ui| hover(ui, id, false, fill));
-        assert_eq!(frame(&ctx, 0.01, false, |ui| hover(ui, id, true, fill)), Some(fill));
+        assert_eq!(frame(&ctx, 0.01, false, |ui| hover(ui, id, true, fill)), Some(fill), "off: there at once");
+        assert_eq!(frame(&ctx, 0.02, false, |ui| hover(ui, id, false, fill)), None, "off: gone at once");
     }
 }
