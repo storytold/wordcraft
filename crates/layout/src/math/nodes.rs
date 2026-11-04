@@ -1,6 +1,7 @@
 use super::bx::{Bx, Cls, RunPart, St, compose, finalize, hcat};
+use super::glyphs::TextAtom;
 use super::state::{MAX_NODES, class_of};
-use super::*;
+use super::{C, Ctx, FaceRef, FontDb, LimLoc, MAX_DEPTH, MItem, MNode, MRun, MScr, MSty, Rgb, ScriptKind, is_integral, math_alnum};
 
 impl Ctx {
     pub(super) fn arg(&mut self, a: &[MNode], st: St, depth: usize) -> Bx {
@@ -128,7 +129,16 @@ impl Ctx {
                 _ => (false, false),
             };
             let rs = wordcraft_fonts::word::resolve(&fam, bold, italic);
-            let mut b = self.text_atom(rs.face, &r.text, size, 0, color, (rs.synth_bold, rs.synth_italic), path, u0);
+            let mut b = self.text_atom(TextAtom {
+                face: rs.face,
+                text: &r.text,
+                size,
+                level: 0,
+                color,
+                synth: (rs.synth_bold, rs.synth_italic),
+                path,
+                k0: u0,
+            });
             b.glyph = None;
             out.push(RunPart::Atom(b.cls(Cls::Ord)));
             return out;
@@ -141,7 +151,8 @@ impl Ctx {
         let flush = |cur: &mut String, k0: usize, face: Option<FaceRef>, synth_italic: bool, out: &mut Vec<RunPart>| {
             if !cur.is_empty() {
                 let f = face.unwrap_or(self.face);
-                let b = self.text_atom(f, cur, size, st.level, color, (false, synth_italic), path, u0 + k0);
+                let b =
+                    self.text_atom(TextAtom { face: f, text: cur, size, level: st.level, color, synth: (false, synth_italic), path, k0: u0 + k0 });
                 out.push(RunPart::Atom(b.cls(Cls::Ord)));
                 cur.clear();
             }
@@ -199,7 +210,8 @@ impl Ctx {
             }
             if cls != Cls::Ord {
                 let f = face.unwrap_or(self.face);
-                let b = self.text_atom(f, &ch.to_string(), size, st.level, color, (false, slant), path, u0 + k);
+                let text = ch.to_string();
+                let b = self.text_atom(TextAtom { face: f, text: &text, size, level: st.level, color, synth: (false, slant), path, k0: u0 + k });
                 out.push(RunPart::Atom(b.cls(cls)));
                 continue;
             }

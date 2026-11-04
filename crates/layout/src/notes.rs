@@ -1,9 +1,11 @@
-use super::boxes::{BoxContext, BoxLayout, layout_box};
+use super::boxes::{BoxInput, BoxLayout, layout_box};
 use super::ctx::Ctx;
 use super::floats::left_out_objects;
 use super::page::{PageBuilder, item_bottom};
 use super::placed::Placed;
-use super::*;
+use super::{
+    Block, Blocks, Border, Document, HashMap, HideDeleted, InlineObject, Page, ParaLayout, Paragraph, Rect, StoryRef, TextDirection, fields, para,
+};
 
 /// Footnote and endnote numbers (each kind counted separately), in document order, as each
 /// section's options say: starting at its "start at", numbered on, or starting again in each
@@ -127,7 +129,7 @@ impl NoteSeps {
 
 /// A note separator or continuation notice story (`blocks`) laid out `width` wide.
 fn sep_box(ctx: &mut Ctx, blocks: &Blocks, width: f32) -> SepBox {
-    let bl = layout_box(ctx, DECOR_STORY, blocks, &[], width, BoxContext::Other, 0, None);
+    let bl = layout_box(ctx, BoxInput::other(DECOR_STORY, blocks, width, 0, None));
     let mut items = bl.items;
     items.extend(separator_rules(blocks, &items));
     (items, bl.height)
@@ -318,7 +320,7 @@ pub(crate) fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>,
     for id in ids {
         let Some(part) = ctx.doc.parts.get(&id) else { continue };
         let blocks = part.blocks.clone();
-        let BoxLayout { items, height: h, .. } = layout_box(ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), BoxContext::Other, 0, None);
+        let BoxLayout { items, height: h, .. } = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, pb.col_w(), 0, None));
         // A note longer than the room left continues at a line break in the next column or on
         // a new page (Word). Each page takes at least a line, so this ends; the page cap is a
         // backstop (the rest then runs off the last page).
@@ -401,7 +403,7 @@ pub(crate) fn table_notes(ctx: &mut Ctx, pb: &mut PageBuilder, items: &[Placed])
     for id in ids {
         let Some(part) = ctx.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote) else { continue };
         let blocks = part.blocks.clone();
-        let BoxLayout { items, height: h, .. } = layout_box(ctx, StoryRef::Part(id), &blocks, &[], pb.sect.text_width(), BoxContext::Other, 0, None);
+        let BoxLayout { items, height: h, .. } = layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, pb.sect.text_width(), 0, None));
         pb.notes.push(NoteBox { id, items, h, cont: false });
     }
     pb.bottom -= pb.notes_h() - before;

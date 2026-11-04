@@ -1,5 +1,5 @@
 use super::autocorrect::{AUTOCORRECT, AutoCap, AutoCorrectPrefs, SMILEYS};
-use super::*;
+use super::{CmdError, Pos, Selection, Session};
 
 /// Apply AutoCorrect to the word just before the caret (called after typing a space/punctuation):
 /// replacements, then ordinal superscripts, web addresses as links and sentence capitals.

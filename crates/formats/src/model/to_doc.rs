@@ -3,7 +3,11 @@ use super::types::{
     CODE_STYLE, Cell, Dropped, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, MAX_DEPTH, MAX_RUN_STRINGS, MONO_FONT, Para, RUBY_BASE_SIZE,
     RevMark, clean_text, dropped, ruby_object,
 };
-use super::*;
+use super::{
+    AbstractNum, Arc, Block, Blocks, Border, BorderStyle, Borders, CellProps, CharProps, Document, InlineObject, Level, ListKind, Num, NumRef, OBJ,
+    ParaProps, Paragraph, PropChange, Revision, RevisionKind, Rgb, RowProps, Run, Style, StyleKind, Table, TextColor, Underline, VMerge, VertAlign,
+    levels_for, para_block,
+};
 
 pub fn char_props(f: &Fmt) -> CharProps {
     let on = |b: bool| if b { Some(true) } else { None };
@@ -96,6 +100,12 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     out.indent_left = sp.left;
     out.indent_right = sp.right;
     out.indent_first = sp.first;
+    if sp.before_auto {
+        out.space_before_auto = Some(true);
+    }
+    if sp.after_auto {
+        out.space_after_auto = Some(true);
+    }
     if p.page_break {
         out.page_break_before = Some(true);
     }
@@ -172,6 +182,9 @@ impl<'a> Builder<'a> {
             };
             let old = para_props(&c.old, old_num);
             out.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
+        }
+        if let Some(f) = &p.mark {
+            out.mark = self.budget(char_props(f));
         }
         if p.keep_next {
             out.props.keep_next = Some(true);
@@ -277,7 +290,7 @@ impl<'a> Builder<'a> {
                 level
             })
             .collect();
-        let numbering = &mut self.doc.numbering;
+        let numbering = Arc::make_mut(&mut self.doc.numbering);
         let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels, ..Default::default() });
         let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
@@ -412,7 +425,7 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     doc.numbering = Default::default();
     let uses_code = uses_kind(&flow.blocks, Kind::Code, 0);
     if uses_code {
-        doc.styles.upsert(code_style());
+        Arc::make_mut(&mut doc.styles).upsert(code_style());
     }
     let body = Builder::new(&mut doc).blocks(&flow.blocks, 0);
     doc.body = body;

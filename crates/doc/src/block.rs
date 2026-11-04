@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Deserialize, Paragraph, Serialize, Table};
 
 /// A block in a story. (Blocks are always behind an `Arc`, so the size difference is fine.)
 #[allow(clippy::large_enum_variant)]
