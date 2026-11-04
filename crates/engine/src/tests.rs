@@ -2570,25 +2570,66 @@ fn select_extend_from_a_table_paragraph_selects_the_document() {
     assert_eq!(b, s.doc.end_of(StoryRef::Body));
 }
 
-/// #1596: tables nest 24 deep at most, the depth the DOCX reader and writer keep. Insert › Table
-/// in the deepest cell says so; a table pasted there brings its text as paragraphs.
+/// #1596, #3618: tables nest only as deep as a `.json` save (and so an AutoRecover snapshot)
+/// reads back. Insert › Table in the deepest cell says so; a table pasted there brings its text
+/// as paragraphs.
 #[test]
-fn tables_nest_at_most_24_deep() {
+fn tables_nest_only_as_deep_as_a_json_save_reads() {
     use wordcraft_doc::table::MAX_TABLE_DEPTH;
     let mut s = s();
     for _ in 0..MAX_TABLE_DEPTH {
         run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
     }
     assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
+    let saved = crate::io::save_bytes("deep.json", &s.doc).unwrap();
+    assert_eq!(crate::io::open_bytes("deep.json", &saved).map(|d| d == s.doc), Ok(true));
     let before = s.doc.clone();
     let e = s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap_err();
-    assert!(e.to_string().contains("24 deep"), "{e}");
+    assert!(e.to_string().contains(&format!("{MAX_TABLE_DEPTH} deep")), "{e}");
     assert_eq!(s.doc, before);
     run(&mut s, "edit.paste", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
     let cell = s.sel.focus.path.clone();
     let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
     assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
     assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('b'))), "the pasted text is there");
+}
+
+/// #3618: a text box story sits two JSON levels below the body, and its deepest cell still reads
+/// back from a `.json` save with the richest content measured pasted in: a gradient shape, and
+/// gradient text effects changed with Track Changes on (the change keeps the old effects too).
+#[test]
+fn the_deepest_cell_of_a_text_box_reads_back_with_rich_content() {
+    use wordcraft_doc::table::MAX_TABLE_DEPTH;
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "rectangle"}));
+    run(&mut s, "shape.fill", json!({"gradient": {"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}]}}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "text.insert", json!({"text": "word"}));
+    run(&mut s, "select.text", json!({"text": "word"}));
+    run(&mut s, "format.textEffects", json!({"fill": {"gradient": ["FF0000", "0000FF"]}, "shadow": {"color": "FF0000"}}));
+    run(&mut s, "review.trackChanges", json!({"on": true}));
+    run(&mut s, "format.textEffects", json!({"fill": {"gradient": ["00FF00", "0000FF"]}, "glow": {"color": "00FF00"}}));
+    run(&mut s, "review.trackChanges", json!({"on": false}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.textBox", json!({"text": "in box"}));
+    for _ in 0..MAX_TABLE_DEPTH {
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    }
+    assert_ne!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
+    run(&mut s, "edit.paste", json!({}));
+    // Commands don't reach this deep (the paragraph walk stops at 16), so check the paste did.
+    let para = s.doc.block(s.sel.focus.story, &s.sel.focus.path).and_then(|b| b.as_para()).unwrap();
+    let gradient = |f: &Option<wordcraft_doc::fill::Fill>| matches!(f, Some(wordcraft_doc::fill::Fill::Gradient(_)));
+    assert!(para.objects.iter().any(|o| matches!(o, wordcraft_doc::InlineObject::Shape { fill, .. } if gradient(fill))), "{para:?}");
+    assert!(
+        para.runs.iter().any(|r| r.props.text_effects.is_some() && r.props.fmt_change.as_ref().is_some_and(|c| c.old.text_effects.is_some())),
+        "{para:?}"
+    );
+    let saved = crate::io::save_bytes("deep.json", &s.doc).unwrap();
+    assert_eq!(crate::io::open_bytes("deep.json", &saved).map(|d| d == s.doc), Ok(true));
 }
 
 /// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
@@ -4628,11 +4669,39 @@ fn hostile_params_never_panic() {
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
             assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
-            let _ = s.run(spec.id, j);
+            let r = s.run(spec.id, j);
+            assert!(!caught_panic(&reg, &r), "{} panicked on {j}: {r:?}", spec.id);
             s.clamp_selection();
             let _ = s.layout();
         }
     }
+}
+
+/// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
+/// crash path (#3718). Only the guard's own `"{id} panicked: "` counts, not an error that echoes
+/// those words.
+fn caught_panic(reg: &crate::Registry, r: &Result<serde_json::Value, crate::CmdError>) -> bool {
+    matches!(r, Err(crate::CmdError::Failed(m)) if m.split_once(" panicked: ").is_some_and(|(id, _)| reg.get(id).is_some()))
+}
+
+#[test]
+fn caught_panic_flags_a_command_that_panics() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let boom = crate::CommandSpec::new("test.boom", "Boom", "", |_, _| panic!("boom")).pure();
+    // Outline's commands run Paragraph ones: the inner command's name is in the error (review of #4207).
+    let outer = crate::CommandSpec::new("test.outer", "Outer", "", |s, v| s.run("test.boom", v)).pure();
+    s.registry = std::sync::Arc::new(crate::Registry::new(vec![boom, outer]));
+    let boom = s.run("test.boom", &json!({}));
+    assert!(caught_panic(&s.registry, &boom));
+    let nested = s.run("test.outer", &json!({}));
+    assert!(matches!(&nested, Err(crate::CmdError::Failed(m)) if m.starts_with("test.boom panicked: ")), "{nested:?}");
+    assert!(caught_panic(&s.registry, &nested));
+    assert!(!caught_panic(&s.registry, &Err(crate::CmdError::Failed("no picture".into()))));
+    // A command's own error can quote what it was given.
+    let mut full = Session::new(crate::sample::sample_document());
+    let echoed = full.run("developer.control", &json!({"control": "x panicked: y"}));
+    assert!(matches!(&echoed, Err(crate::CmdError::Failed(m)) if m.contains(" panicked: ")), "{echoed:?}");
+    assert!(!caught_panic(&full.registry, &echoed), "{echoed:?}");
 }
 
 #[test]
@@ -6595,7 +6664,7 @@ fn reading_mode_reflows_per_viewport_without_changing_document_or_export() {
 }
 
 /// Read Mode › View › Page Color: None, Sepia or Inverse, a view setting that leaves the
-/// document alone, is not saved, and starts at None on each entry to Read Mode.
+/// document alone, starts at None and is kept between documents and runs as a preference.
 #[test]
 fn reading_page_color_is_a_transient_view_setting() {
     use crate::cmd::view::ReadPageColor;
@@ -6606,18 +6675,46 @@ fn reading_page_color_is_a_transient_view_setting() {
     assert_eq!(s.view.read_page_color, ReadPageColor::None);
     assert_eq!(s.run("view.readPageColor", &json!({"value": "sepia"})).unwrap(), json!({"pageColor": "sepia"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Sepia);
     run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     for bad in [json!({"value": "black"}), json!({"value": 1}), json!({})] {
         assert!(s.run("view.readPageColor", &bad).is_err(), "{bad}");
     }
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse, "rejected values keep the color");
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     assert!(serde_json::to_value(&s.view).unwrap().get("readPageColor").is_none());
     assert_eq!(s.doc, original);
     assert_eq!(s.dirty, dirty);
+    // The color stays for the next entry to Read Mode, while the other reading controls reset.
+    run(&mut s, "view.readTextSize", json!({"value": 150}));
     run(&mut s, "view.printLayout", json!({}));
     run(&mut s, "view.readMode", json!({}));
-    assert_eq!(s.view.read_page_color, ReadPageColor::None);
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.view.read_zoom, 1.0);
+}
+
+#[test]
+fn reading_page_color_follows_saved_prefs_and_new_documents() {
+    use crate::cmd::view::ReadPageColor;
+    let mut s = s();
+    s.prefs.read_page_color = ReadPageColor::Sepia;
+    run(&mut s, "view.readMode", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    let first = s.document_id();
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
+    s.activate(first).unwrap();
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.open", json!({"path": "reading-color.docx", "data": ""}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    s.set_document(wordcraft_doc::Document::new());
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
 }
 
 /// File › Options › Advanced › Numeral: the display mode for digits (display only).
@@ -8673,7 +8770,7 @@ const PORTUGUESE_TEST_AFF: &str =
     "SET UTF-8\nFLAG UTF-8\nFORBIDDENWORD F\nTRY aeiousrntmdlcpvgqbzfhjxçãõáéíóúâêô\nMAP 2\nMAP aáã\nMAP eé\nREP 1\nREP seje seja\n";
 const PORTUGUESE_TEST_DIC: &str = "11\nsaudade\ncoração\ne\nele\ndisse\nnão\né\nque\nseja\nfrequencia/F\nmuito\n";
 
-/// #1063: File › Options › Proofing › Dictionaries folder. A folder of Hunspell files is saved,
+/// #1063: File › Options › Language › Dictionaries folder. A folder of Hunspell files is saved,
 /// searched first and reported per language; a missing folder or a relative path is refused and
 /// changes nothing. The folder holds the same test dictionaries the other tests install, so tests
 /// running meanwhile see the same words; it stays set for the rest of the run for that reason.
