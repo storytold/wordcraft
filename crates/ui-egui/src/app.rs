@@ -55,6 +55,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             word_count,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -116,7 +117,9 @@ impl WordApp {
             fonts_korean: false,
             fonts_hant: false,
             fonts_system_cjk: false,
+            fonts_system_arabic: false,
             want_system_cjk: false,
+            want_system_arabic: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
@@ -167,6 +170,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             word_count,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -223,6 +227,7 @@ impl WordApp {
         crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        crate::rtl::sync(ctx);
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,
