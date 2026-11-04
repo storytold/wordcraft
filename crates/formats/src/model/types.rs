@@ -1024,7 +1024,6 @@ impl FTable {
 #[derive(Clone, Debug, PartialEq)]
 // Paragraph borders now carry two additional cell-border slots in the shared format model. Keep
 // the public Para value inline; changing FBlock's representation would break format consumers.
-#[allow(clippy::large_enum_variant)]
 pub enum FBlock {
     Para(Para),
     Table(FTable),

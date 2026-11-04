@@ -363,7 +363,7 @@ fn cell_diagonal_borders_survive_json_two_saves_and_unrelated_edits() {
     let down = Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0x11, 0x22, 0x33)), ..Default::default() };
     let up = Border { style: BorderStyle::Dashed, width: 0.75, color: Some(Rgb(0x44, 0x55, 0x66)), ..Default::default() };
     let mut d = Document::new();
-    d.styles.styles.push(Style {
+    Arc::make_mut(&mut d.styles).styles.push(Style {
         id: "DiagonalGrid".into(),
         name: "Diagonal Grid".into(),
         kind: StyleKind::Table,
@@ -398,7 +398,7 @@ fn cell_diagonal_borders_survive_json_two_saves_and_unrelated_edits() {
         assert_eq!(style_borders.and_then(|b| b.tl2br), None);
         assert_eq!(style_borders.and_then(|b| b.tr2bl), None);
         if cycle == 0 {
-            got.styles.styles.iter_mut().find(|s| s.id == "DiagonalGrid").expect("table style").name = "Edited Grid".into();
+            Arc::make_mut(&mut got.styles).styles.iter_mut().find(|s| s.id == "DiagonalGrid").expect("table style").name = "Edited Grid".into();
         }
     }
 }

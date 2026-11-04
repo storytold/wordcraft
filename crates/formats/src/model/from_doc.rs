@@ -1002,6 +1002,8 @@ fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>
         right: right.or(Some(none)),
         between: None,
         inside_v: None,
+        tl2br: None,
+        tr2bl: None,
     };
     Some(out)
 }
