@@ -18,6 +18,7 @@ pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
             comment_balloons: opts.comments,
             numeral: opts.numeral,
             output_page_refs: true,
+            bookmark_error: opts.bookmark_error.clone(),
             ..Default::default()
         };
         let lay = layout(doc, &mut LayoutCache::new(), &lo);

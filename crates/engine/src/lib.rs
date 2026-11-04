@@ -33,6 +33,7 @@ use serde_json::Value;
 
 pub use io::Password;
 pub use keymap::KeyMap;
+pub use locale::set_bookmark_error;
 pub use ribbon::RibbonLayout;
 pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,

@@ -8614,15 +8614,7 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(
-            d,
-            &mut LayoutCache::new(),
-            &LayoutOptions::default(),
-            (&HashMap::new(), &Arc::default()),
-            &totals,
-            true,
-            (&EarlyFloats::new(), true),
-        )
+        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), (&HashMap::new(), None), &totals, true, (&EarlyFloats::new(), true))
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -12039,7 +12031,7 @@ fn last_rewrap_pass_keeps_early_floats_clear_of_text() {
             &d,
             &mut LayoutCache::new(),
             &LayoutOptions::default(),
-            (&HashMap::new(), &Arc::default()),
+            (&HashMap::new(), None),
             &totals,
             false,
             (&EarlyFloats::new(), false),

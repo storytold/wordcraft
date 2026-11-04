@@ -76,6 +76,7 @@ impl Session {
             filepath: filepath.clone(),
             // The editor shows a body page reference as stored until fields are updated.
             output_page_refs: false,
+            bookmark_error: None,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         let [newest, _] = std::mem::take(&mut self.layout);
@@ -174,6 +175,7 @@ impl Session {
             filename: Some(Arc::from(fn_name.as_str())),
             filepath: Some(Arc::from(fn_path.as_str())),
             output_page_refs: true,
+            bookmark_error: crate::locale::bookmark_error(),
             ..Default::default()
         };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
