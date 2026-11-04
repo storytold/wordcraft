@@ -125,8 +125,10 @@ fn add_shape_text(app: &mut WordApp) {
     if crate::objects::enter_text_box(app) {
         return;
     }
-    if app.run("shape.addText", json!({})).is_ok() {
-        crate::objects::enter_text_box(app);
+    if let Ok(v) = app.run("shape.addText", json!({}))
+        && let Some(id) = v.get("textBox").and_then(|i| i.as_u64()).and_then(|i| u32::try_from(i).ok())
+    {
+        crate::objects::enter_text_story(app, id);
     }
 }
 

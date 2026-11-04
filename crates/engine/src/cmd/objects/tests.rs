@@ -1331,3 +1331,21 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// shape.style on a line keeps it visible (a preset without an outline gives it the preset's
+/// colour) and a picture in a mixed selection is skipped, not returned as styled.
+#[test]
+fn shape_style_keeps_open_shapes_visible_and_skips_pictures() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "line"})).unwrap();
+    s.run("shape.style", &json!({"style": "moderate", "color": "accent2"})).unwrap();
+    let Some((_, InlineObject::Shape { stroke, stroke_width, .. })) = selected(&s) else { panic!("a line") };
+    assert!(stroke.is_some() && stroke_width >= 1.0, "a line keeps a visible stroke: {stroke:?} {stroke_width}");
+
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    s.run("select.all", &json!({})).unwrap();
+    let r = s.run("shape.style", &json!({"style": "fill"})).unwrap();
+    assert!(r["object"].get("Shape").is_some() || r["object"]["kind"].is_string(), "the returned object is the styled shape: {r}");
+}

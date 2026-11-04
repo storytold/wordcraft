@@ -310,9 +310,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let st = shape_style(style, color, &s.doc.settings.theme_colors).ok_or_else(|| {
                 CmdError::Params(format!("unknown shape style `{style}` or colour `{color}` (styles: {}; colours: {})", style_ids(), color_ids()))
             })?;
-            let mut targets: Vec<Pos> = selected_all(s, 10_000).into_iter().map(|(pos, _)| pos).collect();
+            let styleable = |o: &InlineObject| matches!(o, InlineObject::Shape { .. }) || o.is_canvas();
+            let mut targets: Vec<Pos> = selected_all(s, 10_000).into_iter().filter(|(_, o)| styleable(o)).map(|(pos, _)| pos).collect();
             for pos in picked_objects(s) {
-                if !targets.contains(&pos) {
+                if !targets.contains(&pos) && s.doc.para_at(&pos).and_then(|q| q.object_at(pos.off)).is_some_and(styleable) {
                     targets.push(pos);
                 }
             }
@@ -322,8 +323,16 @@ pub fn specs() -> Vec<CommandSpec> {
             let mut last = serde_json::Value::Null;
             for pos in &targets {
                 let o = edit_obj(s, pos, |o| {
-                    if let InlineObject::Shape { fill, stroke, stroke_width, effects, float, extra, .. } = o {
-                        (*fill, *stroke, *stroke_width) = (st.fill.map(wordcraft_doc::fill::Fill::solid), st.stroke, st.width);
+                    if let InlineObject::Shape { kind, fill, stroke, stroke_width, effects, float, extra, .. } = o {
+                        let solid = st.fill.map(wordcraft_doc::fill::Fill::solid);
+                        if kind.is_open() {
+                            // Lines and connectors draw only their stroke: keep it, or give the
+                            // preset's colour when the preset has no outline.
+                            *stroke = st.stroke.or(*stroke).or(st.fill);
+                            *stroke_width = if st.width > 0.0 { st.width } else { stroke_width.max(1.0) };
+                        } else {
+                            (*fill, *stroke, *stroke_width) = (solid, st.stroke, st.width);
+                        }
                         extra.outline_fill = None;
                         effects.shadow = if st.shadow { wordcraft_doc::effects::Shadow::preset("offsetBottomRight") } else { None };
                         float.effect = effects.extent();
