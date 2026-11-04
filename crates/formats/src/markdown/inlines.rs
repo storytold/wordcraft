@@ -415,9 +415,7 @@ fn angle_inlines(s: &str, start: usize, base: &Fmt) -> Option<(usize, Vec<Node>)
     } else if matches!(lower.trim_end_matches('/').trim(), "br") {
         push_text(&mut nodes, "\n", base);
         Some((end, nodes))
-    } else if lower.starts_with("a ")
-        && rest.get(inner.len() + 1..).and_then(|tail| tail.get(..4)).is_some_and(|p| p.eq_ignore_ascii_case("</a>"))
-    {
+    } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).and_then(|tail| tail.get(..4)).is_some_and(|p| p.eq_ignore_ascii_case("</a>")) {
         if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
             nodes.push(Node::Inl(Inline::Anchor(name)));
         }
