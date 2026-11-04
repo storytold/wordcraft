@@ -54,16 +54,14 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };
                 let from = p.clamp(a.off.saturating_sub(30));
                 let to = p.clamp((b.off + 40).min(p.len()));
-                let pre = p.text.get(from..a.off).unwrap_or("");
-                let hit = p.text.get(a.off..b.off).unwrap_or("");
-                let post = p.text.get(b.off..to).unwrap_or("");
+                let (pre, hit, post) = (shown(p, from, a.off), shown(p, a.off, b.off), shown(p, b.off, to));
                 let mut job = egui::text::LayoutJob::default();
                 let fmt = |c| egui::TextFormat { font_id: regular(12.0), color: c, ..Default::default() };
-                job.append(pre, 0.0, fmt(ui.visuals().text_color()));
+                job.append(&pre, 0.0, fmt(ui.visuals().text_color()));
                 // The match is marked the way Find marks it on the page, per theme (#656).
                 let mark = Tokens::get(ui.ctx()).find_highlight;
-                job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
-                job.append(post, 0.0, fmt(ui.visuals().text_color()));
+                job.append(&hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
+                job.append(&post, 0.0, fmt(ui.visuals().text_color()));
                 job.wrap.max_width = ui.available_width();
                 if ui.add(egui::Button::new(job).frame(false)).clicked() {
                     let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
@@ -104,6 +102,20 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Paragraph `p`'s text from byte `a` to `b` as a search result reads it: a field shows its
+/// result, which Find matched (#5552), not its object character.
+fn shown(p: &wordcraft_doc::Paragraph, a: usize, b: usize) -> String {
+    let Some(t) = p.text.get(a..b) else { return String::new() };
+    let mut out = String::with_capacity(t.len());
+    for (i, c) in t.char_indices() {
+        match p.object_at(a + i) {
+            Some(o @ wordcraft_doc::InlineObject::Field { .. }) => out.push_str(o.plain_text()),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Which headings the pane shows: those under a collapsed heading (every following heading
