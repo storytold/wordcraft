@@ -9,10 +9,11 @@ description = "WordCraft layout: shaping, line breaking, tabs, lists, tables, pa
 workspace = true
 
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-proof = { workspace = true }
+wordcraft-metafile = { workspace = true }
 kurbo = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-linebreak = { workspace = true }
@@ -22,6 +23,6 @@ serde_json = { workspace = true }
 image = { workspace = true }
 log = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+# The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32-unknown-unknown).
 js-sys = "0.3"
