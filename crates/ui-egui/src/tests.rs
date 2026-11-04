@@ -4067,6 +4067,27 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
     }
 }
 
+/// #1537/#4943: with no formatting picked up, Ctrl/Cmd+Shift+V pastes the clipboard as text
+/// only (Word for Windows): the text arrives in the destination's formatting, not the source's.
+#[test]
+fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    a.run("select.text", json!({"text": "plain"})).unwrap();
+    assert!(a.session.painter.is_none());
+    let mut h = harness(a);
+    h.run_steps(6);
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
+    let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
+    assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+}
+
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing
 /// nothing without one, as in Word for Windows. (Windows sends Shift+Delete as a Cut; macOS and
 /// Linux send the key, which reached no command.)
