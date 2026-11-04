@@ -394,10 +394,11 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 
 /// A picture `image` in `rect` and its outline (Picture Border, #5544), `stroke` of `width`
 /// points, stroked on the picture's frame as a rectangle's outline is: turned with it when it is
-/// drawn inside its spin. No outline without a colour or a width.
+/// drawn inside its spin. No outline without a colour; a width of 0 is a hairline, which
+/// the backends draw at their minimum width.
 pub(super) fn picture_draws(rect: Rect, image: Draw, stroke: Option<Rgb>, width: f32) -> Vec<Draw> {
     let width = wordcraft_geom::finite(width).clamp(0.0, 100.0);
-    let outline = stroke.filter(|_| width > 0.0).map(|c| Draw::Shape {
+    let outline = stroke.map(|c| Draw::Shape {
         rect,
         kind: ShapeKind::Rectangle,
         fill: None,

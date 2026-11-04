@@ -559,6 +559,45 @@ fn picture_outline_round_trips() {
 }
 
 #[test]
+fn a_picture_outline_with_its_fill_omitted_is_the_theme_dark_colour() {
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let obj = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "bare".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    // A line that names its width and leaves the fill out: a solid line in the theme's
+    // dark colour at that width, as Office draws it — not no outline at all.
+    let xml = xml.replacen("</pic:spPr>", r#"<a:ln w="76200"/></pic:spPr>"#, 1);
+    let read = wordcraft_docx::read(&replace_part(&bytes, "word/document.xml", xml.as_bytes())).unwrap();
+    let got: Vec<(Option<Rgb>, f32)> = paras(&read)[0]
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Image { stroke, stroke_width, .. } => Some((*stroke, *stroke_width)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got, vec![(Some(Rgb(0x00, 0x00, 0x00)), 6.0)]);
+    // Saved, the border is written as the explicit solid line it now is, and reads back.
+    let saved = wordcraft_docx::write(&read).unwrap();
+    let xml = document_xml(&saved);
+    assert!(xml.contains(r#"<a:ln w="76200"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></pic:spPr>"#), "{xml}");
+}
+
+#[test]
 fn hyperlinks_and_bookmarks_round_trip() {
     let ext = CharProps { link: Some("https://example.com/a?b=1&c=2".into()), underline: Some(Underline::Single), ..Default::default() };
     let int = CharProps { link: Some("#target".into()), ..Default::default() };

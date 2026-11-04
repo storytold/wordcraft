@@ -656,6 +656,50 @@ fn a_picture_outline_is_stroked_on_its_frame() {
     }
 }
 
+/// #5544: an outline of width 0 is a hairline, as Office draws it: the frame's edge is
+/// painted at the renderer's minimum width, and the paper a few points out is untouched.
+#[test]
+fn a_zero_width_picture_outline_is_a_hairline() {
+    let green = Rgb(0x00, 0xB0, 0x50);
+    let mut d = Document::new();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let media = d.add_media(png, "png");
+    let mut p = wordcraft_doc::Paragraph::new();
+    let obj = wordcraft_doc::para::InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        stroke: Some(green),
+        stroke_width: 0.0,
+    };
+    p.insert_object(0, obj, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let rect = page_display(&d, &l.pages[0], &opts.display)
+        .iter()
+        .find_map(|i| match i {
+            Draw::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a picture on the page");
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let y = (rect.y + rect.h / 2.0) as u32;
+    let middle = img.pixel((rect.x + rect.w / 2.0) as u32, y);
+    assert!(middle[0] > 150 && middle[1] < 60, "the picture is drawn: {middle:?}");
+    // The hairline straddles the frame edge at the renderer's minimum width: the pixel
+    // just outside it is paper tinted with the outline colour, not plain paper.
+    let edge = img.pixel((rect.x - 1.0) as u32, y);
+    assert!(edge[1] > edge[0] && edge[0] < 250, "the hairline tints the paper at the frame edge: {edge:?}");
+    let outside = img.pixel((rect.x - 3.0) as u32, y);
+    assert!(outside[..3].iter().all(|c| *c > 200), "and only there: paper beside it: {outside:?}");
+}
+
 /// #5544: a turned picture's outline turns with it, as the certificate's frame (a picture turned
 /// 90°) does: a 100 × 40 picture turned 90° has its outline 50 pt above and below its centre, and
 /// none 50 pt left or right of it, where the unturned frame's would be.
