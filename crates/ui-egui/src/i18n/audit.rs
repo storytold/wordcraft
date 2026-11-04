@@ -175,6 +175,17 @@ impl<'a> Exempt<'a> {
         for p in wordcraft_engine::packs::installed() {
             names.extend([p.name.clone(), p.licence, format!("{} · {}", p.name, p.locale), p.locale]);
         }
+        // Options › Language › Your languages: each row's language tag, and a pack's own name
+        // beside it, as the index and the document wrote them.
+        let index = wordcraft_engine::packs::available();
+        for row in wordcraft_engine::packs::your_languages(&app.session) {
+            let tag = row.tags.first().cloned().or_else(|| row.pack.as_deref().map(crate::ribbon::tag_for_pack)).unwrap_or_default();
+            if let Some(p) = row.pack.as_deref().and_then(|l| index.iter().find(|p| p.locale == l)) {
+                names.insert(format!("{} · {tag}", p.name));
+            }
+            names.extend(row.tags.iter().cloned());
+            names.insert(tag);
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
