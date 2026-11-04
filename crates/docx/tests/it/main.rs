@@ -13,6 +13,7 @@ mod default_size;
 mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;
+mod emphasis_marks;
 mod fixtures;
 mod footer_table_end;
 mod glossary;
