@@ -36,6 +36,9 @@ pub enum Placed {
         path: Path,
         off: usize,
         spin: Spin,
+        /// Its outline (Picture Border) and the outline's width, points.
+        stroke: Option<Rgb>,
+        stroke_width: f32,
     },
     Shape {
         rect: Rect,

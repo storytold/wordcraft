@@ -30,6 +30,8 @@ fn complete_document() -> Document {
             float: Default::default(),
             crop: Default::default(),
             ole: Some(source.clone()),
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )

@@ -102,6 +102,8 @@ fn sample() -> Document {
             float: Default::default(),
             crop: [0.1, 0.0, 0.0, 0.0],
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )
@@ -238,13 +240,25 @@ fn hostile_documents_export() {
             float: Default::default(),
             crop: [f32::NAN; 4],
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
         },
         &CharProps::default(),
     )
     .unwrap();
     p.insert_object(
         0,
-        InlineObject::Image { media: "missing".into(), w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: "missing".into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1012,6 +1026,76 @@ fn red_right_half_emf() -> Vec<u8> {
     [h, rec(39, &le32(&[1, 0, 0x0000_00FF, 0])), rec(37, &le32(&[1])), rec(43, &le32(&[50, 0, 100, 100])), rec(14, &[0; 12])].concat()
 }
 
+/// #5544: a picture's outline (Picture Border) is exported as a stroke of its colour and width
+/// around the picture's frame, turned with a turned picture (the issue's certificate frame is a
+/// picture turned 90°); a picture with no outline exports no stroke.
+#[test]
+fn a_picture_outline_is_exported_as_a_stroke() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use kurbo::Shape;
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::Rgb;
+    /// Each stroke: its colour, width and bounds, in top-down page points.
+    struct Strokes(Vec<([u8; 4], f64, kurbo::Rect)>);
+    impl Device<'_> for Strokes {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &kurbo::BezPath, transform: kurbo::Affine, paint: &Paint<'_>, mode: &PathDrawMode) {
+            let (PathDrawMode::Stroke(props), Paint::Color(c)) = (mode, paint) else { return };
+            let width = f64::from(props.line_width) * transform.determinant().abs().sqrt();
+            self.0.push((c.to_rgba().to_rgba8(), width, (transform * path.clone()).bounding_box()));
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let green = Rgb(0x00, 0xB0, 0x50);
+    // A 100 × 40 picture at (100, 100) on the page: its centre is (150, 120).
+    let strokes = |stroke: Option<Rgb>, rot: f32| {
+        let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, rot, ..Default::default() };
+        let mut d = Document::new();
+        let media = d.add_media(png(), "png");
+        let stroke_width = if stroke.is_some() { 6.0 } else { 0.0 };
+        let mut p = Paragraph::new();
+        let obj = InlineObject::Image { media, w: 100.0, h: 40.0, alt: String::new(), float, crop: [0.0; 4], ole: None, stroke, stroke_width };
+        p.insert_object(0, obj, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        let pdf = hayro_syntax::Pdf::new(export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap()).expect("parse");
+        let cache = InterpreterCache::new();
+        let mut out = Strokes(Vec::new());
+        for page in pdf.pages().iter() {
+            let height = page.media_box().height();
+            let top_down = kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, height]);
+            let mut ctx = Context::new(
+                top_down,
+                kurbo::Rect::new(0.0, 0.0, page.media_box().width(), height),
+                &cache,
+                pdf.xref(),
+                InterpreterSettings::default(),
+            );
+            interpret_page(page, &mut ctx, &mut out);
+        }
+        out.0
+    };
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+    for (rot, (w, h)) in [(0.0, (100.0, 40.0)), (90.0, (40.0, 100.0))] {
+        let got = strokes(Some(green), rot);
+        let [(color, width, bounds)] = got.as_slice() else { panic!("one outline turned {rot}°: {got:?}") };
+        assert!(color[..3].iter().zip([0x00u8, 0xB0, 0x50]).all(|(a, b)| a.abs_diff(b) <= 1) && color[3] == 255, "turned {rot}°: {color:?}");
+        assert!((width - 6.0).abs() < 0.01, "turned {rot}°: width {width}");
+        let c = bounds.center();
+        assert!(near(c.x, 150.0) && near(c.y, 120.0) && near(bounds.width(), w) && near(bounds.height(), h), "turned {rot}°: {bounds:?}");
+    }
+    assert!(strokes(None, 0.0).is_empty(), "no outline, no stroke");
+}
+
 #[test]
 fn metafile_pictures_are_drawn_as_vector_paths() {
     let mut d = Document::new();
@@ -1020,7 +1104,17 @@ fn metafile_pictures_are_drawn_as_vector_paths() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: "red".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "red".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1067,7 +1161,17 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
         let mut p = Paragraph::new();
         p.insert_object(
             0,
-            InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None },
+            InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop,
+                ole: None,
+                stroke: None,
+                stroke_width: 0.0,
+            },
             &CharProps::default(),
         )
         .unwrap();
@@ -1127,7 +1231,17 @@ fn inline_picture_figure_keeps_its_alt_text() {
         let media = d.add_media(red_right_half_emf(), "emf");
         let mut p = Paragraph::with_text("Figure: ", CharProps::default());
         let n = p.len();
-        let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: alt.into(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: alt.into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
         String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
@@ -1144,7 +1258,17 @@ fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
     let media = d.add_media(red_right_half_emf(), "emf");
     let mut p = Paragraph::with_text("Figure: ", CharProps::default());
     let n = p.len();
-    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], ole: None };
+    let obj = InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: "A red square".into(),
+        float,
+        crop: [0.0; 4],
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
     p.insert_object(n, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
@@ -1179,8 +1303,17 @@ fn rotated_group_tags_each_picture_on_its_own() {
     use wordcraft_doc::para::{AltText, Float, GroupChild};
     let mut d = Document::new();
     let media = d.add_media(red_right_half_emf(), "emf");
-    let picture =
-        |alt: &str, float: Float| InlineObject::Image { media: media.clone(), w: 70.0, h: 70.0, alt: alt.into(), float, crop: [0.0; 4], ole: None };
+    let picture = |alt: &str, float: Float| InlineObject::Image {
+        media: media.clone(),
+        w: 70.0,
+        h: 70.0,
+        alt: alt.into(),
+        float,
+        crop: [0.0; 4],
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
     let decorative = Float { alt: AltText { decorative: true, ..Default::default() }, ..Default::default() };
     let group = InlineObject::Group {
         w: 160.0,
@@ -1238,7 +1371,17 @@ fn metafile_strokes_use_round_caps_and_joins() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1269,7 +1412,17 @@ fn metafile_fill_items_carry_no_stroke_state() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1293,7 +1446,17 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1331,7 +1494,17 @@ fn metafile_text_records_are_drawn_as_text() {
     let n = p.len();
     p.insert_object(
         n,
-        InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1488,7 +1661,17 @@ fn outline_keeps_visible_objects() {
     let media = base.add_media(png(), "png");
     for object in [
         InlineObject::Field { instr: "QUOTE Visible".into(), result: "Visible".into(), locked: true, dirty: false, code: false, form: String::new() },
-        InlineObject::Image { media, w: 16.0, h: 8.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media,
+            w: 16.0,
+            h: 8.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        },
     ] {
         let mut d = base.clone();
         let mut heading = Paragraph::with_text("\u{c}After break", CharProps::default()).styled("Heading1");

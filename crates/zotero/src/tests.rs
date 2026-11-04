@@ -522,7 +522,17 @@ fn a_note_with_a_picture_stays_when_its_citation_leaves() {
     let pid = *z.s.doc.parts.keys().next().unwrap();
     let p = z.s.doc.para_mut(StoryRef::Part(pid), &Path::top(0)).unwrap();
     let n = p.len();
-    let image = InlineObject::Image { media: "m".into(), w: 1.0, h: 1.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = InlineObject::Image {
+        media: "m".into(),
+        w: 1.0,
+        h: 1.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
     p.insert_object(n, image, &Default::default()).unwrap();
     z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
     assert_eq!(z.s.doc.parts.len(), 1);
