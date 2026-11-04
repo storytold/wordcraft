@@ -242,7 +242,7 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 css.push(format!("background-color:#{}", s.hex()));
             }
             let single = match c.blocks.as_slice() {
-                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break => Some(p),
+                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && !p.rtl => Some(p),
                 _ => None,
             };
             if let Some(a) = single.and_then(|p| align_css(p.align)) {
@@ -312,10 +312,11 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                out.push_str("<pre><code>");
+                // The direction goes on the `<pre>`; a run ends where the direction changes.
+                out.push_str(if p.rtl { "<pre dir=\"rtl\"><code>" } else { "<pre><code>" });
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    if q.kind != Kind::Code || q.list.is_some() {
+                    if q.kind != Kind::Code || q.list.is_some() || q.rtl != p.rtl {
                         break;
                     }
                     if !first {

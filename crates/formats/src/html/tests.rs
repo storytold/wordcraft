@@ -294,6 +294,20 @@ fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
 }
 
 #[test]
+fn rtl_direction_survives_export_in_single_paragraph_cells_and_code() {
+    // A cell with one RTL paragraph and a run of code paragraphs keep their direction.
+    let flow = parse(
+        r#"<table><tr><td><p dir="rtl">abc</p></td></tr></table><pre dir="rtl">one
+two</pre><pre>three</pre>"#,
+    );
+    let out = export_flow(&flow, "en");
+    let back = parse(&out);
+    assert_eq!(cell_paras(&back)[0].iter().flatten().map(|p| p.rtl).collect::<Vec<_>>(), [true], "{out}");
+    let code: Vec<bool> = back.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+    assert_eq!(code, [true, true, false], "{out}");
+}
+
+#[test]
 fn reporter_sample_header_bold_and_right_aligned_cells() {
     // #1381: the reporter's table.
     let f = parse(
