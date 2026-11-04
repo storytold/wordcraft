@@ -463,24 +463,6 @@ struct Seg {
     field: bool,
 }
 
-/// The result a field object shows, which Find reads in its place as Word does (#5552): a legacy
-/// drop-down's selected entry, otherwise the cached result. None for other objects, a field
-/// showing its code (View › Field Codes `codes`, toggled per field by Shift+F9), a check box or
-/// an empty result.
-fn shown_result(o: &wordcraft_doc::InlineObject, codes: bool) -> Option<std::borrow::Cow<'_, str>> {
-    use wordcraft_doc::legacy_form::LegacyForm;
-    let wordcraft_doc::InlineObject::Field { result, code, .. } = o else { return None };
-    if codes != *code {
-        return None;
-    }
-    let shown: Option<std::borrow::Cow<'_, str>> = match o.legacy_form() {
-        Some(LegacyForm::CheckBox { .. }) => return None,
-        Some(f @ LegacyForm::DropDown { .. }) => f.shown_text().map(|t| t.to_string().into()),
-        _ => None,
-    };
-    shown.or(Some(result.as_str().into())).filter(|r| !r.is_empty())
-}
-
 /// All matches of the find state in the current story. Text marked deleted by
 /// Track Changes is no longer part of the document, so the search reads each
 /// paragraph without it: a match lies within one stretch of live text, and word
@@ -561,7 +543,7 @@ pub(crate) fn search_full(s: &Session, story: StoryRef, with_rep: bool) -> Resul
                 let mut at = r.start;
                 for (k, _) in t.match_indices(wordcraft_doc::para::OBJ) {
                     let off = r.start + k;
-                    let Some(res) = p.object_at(off).and_then(|o| shown_result(o, s.view.field_codes)) else { continue };
+                    let Some(res) = p.object_at(off).and_then(|o| o.shown_result(s.view.field_codes)) else { continue };
                     push_text(&mut segs, &mut hay, i, at, p.text.get(at..off).unwrap_or(""));
                     segs.push(Seg { hay: hay.len(), para: i, raw: off, len: res.len(), mark: false, field: true });
                     hay.push_str(&res);

@@ -54,7 +54,8 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 let Some(p) = app.session.doc.para_at(a) else { continue };
                 let from = p.clamp(a.off.saturating_sub(30));
                 let to = p.clamp((b.off + 40).min(p.len()));
-                let (pre, hit, post) = (shown(p, from, a.off), shown(p, a.off, b.off), shown(p, b.off, to));
+                let codes = app.session.view.field_codes;
+                let (pre, hit, post) = (shown(p, (from, a.off), codes), shown(p, (a.off, b.off), codes), shown(p, (b.off, to), codes));
                 let mut job = egui::text::LayoutJob::default();
                 let fmt = |c| egui::TextFormat { font_id: regular(12.0), color: c, ..Default::default() };
                 job.append(&pre, 0.0, fmt(ui.visuals().text_color()));
@@ -104,15 +105,15 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-/// Paragraph `p`'s text from byte `a` to `b` as a search result reads it: a field shows its
-/// result, which Find matched (#5552), not its object character.
-fn shown(p: &wordcraft_doc::Paragraph, a: usize, b: usize) -> String {
+/// Paragraph `p`'s text from byte `a` to `b` as a search result reads it: a field shows the
+/// result Find matched (#5552), not its object character.
+fn shown(p: &wordcraft_doc::Paragraph, (a, b): (usize, usize), codes: bool) -> String {
     let Some(t) = p.text.get(a..b) else { return String::new() };
     let mut out = String::with_capacity(t.len());
     for (i, c) in t.char_indices() {
-        match p.object_at(a + i) {
-            Some(o @ wordcraft_doc::InlineObject::Field { .. }) => out.push_str(o.plain_text()),
-            _ => out.push(c),
+        match p.object_at(a + i).and_then(|o| o.shown_result(codes)) {
+            Some(r) => out.push_str(&r),
+            None => out.push(c),
         }
     }
     out
@@ -199,4 +200,23 @@ pub(super) fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, co
         (toggled, r)
     })
     .inner
+}
+
+#[cfg(test)]
+mod tests {
+    use wordcraft_doc::{Document, InlineObject, Path, Pos, StoryRef};
+
+    /// A Navigation result shows what Find matched in a field: a legacy drop-down's selected
+    /// entry even when its cached result is empty, and nothing for a field showing its code.
+    #[test]
+    fn a_result_shows_the_field_text_find_matched() {
+        let mut d = Document::from_text("from ");
+        let form = r#"<w:ffData><w:name w:val="City"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Vienna"/><w:listEntry w:val="Graz"/></w:ddList></w:ffData>"#;
+        let drop =
+            InlineObject::Field { instr: "FORMDROPDOWN".into(), result: String::new(), locked: false, dirty: false, code: false, form: form.into() };
+        d.insert_object(&Pos::body(0, 5), drop, &Default::default()).unwrap();
+        let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+        assert_eq!(super::shown(p, (0, p.text.len()), false), "from Graz");
+        assert_eq!(super::shown(p, (0, p.text.len()), true), format!("from {}", wordcraft_doc::para::OBJ));
+    }
 }
