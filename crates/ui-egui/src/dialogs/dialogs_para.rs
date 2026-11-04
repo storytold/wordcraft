@@ -872,14 +872,14 @@ mod tests {
     #[test]
     fn borders_dialog_uses_text_border_flags_for_text_edits() {
         let mut app = app_with("Border flags");
-        let _ = app.run(
-            "para.borders",
-            json!({"sides": {"top": {"style": "single", "shadow": true, "frame": false}}}),
-        );
+        let _ = app.run("para.borders", json!({"sides": {"top": {"style": "single", "shadow": true, "frame": false}}}));
         let _ = app.run("select.text", json!({"text": "Border flags"}));
-        let _ = app.run("format.set", json!({"props": {"border": {
-            "style": "single", "width": 0.5, "shadow": false, "frame": true
-        }}}));
+        let _ = app.run(
+            "format.set",
+            json!({"props": {"border": {
+                "style": "single", "width": 0.5, "shadow": false, "frame": true
+            }}}),
+        );
         let _ = app.run("para.borders", json!({}));
         let Some(Dialog::Borders { form }) = app.dialog.take() else { panic!("Borders and Shading opens without params") };
         let mut form = *form;
