@@ -208,8 +208,9 @@ impl LiveShell {
         live.handle_all(&mut app.session, events, now);
         live.tick(&mut app.session, now);
         let actions = live.take_actions();
-        self.unsent.set(live.has_unsent());
         self.io.run(actions, app);
+        // Queued in the session, or sent but still in the browser's buffer.
+        self.unsent.set(live.has_unsent() || self.io.buffered());
     }
 }
 

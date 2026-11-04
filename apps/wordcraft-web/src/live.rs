@@ -379,6 +379,9 @@ pub enum Event {
     Save,
     /// The person closed the document (File › Close, the title bar's Close).
     Close,
+    /// A frame the socket didn't take (it wasn't open, or `send` failed): it waits for the next
+    /// connection, and the page guards leaving until then.
+    Unsent(Vec<u8>),
 }
 
 /// What the browser glue does next.
@@ -585,6 +588,7 @@ impl Live {
                 self.out.push(Action::Shell(json!({"type": "craft-live:close"})));
                 self.close(s);
             }
+            Event::Unsent(frame) => self.requeue(frame),
         }
         self.pump(s);
     }
@@ -727,9 +731,20 @@ impl Live {
 
     /// A frame for the room: now when the socket is up and welcomed, else queued.
     /// Edits wait for the socket (it's down, or the server hasn't welcomed it): leaving the page
-    /// now would lose them.
+    /// now would lose them. Frames the browser still buffers are the glue's to count
+    /// (`bufferedAmount`).
     pub fn has_unsent(&self) -> bool {
         !self.queue.is_empty()
+    }
+
+    /// Puts back a frame the socket didn't take. It waits for the next welcome rather than going
+    /// out again at once (the socket that refused it is closing).
+    /// Control messages (`hello`, `bye`, …) belong to the connection that refused them: dropped.
+    fn requeue(&mut self, frame: Vec<u8>) {
+        if matches!(Frame::decode(&frame), Some(Frame::Control(_)) | None) {
+            return;
+        }
+        self.queue_frame(frame);
     }
 
     fn send(&mut self, frame: Vec<u8>) {
@@ -737,6 +752,10 @@ impl Live {
             self.out.push(Action::Send(frame));
             return;
         }
+        self.queue_frame(frame);
+    }
+
+    fn queue_frame(&mut self, frame: Vec<u8>) {
         self.queued_bytes = self.queued_bytes.saturating_add(frame.len());
         if self.queued_bytes > MAX_QUEUED_BYTES {
             // The next sync exchange brings the server whatever is dropped here.

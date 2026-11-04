@@ -496,6 +496,10 @@ fn body(ui: &mut Ui, d: &mut ShareDialog, dirty: bool) -> Action {
 /// (see `plugin_ui::after_run`).
 fn go(app: &mut WordApp, d: &ShareDialog) -> Result<(), String> {
     let (plugin, _) = d.transports.get(d.transport).cloned().ok_or_else(|| tl!("Choose a connection").to_string())?;
+    let command = if d.join { "join" } else { "share" };
+    if wordcraft_plugin::get(&plugin).is_some_and(|p| p.manifest.command(command).is_none()) {
+        return Err(crate::i18n::fmt(tl!("This add-in has no {command} command"), &[("command", command)]));
+    }
     app.run("collab.setUser", json!({"name": d.name.trim(), "color": d.color}))?;
     let was_dirty = app.session.dirty;
     let params = if d.join {
@@ -507,13 +511,10 @@ fn go(app: &mut WordApp, d: &ShareDialog) -> Result<(), String> {
     } else {
         json!({"name": d.name.trim(), "color": d.color, "encrypt": d.encrypt})
     };
-    let command = if d.join { "join" } else { "share" };
-    if wordcraft_plugin::get(&plugin).is_some_and(|p| p.manifest.command(command).is_none()) {
-        return Err(crate::i18n::fmt(tl!("This add-in has no {command} command"), &[("command", command)]));
-    }
-    // Until a session replaces the document, its unsaved changes are still there to save.
     let started = app.run("plugins.run", json!({"plugin": plugin, "command": command, "params": params}));
-    if started.is_err() || (app.session.active_room().is_none() && app.dialog.is_none()) {
+    // Until a session replaces the document, its unsaved changes are still there to save: a
+    // failed join, or one still waiting on the add-in's dialog, doesn't lose them.
+    if app.session.active_room().is_none() {
         app.session.dirty |= was_dirty;
     }
     started?;

@@ -116,14 +116,19 @@ pub fn origin(url: &str) -> Option<String> {
 
 /// The origins an add-in's page may be at, as Office allows them: the page's own and the
 /// manifest's `<AppDomains>` (a domain without a scheme is `https`; `https://*.example.com`
-/// takes every subdomain).
+/// takes every subdomain). Only `https`: a page served in the clear never gets the document.
 pub fn allowed_origins(plugin: &str, url: &str) -> Vec<String> {
     let domains = wordcraft_plugin::get(plugin).and_then(|p| p.manifest.office.as_ref().map(|o| o.app_domains.clone())).unwrap_or_default();
-    let mut allowed: Vec<String> = origin(url).into_iter().collect();
+    allowed_from(&domains, url)
+}
+
+fn allowed_from(domains: &[String], url: &str) -> Vec<String> {
+    let mut allowed: Vec<String> = origin(url).into_iter().filter(|o| o.starts_with("https://")).collect();
     for d in domains {
         let d = d.trim();
         let full = if d.contains("://") { d.to_string() } else { format!("https://{d}") };
         if let Some(o) = origin(&full)
+            && o.starts_with("https://")
             && !allowed.contains(&o)
         {
             allowed.push(o);
@@ -451,5 +456,23 @@ mod tests {
         assert!(!origin_allowed("https://add-in.example.evil.example/", &allowed));
         assert!(!origin_allowed("http://add-in.example/", &allowed));
         assert!(!origin_allowed("about:blank", &allowed));
+    }
+
+    #[test]
+    fn only_https_app_domains_are_allowed() {
+        let m = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TaskPaneApp">
+  <Id>0d5c7a1e-0000-4bcd-9eaf-0000000000cc</Id><Version>1.0.0.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Domains Test"/><Description DefaultValue="Tests"/>
+  <Hosts><Host Name="Document"/></Hosts>
+  <DefaultSettings><SourceLocation DefaultValue="https://pane.example/pane.html"/></DefaultSettings>
+  <AppDomains><AppDomain>http://clear.example</AppDomain><AppDomain>login.example</AppDomain><AppDomain>https://*.id.example</AppDomain></AppDomains>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>"#;
+        let manifest = wordcraft_plugin::office::parse_manifest(m, wordcraft_plugin::HOST_ID).unwrap();
+        let allowed = super::allowed_from(&manifest.office.unwrap().app_domains, "https://pane.example/pane.html");
+        assert_eq!(allowed, ["https://pane.example", "https://login.example", "https://*.id.example"]);
+        assert!(!origin_allowed("http://clear.example/", &allowed));
+        assert!(super::allowed_from(&[], "http://pane.example/").is_empty());
     }
 }

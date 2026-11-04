@@ -845,3 +845,18 @@ fn hostile_control_messages_change_nothing() {
     assert_eq!(room.tabs[a].live.phase, Phase::Live);
     assert!(room.uploads.is_empty());
 }
+
+#[test]
+fn a_frame_the_socket_refused_waits_and_keeps_the_page_guarded() {
+    let cfg = Config::from_json(&json!({"ws": "ws://127.0.0.1:9/ws/r", "room": "r", "token": "t", "seed": false, "role": "edit"})).unwrap();
+    let mut live = Live::new(cfg);
+    let mut s = Session::new(Document::new());
+    assert!(!live.has_unsent());
+    // A connection's control message isn't sent again on the next one.
+    live.handle(&mut s, Event::Unsent(Frame::Control(json!({"type": "bye"})).encode()));
+    live.handle(&mut s, Event::Unsent(vec![9]));
+    assert!(!live.has_unsent());
+    // An edit waits for the next welcome, and the page asks before closing meanwhile.
+    live.handle(&mut s, Event::Unsent(Frame::Update(vec![1, 2, 3]).encode()));
+    assert!(live.has_unsent());
+}
