@@ -322,7 +322,7 @@ impl LanguageForm {
 
 /// A language's name in the interface language (the tag itself when we don't know it).
 pub(super) fn language_name(tag: &str) -> String {
-    tl!(&crate::ribbon::language_name(Some(tag))).to_string()
+    crate::ribbon::display_name(Some(tag))
 }
 
 pub(super) fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
