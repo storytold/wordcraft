@@ -1,5 +1,16 @@
 use super::{Arc, CmdError, CmdResult, Document, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
 
+/// Options › Language › Set as default: only the saved default proofing language (what future
+/// blank documents are written in), as Word's Set as Preferred. A setting, like `file.options`: the
+/// document, the selection, the undo history and the modified flag are left alone.
+pub(super) fn preferred_language(s: &mut Session, v: &Value) -> CmdResult {
+    let t = p::str(v, "lang").ok_or_else(|| CmdError::Params("`lang` is required".into()))?;
+    let l = wordcraft_proof::lang::normalize_tag(t)
+        .ok_or_else(|| CmdError::Params(format!("`lang` must be a language tag such as pl-PL or en-US, not {t:?}")))?;
+    s.prefs.default_language = Some(l.clone());
+    Ok(json!({"preferred": l}))
+}
+
 /// Set Proofing Language: the selection's language and "do not check spelling or grammar",
 /// or (`default`) the document's default and the saved language for future blank documents;
 /// `detect` is the per-user detection preference.
