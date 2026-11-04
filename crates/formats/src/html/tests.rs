@@ -721,6 +721,27 @@ fn zero_rowspan_keeps_the_existing_span_limit() {
 }
 
 #[test]
+fn row_groups_in_depth_limited_tables_keep_the_enclosing_cells() {
+    for depth in [model::MAX_DEPTH - 1, model::MAX_DEPTH, model::MAX_DEPTH + 1, model::MAX_DEPTH + 2] {
+        let mut nested = String::from("<p>Innermost</p>");
+        for d in (1..depth).rev() {
+            nested = format!("<table><tbody><tr><td>Depth{d}<td>{nested}</td></tr></tbody></table>");
+        }
+        for span in [0, 2] {
+            let f = parse(&format!(
+                "<table><tbody><tr><td rowspan={span}>Shared<td>{nested}<p>Tail</p></td></tr><tr><td>Second</td></tr></tbody></table>"
+            ));
+            let [FBlock::Table(t)] = f.blocks.as_slice() else { panic!("content left the table at depth {depth}") };
+            assert_eq!(t.rows.len(), 2, "depth {depth}, span {span}");
+            assert_eq!(t.rows[0][0].rowspan, 2);
+            assert!(t.rows[0][1].text().ends_with("Tail"));
+            assert!(t.rows[1][0].covered);
+            assert_eq!(t.rows[1][1].text(), "Second");
+        }
+    }
+}
+
+#[test]
 fn cells_give_their_columns_widths() {
     let f = parse(
         "<style>td.n { width: 42px }</style><table border=1><tr><td colspan=3>t</td></tr><tr><td class=n>1</td><td width=200>a</td><td style='width: 2in'>b</td></tr></table>",

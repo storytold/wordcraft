@@ -944,10 +944,11 @@ impl<'r> Builder<'r> {
     fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
         if matches!(name, "thead" | "tbody" | "tfoot") && !self.tables.is_empty() {
             // Row-group end tags, like row and cell end tags, can be omitted.
+            // A table flattened at the depth limit still owns its row-group tags.
             let open = self
-                .find_open(|e| e.kind == ElKind::RowGroup, |e| e.kind == ElKind::Table)
-                .or_else(|| self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table))
-                .or_else(|| self.find_open(|e| e.kind == ElKind::Cell, |e| e.kind == ElKind::Table));
+                .find_open(|e| e.kind == ElKind::RowGroup, |e| e.name == "table")
+                .or_else(|| self.find_open(|e| e.kind == ElKind::Tr, |e| e.name == "table"))
+                .or_else(|| self.find_open(|e| e.kind == ElKind::Cell, |e| e.name == "table"));
             if let Some(k) = open {
                 self.pop_to(k);
             }
@@ -1118,7 +1119,7 @@ impl<'r> Builder<'r> {
             return;
         }
         let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
-        if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+        if matches!(kind, ElKind::Table | ElKind::RowGroup | ElKind::Tr | ElKind::Cell) && !in_table {
             kind = ElKind::Block;
         }
         if matches!(kind, ElKind::RowGroup | ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
@@ -1210,7 +1211,7 @@ impl<'r> Builder<'r> {
         } else if name == "tr" {
             self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table)
         } else if matches!(name, "thead" | "tbody" | "tfoot") {
-            self.find_open(|e| e.name == name, |e| e.kind == ElKind::Table)
+            self.find_open(|e| e.name == name, |e| e.name == "table")
         } else {
             self.find_open(|e| e.name == name, |e| !crosses && matches!(e.kind, ElKind::Table | ElKind::Cell))
         };
