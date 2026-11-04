@@ -183,7 +183,8 @@ impl StyleIndex {
             let (mut label, mut levels) = (None, Vec::new());
             if let Some(n) = num
                 && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
-                && def.format != NumFormat::Bullet
+                && (def.format != NumFormat::Bullet
+                    || (!def.legal && def.custom_format.as_deref().is_some_and(|p| wordcraft_doc::numbering::custom_pad_width(p).is_some())))
             {
                 let vals = counters.values(&doc.numbering, n.num).unwrap_or_default();
                 for (k, v) in vals.iter().enumerate().take(usize::from(n.level.min(8)) + 1) {

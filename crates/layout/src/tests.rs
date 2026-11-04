@@ -1774,7 +1774,8 @@ fn a_numbering_num_tab_after_the_label_is_the_text_destination() {
             let n = std::sync::Arc::make_mut(&mut d.numbering);
             id = n.add_list(wordcraft_doc::ListKind::Numbered);
             if let Some(a) = n.abstracts.first_mut() {
-                a.levels[0] = wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
+                a.levels[0] =
+                    wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
             }
         }
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
@@ -1798,7 +1799,8 @@ fn a_numbering_num_tab_stays_within_the_first_lines_span() {
             let n = std::sync::Arc::make_mut(&mut d.numbering);
             id = n.add_list(wordcraft_doc::ListKind::Numbered);
             if let Some(a) = n.abstracts.first_mut() {
-                a.levels[0] = wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
+                a.levels[0] =
+                    wordcraft_doc::numbering::Level { text: "[%1]".into(), indent: 0.0, hanging: 0.0, tab: Some(tab), ..Default::default() };
             }
         }
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
