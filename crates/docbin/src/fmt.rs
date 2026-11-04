@@ -2,7 +2,8 @@
 
 use wordcraft_doc::Rgb;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, Highlight, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop, TextColor, Underline, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, TabAlign, TabLeader, TabStop, TextColor, Underline,
+    VertAlign,
 };
 use wordcraft_doc::styles::{Style, StyleKind, StyleSheet};
 
@@ -429,7 +430,7 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
 
 /// Build the model stylesheet: resolve each raw style's chain (base → this) and the ids we
 /// reference from paragraphs.
-pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standard: crate::stsh::StandardFonts) -> StyleSheet {
+pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], ids: &[String], fonts: &[String], standard: crate::stsh::StandardFonts) -> StyleSheet {
     let mut sheet = StyleSheet::empty();
     // Word's base character properties: the stylesheet's standard fonts (Aptos in a Word 365
     // file, whose font table still starts with Times New Roman, #5066), else font index 0 of the
@@ -445,14 +446,15 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standa
         if st.name.is_empty() {
             continue;
         }
-        let id = style_id(&st.name);
+        let builtin = builtin_by_sti(st.sti);
+        let id = ids.get(istd).cloned().unwrap_or_default();
         let kind = match st.stk {
             2 => StyleKind::Character,
             3 => StyleKind::Table,
             4 => StyleKind::Numbering,
             _ => StyleKind::Paragraph,
         };
-        let base = base_of(raw, istd).and_then(|i| raw.get(i)).map(|b| style_id(&b.name));
+        let base = base_of(raw, istd).and_then(|i| ids.get(i)).cloned();
         // Inherit: properties come from the base chain, root first, then our own grpprls.
         let mut chr = CharProps::default();
         let mut para = ParaProps::default();
@@ -461,12 +463,14 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String], standa
             apply_chain_para(&mut para, &s.papx);
         }
         if para.outline_level.is_none() && kind == StyleKind::Paragraph {
-            let h = heading_level(&st.name);
+            let h = builtin.as_ref().map_or_else(|| heading_level(&st.name), |b| b.2);
             if h > 0 {
                 para.outline_level = Some(h - 1);
             }
         }
-        sheet.styles.push(Style { id, name: display_name(&st.name), kind, based_on: base, chr, para, ..Default::default() });
+        let name = builtin.map_or_else(|| display_name(&st.name), |b| b.1);
+        // Word's own styles (`sti` below istiUser) are built in, as the DOCX reader marks them.
+        sheet.styles.push(Style { id, name, kind, based_on: base, chr, para, builtin: st.sti < crate::stsh::STI_USER, ..Default::default() });
     }
     sheet
 }
@@ -499,9 +503,60 @@ fn style_chain(raw: &[crate::stsh::RawStyle], istd: usize) -> Vec<usize> {
     chain
 }
 
+/// The built-in style an invariant `sti` names: (id, shown name, heading level). The `sti` is
+/// the same in every language ([MS-DOC] StdfBase), so "Überschrift 1" is still heading 1.
+fn builtin_by_sti(sti: u16) -> Option<(String, String, u8)> {
+    match sti {
+        0 => Some(("Normal".into(), "Normal".into(), 0)),
+        1..=9 => Some((format!("Heading{sti}"), format!("Heading {sti}"), sti as u8)),
+        19..=27 => Some((format!("TOC{}", sti - 18), format!("TOC {}", sti - 18), 0)),
+        _ => None,
+    }
+}
+
+/// A stored style's id: by its built-in index when it has one, else by its name.
+fn raw_style_id(raw: &crate::stsh::RawStyle) -> String {
+    builtin_by_sti(raw.sti).map_or_else(|| style_id(&raw.name), |b| b.0)
+}
+
+/// Each stored style's id by `istd` (empty without a name). Word's own styles take theirs first;
+/// one already taken gets a number: "Heading 1" next to "Überschrift 1" is `Heading1_2`.
+pub(crate) fn style_ids(raw: &[crate::stsh::RawStyle]) -> Vec<String> {
+    let mut ids = vec![String::new(); raw.len()];
+    let mut taken = std::collections::BTreeSet::new();
+    // The next number to try for each id, so many styles of one name stay linear.
+    let mut next: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let named = |i: &usize, word: bool| raw.get(*i).is_some_and(|s| !s.name.is_empty() && (s.sti < crate::stsh::STI_USER) == word);
+    let order = (0..raw.len()).filter(|i| named(i, true)).chain((0..raw.len()).filter(|i| named(i, false)));
+    for i in order {
+        let Some(st) = raw.get(i) else { continue };
+        let base = raw_style_id(st);
+        let mut id = base.clone();
+        while taken.contains(&id) {
+            let n = next.entry(base.clone()).or_insert(2);
+            id = format!("{base}_{n}");
+            *n += 1;
+        }
+        taken.insert(id.clone());
+        if let Some(slot) = ids.get_mut(i) {
+            *slot = id;
+        }
+    }
+    ids
+}
+
 /// The style-id form of a stored (lower-case) built-in name, matching the docx reader's ids.
 pub(crate) fn style_id(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
+    // Word's ids for the TOC levels and headings, which References › Update Table and the
+    // Heading 1-3 commands (Ctrl+Alt+1-3) name.
+    if let Some(n) = toc_level(&lower) {
+        return format!("TOC{n}");
+    }
+    let h = heading_level(&lower);
+    if h > 0 {
+        return format!("Heading{h}");
+    }
     match lower.as_str() {
         "normal" => "Normal".into(),
         "title" => "Title".into(),
@@ -539,11 +594,19 @@ fn heading_level(name: &str) -> u8 {
     lower.strip_prefix("heading ").and_then(|d| d.parse().ok()).filter(|&l: &u8| (1..=9).contains(&l)).unwrap_or(0)
 }
 
+/// "toc 2" → 2; `None` when not a table of contents level.
+fn toc_level(lower: &str) -> Option<u8> {
+    lower.strip_prefix("toc ").and_then(|d| d.parse().ok()).filter(|l: &u8| (1..=9).contains(l))
+}
+
 fn display_name(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
     let h = heading_level(&lower);
     if h > 0 {
         return format!("Heading {h}");
+    }
+    if let Some(n) = toc_level(&lower) {
+        return format!("TOC {n}");
     }
     match lower.as_str() {
         "body text" => "Body Text".into(),
@@ -563,9 +626,27 @@ fn apply_chain(chr: &mut CharProps, grpprl: &[u8], fonts: &[String]) {
 
 /// Apply a grpprl of paragraph sprms.
 fn apply_chain_para(para: &mut ParaProps, grpprl: &[u8]) {
+    let (mut ilfo, mut ilvl) = (None, None);
     for prl in sprm::iter(grpprl) {
-        if prl.sgc() == 1 {
-            apply_para(para, &prl);
+        match prl.op {
+            crate::P_ILFO => ilfo = Some(crate::ilfo_operand(prl.operand)),
+            crate::P_ILVL => ilvl = Some(crate::ilvl_operand(prl.operand)),
+            _ if prl.sgc() == 1 => apply_para(para, &prl),
+            _ => {}
         }
+    }
+    // A list style ("List Number", a numbered paragraph style): its paragraphs are numbered
+    // without a list of their own. A style based on it may change the level or end the list.
+    match (ilfo, &mut para.numbering) {
+        (Some(ilfo), n) => {
+            let level = ilvl.or(n.map(|n| n.level)).unwrap_or(0);
+            *n = match crate::num_of(ilfo) {
+                Some(num) => Some(NumRef { num, level }),
+                // Ending the based-on style's list is `num: 0`: no value would inherit it.
+                None => n.map(|_| NumRef { num: 0, level }),
+            };
+        }
+        (None, Some(n)) => n.level = ilvl.unwrap_or(n.level),
+        (None, None) => {}
     }
 }
