@@ -393,7 +393,7 @@ pub struct FitText {
     pub width: Option<u32>,
     /// The id shared by runs in the same fit-text group.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<i32>,
+    pub id: Option<i64>,
 }
 
 pub const MAX_FIT_TEXT_WIDTH: u32 = 31_680;
