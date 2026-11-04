@@ -379,11 +379,7 @@ pub fn missing_metric_fonts() -> Vec<(&'static str, String)> {
         .iter()
         .filter_map(|(word, twins)| {
             let resolved = resolve(word, false, false);
-            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) {
-                None
-            } else {
-                Some((*word, resolved.face.family.clone()))
-            }
+            if has_metric_resolution(db.has_family(word), twins, &resolved.face.family) { None } else { Some((*word, resolved.face.family.clone())) }
         })
         .collect()
 }
