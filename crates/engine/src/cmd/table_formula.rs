@@ -934,7 +934,7 @@ mod tests {
         // number under es-PA and not under pl-PL (whose decimal separator is `,`).
         let balboa = table(&[&["B/. 1,234.50"], &["(B/. 1,234.50)"], &[""]]);
         let mut doc = wordcraft_doc::Document::new();
-        doc.styles.default_chr.lang = Some("es-PA".into());
+        std::sync::Arc::make_mut(&mut doc.styles).default_chr.lang = Some("es-PA".into());
         assert_eq!(
             evaluate_with(&balboa, Some(&doc), Some("pl-PL"), 2, 0, "=SUM(ABOVE)"),
             Ok(0.0),
@@ -944,7 +944,7 @@ mod tests {
         // And the other way around: a balboa cell written with Polish separators is read only when
         // the document language reaches the parser, not when it falls back to English.
         let mut polish = wordcraft_doc::Document::new();
-        polish.styles.default_chr.lang = Some("pl-PL".into());
+        std::sync::Arc::make_mut(&mut polish.styles).default_chr.lang = Some("pl-PL".into());
         let balboa_pl = table(&[&["B/. 1 250,50"], &[""]]);
         assert_eq!(
             evaluate_with(&balboa_pl, Some(&polish), Some("en-US"), 1, 0, "=SUM(ABOVE)"),

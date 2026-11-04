@@ -422,10 +422,13 @@ pub fn models_ui(ui: &mut egui::Ui) {
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     let h = row_height(ui);
-    let titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"];
-    // Company, Model and Version read as text; the counts line up on the right.
-    let right = [false, false, false, true, true, true];
-    let rows: Vec<[String; 6]> = MODELS
+    // A horizontal scroll area stays left-to-right; reverse the columns in a mirrored interface so
+    // Company still starts at the reading edge.
+    let mut titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"];
+    // Company, Model and Version read as text; the counts line up on the right (left in RTL).
+    let mut right = [false, false, false, true, true, true];
+    let mut grow = MODEL_GROW;
+    let mut rows: Vec<[String; 6]> = MODELS
         .iter()
         .map(|m| {
             [
@@ -438,6 +441,19 @@ pub fn models_ui(ui: &mut egui::Ui) {
             ]
         })
         .collect();
+    let rtl = crate::rtl::on();
+    // The reversed columns keep their own widths and scroll position: egui remembers both by id.
+    let id = if rtl { "credits_models_rtl" } else { "credits_models" };
+    if rtl {
+        titles.reverse();
+        // Mirrored alignment: the text columns sit at the reading edge (right), the counts on the left.
+        right.reverse();
+        right = right.map(|r| !r);
+        grow.reverse();
+        for cells in &mut rows {
+            cells.reverse();
+        }
+    }
     let widths: Vec<f32> = titles
         .iter()
         .enumerate()
@@ -446,8 +462,9 @@ pub fn models_ui(ui: &mut egui::Ui) {
     crate::rtl::island(ui, |ui| {
         ui.allocate_ui(egui::vec2(ui.available_width(), 360.0), |ui| {
             ui.set_max_height(360.0);
-            egui::ScrollArea::horizontal().id_salt("credits_models").auto_shrink([false, false]).show(ui, |ui| {
-                fitted_table(ui, "credits_models", &widths, &MODEL_GROW)
+            // When the table overflows, a mirrored one opens at its right (reading) edge, where Company is.
+            egui::ScrollArea::horizontal().id_salt(id).auto_shrink([false, false]).stick_to_right(rtl).show(ui, |ui| {
+                fitted_table(ui, id, &widths, &grow)
                     .header(h + 4.0, |mut header| {
                         for (title, r) in titles.into_iter().zip(right) {
                             header.col(|ui| {
