@@ -180,11 +180,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     app.ui.print.preview = app.ui.print.preview.min(total.saturating_sub(1));
     // Opened afresh, the page doesn't repeat how the last job went: that was said once in the
     // status bar. What the printers are doing (finding them, none found) still shows.
-    let pass = ctx.cumulative_pass_nr();
-    let opened = app.print_page_pass.is_none_or(|last| last.saturating_add(1) < pass);
-    app.print_page_pass = Some(pass);
+    // Passes are counted per viewport, so the marker is per window and names its viewport.
+    let here = (ctx.viewport_id(), ctx.cumulative_pass_nr());
+    let opened = app.print_page_pass.is_none_or(|(viewport, last)| viewport != here.0 || last.saturating_add(1) < here.1);
+    app.print_page_pass = Some(here);
+    // Only once the status bar has said it (`print_feedback`), so nothing goes unsaid.
     if opened
         && !app.printing.busy()
+        && app.printing.message == app.print_feedback_seen
         && matches!(
             app.printing.message,
             Some(crate::printing::Feedback::Submitted(_) | crate::printing::Feedback::Failed(_) | crate::printing::Feedback::WorkerStopped)
