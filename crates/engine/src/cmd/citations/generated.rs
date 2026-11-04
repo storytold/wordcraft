@@ -199,7 +199,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
             s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
         }
         let lines = entries_for(s, &kind);
-        let width = crate::cmd::page::sect(s).text_width();
+        let width = crate::cmd::page::laid_out_sect(s).text_width();
         for (k, (text, hanging)) in lines.into_iter().enumerate() {
             let mut para = Paragraph::with_text(&text, CharProps::default()).styled(ENTRY_STYLE);
             if hanging {

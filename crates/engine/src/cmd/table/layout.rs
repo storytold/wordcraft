@@ -10,7 +10,7 @@ pub(super) fn autofit(s: &mut Session, v: &Value) -> CmdResult {
     let mode = p::str(v, "mode").unwrap_or("window");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let tw = crate::cmd::page::sect(s).text_width();
+    let tw = crate::cmd::page::laid_out_sect(s).text_width();
     match mode {
         "fixed" => with_table(s, |t| t.props.fixed = true),
         "contents" => {

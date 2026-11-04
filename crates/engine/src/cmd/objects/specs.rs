@@ -206,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
-            let sect = crate::cmd::page::sect(s);
+            let sect = crate::cmd::page::laid_out_sect(s);
             let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {
@@ -228,7 +228,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
-            let tw = crate::cmd::page::sect(s).text_width();
+            let tw = crate::cmd::page::laid_out_sect(s).text_width();
             let w = selected(s).map(|(_, o)| obj_size(&o).0).unwrap_or(72.0);
             with_float(s, |f| {
                 if f.wrap == Wrap::Inline {

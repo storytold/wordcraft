@@ -256,7 +256,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
         spec.colors = c;
     }
     // Fitted to the text width, as a new graphic is.
-    let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
+    let max_w = super::page::laid_out_sect(s).text_width().max(36.0);
     let w = p::f32(v, "width").unwrap_or(DEFAULT_W).clamp(36.0, 2000.0).min(max_w);
     let h = p::f32(v, "height").unwrap_or(DEFAULT_H).clamp(36.0, 2000.0);
     let graphic = smart_art_graphic(spec, &s.doc.settings.theme_colors, w, h);

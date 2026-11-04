@@ -3,7 +3,8 @@
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Border, Borders};
 use wordcraft_doc::section::{
-    Columns, DocGrid, DocGridType, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, MAX_NOTE_START, MIN_GRID_PITCH, SectionProps, SectionStart,
+    Columns, DocGrid, DocGridType, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, MAX_NOTE_START, MIN_GRID_PITCH, MultiplePages, SectionProps,
+    SectionStart,
 };
 use wordcraft_doc::{Block, Pos, StoryRef};
 
@@ -13,17 +14,13 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
-            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
+            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool} (the mirrored preset or mirror true picks Multiple pages › Mirror margins, also from 2 pages per sheet or Book fold; mirror false is refused under Book fold, whose margins always mirror)"#,
         ),
-        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", |s, v| {
-            let land = match p::str(v, "value") {
-                Some("landscape") => true,
-                Some("portrait") => false,
-                _ => !sect(s).landscape,
-            };
-            with_sect(s, |x| x.set_landscape(land))
-        })
-        .params(r#"{"value": "portrait|landscape"}"#),
+        CommandSpec::new("layout.multiplePages", "Multiple Pages", "Layout › Page Setup", multiple_pages).params(
+            r#"{"mode": "normal|mirror|twoPerSheet|bookFold", "sheets"?: 0-40 (Book fold: sheets per booklet, 0 = all), "reverse"?: bool (Book fold printed right to left)} (applies to the whole document: Book fold turns every section to landscape, and every section's margins must fit the half page)"#,
+        ),
+        CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", orientation)
+            .params(r#"{"value": "portrait|landscape"} (Book fold stays landscape; under 2 pages per sheet the margins must fit the turned half page)"#),
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
@@ -43,6 +40,15 @@ pub fn specs() -> Vec<CommandSpec> {
             if let Some(props) = v.get("section") {
                 let mut new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
                 validate_section(&mut new)?;
+                // As `layout.orientation` and `layout.margins` do: a booklet stays landscape and
+                // the margins must fit the half page (#1836).
+                let mode = s.doc.settings.multiple_pages();
+                if mode == MultiplePages::BookFold && !new.landscape {
+                    return Err(CmdError::Params("Book fold prints on a landscape sheet; choose another Multiple pages setting first".into()));
+                }
+                if mode.halves_page() && !fits_turned(&new, None, mode) {
+                    return Err(CmdError::Params(MARGINS_DONT_FIT.into()));
+                }
                 return with_sect(s, |x| *x = new.clone());
             }
             s.push_ui_request(json!({"open": "pageSetup"}));
@@ -250,6 +256,12 @@ pub fn section_index_of_focus(s: &Session) -> usize {
 pub fn sect(s: &Session) -> SectionProps {
     let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()
+}
+
+/// [`sect`] as laid out: the page is half the sheet under 2 pages per sheet and Book fold
+/// (#1836). What new content (tables, pictures, charts…) is sized to.
+pub fn laid_out_sect(s: &Session) -> SectionProps {
+    sect(s).for_multiple_pages(s.doc.settings.multiple_pages())
 }
 
 /// The last block of each section of the selection.
@@ -510,13 +522,25 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
     let (t, b, l, r) = (t.max(0.0), b.max(0.0), l.max(0.0), r.max(0.0));
     let gutter = p::f32(v, "gutter").map(|g| g.max(0.0));
     let cur = sect(s);
-    if !margins_fit((cur.page_w, cur.page_h), (t, b, l, r), gutter.unwrap_or(cur.gutter)) {
+    // A preset picks mirrored or not, as does `mirror`; plain numbers alone (a ruler drag, an
+    // agent) keep the setting. Mirrored margins leave 2 pages per sheet and Book fold, as Word's
+    // gallery does; other presets keep those modes, and a booklet can't be unmirrored (#1836).
+    let mode = s.doc.settings.multiple_pages();
+    let mirror = p::bool(v, "mirror");
+    let target = if mirror == Some(true) || preset == Some("mirrored") {
+        MultiplePages::Mirror
+    } else if mirror == Some(false) && mode == MultiplePages::BookFold {
+        return Err(CmdError::Params("Book fold always mirrors the margins; choose another Multiple pages setting first".into()));
+    } else if (mirror.is_some() || preset.is_some()) && mode == MultiplePages::Mirror {
+        MultiplePages::Normal
+    } else {
+        mode
+    };
+    if !margins_fit(target.page_size(cur.page_w, cur.page_h, cur.landscape), (t, b, l, r), gutter.unwrap_or(cur.gutter)) {
         return Err(CmdError::Params("margins leave no room for text".into()));
     }
-    // A preset picks mirrored or not, as does `mirror` (Page Setup's Multiple pages); plain numbers
-    // alone (a ruler drag, an agent) keep the setting.
-    if let Some(on) = p::bool(v, "mirror").or(preset.map(|k| k == "mirrored")) {
-        s.doc.settings.mirror_margins = on;
+    if target != mode {
+        s.doc.settings.set_multiple_pages(target);
     }
     with_sect(s, |x| {
         x.margin_top = t;
@@ -527,6 +551,81 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
             x.gutter = g;
         }
     })
+}
+
+/// Page Setup › Multiple pages (#1836): Normal, Mirror margins, 2 pages per sheet or Book fold. A
+/// booklet is printed on a landscape sheet, so Book fold turns the section to landscape (as the
+/// dialog does); `sheets` and `reverse` apply to it. The margins must fit the half page.
+fn multiple_pages(s: &mut Session, v: &Value) -> CmdResult {
+    let mode = match v.get("mode") {
+        Some(Value::String(id)) => MultiplePages::from_id(id).ok_or_else(|| CmdError::Params(format!("unknown mode `{id}`")))?,
+        _ => return Err(CmdError::Params("`mode` must be normal, mirror, twoPerSheet or bookFold".into())),
+    };
+    let sheets = match v.get("sheets") {
+        None | Some(Value::Null) => None,
+        Some(n) => Some(
+            n.as_u64()
+                .ok_or_else(|| CmdError::Params("`sheets` must be a whole number, 0 or more".into()))?
+                .min(u64::from(wordcraft_doc::MAX_BOOKLET_SHEETS)) as u16,
+        ),
+    };
+    let reverse = match v.get("reverse") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(CmdError::Params("`reverse` must be true or false".into())),
+    };
+    // The mode is the document's, so it applies to every section, not just the selection's.
+    let book = mode == MultiplePages::BookFold;
+    if !s.doc.sections().iter().all(|(_, x)| fits_turned(x, if book { Some(true) } else { None }, mode)) {
+        return Err(CmdError::Params(MARGINS_DONT_FIT.into()));
+    }
+    s.doc.settings.set_multiple_pages(mode);
+    if let Some(n) = sheets {
+        s.doc.settings.book_fold_sheets = n;
+    }
+    if let Some(r) = reverse {
+        s.doc.settings.book_fold_reverse = r;
+    }
+    if book {
+        let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+        for end in ends {
+            s.doc.section_mut(end).set_landscape(true);
+        }
+    }
+    Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+}
+
+/// Whether section `x`'s margins fit its page under `mode` once turned to `landscape` (None:
+/// as it is).
+fn fits_turned(x: &SectionProps, landscape: Option<bool>, mode: MultiplePages) -> bool {
+    let mut t = x.clone();
+    if let Some(on) = landscape {
+        t.set_landscape(on);
+    }
+    margins_fit(mode.page_size(t.page_w, t.page_h, t.landscape), (t.margin_top, t.margin_bottom, t.margin_left, t.margin_right), t.gutter)
+}
+
+/// Layout › Orientation for the section(s) of the selection. A booklet is printed on a landscape
+/// sheet, so Book fold keeps it landscape (Word greys Orientation out); under 2 pages per sheet the
+/// margins must fit the turned half page (#1836).
+fn orientation(s: &mut Session, v: &Value) -> CmdResult {
+    let land = match p::str(v, "value") {
+        Some("landscape") => true,
+        Some("portrait") => false,
+        _ => !sect(s).landscape,
+    };
+    let mode = s.doc.settings.multiple_pages();
+    if mode == MultiplePages::BookFold && !land {
+        return Err(CmdError::Params("Book fold prints on a landscape sheet; choose another Multiple pages setting first".into()));
+    }
+    if mode.halves_page() {
+        let sections = s.doc.sections();
+        let fits = |block: usize| sections.iter().find(|(e, _)| *e == block).is_none_or(|(_, x)| fits_turned(x, Some(land), mode));
+        if !selected_section_ends(s).into_iter().all(fits) {
+            return Err(CmdError::Params(MARGINS_DONT_FIT.into()));
+        }
+    }
+    with_sect(s, |x| x.set_landscape(land))
 }
 
 /// Why `layout.size` refuses a page its margins don't fit.
@@ -560,12 +659,16 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = (w.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE), h.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE));
     // Each section keeps its orientation: the long side across in landscape, down in portrait.
     let oriented = |x: &SectionProps| if x.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
+    let mode = s.doc.settings.multiple_pages();
     let sections = s.doc.sections();
     let fits = |block: usize| {
-        sections
-            .iter()
-            .find(|(e, _)| *e == block)
-            .is_none_or(|(_, x)| margins_fit(oriented(x), (x.margin_top, x.margin_bottom, x.margin_left, x.margin_right), x.gutter))
+        sections.iter().find(|(e, _)| *e == block).is_none_or(|(_, x)| {
+            margins_fit(
+                mode.page_size(oriented(x).0, oriented(x).1, x.landscape),
+                (x.margin_top, x.margin_bottom, x.margin_left, x.margin_right),
+                x.gutter,
+            )
+        })
     };
     if !selected_section_ends(s).into_iter().all(fits) {
         return Err(CmdError::Params(MARGINS_DONT_FIT.into()));
@@ -577,7 +680,7 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
     let space = p::f32(v, "space").unwrap_or(36.0).clamp(0.0, 300.0);
     let sep = p::bool(v, "separator").unwrap_or(false);
-    let tw = sect(s).text_width();
+    let tw = laid_out_sect(s).text_width();
     // Unequal columns: (width, space after) each, as the Columns dialog sends them.
     let custom = match v.get("widths").filter(|w| !w.is_null()) {
         Some(w) => Some(column_widths(w, tw)?),

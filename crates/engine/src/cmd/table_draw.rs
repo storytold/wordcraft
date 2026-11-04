@@ -127,7 +127,7 @@ fn draw_table(s: &mut Session, v: &Value, l: &DocLayout, page: usize, start: (f3
         return Err(CmdError::Failed("draw new tables outside a table; inside one, draw a line to split cells".into()));
     }
     let len = s.doc.para(pos.story, &pos.path).map(|q| q.len()).ok_or_else(|| CmdError::Failed("there's no paragraph there".into()))?;
-    let tw = super::page::sect(s).text_width().max(18.0);
+    let tw = super::page::laid_out_sect(s).text_width().max(18.0);
     let w = r.w.clamp(18.0, tw);
     let mut t = Table::new(1, 1, w);
     t.props.width = Some(w);

@@ -1144,8 +1144,30 @@ fn two_column_doc(n: usize) -> Session {
 fn page_columns(s: &mut Session, page: usize) -> Vec<(f32, f32)> {
     let layout = s.layout();
     let pg = &layout.pages[page];
-    let boxes = s.doc.sections()[pg.section].1.column_boxes();
+    let boxes = s.doc.laid_out_sections()[pg.section].1.column_boxes();
     boxes.iter().map(|(x, w)| (pg.body.x + x, pg.body.x + x + w)).collect()
+}
+
+/// #1836 review: under Book fold the columns are those of the half page, so a drop in the
+/// second column anchors to a paragraph that starts there, not the first column's.
+#[test]
+fn book_fold_anchors_in_the_half_page_columns() {
+    let mut s = two_column_doc(40);
+    s.run("layout.multiplePages", &json!({"mode": "bookFold"})).unwrap();
+    s.touch();
+    let cols = page_columns(&mut s, 0);
+    assert!(cols[1].0 < 300.0, "the second column starts on the half page: {cols:?}");
+    let layout = s.layout();
+    let (path, top) = layout.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { path, l0: 0, x, y, .. } if path.depth() == 0 && *x >= cols[1].0 - 0.5 => Some((path.clone(), *y)),
+            _ => None,
+        })
+        .unwrap();
+    let mid = (cols[1].0 + cols[1].1) / 2.0;
+    assert_eq!(anchor_paragraph(&s.doc, &layout, 0, (mid, top - 1.0), StoryRef::Body), Some(path));
 }
 
 /// #884 review: mirrored indents shift some paragraphs on even pages; that shift isn't taken

@@ -369,6 +369,14 @@ impl Document {
         v
     }
 
+    /// [`Document::sections`] as laid out: under 2 pages per sheet or Book fold each section's
+    /// paper becomes the half-sheet page (see [`SectionProps::for_multiple_pages`]). Use this to
+    /// size content to the page (#1836).
+    pub fn laid_out_sections(&self) -> Vec<(usize, SectionProps)> {
+        let mode = self.settings.multiple_pages();
+        self.sections().into_iter().map(|(e, s)| (e, s.for_multiple_pages(mode))).collect()
+    }
+
     /// The footnote (`endnote` false) or endnote options in effect in section `sect`: its own,
     /// else the document's, else Word's defaults (footnotes at the page bottom in 1, 2, 3;
     /// endnotes at the end of the document in i, ii, iii; numbered on through the document).

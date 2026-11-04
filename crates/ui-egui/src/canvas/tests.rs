@@ -1,3 +1,4 @@
+use super::margins::ruler_sect;
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
@@ -455,6 +456,20 @@ fn margin_drags_are_clamped() {
     assert!(after.page_w - after.margin_left - after.margin_right - after.gutter >= MIN_TEXT - 0.01);
     assert!(app.session.undo());
     assert_eq!(wordcraft_engine::cmd::page::sect(&app.session).margin_left, sect.margin_left);
+
+    // #1836 review: under Book fold and 2 pages per sheet the ruler measures the half page, so
+    // the right and bottom handles move.
+    for (mode, edge) in [("bookFold", MarginEdge::Right), ("twoPerSheet", MarginEdge::Bottom)] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("layout.multiplePages", json!({"mode": mode})).unwrap();
+        let page = app.session.layout().pages[0].clone();
+        let far = if edge == MarginEdge::Right { page.w } else { page.h };
+        let v = dragged_margin(edge, far - 36.0, &ruler_sect(&app.session.doc, page.section));
+        assert_eq!(v, 36.0, "{mode}");
+        let mut params = json!({});
+        params[if edge == MarginEdge::Right { "right" } else { "bottom" }] = json!(v);
+        app.run("layout.margins", params).unwrap();
+    }
 }
 
 /// #2914: on an even page of a mirrored layout the page is the odd page reflected, so dragging

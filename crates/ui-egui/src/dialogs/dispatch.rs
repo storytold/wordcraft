@@ -4,10 +4,11 @@ use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigati
 use super::font::{apply_font, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
-use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
+use super::page_setup::{booklet_sheet_choices, page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
 use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
+use wordcraft_doc::section::MultiplePages;
 
 /// Returns true to close.
 pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -596,7 +597,11 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         left,
         right,
         landscape,
-        mirror,
+        multiple,
+        multiple_was,
+        multiple_prev,
+        sheets,
+        reverse,
         rtl,
         grid,
         grid_was,
@@ -611,6 +616,22 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
+    // A booklet is printed on a landscape sheet, and the margins then read inside/outside.
+    // The mode as this frame started: the combo below may change `multiple` mid-frame, and
+    // that change is the entry into Book fold the next frame has to see.
+    let multiple_at_start = *multiple;
+    let book = *multiple == MultiplePages::BookFold;
+    // Only the frame that switches to Book fold turns the page and margins; after that the
+    // orientation stays locked, so editing the paper size can't rotate the margins again.
+    let entering_book = book && *multiple_prev != MultiplePages::BookFold;
+    let inside = matches!(*multiple, MultiplePages::Mirror | MultiplePages::BookFold);
+    if entering_book && !*landscape {
+        // The margin fields turn with the page, as `layout.orientation` turns the section's.
+        (*top, *bottom, *left, *right) = (*left, *right, *bottom, *top);
+    }
+    if entering_book {
+        *landscape = true;
+    }
     ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
     crate::rtl::Table::new("ps").columns(4).show(ui, |t| {
         t.row(|r| {
@@ -620,20 +641,65 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             r.cell(|ui| ui.add(margin(bottom)).labelled_by(bottom_label.id));
         });
         t.row(|r| {
-            let left_label = r.cell(|ui| ui.label(if *mirror { tl!("Inside:") } else { tl!("Left:") }));
+            let left_label = r.cell(|ui| ui.label(if inside { tl!("Inside:") } else { tl!("Left:") }));
             r.cell(|ui| ui.add(margin(left)).labelled_by(left_label.id));
-            let right_label = r.cell(|ui| ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") }));
+            let right_label = r.cell(|ui| ui.label(if inside { tl!("Outside:") } else { tl!("Right:") }));
             r.cell(|ui| ui.add(margin(right)).labelled_by(right_label.id));
         });
     });
     ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
-    ui.horizontal(|ui| {
-        ui.radio_value(landscape, false, tl!("Portrait"));
-        ui.radio_value(landscape, true, tl!("Landscape"));
+    ui.add_enabled_ui(!book, |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(landscape, false, tl!("Portrait"));
+            ui.radio_value(landscape, true, tl!("Landscape"));
+        });
     });
     ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
-    ui.checkbox(mirror, tl!("Mirror margins"));
-    page_paper_group(ui, paper, landscape, paper_custom);
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Multiple pages:"));
+        // Word saves "Reverse book fold" as its own choice (a lone `w:bookFoldRevPrinting`).
+        let name = |m: MultiplePages, rev: bool| match m {
+            MultiplePages::Normal => tl!("Normal"),
+            MultiplePages::Mirror => tl!("Mirror margins"),
+            MultiplePages::TwoPerSheet => tl!("2 pages per sheet"),
+            MultiplePages::BookFold if rev => tl!("Reverse book fold"),
+            MultiplePages::BookFold => tl!("Book fold"),
+        };
+        let shown = name(*multiple, *reverse);
+        let combo = craft_ui::ComboBox::from_id_salt("ps_multiple").width(180.0).selected_text(shown).show_ui(ui, |ui| {
+            for (m, rev) in [
+                (MultiplePages::Normal, false),
+                (MultiplePages::Mirror, false),
+                (MultiplePages::TwoPerSheet, false),
+                (MultiplePages::BookFold, false),
+                (MultiplePages::BookFold, true),
+            ] {
+                let on = *multiple == m && (m != MultiplePages::BookFold || *reverse == rev);
+                if ui.selectable_label(on, name(m, rev)).clicked() {
+                    *multiple = m;
+                    *reverse = rev;
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    if book {
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Sheets per booklet:"));
+            let shown = if *sheets == 0 { tl!("All").to_string() } else { sheets.to_string() };
+            let combo = craft_ui::ComboBox::from_id_salt("ps_sheets").width(80.0).selected_text(shown).show_ui(ui, |ui| {
+                for n in booklet_sheet_choices(*sheets) {
+                    ui.selectable_value(sheets, n, if n == 0 { tl!("All").to_string() } else { n.to_string() });
+                }
+            });
+            combo.response.labelled_by(label.id);
+        });
+    }
+    page_paper_group(ui, paper, landscape, paper_custom, book && !entering_book);
+    if book {
+        *landscape = true;
+    }
+    *multiple_prev = multiple_at_start;
     ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
     ui.horizontal_wrapped(|ui| {
         ui.radio_value(&mut grid.0, 0, tl!("No grid"));
@@ -665,12 +731,31 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         // Everything OK changes is one undo step; a refused command applies nothing.
-        let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right))
+        if book && paper.0 < paper.1 {
+            *paper = (paper.1, paper.0);
+        }
+        let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right), *multiple)
             .map_err(|e| tl!(e).to_string())
             .and_then(|mut commands| {
-                // Mirror margins go with the margins (#1181).
-                if let Some((_, v)) = commands.iter_mut().rev().find(|(id, _)| *id == "layout.margins") {
-                    v["mirror"] = json!(*mirror);
+                // Multiple pages (#1836): a mode that halves the page runs after the margins,
+                // orientation and size are set, one that gives the page back before them. When
+                // the document is in a halving mode already, the page is given back first, so
+                // those are checked against the whole sheet and the mode against every section.
+                let settings = &app.session.doc.settings;
+                let changed =
+                    *multiple != *multiple_was || (book && (*sheets != settings.book_fold_sheets || *reverse != settings.book_fold_reverse));
+                let mut v = json!({"mode": multiple.id()});
+                if book {
+                    v["sheets"] = json!(*sheets);
+                    v["reverse"] = json!(*reverse);
+                }
+                if multiple.halves_page() && (changed || multiple_was.halves_page()) {
+                    if multiple_was.halves_page() {
+                        commands.insert(0, ("layout.multiplePages", json!({"mode": "normal"})));
+                    }
+                    commands.push(("layout.multiplePages", v));
+                } else if changed {
+                    commands.insert(0, ("layout.multiplePages", v));
                 }
                 if grid != grid_was {
                     let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");
