@@ -15,6 +15,8 @@ const MAX_OPEN: usize = 64;
 const MAX_CODE: usize = 1 << 20;
 /// Most tokens one `supportFields` comment is read as.
 const MAX_TOKENS: usize = 1 << 20;
+/// Most `supportFields` openers read inside one comment (each one unclosed).
+const MAX_NESTED: usize = 16;
 
 /// Where an open field is.
 enum State {
@@ -93,17 +95,36 @@ impl Fields {
     }
 
     /// Read the markup of a `supportFields` comment: marks, code and (Better Notes) the result.
+    ///
+    /// A `<!--[if supportFields]>` opened inside it (which can only be unclosed: comments don't
+    /// nest) is read on from where it stands, in a loop rather than by recursion, so hostile
+    /// markup can't exhaust the stack; past [`MAX_NESTED`] such openers the rest is dropped.
     fn comment(&mut self, markup: &str, b: &mut Builder) {
-        let mut lx = Lexer { s: markup, pos: 0 };
+        let mut current = markup.to_owned();
         let mut count = 0usize;
+        for _ in 0..=MAX_NESTED {
+            match self.comment_part(&current, b, &mut count) {
+                Some(next) => current = next,
+                None => return,
+            }
+        }
+    }
+
+    /// Read one comment's markup, counting tokens into `count`; the markup of a `supportFields`
+    /// comment opened inside it, when there is one, is handed back to be read next.
+    fn comment_part(&mut self, markup: &str, b: &mut Builder, count: &mut usize) -> Option<String> {
+        let mut lx = Lexer { s: markup, pos: 0 };
         // White space the comment's source lays out around a mark (`\n<span …field-separator…>\n`)
         // is not the result's: it is dropped after a mark and held until content follows.
         let mut after_mark = true;
         let mut held = String::new();
-        while count < MAX_TOKENS
+        while *count < MAX_TOKENS
             && let Some(t) = lx.next()
         {
-            count += 1;
+            *count += 1;
+            if let Tok::SupportFields(next) = t {
+                return Some(next);
+            }
             let is_mark = matches!(&t, Tok::Start { attrs, .. } if mark(attrs).is_some());
             if let Tok::Text(text) = &t
                 && self.code().is_none()
@@ -134,6 +155,7 @@ impl Fields {
                 _ => {}
             }
         }
+        None
     }
 
     /// The code being read, when text belongs to one (the outermost field still in its code).
@@ -144,6 +166,7 @@ impl Fields {
         })
     }
 
+    /// Act on field mark `m`: open a field, start its result, or close it.
     fn mark(&mut self, m: Mark, b: &mut Builder) {
         match m {
             Mark::Begin => {
@@ -204,6 +227,8 @@ impl Fields {
     }
 }
 
+/// Close an open field at the builder's position: a field still in its code gets an empty
+/// result; fields nested in a code or past [`MAX_OPEN`] leave nothing.
 fn close(s: State, b: &mut Builder) {
     match s {
         // No separator: a field with an empty result.

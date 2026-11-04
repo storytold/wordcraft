@@ -896,3 +896,18 @@ fn support_fields_edge_cases_stay_balanced() {
     assert_eq!(marks.iter().map(|m| m.matches('{').count()).sum::<usize>(), 64);
     assert_eq!(marks.iter().map(|m| m.matches('}').count()).sum::<usize>(), 64);
 }
+
+#[test]
+fn nested_support_fields_openers_dont_exhaust_the_stack() {
+    // Comments don't nest: each opener inside runs to the end, and is read on in a loop.
+    let deep = format!("<p>a<!--{}x-->b</p>", "[if supportFields]><span style='mso-element:field-begin'></span>F<!--".repeat(200_000));
+    let marks = inline_marks(&parse(&deep));
+    let opens = marks.iter().map(|m| m.matches('{').count()).sum::<usize>();
+    assert_eq!(opens, marks.iter().map(|m| m.matches('}').count()).sum::<usize>());
+    // A field never separated takes the text after it as code (as Word's split form reads), and
+    // only the first openers are read.
+    assert!(marks.concat().matches('F').count() <= 17, "{marks:?}");
+    // One nested opener: what follows it is still read.
+    let one = "<p>a<!--[if supportFields]><span style='mso-element:field-begin'></span>PAGE<span style='mso-element:field-separator'></span><!--[if supportFields]>1<span style='mso-element:field-end'></span><![endif]-->b</p>";
+    assert_eq!(inline_marks(&parse(one)), ["a{PAGE|1}b"]);
+}
