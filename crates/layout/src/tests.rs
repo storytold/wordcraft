@@ -4738,6 +4738,7 @@ fn a_press_inside_a_text_box_over_a_picture_goes_to_its_text() {
             float: float(wrap, picture_z),
             crop: [0.0; 4],
             ole: None,
+            fx: Default::default(),
         };
         d.insert_object(&Pos::body(0, 0), picture, &Default::default()).unwrap();
         let id = text_box(&mut d, 0, "Name", 200.0, 100.0, Float { x: 50.0, y: 150.0, rot, ..float(wrap, 2) });
@@ -10936,6 +10937,7 @@ fn split_cell_moves_image_frame() {
             rect,
             media: "synthetic".into(),
             crop: [0.1, 0.2, 0.3, 0.4],
+            fx: Default::default(),
             story: StoryRef::Body,
             path: Path::top(0),
             off: 0,
