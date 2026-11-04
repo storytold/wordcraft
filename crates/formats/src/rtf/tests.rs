@@ -38,6 +38,21 @@ fn basic_reader() {
 }
 
 #[test]
+fn unicode_fallback_uses_the_declared_count() {
+    for (rtf, expected) in [
+        (br"{\rtf1\uc18\u8804less than or equal rest}".as_slice(), "≤ rest"),
+        (br"{\rtf1\uc10\u233\'30\'31\'32\'33\'34\'35\'36\'37\'38\'39 rest}", "é rest"),
+        (br"{\rtf1\uc0\u233X}", "éX"),
+        (br"{\rtf1\uc1\u233?X}", "éX"),
+        (br"{\rtf1{\uc2147483647\u233?}X}", "éX"),
+        (br"{\rtf1\uc-1\u233X}", "éX"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), expected, "{rtf:?}");
+    }
+}
+
+#[test]
 fn paragraph_borders() {
     // A heading with a grey rule under it, as hh.ru résumés write their section titles.
     let rtf = br"{\rtf1\ansi{\colortbl;\red0\green0\blue0;\red216\green216\blue216;}

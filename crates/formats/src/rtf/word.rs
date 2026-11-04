@@ -89,7 +89,7 @@ impl Reader {
                 }
                 self.skip_chars = self.st.uc;
             }
-            "uc" => self.st.uc = pv.clamp(0, 8) as usize,
+            "uc" => self.st.uc = pv.max(0) as usize,
             "plain" => {
                 self.st.fmt = Fmt { link: self.st.fmt.link.clone(), ..Default::default() };
                 self.st.rev = RevSt::default();
