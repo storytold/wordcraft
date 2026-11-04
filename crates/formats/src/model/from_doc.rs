@@ -981,7 +981,13 @@ fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>
     let (first_g, last_g) = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
     let rb = wordcraft_doc::styles::part_borders(&part_borders, (ri, nrows), (first_g, last_g));
     let edge = |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
-    let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let none = Border {
+        style: BorderStyle::None,
+        width: 0.0,
+        color: None,
+        space: 0.0,
+        ..Default::default()
+    };
     let top = edge(cb.top.or(if ri == 0 { rowb.top } else { rowb.between }).or(rb.top), ri == 0, tb.top, tb.between);
     let bottom = edge(cb.bottom.or(if ri + 1 == nrows { rowb.bottom } else { rowb.between }).or(rb.bottom), ri + 1 == nrows, tb.bottom, tb.between);
     let left = edge(

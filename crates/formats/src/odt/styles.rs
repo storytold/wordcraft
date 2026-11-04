@@ -541,12 +541,26 @@ pub(super) fn style_id(odt: &str) -> String {
 /// An ODF border (`0.5pt solid #000000`, `none`; ODF 1.3 §20.183): width, style and colour in any
 /// order. `none` and `hidden` are an explicit no line; `None` when nothing in it reads.
 pub(super) fn parse_border(v: &str) -> Option<Border> {
-    let mut b = Border { style: BorderStyle::Single, width: 0.75, color: None, space: 0.0 };
+    let mut b = Border {
+        style: BorderStyle::Single,
+        width: 0.75,
+        color: None,
+        space: 0.0,
+        ..Default::default()
+    };
     let mut any = false;
     for t in v.split_whitespace() {
         let t = t.to_ascii_lowercase();
         match t.as_str() {
-            "none" | "hidden" => return Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }),
+            "none" | "hidden" => {
+                return Some(Border {
+                    style: BorderStyle::None,
+                    width: 0.0,
+                    color: None,
+                    space: 0.0,
+                    ..Default::default()
+                });
+            }
             "solid" | "groove" | "ridge" | "inset" | "outset" => b.style = BorderStyle::Single,
             "double" => b.style = BorderStyle::Double,
             "dotted" => b.style = BorderStyle::Dotted,
@@ -918,7 +932,13 @@ fn border_sides(a: &Attrs) -> Option<Borders> {
         let pad = get(a, p).and_then(length).or(pad_all).filter(|v| v.is_finite() && *v > 0.0);
         // Padding without a line still takes room (LibreOffice): a side with no line holds it.
         let Some(mut line) = get(a, b).and_then(parse_border).or(all) else {
-            return pad.map(|sp| Border { style: BorderStyle::None, width: 0.0, color: None, space: sp.min(MAX_PADDING) });
+            return pad.map(|sp| Border {
+                style: BorderStyle::None,
+                width: 0.0,
+                color: None,
+                space: sp.min(MAX_PADDING),
+                ..Default::default()
+            });
         };
         if let Some(sp) = pad {
             line.space = if line.is_visible() { sp.min(31.0) } else { sp.min(MAX_PADDING) };
