@@ -1,7 +1,5 @@
 # WordCraft roadmap
 
-**PR #4703 — Footer table fidelity (2026-11-03):** DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified.
-
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -726,7 +724,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | trivial | Preserve table-only footer endings and the empty-written-footer fallback; synthetic fidelity controls; #3114 and native Windows acceptance remain unqualified (#4703). |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
@@ -738,6 +735,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | PR #4703 — Footer table fidelity (2026-11-03): DOCX saves retain a table-only footer ending without adding an empty paragraph. If every table has no writable rows, the footer still receives its fallback paragraph; skipped tables beside real content add no blank spacing. The Windows disappearance in #3114 and native Word/Windows GUI acceptance remain unqualified. |
+| 2026-11-03 | trivial | Preserve table-only footer endings and the empty-written-footer fallback; synthetic fidelity controls; #3114 and native Windows acceptance remain unqualified (#4703). |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
