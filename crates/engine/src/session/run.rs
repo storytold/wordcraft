@@ -351,6 +351,24 @@ impl Session {
             }
         }
         self.clamp_selection();
+        // A command that puts the selection into text a collapsed heading hides opens
+        // the fold (#1745; Word for Mac's Find does): Find, Go To, `select.text`,
+        // `caret.set`, paste. Select All leaves folds alone (Select All + Delete deletes
+        // the hidden text, as in Word); Undo and Redo put the document back as it was.
+        if self.sel != *sel_before
+            && !matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "select.all")
+            && crate::cmd::outline::selection_hidden(self)
+        {
+            if !spec.mutates {
+                // Its own undo step, which folds the text again.
+                let at = std::mem::replace(&mut self.sel, sel_before.clone());
+                self.checkpoint("Expand Heading");
+                self.sel = at;
+            }
+            if crate::cmd::outline::show_selection(self) {
+                self.touch();
+            }
+        }
         let mut ime_outcome = self.ime_edit_outcome;
         if ime_outcome.content_changed {
             ime_outcome.state_changed = true;

@@ -121,6 +121,10 @@ pub enum Dialog {
         /// Mirror indents, don't add space between paragraphs of the same style, suppress line
         /// numbers, don't hyphenate (#512).
         opts: [bool; 4],
+        /// Outline level: 0–8 for Level 1–9, 9 for body text.
+        outline: u8,
+        /// Collapsed by default (#1745): only for an outline level other than body text.
+        collapsed: bool,
         /// The fields every selected paragraph shares, as `para_fields` names them, from when
         /// the dialog opened: OK sends only the fields that differ from these, so an untouched
         /// tab adds no direct formatting (#1346).

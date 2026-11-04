@@ -211,6 +211,7 @@ pub(super) fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
     let start = s.doc.start_of(StoryRef::Body);
     let at = s.doc.split_paragraph(&start)?;
     let _ = at;
+    super::super::outline::open_for_insert(s, &start, frag.blocks.len());
     s.doc.insert_fragment(&start, &frag)?;
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
     sel_result(s)
