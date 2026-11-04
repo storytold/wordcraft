@@ -524,6 +524,13 @@ pub const SCREEN_BAR_HEIGHT: f32 = 30.0;
 
 /// The slim bar across the top in Focus ("⋯" drops the ribbon down over the page) and Full
 /// Screen View (Search, which finds and runs any command).
+/// The status message while it is fresh enough to show — the status bar's six-second rule
+/// (chrome.rs, `status_bar`). The screen bar asks too: in Focus the status bar is not drawn
+/// at all, so a message nobody draws is a refusal nobody sees (PR #5551 review).
+pub(crate) fn fresh_status(app: &WordApp) -> Option<&str> {
+    app.status_msg.as_ref().filter(|(_, at)| crate::now_ms() - at < 6000.0).map(|(msg, _)| msg.as_str())
+}
+
 pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
     let t = Tokens::get(ui.ctx());
     let fill = if screen == Screen::Focus { FOCUS_CANVAS } else { t.title_bar };
@@ -538,6 +545,27 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Show the ribbon")));
             if resp.on_hover_text(tl!("Show the ribbon")).clicked() {
                 let _ = app.run("ui.focusRibbon", json!({}));
+            }
+            // The status message, while it is fresh: the status bar that draws it in the other
+            // screens does not exist in Focus, so without this a refusal reported through
+            // app.status (the Convert Text to Table section-break refusal, #5548) is invisible
+            // here. It runs from the bar's left edge up to the ribbon button, shortened to fit,
+            // with the whole message on hover, as in the status bar.
+            if let Some(msg) = fresh_status(app) {
+                let font = TypeRung::Caption.regular();
+                let track = TypeRung::Caption.tracking();
+                let color = egui::Color32::from_gray(220);
+                let room = (r.min.x - 8.0) - (full.min.x + 10.0);
+                if room > 0.0 {
+                    let shown = fit_text(ui.painter(), msg, &font, track, color, room);
+                    if !shown.is_empty() {
+                        let w = text_width(ui.painter(), &shown, &font, track, color);
+                        let at = pos2(full.min.x + 10.0, full.center().y - TypeRung::Caption.line_height() / 2.0);
+                        let rect = Rect::from_min_size(at, vec2(w + 1.0, TypeRung::Caption.line_height()));
+                        let _ = ui.interact(rect, status_message_id(), Sense::hover()).on_hover_text(msg.to_string());
+                        paint_text(ui.painter(), rect.min, Align2::LEFT_TOP, &shown, &font, track, color);
+                    }
+                }
             }
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {

@@ -7217,3 +7217,13 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+#[test]
+fn fresh_status_follows_the_six_second_rule() {
+    let mut a = app();
+    assert_eq!(crate::chrome::fresh_status(&a), None, "no message, nothing to show");
+    a.status_msg = Some(("the selection crosses a section break".to_string(), crate::now_ms()));
+    assert_eq!(crate::chrome::fresh_status(&a), Some("the selection crosses a section break"), "a fresh message shows");
+    a.status_msg = Some(("old news".to_string(), crate::now_ms() - 7000.0));
+    assert_eq!(crate::chrome::fresh_status(&a), None, "a message older than six seconds is gone");
+}
