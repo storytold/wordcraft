@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+> **Keep-with-next validation:** 2026-10-31 · Build on #5095 (@dfgodvan): use the effective paragraph gap in lookahead. All eight headings in the synthetic A4 control now share the native Word reference pages; other controls retain baseline renders. Readiness estimates unchanged.
+>
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -371,6 +373,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
 |---|---|
+| 2026-10-31 | Kept headings count the effective spacing to the following paragraph (#5095, original leading fix by @dfgodvan). The synthetic A4 control moves headings 4 and 7 to the native pages 3 and 5; seven portable controls cover collapsed/additive/contextual/list gaps, kept chains and footnote-bearing lookahead (with endnotes unchanged). |
 | 2026-10-26 | Spelling & Grammar opens a right-side Proofing task pane observed in Word for Windows: sentence context, directly clickable suggestion cards and ignore/dictionary actions. Current-story traversal and stale-target checks are retained. Right-click keeps its compact menu. |
 | 2026-10-22 | Documents that keep content in another format (`w:altChunk`: a web page, RTF, text or another Word document, as generators and mail-merge tools write them) show it where it stands, as Word does, instead of leaving it out; one such file in the docxide-pdf corpus opened as an empty page and now matches Word's 8 pages. `.mht` web archives open, and web pages open the way Word opens them (style sheets, paragraph margins, Times New Roman, single lines, automatic spacing). Insert › Text from File keeps the inserted file's pictures |
 | 2026-10-18 | Explicit New/Open keeps the requested document visible when startup recovery discovery finishes; older copies stay available. Recover uses the regular theme. See docs/recovery.md. |
@@ -734,6 +737,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-31 | trivial | Progress log: a list level above counts its first number at the first deeper item |
 | 2026-11-01 | trivial | Progress log: paragraph side borders lie outside the text (#5036) |
 | 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
+| 2026-10-31 | trivial | Adapt #5095 (@dfgodvan) to current main while retaining its three-line widow control; share effective-gap rules between placement and lookahead. Six additional spacing/list/chain controls and synthetic A4 Word Mac 16.114.3 reference validation; no general pagination-parity claim. |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
 | 2026-10-31 | trivial | Progress log: Backstage keytips, Alt, F, P prints (#4960) |

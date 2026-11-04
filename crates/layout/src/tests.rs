@@ -9,6 +9,7 @@ mod bidi;
 mod budget;
 mod complex;
 mod grid;
+mod keep_spacing;
 mod ligature;
 pub(crate) mod linear;
 mod nbsp;
