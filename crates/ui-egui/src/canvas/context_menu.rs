@@ -137,6 +137,12 @@ fn rows(app: &mut WordApp, ui: &mut Ui) {
         }
         rule(ui);
     }
+    // A tracked change at the caret or in the selection: resolve it from here, as in Word.
+    if wordcraft_engine::cmd::review::change_at_selection(&app.session) {
+        item(ui, "Accept Change", "review.accept", json!({}));
+        item(ui, "Reject Change", "review.reject", json!({}));
+        rule(ui);
+    }
     item(ui, "Cut", "edit.cut", json!({}));
     item(ui, "Copy", "edit.copy", json!({}));
     // How to paste, chosen before pasting (#2583): the ribbon's Paste menu, item for item. Paste
