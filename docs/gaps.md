@@ -146,7 +146,6 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 ## Revision history
 
 > 2026-11-03 · Synthetic DOCX tests cover explicit conditional table-style flags across repeated saves; real-world corpus qualification remains open.
->
 
 > 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
 >

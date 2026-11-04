@@ -287,7 +287,6 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 ## Revision history
 
 > 2026-11-03 · Explicit DOCX `w:cnfStyle` masks and named conditional flags round-trip across runs, paragraphs, rows and cells, with explicit false values preserved.
->
 
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 
