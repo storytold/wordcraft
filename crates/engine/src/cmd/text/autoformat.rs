@@ -1,5 +1,8 @@
 use super::enter_tab::insert_paragraphs;
-use super::*;
+use super::{
+    Block, Border, BorderStyle, CmdError, CmdResult, ListKind, NumRef, OBJ, Path, Pos, Selection, Session, StoryRef, Table, Value, delete_selection,
+    p, sel_result, split_para, type_text_effect,
+};
 
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
 fn autoformat(s: &mut Session, text: &str) -> Option<String> {

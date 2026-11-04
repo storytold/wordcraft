@@ -1,10 +1,13 @@
-use super::boxes::{BoxContext, layout_box};
+use super::boxes::{BoxInput, layout_box};
 use super::cache::{Totals, hash_of};
 use super::ctx::{Ctx, with_pct_base, with_pin};
 use super::flow::again;
 use super::page::{PageBuilder, PageFrame, page_border_rules};
 use super::placed::{HfSlot, Placed};
-use super::*;
+use super::{
+    Arc, Document, HashMap, HashSet, HeaderSet, InlineObject, Page, Path, Rect, SectionProps, SectionStart, StoryRef, ViewMode, fields, styleref,
+    work,
+};
 
 /// Whether a section that starts on a new page needs a blank page first so it lands on the right
 /// side, and the page number it restarts at. `last` is the number of the page before it and
@@ -140,7 +143,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let Some(part) = ctx.doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
     let base = hf.defining_width(false, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
@@ -150,8 +153,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let track = std::mem::replace(&mut ctx.track_totals, false);
     ctx.fields.page = page.number;
     let mut areas = again(ctx, 0, |ctx| {
-        with_pct_base(ctx, base, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)))
-            .table_areas
+        with_pct_base(ctx, base, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))).table_areas
     });
     ctx.counters = counters;
     ctx.boxes = boxes;
@@ -296,10 +298,10 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+            let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
             let base = hf.defining_width(false, page.section, hid);
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
-                with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
+                with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {
                 it.translate(x, sect.header);
@@ -313,12 +315,12 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             let blocks = part.blocks.clone();
             let base = hf.defining_width(true, page.section, fid);
             // The footer's height fixes where it sits, which page-relative floats need.
-            let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
-                with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, None).height)
+            let (h, ..) = with_pin(ctx, id, sect, page.number, None, |ctx| {
+                with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, None)).height)
             });
-            let frame = PageFrame { sect, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
-                with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
+            let frame = PageFrame { sect, margin_top: None, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
+                with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {
                 it.translate(x, sect.page_h - sect.footer - h);

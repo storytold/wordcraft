@@ -14,7 +14,7 @@ use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
 use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
-use crate::{BoxContext, Ctx, Placed, fit_box, layout_box};
+use crate::{BoxInput, Ctx, Placed, fit_box, layout_box};
 
 /// Linked text boxes for one layout, worked out when a linked box is first laid out.
 #[derive(Default)]
@@ -90,9 +90,9 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
                 _ => b.clone(),
             })
             .collect();
-        return layout_box(ctx, story, &stacked, &[], STACK_WIDTH, BoxContext::Other, depth + 1, None).items;
+        return layout_box(ctx, BoxInput::other(story, &stacked, STACK_WIDTH, depth + 1, None)).items;
     }
-    layout_box(ctx, story, blocks, &[], len, BoxContext::Other, depth + 1, None).items
+    layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items
 }
 
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its

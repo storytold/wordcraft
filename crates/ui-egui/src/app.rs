@@ -1,7 +1,14 @@
 use super::clock::now_ms;
+#[cfg(not(target_arch = "wasm32"))]
+use super::file_browser;
 use super::services::Services;
 use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_everything};
-use super::*;
+use super::{
+    AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
+    async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
+    i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
+    system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
+};
 
 mod commands;
 mod control;
@@ -31,6 +38,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -94,6 +102,7 @@ impl WordApp {
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
+            packs_rt: Default::default(),
             control_rx: None,
             shots: crate::control::Shots::default(),
             capture_epoch: 0,
@@ -105,8 +114,11 @@ impl WordApp {
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
+            fonts_hant: false,
             fonts_system_cjk: false,
+            fonts_system_arabic: false,
             want_system_cjk: false,
+            want_system_arabic: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
@@ -140,6 +152,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -209,8 +222,10 @@ impl WordApp {
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
         updates_ui::tick(self, ctx);
+        crate::language_packs::tick(self);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        crate::rtl::sync(ctx);
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,

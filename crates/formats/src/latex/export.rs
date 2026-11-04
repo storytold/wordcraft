@@ -1,5 +1,5 @@
 use super::math::linear_to_latex;
-use super::*;
+use super::{Align, Cell, Document, FBlock, FTable, Fmt, Inline, Kind, Para, Rgb, model};
 
 /// Text width of the exported article in points (`\linewidth` when reading widths).
 pub(super) const LINE_WIDTH: f32 = 345.0;
@@ -233,7 +233,7 @@ impl Writer {
             match i {
                 Inline::Text(t, f) => {
                     let s = self.span(t, f);
-                    o.push_str(&s);
+                    push_apart(&mut o, &s);
                 }
                 Inline::Image(img) => {
                     let alt = if img.alt.trim().is_empty() { "Picture".to_string() } else { format!("Picture: {}", img.alt.trim()) };
@@ -244,7 +244,7 @@ impl Writer {
                 // LaTeX keeps no ruby (no package): its base text, in the run's formatting.
                 Inline::Ruby { base, fmt, .. } => {
                     let s = self.span(base, fmt);
-                    o.push_str(&s);
+                    push_apart(&mut o, &s);
                 }
                 Inline::Equation { linear, display } => {
                     self.uses.math = true;
@@ -398,6 +398,18 @@ fn num(v: f32) -> String {
     if r.fract() == 0.0 { format!("{r:.0}") } else { format!("{r}") }
 }
 
+/// Appends a run, writing `{}` between a `-` or `'` ending `o` and the same character starting
+/// `s`, so TeX does not join them across runs into a dash or quote.
+fn push_apart(o: &mut String, s: &str) {
+    if let Some(c) = s.chars().next()
+        && (c == '-' || c == '\'')
+        && o.ends_with(c)
+    {
+        o.push_str("{}");
+    }
+    o.push_str(s);
+}
+
 /// Text with LaTeX's special characters escaped.
 pub fn escape_text(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 8);
@@ -418,6 +430,8 @@ pub fn escape_text(s: &str) -> String {
             '>' => o.push_str("\\textgreater{}"),
             '|' => o.push_str("\\textbar{}"),
             '\u{A0}' => o.push('~'),
+            // TeX collapses a run of spaces into one; a control space keeps each further one.
+            ' ' if prev == ' ' => o.push_str("\\ "),
             // An opening bracket here would become an optional item or line-break argument.
             '[' if !line_has_text => o.push_str("{[}"),
             // Keep TeX from joining `--`, ``` `` ``` and `''` into dashes and quotes.
