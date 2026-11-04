@@ -221,3 +221,28 @@ fn controls_keep_their_place_on_the_line_and_a_text_area_its_lines() {
     let plain = entry(&export(&import(&package(&doc_xml(), None)).unwrap()).unwrap(), "content.xml");
     assert!(plain.contains(r#"style:vertical-pos="top" style:vertical-rel="baseline""#), "{plain}");
 }
+
+#[test]
+fn password_number_time_and_grid_controls_are_kept() {
+    // ODF 1.3 §13.5 controls WordCraft has no kind for: kept as read, each in its place.
+    let controls = r#"<form:password form:name="Secret" xml:id="p1" form:id="p1" form:echo-char="*"/><form:number form:name="Count" xml:id="n1" form:id="n1" form:value="3"/><form:time form:name="At" xml:id="t1" form:id="t1" form:value="10:30:00"/><form:grid form:name="Rows" xml:id="g1" form:id="g1"><form:column form:name="Col" form:label="Name"><form:text form:name="Cell"/></form:column></form:grid>"#;
+    let anchor = |id: &str| format!(r#"<draw:control text:anchor-type="as-char" svg:width="1in" svg:height="0.3in" draw:control="{id}"/>"#);
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_F}><office:body><office:text><office:forms><form:form form:name="Form">{controls}</form:form></office:forms><text:p>Fill {} {} {} {}</text:p></office:text></office:body></office:document-content>"#,
+        anchor("p1"),
+        anchor("n1"),
+        anchor("t1"),
+        anchor("g1")
+    );
+    let saved = export(&import(&package(&content, None)).unwrap()).unwrap();
+    let c = entry(&saved, "content.xml");
+    for el in [r#"<form:password "#, r#"form:echo-char="*""#, "<form:number ", "<form:time ", "<form:grid ", "<form:column ", r#"form:label="Name""#]
+    {
+        assert!(c.contains(el), "{el}: {c}");
+    }
+    // Each in its place in the text, naming its control.
+    assert_eq!(c.matches("<draw:control ").count(), 4, "{c}");
+    // And again.
+    let again = entry(&export(&import(&saved).unwrap()).unwrap(), "content.xml");
+    assert!(again.contains("<form:password ") && again.contains("<form:grid ") && again.matches("<draw:control ").count() == 4, "{again}");
+}

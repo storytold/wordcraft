@@ -1,6 +1,6 @@
 # ODT element audit
 
-> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (first version: every element of the ODF 1.3 schema against two corpora and a generated sample of each element never seen)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** trivial (password, number, time and grid form controls kept); previously minor (first version: every element of the ODF 1.3 schema against two corpora and a generated sample of each element never seen)
 
 Every element the ODF 1.3 schema (OASIS, Part 3, RELAX NG) defines, checked against what WordCraft's ODT reader and writer do with it. The question for each: does a file holding it open, and does a save without edits keep it? (See [file-format-parity.md](file-format-parity.md) for what WordCraft models; markup it doesn't model is written back as read while unedited: [odf-interpretation.md](odf-interpretation.md).)
 
@@ -45,9 +45,9 @@ Each in a document of our own: it opens, saves without edits keeping it, and sav
 | `draw:image-map` | kept |
 | `draw:plugin` | kept |
 | `form:connection-resource` | kept |
-| `form:grid` | **dropped**: a control of a kind WordCraft doesn't model (see below) |
+| `form:grid` | kept (as read, with its columns; LibreOffice opens the saved file, though its PDF export of a grid control fails whenever a document has automatic styles, ours or its own) |
 | `form:list-value` | kept (the sample held none; a list box's values are kept with the form) |
-| `form:password` | **dropped**: a control of a kind WordCraft doesn't model (see below) |
+| `form:password` | kept (as read) |
 | `number:boolean-style` | kept |
 | `number:embedded-text` | kept |
 | `number:era` | kept |
@@ -98,10 +98,10 @@ The check found these, each fixed with a test (see [file-format-parity.md](file-
 - Lists lost what a paragraph's markup can't say (a label followed by a space, picture bullets, an unnumbered header): unedited lists are now kept as read.
 - Styles of different families, and list styles, sharing a name overwrote each other among the definitions kept.
 - A form's data source (`form:connection-resource`) was taken for a control; index marks over text, plugins and floating frames weren't kept.
+- Password, number, time and grid form controls (ODF 1.3 §13.5), of kinds WordCraft doesn't model, were dropped; they are kept as read, in their place in the text, as buttons and image controls were.
 
 ## Left
 
-- **Password and grid form controls** (`form:password`, `form:grid`): WordCraft models text fields and areas, buttons, check boxes, option buttons, list and combo boxes, date, formatted and file fields, labels, images and image frames, frames, value ranges, hidden and generic controls; a control of another kind is dropped, with its place in the text.
 - **A section inside a table's cell, or one starting or ending at a paragraph with a twin elsewhere** (an empty one): written from the model, its text hidden still when the section was.
 - **A paragraph showing a chart, a form control, a linked text box, or a comment or tracked change reaching into another paragraph**: written from the model, which keeps what WordCraft models of it.
 - **Calligra's page sequence** (`text:page-sequence`, a layout of fixed pages) and **numbered paragraphs** (`text:numbered-paragraph`): read as text, written from the model.
@@ -112,3 +112,4 @@ The check found these, each fixed with a test (see [file-format-parity.md](file-
 | Date | Change | What |
 |---|---|---|
 | 2026-11-04 | minor | First version |
+| 2026-11-04 | trivial | Password, number, time and grid form controls kept |

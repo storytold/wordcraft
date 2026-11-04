@@ -21,9 +21,23 @@ const MAX_VALUE: usize = 10_000;
 pub(in crate::odt) const RADIO_ON: char = '\u{25C9}';
 pub(in crate::odt) const RADIO_OFF: char = '\u{25CB}';
 
-/// Form controls WordCraft has no kind for, kept verbatim (see [`ContentControl::form_xml`]).
-const KEPT: [&str; 8] =
-    ["form:button", "form:image", "form:fixed-text", "form:file", "form:value-range", "form:frame", "form:image-frame", "form:generic-control"];
+/// Form controls WordCraft has no kind for, kept verbatim (see [`ContentControl::form_xml`]):
+/// every control of ODF 1.3 §13.5 but those it reads (text fields and areas, check boxes, option
+/// buttons, list and combo boxes, date fields) and hidden ones (kept apart).
+const KEPT: [&str; 12] = [
+    "form:button",
+    "form:image",
+    "form:fixed-text",
+    "form:file",
+    "form:value-range",
+    "form:frame",
+    "form:image-frame",
+    "form:generic-control",
+    "form:password",
+    "form:number",
+    "form:time",
+    "form:grid",
+];
 /// Most bytes of a kept control's XML.
 const MAX_KEPT: usize = 64 * 1024;
 /// The namespace prefixes a kept control may use: those the content WordCraft writes declares.
