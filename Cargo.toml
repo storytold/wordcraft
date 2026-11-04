@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.13.2"
+version = "0.15.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -21,7 +21,16 @@ wordcraft-docbin = { path = "crates/docbin" }
 wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
-wordcraft-proof = { path = "crates/proof" }
+# Proofing is craft-libs' craft-proof (it was crates/proof); its Language data is craft-i18n's
+# language-data/, embedded from CRAFT_I18N_DIR (craft-i18n.rev). The package keeps the
+# `wordcraft-proof` name here so `wordcraft_proof::` paths are unchanged.
+# craft-proof is storytold/craft-libs main at the merge of #590 (ca-ES-valencia reads the ca-valencia
+# pack), after #589 (French elision suggestions first) and #497 (flag-based compounding), which also
+# has #496 (review follow-ups, en-AU) and the merged #482–#490/#495 stack; the font store's
+# `language-pack` kind is #486 (CP4.1).
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "01315d9c92b5b0e69082d35ca56099461a1efd45", version = "=0.1.0" }
+craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
+craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }

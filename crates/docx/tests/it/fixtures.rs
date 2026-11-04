@@ -1,6 +1,7 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
 use std::io::Write;
+use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -46,6 +47,76 @@ fn docx(body: &str, doc_rels: &[(&str, &str, &str)], extra: &[(&str, &str)]) -> 
 
 fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
+}
+
+/// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
+/// including where a table expects rows or cells (ECMA-376 Part 3).
+#[test]
+fn table_alternate_content_keeps_selected_rows_and_cells() {
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let row = |text: &str| format!("<w:tr>{}</w:tr>", cell(text));
+    let table =
+        |rows: &str, columns: usize| format!(r#"<w:tbl><w:tblGrid>{}</w:tblGrid>{rows}</w:tbl>"#, r#"<w:gridCol w:w="2400"/>"#.repeat(columns));
+    let alternate = |chosen: &str, fallback: &str, requires: &str| {
+        format!(
+            r#"<mc:AlternateContent><mc:Choice Requires="{requires}">{chosen}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+        )
+    };
+    for (requires, use_choice) in [("wps", true), ("alias", true), ("unknown", false), ("wps unknown", false)] {
+        for cells in [false, true] {
+            let choice = if cells { cell("Chosen cell") } else { row("Chosen row") };
+            let fallback = if cells { cell("Fallback cell") } else { row("Fallback row") };
+            let selected = if use_choice { &choice } else { &fallback };
+            let middle = alternate(&choice, &fallback, requires);
+            let (actual, expected) = if cells {
+                (
+                    format!("<w:tr>{}{middle}{}</w:tr>", cell("Before"), cell("After")),
+                    format!("<w:tr>{}{selected}{}</w:tr>", cell("Before"), cell("After")),
+                )
+            } else {
+                (format!("{}{middle}{}", row("Before"), row("After")), format!("{}{selected}{}", row("Before"), row("After")))
+            };
+            let columns = if cells { 3 } else { 1 };
+            let expected = read_body(&table(&expected, columns));
+            let wrapped = format!(
+                r#"<w:customXml xmlns:alias="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:unknown="urn:original:unsupported">{}</w:customXml>"#,
+                table(&actual, columns)
+            );
+            let mut actual = read_body(&wrapped);
+            for round in 0..=2 {
+                assert_eq!(actual.body, expected.body, "requires={requires}, cells={cells}, round={round}");
+                if round < 2 {
+                    actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_alternate_content_keeps_nested_row_and_cell_controls() {
+    let wrap =
+        |tag: &str, content: &str| format!(r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"#);
+    let alternate =
+        |content: &str| format!(r#"<mc:AlternateContent><mc:Choice Requires="wps">{content}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#);
+    let cell = "<w:tc><w:p><w:r><w:t>Controlled cell</w:t></w:r></w:p></w:tc>";
+    let oracle_cell = wrap("cell", cell);
+    let actual_cell = alternate(&wrap("cell", &alternate(cell)));
+    let oracle_row = wrap("row", &format!("<w:tr>{oracle_cell}</w:tr>"));
+    let actual_row = wrap("row", &alternate(&format!("<w:tr>{actual_cell}</w:tr>")));
+    let expected = read_body(&format!("<w:tbl>{oracle_row}</w:tbl>"));
+    let mut actual = read_body(&format!("<w:tbl>{}</w:tbl>", alternate(&actual_row)));
+    for round in 0..=2 {
+        assert_eq!(actual.body, expected.body, "round={round}");
+        let table = actual.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.rows[0].controls.open[0].tag, "row");
+        assert_eq!(table.rows[0].controls.close, 1);
+        assert_eq!(table.rows[0].cells[0].controls.open[0].tag, "cell");
+        assert_eq!(table.rows[0].cells[0].controls.close, 1);
+        if round < 2 {
+            actual = wordcraft_docx::read(&wordcraft_docx::write(&actual).unwrap()).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -182,7 +253,7 @@ fn omitted_paragraph_defaults_can_be_edited() {
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
     let mut d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert!(!d.styles.default_para_present);
-    d.styles.default_para.space_after = Some(12.0);
+    Arc::make_mut(&mut d.styles).default_para.space_after = Some(12.0);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));
@@ -2099,6 +2170,68 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
 }
 
+/// `w:shd w:val="nil"` paints nothing despite its fill: a CV template's red cell showed over the name.
+#[test]
+fn nil_shading_paints_no_fill() {
+    let body = r#"
+<w:tbl><w:tblGrid><w:gridCol w:w="200"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>
+ <w:tc><w:tcPr><w:shd w:val="nil" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc>
+ <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p><w:pPr><w:shd w:val="nil" w:fill="C00000" w:themeFill="accent2"/></w:pPr><w:r><w:rPr><w:shd w:val="nil" w:color="C00000" w:fill="C00000"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+    assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0xC0, 0, 0)));
+    let p = paras(&d);
+    assert_eq!(p[0].props.shading, None);
+    assert_eq!(p[0].props_of_char(0).shading, None);
+}
+
+/// A border's theme colour wins over its stale `w:color`: a template's white rule showed as black.
+#[test]
+fn border_theme_colour_wins_over_the_fixed_colour() {
+    let body = r#"
+<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="background1"/><w:left w:val="single" w:sz="4" w:color="FF0000"/></w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single" w:sz="4" w:color="auto" w:themeColor="accent2"/></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="accent1"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single" w:sz="4" w:color="000000" w:themeColor="accent6" w:themeShade="BF"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p/>
+<w:sectPr><w:pgBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="text2"/></w:pgBorders></w:sectPr>"#;
+    let styles = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblBorders><w:bottom w:val="single" w:sz="4" w:color="000000" w:themeColor="accent3"/></w:tblBorders></w:tblPr></w:style>"#;
+    let d = themed_docx(body, styles, None);
+    let p = paras(&d);
+    let pb = p[0].props.borders.unwrap();
+    assert_eq!(pb.top.and_then(|b| b.color), Some(Rgb(0xFF, 0xFF, 0xFF)));
+    assert_eq!(pb.left.and_then(|b| b.color), Some(Rgb(0xFF, 0, 0)), "no theme colour keeps the fixed one");
+    assert_eq!(p[0].props_of_char(0).border.and_then(|b| b.color), Some(Rgb(0xED, 0x7D, 0x31)));
+    let Block::Table(t) = &*d.body[1] else { panic!("table second") };
+    assert_eq!(t.props.borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x72, 0xC4)));
+    let cell = t.rows[0].cells[0].props.borders.and_then(|b| b.left).and_then(|b| b.color);
+    assert!(near(cell.map(TextColor::Rgb), Rgb(0x53, 0x81, 0x35)), "{cell:?}");
+    assert_eq!(d.last_section.page_borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x54, 0x6A)));
+    let st = d.styles.get("T").and_then(|s| s.table.as_ref()).and_then(|t| t.borders);
+    assert_eq!(st.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(0xA5, 0xA5, 0xA5)));
+}
+
+/// Given both `themeTint` and `themeShade`, Word applies the tint alone, for text colours,
+/// shading and borders (MS-OI29500 17.3.2.6 b, 17.4.32 a; MS-OE376 2.3.2.3 a).
+#[test]
+fn theme_tint_wins_over_theme_shade() {
+    let both = r#"w:themeColor="accent1" w:themeTint="99" w:themeShade="7F""#;
+    let body = format!(
+        r#"<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" {both}/></w:pBdr></w:pPr><w:r><w:rPr><w:color w:val="000000" {both}/><w:bdr w:val="single" w:sz="4" w:color="000000" {both}/><w:shd w:val="clear" w:color="auto" w:fill="000000" w:themeFill="accent1" w:themeFillTint="99" w:themeFillShade="7F"/></w:rPr><w:t>a</w:t></w:r></w:p>"#
+    );
+    let d = themed_docx(&body, "", None);
+    let p = paras(&d);
+    let ch = p[0].props_of_char(0);
+    // accent1 4472C4 lightened by tint 99 alone, as Word writes it into w:val.
+    let tinted = Rgb(0x8E, 0xAA, 0xDB);
+    assert!(near(ch.color, tinted), "text colour {:?}", ch.color);
+    let run_border = ch.border.and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(run_border, tinted), "text border {run_border:?}");
+    let para_border = p[0].props.borders.and_then(|b| b.top).and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(para_border, tinted), "paragraph border {para_border:?}");
+    assert!(near(ch.shading.map(TextColor::Rgb), tinted), "shading {:?}", ch.shading);
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.
@@ -2473,6 +2606,52 @@ fn vml_lines_and_rectangles() {
         &objs[1],
         InlineObject::Shape { kind: ShapeKind::Rectangle, fill: Some(Fill::Solid { color: Rgb(255, 0, 0), .. }), stroke: None, w: 30.0, h: 20.0, .. }
     ));
+}
+
+/// An arrowhead's kind, width and length (DrawingML `a:headEnd`/`a:tailEnd` `type`/`w`/`len`, VML
+/// `startarrow`/`startarrowwidth`/`startarrowlength`) are read and saved: they set the size Word
+/// draws it at. An end without `w`/`len` is medium.
+#[test]
+fn arrowheads_keep_their_kind_and_size() {
+    use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+    let style = |kind, width, length| ArrowStyle { kind, width, length };
+    let body = [
+        anchored_wsp(
+            "Line",
+            1270000,
+            0,
+            r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:headEnd type="stealth" w="sm" len="lg"/><a:tailEnd type="diamond" w="lg" len="sm"/></a:ln>"#,
+            "",
+            "<wps:cNvCnPr/>",
+        ),
+        anchored_wsp("Plain", 1270000, 0, r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#, "", "<wps:cNvCnPr/>"),
+        r#"<w:r><w:pict><v:line style="position:absolute" from="10pt,20pt" to="40pt,20pt"><v:stroke startarrow="classic" startarrowwidth="narrow" startarrowlength="long" endarrow="oval" endarrowwidth="wide" endarrowlength="short"/></v:line></w:pict></w:r>"#.to_string(),
+    ]
+    .concat();
+    let ends = |d: &Document| -> Vec<(bool, ArrowStyle, bool, ArrowStyle)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Shape { extra, .. } => (extra.arrow_start, extra.start_style, extra.arrow_end, extra.end_style),
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let expected = vec![
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Diamond, ArrowSize::Large, ArrowSize::Small)),
+        (false, ArrowStyle::default(), true, ArrowStyle::default()),
+        (true, style(ArrowKind::Stealth, ArrowSize::Small, ArrowSize::Large), true, style(ArrowKind::Oval, ArrowSize::Large, ArrowSize::Small)),
+    ];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(ends(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:headEnd type="stealth" w="sm" len="lg"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:tailEnd type="diamond" w="lg" len="sm"/>"#), "{xml}");
+    assert_eq!(ends(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
 
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
@@ -3976,6 +4155,30 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Solid { color, transparency }), .. } => (Some(*color), *transparency),
+        o => panic!("{o:?}"),
+    };
+    const FILL_ALPHA: u32 = 30_980;
+    const ALPHA_SCALE: f32 = 100_000.0;
+    // Canonical Fill stores the percentage computed from opacity, including f32 rounding.
+    let expected = 100.0 - (FILL_ALPHA as f32 / ALPHA_SCALE) * 100.0;
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), expected));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let parts = unzip(&bytes);
+    let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+    assert!(xml.contains(&format!("<a:alpha val=\"{FILL_ALPHA}\"/>")), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), expected));
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the
@@ -4171,4 +4374,63 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
+/// line when it has no width and no `o:hrpct`, a share of it (`o:hrpct`, tenths of a percent), or
+/// its own width (`o:hrpct="0"`), placed by `o:hralign`. It saves back as the same VML rule.
+#[test]
+fn vml_horizontal_rules_are_read_and_kept() {
+    use wordcraft_doc::connector::HorizontalRule;
+    use wordcraft_doc::props::Align;
+    let hr = |attrs: &str, style: &str| format!(r#"<w:p><w:r><w:pict><v:rect style="{style}" {attrs}/></w:pict></w:r></w:p>"#);
+    let body = [
+        hr(r#"o:hralign="center" o:hrstd="t" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="500" o:hralign="right" o:hr="t""#, "width:0;height:1.5pt"),
+        hr(r#"o:hrpct="0" o:hralign="center" o:hr="t""#, "width:100pt;height:3pt"),
+        hr("", "width:100pt;height:3pt"),
+    ]
+    .concat();
+    let rules = |d: &Document| -> Vec<(Option<HorizontalRule>, f32)> {
+        paras(d)
+            .iter()
+            .filter_map(|p| p.objects.iter().find_map(|o| if let InlineObject::Shape { extra, w, .. } = o { Some((extra.hr, *w)) } else { None }))
+            .collect()
+    };
+    let d = read_body(&body);
+    let got = rules(&d);
+    assert_eq!(
+        got,
+        [
+            (Some(HorizontalRule { pct: 100.0, align: Align::Center, standard: true }), 0.0),
+            (Some(HorizontalRule { pct: 50.0, align: Align::Right, standard: false }), 0.0),
+            (Some(HorizontalRule { pct: 0.0, align: Align::Center, standard: false }), 100.0),
+            (None, 100.0),
+        ]
+    );
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(rules(&again)[..3], got[..3]);
+    // A rule's rotation and flips are kept.
+    let spin = |d: &Document| paras(d)[0].objects.iter().find_map(|o| o.frame()).map(|(_, _, f)| f.spin());
+    let d = read_body(&hr(r#"o:hrpct="500" o:hr="t""#, "width:0;height:1.5pt;rotation:45;flip:x y"));
+    assert_eq!(spin(&d), Some(wordcraft_geom::Spin::new(45.0, true, true)));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(spin(&again), spin(&d));
+    // A see-through rule stays see-through.
+    let fill = |d: &Document| paras(d)[0].objects.iter().find_map(|o| if let InlineObject::Shape { fill, .. } = o { fill.clone() } else { None });
+    let d = read_body(
+        r##"<w:p><w:r><w:pict><v:rect style="width:0;height:1.5pt" o:hr="t" fillcolor="#ff0000"><v:fill opacity="0.25"/></v:rect></w:pict></w:r></w:p>"##,
+    );
+    let Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) = fill(&d) else { panic!("{:?}", fill(&d)) };
+    assert!((transparency - 75.0).abs() < 0.01, "{transparency}");
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(fill(&again), fill(&d));
+    // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
+    let body = [
+        hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),
+        hr(r#"o:hralign="center" o:hr="t""#, "visibility:hidden;width:0;height:2pt"),
+    ]
+    .concat();
+    let d = read_body(&body);
+    assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }
