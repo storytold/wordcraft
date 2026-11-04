@@ -149,6 +149,23 @@ fn fit_text_unit_width_and_source_run_children_round_trip() {
 }
 
 #[test]
+fn fit_text_hyperlink_field_replays_source_run_children_together() {
+    let xml = r#"<w:p><w:fldSimple w:instr="HYPERLINK &quot;https://example.org&quot;"><w:r><w:rPr><w:fitText w:val="720"/></w:rPr><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r></w:fldSimple></w:p>"#;
+    let doc = read_body(xml);
+    let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+    assert_eq!(para.runs[0].props.link.as_deref(), Some("https://example.org"));
+
+    let reopened = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let para = reopened.body.first().and_then(|b| b.as_para()).unwrap();
+    assert_eq!(para.text, "a\tb");
+    assert_eq!(para.runs.len(), 1);
+    assert_eq!(para.runs[0].props.fit_text.as_ref().and_then(|fit| fit.width), Some(720));
+}
+
+#[test]
 fn fit_text_without_width_is_omitted_on_save() {
     let mut doc = read_body(r#"<w:p><w:r><w:rPr><w:fitText w:id="1"/></w:rPr><w:t>text</w:t></w:r></w:p>"#);
     let para = doc.body.first().and_then(|b| b.as_para()).unwrap();
