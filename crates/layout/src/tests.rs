@@ -6188,6 +6188,30 @@ fn a_split_word_keeps_its_note_mark() {
     assert!(split > 100, "{split} widths split the word");
 }
 
+/// #5402: in a column only a letter or two wide, a note mark after a word's first letter still
+/// doesn't start a line: with no letter left to take along, the mark and the comma after it stay
+/// on the first letter's line, past its edge.
+#[test]
+fn a_note_mark_after_a_first_letter_stays_in_a_narrow_column() {
+    // 40 pt letters, so a letter or two fill the narrowest column (18 pt).
+    let text = "A, Pneumonoultramicroscopic";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(40.0)).unwrap();
+    footnote(&mut d, &Pos::body(0, 1), "A note.");
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let after = 1 + wordcraft_doc::para::OBJ.len_utf8();
+    let width = |m: f32| d.last_section.page_w - d.last_section.margin_left - m;
+    let mut narrow = 0;
+    for m in 380..=540 {
+        let m = m as f32;
+        let starts = body_line_starts(&d, m);
+        narrow += usize::from(width(m) < 40.0);
+        assert!(!starts.contains(&1), "width {}: a line starts with the note mark: {starts:?}", width(m));
+        assert!(!starts.contains(&after), "width {}: a line starts with the comma after the mark: {:?}", width(m), &p.text[after..]);
+    }
+    assert!(narrow > 5, "{narrow} columns under 40 pt");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.

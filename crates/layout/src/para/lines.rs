@@ -948,11 +948,25 @@ impl Scan {
         }
         // A note mark neither starts a line nor ends one before the punctuation after it: the mark
         // takes the letter before it along, and the punctuation after it stays with it (#5402).
-        while b > c0 + 1 && pl.notes.iter().any(|(k, _)| *k == b || *k + 1 == b) {
+        let is_note = |k: usize| pl.notes.iter().any(|(n, _)| *n == k);
+        let glued = |k: usize| is_note(k) || k.checked_sub(1).is_some_and(is_note);
+        while b > c0 + 1 && glued(b) {
             b -= 1;
             while b > c0 + 1 && pl.clusters.get(b).is_some_and(|c| glyphless(b) || !pl.is_edit_boundary(c.start)) {
                 b -= 1;
             }
+        }
+        // Only the line's first letter is left before the mark: the mark, and the cluster after it,
+        // stay on this line instead, running past its edge (a column a letter or two wide).
+        if glued(b) && b <= c0 + 1 && !self.skip {
+            let mut k = j;
+            while k < bk.n && glued(k) && pl.clusters.get(k).is_some_and(|c| !matches!(c.kind, ClKind::Space | ClKind::Tab)) {
+                self.xs.push(self.x);
+                self.x += pl.clusters.get(k).map_or(0.0, |c| c.adv);
+                k += 1;
+            }
+            self.j = k;
+            return;
         }
         if b < j
             && b > c0
