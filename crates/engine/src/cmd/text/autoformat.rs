@@ -69,7 +69,9 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     typing_options(s, text);
     // A selected text form field's result is not the paragraph's text: smart quotes
     // would read the field object (or the text before it) instead of the result (#5525).
-    let in_form_field = crate::cmd::selected_text_form_field(s).is_some();
+    // With Track Changes on the fill declines and the tracked replacement runs instead,
+    // where smart quotes behave as they always did.
+    let in_form_field = !s.doc.settings.track_changes && crate::cmd::selected_text_form_field(s).is_some();
     let smart_quote = if raw || in_form_field { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
     let effect = type_text_effect(s, smart_quote.as_deref().unwrap_or(text))?;
