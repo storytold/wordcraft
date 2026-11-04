@@ -29,6 +29,7 @@ pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod ime_text;
+pub mod kept;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -39,6 +40,7 @@ pub mod math_latex;
 pub mod math_linear;
 pub mod math_symbols;
 pub mod numbering;
+pub mod odf_profile;
 pub mod para;
 pub mod props;
 pub mod resolve;
@@ -135,6 +137,10 @@ pub struct Document {
     /// by `==`).
     #[serde(skip)]
     media_index: MediaIndex,
+    /// Markup kept from the file it was opened from, for writing back what isn't edited (see
+    /// [`kept`]); never saved, ignored by `==`.
+    #[serde(skip)]
+    pub kept: kept::Kept,
 }
 
 #[cfg(test)]

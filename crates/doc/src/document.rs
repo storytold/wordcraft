@@ -77,6 +77,7 @@ impl Document {
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
+            kept: Default::default(),
         }
     }
 
@@ -154,6 +155,7 @@ impl Document {
             passthrough,
             glossary,
             media_index: _,
+            kept: _,
         } = self;
         let Document {
             body: other_body,
@@ -174,6 +176,7 @@ impl Document {
             passthrough: other_passthrough,
             glossary: other_glossary,
             media_index: _,
+            kept: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
@@ -735,6 +738,52 @@ impl Document {
                     });
                 }
             }
+        }
+    }
+
+    /// [`Document::objects_mut`] for filling in what an object shows from what it is (a chart's
+    /// drawing from its data), which doesn't change the document: the markup kept as read for
+    /// the paragraphs and tables holding them (see [`crate::kept`]) follows them.
+    pub fn fill_objects(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
+        // The stories (text boxes', notes') as read before, when filling changes one: they stay
+        // as read after it, so the paragraphs showing them keep their markup.
+        let holds = |b: &Arc<Block>| {
+            let mut any = false;
+            edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+            any
+        };
+        let as_read: Vec<u32> = match self.kept.get() {
+            Some(k) if !k.story_fps.is_empty() && self.parts.values().any(|p| p.blocks.iter().any(holds)) => {
+                k.story_fps.iter().filter(|(id, fp)| **fp == crate::kept::story_fingerprint(self, **id)).map(|(id, _)| *id).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut moves: Vec<crate::kept::Moved> = Vec::new();
+        let mut stories: Vec<&mut Blocks> = vec![&mut self.body];
+        stories.extend(self.parts.values_mut().map(|p| &mut p.blocks));
+        for blocks in stories {
+            for b in blocks.iter_mut() {
+                let mut any = false;
+                edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+                if !any {
+                    continue;
+                }
+                let before = crate::kept::identities(b);
+                edit::each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                    if p.objects.iter().any(wants) {
+                        p.objects.iter_mut().filter(|o| wants(o)).for_each(&mut *f);
+                        p.touch();
+                    }
+                });
+                moves.push((before, crate::kept::identities(b)));
+            }
+        }
+        let refreshed: Vec<(u32, u64)> = as_read.into_iter().map(|id| (id, crate::kept::story_fingerprint(self, id))).collect();
+        if let Some(k) = self.kept.get_mut() {
+            for (before, after) in moves {
+                k.follow(&before, &after);
+            }
+            k.story_fps.extend(refreshed);
         }
     }
 
