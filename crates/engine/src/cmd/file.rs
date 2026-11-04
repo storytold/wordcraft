@@ -147,7 +147,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
             .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "linkTarget"?: string | null} | null (removes)}}; text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | {"value": string, "type"?: "text" | "number" | "date" | "yesno" (default text), "linkTarget"?: string | null} | null (removes)}}; a number is a whole number in i32 (stored vt:i4) or any other finite number (vt:r8), a date is YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (vt:filetime), yes/no is true/false/yes/no (vt:bool); text values and bookmark targets are at most 1 MiB; a string keeps an existing target, an object replaces it (omitted/null target unlinks)"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
@@ -450,6 +450,8 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LinkedCustomText<'a> {
     value: &'a str,
+    #[serde(rename = "type", default)]
+    kind: Option<&'a str>,
     #[serde(borrow)]
     link_target: Option<&'a str>,
 }
@@ -471,24 +473,18 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         let Some(m) = custom.as_object() else {
             return Err(CmdError::Params("`custom` must be an object of name → text, linked text value, or null".into()));
         };
-        // Removals first: a case-only rename sends the old spelling as null and the new one
-        // with its value, and `set_custom_prop` matches names case-insensitively, so setting
-        // first would keep the old spelling (object keys are sorted, either spelling may lead).
-        for (name, val) in m {
-            if val.is_null() {
-                s.doc.remove_custom_prop(name);
-            }
-        }
+        // Validate every entry before changing anything, so a refused value sets nothing.
+        let mut sets = Vec::new();
         for (name, val) in m {
             let bad_value =
                 || CmdError::Params(format!("custom property `{name}` must be text (≤ {MAX_CUSTOM_VALUE} bytes), a linked text value, or null"));
-            let (value, target) = match val {
+            let (value, kind, target) = match val {
                 // Removal also accepts names longer than today's limit (#2982).
                 Value::Null => continue,
-                Value::String(value) => (value.as_str(), None),
+                Value::String(value) => (value.as_str(), None, None),
                 Value::Object(_) => {
                     let linked: LinkedCustomText<'_> = serde::Deserialize::deserialize(val).map_err(|_| bad_value())?;
-                    (linked.value, Some(linked.link_target))
+                    (linked.value, linked.kind, Some(linked.link_target))
                 }
                 _ => return Err(bad_value()),
             };
@@ -501,7 +497,25 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             if target.flatten().is_some_and(|t| t.len() > MAX_CUSTOM_VALUE) {
                 return Err(CmdError::Params(format!("custom property bookmark targets are at most {MAX_CUSTOM_VALUE} bytes")));
             }
-            s.doc.set_custom_prop(name, value);
+            let ty = match kind {
+                None => CustomType::Text,
+                Some(k) => CustomType::from_id(k)
+                    .ok_or_else(|| CmdError::Params(format!("custom property `{name}` has an unknown type `{k}` (text, number, date or yesno)")))?,
+            };
+            let (kind, stored) = parse_custom_value(ty, value)
+                .map_err(|_| CmdError::Params(format!("custom property `{name}`: `{value}` is not a valid {} value", ty.id())))?;
+            sets.push((name, kind, stored, target));
+        }
+        // Removals first: a case-only rename sends the old spelling as null and the new one
+        // with its value, and `set_custom_prop_typed` matches names case-insensitively, so setting
+        // first would keep the old spelling (object keys are sorted, either spelling may lead).
+        for (name, val) in m {
+            if val.is_null() {
+                s.doc.remove_custom_prop(name);
+            }
+        }
+        for (name, kind, value, target) in sets {
+            s.doc.set_custom_prop_typed(name, kind, &value);
             if let Some(target) = target
                 && let Some(prop) = s.doc.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
             {
@@ -514,6 +528,119 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         o.insert("custom".into(), serde_json::to_value(&s.doc.custom_props).unwrap_or(Value::Null));
     }
     Ok(out)
+}
+
+/// The value types of Word's Custom properties tab, in its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CustomType {
+    Text,
+    Date,
+    Number,
+    YesNo,
+}
+
+impl CustomType {
+    /// Every type, in the order Word's Type box lists them.
+    pub const ALL: [CustomType; 4] = [CustomType::Text, CustomType::Date, CustomType::Number, CustomType::YesNo];
+
+    /// The `type` id `file.properties` takes.
+    pub fn id(self) -> &'static str {
+        match self {
+            CustomType::Text => "text",
+            CustomType::Date => "date",
+            CustomType::Number => "number",
+            CustomType::YesNo => "yesno",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    /// The type a stored OOXML variant kind is shown and edited as, if it has one (ECMA-376
+    /// Part 1 §22.4). `None` for kinds kept verbatim (`raw`, `cy`, `error`, `clsid`, …).
+    pub fn of_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "lpwstr" | "lpstr" | "bstr" => Some(CustomType::Text),
+            "i1" | "i2" | "i4" | "i8" | "int" | "ui1" | "ui2" | "ui4" | "ui8" | "uint" | "r4" | "r8" | "decimal" => Some(CustomType::Number),
+            "filetime" | "date" => Some(CustomType::Date),
+            "bool" => Some(CustomType::YesNo),
+            _ => None,
+        }
+    }
+}
+
+/// A custom property value typed as `ty`, as its stored OOXML variant kind and value:
+/// text as given (`lpwstr`); a whole number within `i32` (`i4`) or another finite number
+/// (`r8`); a date `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (`filetime`, midnight UTC for a bare
+/// date); yes/no from `true`/`false`/`yes`/`no` in any case (`bool`). `Err(())` when the value
+/// doesn't match the type. The Custom Properties dialog validates with it too.
+#[allow(clippy::result_unit_err)]
+pub fn parse_custom_value(ty: CustomType, value: &str) -> Result<(&'static str, String), ()> {
+    let v = value.trim();
+    match ty {
+        CustomType::Text => Ok(("lpwstr", value.to_string())),
+        CustomType::Number => {
+            let n: f64 = v.parse().map_err(|_| ())?;
+            if !n.is_finite() {
+                return Err(());
+            }
+            if n.fract() == 0.0 && n >= f64::from(i32::MIN) && n <= f64::from(i32::MAX) {
+                Ok(("i4", (n as i32).to_string()))
+            } else {
+                Ok(("r8", n.to_string()))
+            }
+        }
+        CustomType::Date => {
+            let (date, time) = match v.split_once('T') {
+                Some((d, t)) => (d, Some(t)),
+                None => (v, None),
+            };
+            if !valid_date(date) {
+                return Err(());
+            }
+            match time {
+                None => Ok(("filetime", format!("{date}T00:00:00Z"))),
+                Some(t) if valid_time(t) => Ok(("filetime", v.to_string())),
+                Some(_) => Err(()),
+            }
+        }
+        CustomType::YesNo => match v.to_ascii_lowercase().as_str() {
+            "true" | "yes" => Ok(("bool", "true".into())),
+            "false" | "no" => Ok(("bool", "false".into())),
+            _ => Err(()),
+        },
+    }
+}
+
+/// `width` ASCII digits as a number.
+fn digits(s: &str, width: usize) -> Option<u32> {
+    (s.len() == width && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten()
+}
+
+/// A real calendar date `YYYY-MM-DD` (leap years respected).
+fn valid_date(s: &str) -> bool {
+    let mut parts = s.split('-');
+    let (Some(y), Some(m), Some(d), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else { return false };
+    let (Some(y), Some(m), Some(d)) = (digits(y, 4), digits(m, 2), digits(d, 2)) else { return false };
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&d)
+}
+
+/// A UTC time `HH:MM:SSZ`.
+fn valid_time(s: &str) -> bool {
+    let Some(s) = s.strip_suffix('Z') else { return false };
+    let mut parts = s.split(':');
+    let (Some(h), Some(m), Some(sec), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else { return false };
+    matches!((digits(h, 2), digits(m, 2), digits(sec, 2)), (Some(h), Some(m), Some(sec)) if h < 24 && m < 60 && sec < 60)
 }
 
 /// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
