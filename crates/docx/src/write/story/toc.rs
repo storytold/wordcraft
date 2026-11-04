@@ -1,4 +1,4 @@
-use super::*;
+use super::{Blocks, InlineObject, W, Writer};
 
 impl Writer<'_> {
     pub(super) fn update_toc_before_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: bool, w: &mut W) {

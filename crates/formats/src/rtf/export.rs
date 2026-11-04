@@ -1,6 +1,6 @@
 use super::date::{iso_to_dttm, rtf_date};
 use super::styles::{style_fmt, styled};
-use super::*;
+use super::{Align, Document, FBlock, FTable, Fmt, Inline, Kind, Meta, Para, RevMark, Rgb, VAlign, model};
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -341,9 +341,19 @@ impl Writer {
     }
 
     fn picture(&mut self, img: &model::Img, out: &mut String) {
+        // A metafile's `\picw`/`\pich` are its size in 0.01 mm (#4259).
+        let hundredths = ((img.w * 2540.0 / 72.0).round() as i64, (img.h * 2540.0 / 72.0).round() as i64);
         let (data, blip) = match img.ext.as_str() {
             "png" => (img.data.to_vec(), "\\pngblip"),
             "jpeg" | "jpg" => (img.data.to_vec(), "\\jpegblip"),
+            // The bytes decide, as on reading: an EMF starts with its header record, type 1 (a
+            // DOCX may store one under `.wmf`).
+            "emf" | "wmf" if img.data.starts_with(&[1, 0, 0, 0]) => (img.data.to_vec(), "\\emfblip"),
+            // RTF holds a WMF without its 22-byte placeable header.
+            "emf" | "wmf" => {
+                let data = if img.data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) { img.data.get(22..).unwrap_or_default() } else { img.data.as_slice() };
+                (data.to_vec(), "\\wmetafile8")
+            }
             _ => {
                 // Re-encode other formats as PNG, bounding the decode so a tiny file declaring
                 // huge dimensions can't exhaust memory on export.
@@ -355,7 +365,14 @@ impl Writer {
                 (buf, "\\pngblip")
             }
         };
-        let (pw, ph) = model::image_px(&data).unwrap_or((1, 1));
+        // A placeable header with nothing after it leaves no picture to write.
+        if data.is_empty() {
+            return;
+        }
+        let (pw, ph) = match blip {
+            "\\emfblip" | "\\wmetafile8" => hundredths,
+            _ => model::image_px(&data).map(|(a, b)| (i64::from(a), i64::from(b))).unwrap_or((1, 1)),
+        };
         out.push_str(&format!(
             "{{\\pict{blip}\\picw{pw}\\pich{ph}\\picwgoal{}\\pichgoal{}\n",
             (img.w * 20.0).round() as i64,

@@ -1061,63 +1061,8 @@ pub fn apply_structure(root: &mut Arg, pos: &MathPos, level: usize, action: &str
             *kind = ScriptKind::SubSup;
             here(if action == "script.addSup" { 2 } else { 1 })
         }
-        (MNode::Matrix { rows, .. }, a) if a.starts_with("matrix.") => {
-            let ncols = rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
-            // Row and column of the caret's cell.
-            let mut k = 0;
-            let mut rc = (0, 0);
-            for (r, row) in rows.iter().enumerate() {
-                if c < k + row.len() {
-                    rc = (r, c - k);
-                    break;
-                }
-                k += row.len();
-            }
-            let (r, col) = rc;
-            let (mut tr, mut tc) = (r, col);
-            match a {
-                "matrix.rowAbove" | "matrix.rowBelow" if rows.len() < 1000 => {
-                    let at = if a == "matrix.rowAbove" { r } else { r + 1 };
-                    rows.insert(at.min(rows.len()), vec![Vec::new(); ncols]);
-                    tr = at;
-                }
-                "matrix.colBefore" | "matrix.colAfter" if ncols < 64 => {
-                    let at = if a == "matrix.colBefore" { col } else { col + 1 };
-                    for row in rows.iter_mut() {
-                        row.insert(at.min(row.len()), Vec::new());
-                    }
-                    tc = at;
-                }
-                "matrix.deleteRow" if rows.len() > 1 => {
-                    rows.remove(r.min(rows.len() - 1));
-                    tr = r.min(rows.len() - 1);
-                }
-                "matrix.deleteCol" if ncols > 1 => {
-                    for row in rows.iter_mut() {
-                        if col < row.len() {
-                            row.remove(col);
-                        }
-                    }
-                    tc = col.min(ncols - 2);
-                }
-                _ => {}
-            }
-            let flat: usize = rows.iter().take(tr).map(|x| x.len()).sum::<usize>() + tc;
-            here(flat)
-        }
-        (MNode::EqArr { rows }, a) if a.starts_with("eqarr.") => match a {
-            "eqarr.rowAbove" | "eqarr.rowBelow" if rows.len() < 1000 => {
-                let at = if a == "eqarr.rowAbove" { c } else { c + 1 }.min(rows.len());
-                rows.insert(at, Vec::new());
-                here(at)
-            }
-            "eqarr.deleteRow" if rows.len() > 1 => {
-                let k = c.min(rows.len() - 1);
-                rows.remove(k);
-                here(k.min(rows.len() - 1))
-            }
-            _ => inner,
-        },
+        (MNode::Matrix { rows, .. }, a) if a.starts_with("matrix.") => apply_matrix_action(rows, c, a, &here),
+        (MNode::EqArr { rows }, a) if a.starts_with("eqarr.") => apply_equation_array_action(rows, c, a, &here, inner),
         (MNode::GroupChr { top, chr, .. }, "group.flip") => {
             *top = !*top;
             *chr = match *chr {
@@ -1139,6 +1084,66 @@ pub fn apply_structure(root: &mut Arg, pos: &MathPos, level: usize, action: &str
     };
     tidy(root);
     Some(clamp(root, &out))
+}
+
+fn apply_matrix_action(rows: &mut Vec<Vec<Arg>>, caret: usize, action: &str, here: &impl Fn(usize) -> MathPos) -> MathPos {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let (mut row_index, mut column) = (0, 0);
+    let mut offset = 0;
+    for (index, row) in rows.iter().enumerate() {
+        if caret < offset + row.len() {
+            row_index = index;
+            column = caret - offset;
+            break;
+        }
+        offset += row.len();
+    }
+    let (mut target_row, mut target_column) = (row_index, column);
+    match action {
+        "matrix.rowAbove" | "matrix.rowBelow" if rows.len() < 1000 => {
+            let at = if action == "matrix.rowAbove" { row_index } else { row_index + 1 };
+            rows.insert(at.min(rows.len()), vec![Vec::new(); columns]);
+            target_row = at;
+        }
+        "matrix.colBefore" | "matrix.colAfter" if columns < 64 => {
+            let at = if action == "matrix.colBefore" { column } else { column + 1 };
+            for row in rows.iter_mut() {
+                row.insert(at.min(row.len()), Vec::new());
+            }
+            target_column = at;
+        }
+        "matrix.deleteRow" if rows.len() > 1 => {
+            rows.remove(row_index.min(rows.len() - 1));
+            target_row = row_index.min(rows.len() - 1);
+        }
+        "matrix.deleteCol" if columns > 1 => {
+            for row in rows.iter_mut() {
+                if column < row.len() {
+                    row.remove(column);
+                }
+            }
+            target_column = column.min(columns - 2);
+        }
+        _ => {}
+    }
+    let flat = rows.iter().take(target_row).map(Vec::len).sum::<usize>() + target_column;
+    here(flat)
+}
+
+fn apply_equation_array_action(rows: &mut Vec<Arg>, caret: usize, action: &str, here: &impl Fn(usize) -> MathPos, inner: MathPos) -> MathPos {
+    match action {
+        "eqarr.rowAbove" | "eqarr.rowBelow" if rows.len() < 1000 => {
+            let at = (if action == "eqarr.rowAbove" { caret } else { caret + 1 }).min(rows.len());
+            rows.insert(at, Vec::new());
+            here(at)
+        }
+        "eqarr.deleteRow" if rows.len() > 1 => {
+            let index = caret.min(rows.len() - 1);
+            rows.remove(index);
+            here(index.min(rows.len() - 1))
+        }
+        _ => inner,
+    }
 }
 
 /// Set the limit placement of n-ary operators (`None`: Word's default by operator).

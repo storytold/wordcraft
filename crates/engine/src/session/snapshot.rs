@@ -1,6 +1,6 @@
 use super::doc_state::{MAX_UNDO, Selection, doc_bib_style};
 use super::snapshot_types::{EditSnapshot, SNAPSHOT_HEAD};
-use super::*;
+use super::{Document, Session, StoryRef, next_document_id};
 
 impl Session {
     /// Replace the document (open/new).
@@ -258,7 +258,7 @@ impl Session {
         }
         self.rev = rev;
         for slot in &mut self.layout {
-            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+            if slot.as_ref().is_some_and(|l| l.0.0 != rev) {
                 *slot = None;
             }
         }
