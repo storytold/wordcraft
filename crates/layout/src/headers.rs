@@ -109,10 +109,63 @@ impl Linked {
 /// Header rows are re-placed on every page a table spills onto, so a table is O(header items ×
 /// pages) placed items — and an exact-height header row keeps all its overflowing text without
 /// growing, so a few KB of document could otherwise fill memory. Once this many items (a row
-/// counts at least one) have been repeated across a table, later pages carry no header rows;
+/// counts at least one) have been repeated across the whole layout (every table together), later pages carry no header rows;
 /// pagination still finishes. Far above any real table (three ordinary header rows over some
 /// 5 000 pages).
 pub(crate) const MAX_HEADER_ITEMS: usize = 500_000;
+
+#[cfg(test)]
+thread_local! {
+    /// A smaller [`MAX_HEADER_ITEMS`] for tests, so a short table can reach it.
+    pub(crate) static HEADER_ITEMS_CAP: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_HEADER_ITEMS) };
+}
+
+/// [`MAX_HEADER_ITEMS`], or the test cap ([`HEADER_ITEMS_CAP`]) in tests.
+pub(crate) fn header_items_cap() -> usize {
+    #[cfg(test)]
+    return HEADER_ITEMS_CAP.with(|c| c.get());
+    #[cfg(not(test))]
+    MAX_HEADER_ITEMS
+}
+
+/// What re-placing `it` costs against [`MAX_HEADER_ITEMS`] (and laying it out against
+/// [`textbox::MAX_FLOW_WORK`]): one, and for a clipped group (a floating Drawing Canvas) every
+/// member below it, nested groups included, as placing clones them all. Counted with an explicit
+/// stack, and counting stops once the total passes `limit` (the result is then just over it), so
+/// neither deep nesting nor a huge group makes the count itself costly.
+pub(crate) fn placed_cost(it: &Placed, limit: usize) -> usize {
+    placed_cost_by(it, limit, |_| 1)
+}
+
+/// [`placed_cost`] with each item (the group itself and every member) costing `cost` of it.
+pub(crate) fn placed_cost_by(it: &Placed, limit: usize, cost: impl Fn(&Placed) -> usize) -> usize {
+    let mut count = 0usize;
+    let mut stack: Vec<std::slice::Iter<Placed>> = Vec::new();
+    let mut next = Some(it);
+    loop {
+        let cur = match next.take() {
+            Some(c) => c,
+            None => loop {
+                match stack.last_mut() {
+                    None => return count,
+                    Some(iter) => match iter.next() {
+                        Some(c) => break c,
+                        None => {
+                            stack.pop();
+                        }
+                    },
+                }
+            },
+        };
+        count = count.saturating_add(cost(cur));
+        if count > limit {
+            return count;
+        }
+        if let Placed::Clip { items, .. } = cur {
+            stack.push(items.iter());
+        }
+    }
+}
 
 /// Header tables can displace a non-overlapping body table. Page-positioned drawings keep
 /// their own wrapping rules, so only table areas are retained from the header layout.
@@ -143,7 +196,7 @@ pub(crate) fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let Some(part) = ctx.doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
     let base = hf.defining_width(false, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
@@ -298,9 +351,9 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+            let frame = PageFrame { sect, margin_top: Some(page.body.y), origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
             let base = hf.defining_width(false, page.section, hid);
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {
@@ -315,11 +368,11 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
             let blocks = part.blocks.clone();
             let base = hf.defining_width(true, page.section, fid);
             // The footer's height fixes where it sits, which page-relative floats need.
-            let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (h, ..) = with_pin(ctx, id, sect, page.number, None, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, None)).height)
             });
-            let frame = PageFrame { sect, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let frame = PageFrame { sect, margin_top: None, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
+            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_top, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
             });
             for it in &mut items {
