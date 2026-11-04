@@ -366,6 +366,18 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     }
 }
 
+/// Whether to force winit's X11 backend (XWayland on a Wayland desktop). `var` reads the
+/// environment. A Wayland session stays native unless `WORDCRAFT_X11` asks for X11 (#2939);
+/// `WORDCRAFT_WAYLAND` keeps meaning native Wayland.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn use_x11(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |k: &str| var(k).is_some_and(|v| !v.is_empty() && v != "0");
+    if set("WORDCRAFT_WAYLAND") || var("DISPLAY").is_none() {
+        return false;
+    }
+    set("WORDCRAFT_X11") || var("WAYLAND_DISPLAY").is_none()
+}
+
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
 /// geometry, opens requested documents or the Start screen, starts the control server when
 /// asked, and runs the eframe event loop.
@@ -460,10 +472,11 @@ fn main() -> eframe::Result {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
+    // On a Wayland session the window stays native: through XWayland it flickered black and white
+    // and lagged behind its size while being resized (#2939). File drops work natively through
+    // the winit fork's wl_data_device support; WORDCRAFT_X11=1 still runs through XWayland.
+    // Without a Wayland session, X11 is used whenever there is a display.
+    if use_x11(|k| std::env::var_os(k)) {
         options.event_loop_builder = Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();
@@ -660,5 +673,27 @@ mod prefs_tests {
         assert!(write_prefs(&path, b"newer").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod backend_tests {
+    use super::use_x11;
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).into())
+    }
+
+    #[test]
+    fn a_wayland_session_stays_native_unless_x11_is_asked_for() {
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1")])));
+        assert!(use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1")])));
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1"), ("WORDCRAFT_WAYLAND", "1")])));
+    }
+
+    #[test]
+    fn without_a_wayland_session_x11_is_used_when_there_is_a_display() {
+        assert!(use_x11(env(&[("DISPLAY", ":0")])));
+        assert!(!use_x11(env(&[])));
     }
 }
