@@ -108,10 +108,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                     if word == "info" {
                         r.info_depth = Some(r.depth());
                     }
-                    if r.skip_chars > 0
-                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
-                        && !matches!(word, "par" | "pard" | "cell" | "row")
-                    {
+                    if r.skip_chars > 0 && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl) {
                         r.skip_chars -= 1;
                         first_in_group = false;
                         continue;
