@@ -1147,3 +1147,21 @@ fn change_at_selection_finds_the_change_accept_would_resolve() {
     s.run("review.accept", &json!({})).unwrap();
     assert!(!change_at_selection(&s), "nothing left once accepted");
 }
+
+/// A range across a paragraph mark whose only tracked change is its section break's formatting:
+/// Accept resolves it with the mark, so the context menu offers Accept and Reject there too.
+#[test]
+fn change_at_selection_sees_a_section_break_change_on_a_mark_in_the_range() {
+    use super::change_at_selection;
+    use crate::Selection;
+    use wordcraft_doc::props::PropChange;
+    use wordcraft_doc::{Pos, RevisionKind, SectionProps, StoryRef};
+    let mut s = Session::new(Document::from_text("one\ntwo"));
+    let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.section = Some(Box::new(SectionProps { fmt_change: PropChange::boxed(rev, SectionProps::default()), ..Default::default() }));
+    s.sel = Selection { anchor: Pos::body(0, 1), focus: Pos::body(1, 1) };
+    assert!(change_at_selection(&s), "a range across the section break's mark");
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 2) };
+    assert!(!change_at_selection(&s), "a range that stops before the mark");
+}

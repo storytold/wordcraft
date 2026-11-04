@@ -300,7 +300,11 @@ pub fn change_at_selection(s: &Session) -> bool {
         let to = if *path == b.path { b.off } else { p.len() };
         let run = p.run_ranges().any(|(r, c)| r.start < to && from < r.end && (c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some()));
         // As in resolve_sel: the mark when the range goes on past it, the formatting when it has text.
-        let mark = *path != b.path && (p.mark.ins.is_some() || p.mark.del.is_some() || p.mark.fmt_change.is_some());
+        let mark = *path != b.path
+            && (p.mark.ins.is_some()
+                || p.mark.del.is_some()
+                || p.mark.fmt_change.is_some()
+                || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()));
         let props = (*path != b.path || to > from) && (p.props.fmt_change.is_some() || p.props.num_change.is_some());
         run || mark || props || cell_has_change(s, a.story, path)
     })
