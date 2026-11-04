@@ -14,6 +14,7 @@ mod documents;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod paragraph_sort;
 mod revision_checks;
 mod typing;
 mod wordart;
