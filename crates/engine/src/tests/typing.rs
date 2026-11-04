@@ -1485,6 +1485,22 @@ fn shading_the_heading_gives_is_removed() {
 }
 
 #[test]
+fn text_formatted_like_a_heading_that_wraps_or_indents_otherwise_stays_as_typed() {
+    // A heading that breaks Latin words at any character, or mirrors its indents, lays the text
+    // out differently.
+    let customized: [(&str, fn(&mut wordcraft_doc::props::ParaProps)); 2] =
+        [("word wrap", |p| p.word_wrap = Some(false)), ("mirror indents", |p| p.mirror_indents = Some(true))];
+    for (what, change) in customized {
+        let mut s = typed_like_heading("Results", 1);
+        if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+            change(&mut one.para);
+        }
+        typ(&mut s, "\n");
+        assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{what}: {:?}", styled(&s));
+    }
+}
+
+#[test]
 fn text_formatted_like_a_numbered_heading_stays_as_typed() {
     // Heading 1 numbers its paragraphs, so giving the text that style would add a number.
     let mut s = typed_like_heading("Results", 1);

@@ -369,19 +369,13 @@ pub(super) fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result
 /// The heading levels Define styles based on your formatting compares a paragraph with.
 const DEFINED_HEADINGS: std::ops::RangeInclusive<u8> = 1..=3;
 
-/// How a paragraph's spacing, indents, alignment, borders and shading look.
-type ParaLook = (
-    (wordcraft_doc::props::Align, f32, f32, f32, [f32; 3]),
-    (f32, f32, bool, bool, wordcraft_doc::props::LineSpacing),
-    (bool, Option<wordcraft_doc::props::Rgb>, Option<wordcraft_doc::props::Borders>, bool),
-);
-
-fn para_look(r: &wordcraft_doc::resolve::ResolvedPara) -> ParaLook {
-    (
-        (r.align, r.indent_left, r.indent_right, r.indent_first, r.indent_chars),
-        (r.space_before, r.space_after, r.before_auto, r.after_auto, r.line_spacing),
-        (r.contextual_spacing, r.shading, r.borders, r.bidi),
-    )
+/// How a paragraph is laid out: its resolved formatting without the style name, the outline
+/// level, the list number, the keep-with-next and keep-lines-together settings a heading style
+/// gives, and the tab stops (the text holds no tab).
+fn para_look(r: &wordcraft_doc::resolve::ResolvedPara) -> wordcraft_doc::resolve::ResolvedPara {
+    let mut r = r.clone();
+    (r.style, r.outline_level, r.numbering, r.keep_next, r.keep_lines, r.tabs) = (String::new(), None, None, false, false, Vec::new());
+    r
 }
 
 /// How text in a paragraph of style `style` with the run properties `c` looks: its resolved
