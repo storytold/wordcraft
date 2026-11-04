@@ -1,5 +1,6 @@
 use super::lists::touch_all;
 use super::{Block, CmdError, CmdResult, NumRef, ParaProps, Pos, Session, SortKey, Value, p, sel_result, sort_key};
+use wordcraft_doc::InlineObject;
 
 /// Move Paragraph Up / Down (Alt+Shift+Up/Down, ⌃⇧↑/↓ on macOS): the paragraphs the selection
 /// touches swap places with the paragraph above or below, in their own container (the story or
@@ -182,6 +183,24 @@ pub(super) fn sort(s: &mut Session, v: &Value) -> CmdResult {
     // A section's page setup belongs to its boundary, not to the paragraph's sort key.
     if slice.iter().any(|b| b.as_para().is_some_and(|p| p.section.is_some())) {
         return Err(CmdError::Failed("select paragraphs without section breaks to sort".into()));
+    }
+    // A control's markers must travel together. Local pairs and paragraphs inside a larger
+    // control are safe, but moving a boundary apart loses the control when the file is saved.
+    if slice.iter().filter_map(|b| b.as_para()).any(|p| {
+        let mut depth = 0usize;
+        for object in &p.objects {
+            match object {
+                InlineObject::ControlStart { .. } => depth = depth.saturating_add(1),
+                InlineObject::ControlEnd => {
+                    let Some(remaining) = depth.checked_sub(1) else { return true };
+                    depth = remaining;
+                }
+                _ => {}
+            }
+        }
+        depth != 0
+    }) {
+        return Err(CmdError::Failed("select paragraphs without cross-paragraph content control boundaries to sort".into()));
     }
     let mut keyed: Vec<_> =
         slice.iter().map(|b| (natural_key(&b.as_para().map(|p| p.plain_text()).unwrap_or_default(), lang.as_deref()), b.clone())).collect();
