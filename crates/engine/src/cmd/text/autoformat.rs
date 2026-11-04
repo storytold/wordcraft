@@ -315,10 +315,11 @@ pub(super) fn heading_line(s: &Session, at: &Pos) -> Option<u8> {
         return None;
     }
     let Some(Block::Para(prev)) = s.doc.block(at.story, &at.path.with_last(i - 1)) else { return None };
-    // Normal and outside a list, also one the style sheet gives (a numbered Normal style).
+    // Normal and outside a list, also one the style sheet gives (a numbered Normal style), with
+    // no outline level: resolving drops the body-text level 9 and above.
     let plain = |p: &wordcraft_doc::Paragraph| {
         let r = s.doc.styles.resolve_para(&p.props);
-        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none_or(|l| l >= 9)
+        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none()
     };
     let text = prev.text.trim_start_matches('\t');
     let tabs = prev.text.len() - text.len();
@@ -357,14 +358,8 @@ pub(super) fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result
     crate::cmd::para::set_heading(s, at.story, &prev, Some(level))?;
     // Removed tabs change the text, and the formatting comparison after the command only looks
     // at paragraphs that keep theirs, so the style change is recorded here.
-    if s.doc.settings.track_changes
-        && s.prefs.markup.track_formatting
-        && s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text && p.props.fmt_change.is_none())
-    {
-        let rev = crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Format);
-        let p = s.doc.para_mut(at.story, &prev)?;
-        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.props.formatting());
-        p.touch();
+    if s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text) {
+        crate::cmd::fmt_revisions::record_para_props(s, at.story, &prev, &before.props)?;
     }
     s.sel = Selection::caret(at.clone());
     Ok(())
@@ -398,14 +393,8 @@ pub(super) fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Resu
             p.touch();
             // The split changes the block count, and the formatting comparison after the command
             // skips a container whose block count changed, so the border is recorded here.
-            if s.doc.settings.track_changes
-                && s.prefs.markup.track_formatting
-                && let Some(before) = before.filter(|b| b.fmt_change.is_none())
-            {
-                let rev = crate::cmd::new_revision(s, wordcraft_doc::RevisionKind::Format);
-                let p = s.doc.para_mut(at.story, &at.path)?;
-                p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.formatting());
-                p.touch();
+            if let Some(before) = before {
+                crate::cmd::fmt_revisions::record_para_props(s, at.story, &at.path, &before)?;
             }
             s.sel = Selection::caret(new);
         }
