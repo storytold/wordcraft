@@ -189,8 +189,11 @@ fn define_style(s: &mut Session, at: &Pos, styled: wordcraft_doc::Paragraph, und
     } else {
         None
     };
+    // The new paragraph keeps the formatting change the paragraph had before, not the style change.
+    let prior = s.doc.para_at(at).and_then(|p| p.props.fmt_change.clone());
     super::autoformat::apply_defined_style(s, at, styled)?;
     let new = split_para(s, at)?;
+    s.doc.para_mut(new.story, &new.path)?.props.fmt_change = prior;
     s.sel = Selection::caret(new);
     s.goal_x = None;
     if let Some((plain_doc, plain_sel)) = plain {

@@ -1402,10 +1402,24 @@ fn a_tracked_define_styles_change_can_be_rejected() {
     let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
     assert_eq!(p.props.style.as_deref(), Some("Heading1"));
     assert!(p.props.fmt_change.is_some(), "the style change is tracked");
+    // The new paragraph does not take the heading's formatting change.
+    let next = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert!(next.props.fmt_change.is_none() && next.mark.fmt_change.is_none(), "{:?}", next.props.fmt_change);
     run(&mut s, "review.rejectAll", json!({}));
     let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
     assert_eq!(p.props.style, None);
     assert_eq!((p.props.space_before, p.run_ranges().next().and_then(|(_, c)| c.size)), (Some(18.0), Some(20.0)), "the direct formatting is back");
+}
+
+#[test]
+fn text_formatted_like_a_numbered_heading_stays_as_typed() {
+    // Heading 1 numbers its paragraphs, so giving the text that style would add a number.
+    let mut s = typed_like_heading("Results", 1);
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.para.numbering = Some(wordcraft_doc::props::NumRef { num: 1, level: 0 });
+    }
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&s));
 }
 
 #[test]

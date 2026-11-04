@@ -411,7 +411,7 @@ fn consume_para_formatting(p: &mut wordcraft_doc::props::ParaProps) {
 /// the main text whose text, all formatted alike, looks exactly like Heading 1, 2 or 3 (font,
 /// size, color and the other character formatting, alignment, indents and spacing). Returns the
 /// paragraph with that style and without the direct formatting the style now gives, so it looks
-/// the same. A paragraph in a list, with a link, a character style, a tab, an object or a tracked
+/// the same. A heading style that numbers its paragraphs does not match. A paragraph in a list, with a link, a character style, a tab, an object or a tracked
 /// deletion, one that looks like no heading or like more than one, and any paragraph while the
 /// document limits formatting to its styles stay as typed.
 pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Paragraph> {
@@ -467,8 +467,10 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     styled.format(0, styled.len(), &consume_char_formatting).ok()?;
     consume_char_formatting(&mut styled.mark);
     styled.normalize();
-    // The paragraph must look as it did before.
-    let same = para_look(&styles.resolve_para(&styled.props)) == para_look(&resolved)
+    // The paragraph must look as it did before, without a number from the style's list.
+    let after = styles.resolve_para(&styled.props);
+    let same = para_look(&after) == para_look(&resolved)
+        && after.numbering.is_none_or(|n| n.num == 0)
         && styled.text == para.text
         && styled.run_ranges().all(|(_, c)| char_look(s, Some(&id), c) == look);
     same.then_some(styled)
