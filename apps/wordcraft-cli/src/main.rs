@@ -20,7 +20,7 @@ USAGE:
   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--confirm-damaged] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
-                                              --confirm-damaged permits replacing a damaged source file;
+                                              --confirm-damaged permits replacing a source file with parts left out;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -448,7 +448,7 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
 
 fn check_damaged_source_overwrite(session: &Session, output: &Path, confirmed: bool) -> Result<(), Failure> {
     if !confirmed && !session.doc.skipped_parts.is_empty() && session.path.as_deref().is_some_and(|source| same_file_path(source, output)) {
-        return Err("convert: refusing to replace the damaged source; review the omitted parts and pass --confirm-damaged to continue".into());
+        return Err("convert: refusing to replace the source, whose parts were left out; review them and pass --confirm-damaged to continue".into());
     }
     Ok(())
 }
@@ -761,7 +761,7 @@ fn ensure_save_completed(result: &Value, path: &str) -> Result<(), Failure> {
     if result.get("saved").and_then(Value::as_bool) == Some(false)
         && result.get("confirmationRequired").and_then(Value::as_str) == Some("damagedDocx")
     {
-        return Err(format!("refusing to replace damaged source {path}; review skipped parts and confirm the save explicitly").into());
+        return Err(format!("refusing to replace source {path}, whose parts were left out; review them and confirm the save explicitly").into());
     }
     Ok(())
 }

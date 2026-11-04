@@ -316,7 +316,8 @@ pub fn skipped_parts_warning(parts: &[String]) -> String {
         .join(", ");
     let more = parts.len().saturating_sub(3);
     let suffix = if more == 0 { String::new() } else { format!(" and {more} more") };
-    format!("Part of this file is damaged and was left out: {names}{suffix}. Check the document before you save it.")
+    // Not "damaged": a sound file can hold content in a format WordCraft can't bring in.
+    format!("Part of this file couldn't be read and was left out: {names}{suffix}. Check the document before you save it.")
 }
 
 /// Close a document with no window to ask about it (agents, headless sessions).

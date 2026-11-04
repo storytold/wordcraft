@@ -11703,7 +11703,7 @@ fn opening_a_docx_with_a_damaged_part_says_so() {
     std::fs::write(&path, &bytes).unwrap();
     let mut damaged = Session::new(wordcraft_doc::Document::new());
     let opened = run(&mut damaged, "file.open", json!({"path": path.to_string_lossy()}));
-    assert!(damaged.status.contains("damaged"), "{:?}", damaged.status);
+    assert_eq!(damaged.status, "Part of this file couldn't be read and was left out: \"word/settings.xml\". Check the document before you save it.");
     assert_eq!(damaged.doc.plain_text(StoryRef::Body), "Hello", "the text still opens");
     assert!(
         opened["skippedParts"].as_array().is_some_and(|parts| parts.iter().any(|part| part == "word/settings.xml")),
@@ -12214,6 +12214,33 @@ fn alt_chunks_open_in_place_as_word_brings_them_in() {
         let text = crate::io::open_bytes("chunk.docx", &bytes).unwrap().plain_text(StoryRef::Body);
         assert!(text.starts_with(want) && text.ends_with("End"), "{ext}: {text:?}");
     }
+}
+
+/// A chunk WordCraft can't bring in is named when the file opens, and saving over the file asks
+/// first, as for an unreadable part; one brought in says nothing (#5583).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn opening_a_docx_with_a_chunk_left_out_says_so() {
+    let dir = scratch_dir("chunk-left-out");
+    let p = |t: &str| format!(r#"<w:p><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"/>"#, p("Host"));
+    let sound = dir.join("sound.docx");
+    std::fs::write(&sound, docx_with_chunk(&body, "txt", "text/plain", b"Plain chunk")).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let opened = run(&mut s, "file.open", json!({"path": sound.to_string_lossy()}));
+    assert_eq!((s.status.as_str(), &opened["skippedParts"]), ("", &json!([])));
+
+    let path = dir.join("chunk.docx");
+    let bytes = docx_with_chunk(&body, "bin", "application/octet-stream", b"\x00\xff\x00");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let opened = run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Host");
+    assert_eq!(opened["skippedParts"], json!(["word/afchunk.bin"]));
+    assert_eq!(s.status, "Part of this file couldn't be read and was left out: \"word/afchunk.bin\". Check the document before you save it.");
+    let refused = run(&mut s, "file.save", json!({"path": path.to_string_lossy()}));
+    assert_eq!((&refused["saved"], &refused["confirmationRequired"]), (&json!(false), &json!("damagedDocx")));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the file keeps its chunk until the save is confirmed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]

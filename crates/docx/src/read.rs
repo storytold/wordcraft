@@ -337,7 +337,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
     let mut doc = r.doc;
-    doc.skipped_parts = pkg.skipped().to_vec();
+    // The package's unreadable entries first, then the chunks the reader left out.
+    doc.skipped_parts.splice(0..0, pkg.skipped().iter().cloned());
     doc.ensure_nonempty();
     Ok((doc, left, bytes, graphic))
 }

@@ -129,7 +129,9 @@ pub struct Document {
     /// The document's own building blocks (its glossary document), in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<BuildingBlock>,
-    /// Parts of the source file that could not be read and were left out; empty for a sound file.
+    /// Parts of the source file that could not be read and were left out: unreadable entries,
+    /// then content it holds in a form WordCraft can't bring in (a `w:altChunk`); empty when
+    /// everything was read.
     /// Set on open only: not saved, and not part of the file.
     #[serde(skip)]
     pub skipped_parts: Vec<String>,

@@ -1252,7 +1252,7 @@ fn confirm_damaged_save_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -
                 }
                 return true;
             }
-            Ok(_) => app.status(tl!("The damaged document was not saved.")),
+            Ok(_) => app.status(tl!("The document was not saved.")),
             Err(error) => app.status(error),
         }
     }
