@@ -3,7 +3,7 @@ use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_ri
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
-use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture};
+use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
     HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
@@ -19,8 +19,8 @@ pub(crate) struct Exporter<'a> {
     pub(crate) doc: &'a Document,
     pub(crate) lay: &'a DocLayout,
     pub(crate) opts: &'a PdfOptions,
-    /// Layout page index → output page index.
-    pub(crate) out_index: HashMap<usize, usize>,
+    /// Layout page index to the first output sheet side and its placement transform.
+    pub(crate) out_index: HashMap<usize, (usize, Fit)>,
     /// Embedded fonts by face id (`None`: krilla can't read it).
     pub(crate) fonts: HashMap<u32, (FaceRef, Option<Font>)>,
     pub(crate) font_error: Option<PdfError>,
@@ -223,6 +223,11 @@ impl Exporter<'_> {
                             // A rotated inline picture, or a rotated group holding pictures: turned as a
                             // whole, each picture tagged on its own (see `rotated_pictures`).
                             Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
+                            // A turned text box's line: still the paragraph's text. A rotated shape
+                            // without text falls to the artifacts below.
+                            Draw::Rotated { items, .. } if items.iter().any(holds_text) => {
+                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
+                            }
                             // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
                             Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                                 for d in inner {
@@ -235,7 +240,12 @@ impl Exporter<'_> {
                 }
                 Placed::Image { story, path, off, .. } => {
                     let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
-                    let role = if obj.is_some_and(InlineObject::is_decorative) { Role::Artifact(ArtifactType::Other) } else { Role::Figure };
+                    // A cell's background picture (no object of its own) is decoration too.
+                    let role = if obj.is_some_and(InlineObject::is_decorative) || *off == usize::MAX {
+                        Role::Artifact(ArtifactType::Other)
+                    } else {
+                        Role::Figure
+                    };
                     let alt = match obj {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
