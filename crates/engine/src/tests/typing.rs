@@ -1446,6 +1446,45 @@ fn a_tracked_define_styles_change_can_be_rejected() {
 }
 
 #[test]
+fn text_without_direct_formatting_stays_normal_when_a_heading_looks_like_normal() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    let normal = s.doc.styles.get("Normal").cloned().unwrap_or_default();
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.chr = normal.chr.clone();
+        let keep = (one.para.outline_level, one.para.keep_next, one.para.keep_lines);
+        one.para = normal.para.clone();
+        (one.para.outline_level, one.para.keep_next, one.para.keep_lines) = keep;
+    }
+    typ(&mut s, "Results\nNext");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| st == "Normal")), "{:?}", styled(&s));
+}
+
+#[test]
+fn shading_the_heading_gives_is_removed() {
+    use wordcraft_doc::props::Rgb;
+    let mut s = typed_like_heading("Results", 1);
+    let teal = Some(Rgb(0, 128, 128));
+    if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        one.para.shading = teal;
+        one.chr.highlight = None;
+        one.chr.shading = teal;
+    }
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    p.props.shading = teal;
+    p.format(0, 7, &|c| c.shading = teal).unwrap();
+    // The paragraph mark's own shading differs from the heading's and stays.
+    p.mark.shading = Some(Rgb(255, 0, 0));
+    p.touch();
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+    assert_eq!(p.props.shading, None);
+    assert!(p.run_ranges().all(|(_, c)| c.shading.is_none()), "{:?}", p.runs);
+    assert_eq!(p.mark.shading, Some(Rgb(255, 0, 0)));
+}
+
+#[test]
 fn text_formatted_like_a_numbered_heading_stays_as_typed() {
     // Heading 1 numbers its paragraphs, so giving the text that style would add a number.
     let mut s = typed_like_heading("Results", 1);

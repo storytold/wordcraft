@@ -282,8 +282,12 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   created and no style is changed. A paragraph in a list, of another style, with a link, a tab
   or an object, with mixed formatting, that looks like no heading or like two, Enter inside the
   text, and formatting limited to the document's styles leave it as typed
-  (`text_that_does_not_look_exactly_like_a_heading_stays_as_typed`), and so does text formatted
-  like a heading whose style numbers it (`text_formatted_like_a_numbered_heading_stays_as_typed`).
+  (`text_that_does_not_look_exactly_like_a_heading_stays_as_typed`), and so do text formatted
+  like a heading whose style numbers it (`text_formatted_like_a_numbered_heading_stays_as_typed`)
+  and text without direct formatting when a heading looks like Normal
+  (`text_without_direct_formatting_stays_normal_when_a_heading_looks_like_normal`). Shading,
+  borders and the other direct formatting the style gives are removed too
+  (`shading_the_heading_gives_is_removed`).
   ⌘Z right after brings back
   the Normal style and the direct formatting, and the Enter stays
   (`undo_right_after_define_styles_keeps_the_enter`); with Track Changes on, the change is a

@@ -394,9 +394,11 @@ fn char_look(s: &Session, style: Option<&str>, c: &wordcraft_doc::props::CharPro
 
 /// Remove the direct character formatting that a heading style gives instead.
 fn consume_char_formatting(c: &mut wordcraft_doc::props::CharProps) {
-    (c.font, c.font_cs, c.size, c.size_cs, c.kern, c.spacing, c.color) = (None, None, None, None, None, None, None);
+    (c.font, c.font_cs, c.font_ea, c.size, c.size_cs, c.kern, c.spacing, c.color) = (None, None, None, None, None, None, None, None);
     (c.bold, c.bold_cs, c.italic, c.italic_cs, c.caps, c.small_caps, c.strike, c.double_strike) = (None, None, None, None, None, None, None, None);
-    c.underline = None;
+    (c.underline, c.underline_color, c.highlight, c.shading, c.border, c.vert_align) = (None, None, None, None, None, None);
+    (c.hidden, c.scale, c.position, c.emphasis, c.ligatures, c.text_effects) = (None, None, None, None, None, None);
+    (c.outline, c.shadow, c.emboss, c.engrave) = (None, None, None, None);
 }
 
 /// Remove the direct paragraph formatting that a heading style gives instead.
@@ -404,7 +406,7 @@ fn consume_para_formatting(p: &mut wordcraft_doc::props::ParaProps) {
     (p.align, p.indent_left, p.indent_right, p.indent_first) = (None, None, None, None);
     (p.indent_left_chars, p.indent_right_chars, p.indent_first_chars) = (None, None, None);
     (p.space_before, p.space_after, p.space_before_auto, p.space_after_auto) = (None, None, None, None);
-    (p.line_spacing, p.contextual_spacing) = (None, None);
+    (p.line_spacing, p.contextual_spacing, p.shading, p.borders, p.bidi) = (None, None, None, None, None);
 }
 
 /// AutoFormat Define styles based on your formatting: Enter at the end of a Normal paragraph of
@@ -441,6 +443,17 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     if para.run_ranges().any(|(_, c)| c.del.is_some() || c.link.is_some() || c.style.is_some()) {
         return None;
     }
+    // Only manually formatted text is given a style.
+    let consumed = |c: &wordcraft_doc::props::CharProps| {
+        let mut x = c.clone();
+        consume_char_formatting(&mut x);
+        x != *c
+    };
+    let mut plain = para.props.clone();
+    consume_para_formatting(&mut plain);
+    if plain == para.props && !para.run_ranges().any(|(_, c)| consumed(c)) {
+        return None;
+    }
     let (_, first) = para.run_ranges().next()?;
     let look = char_look(s, None, first);
     if para.run_ranges().any(|(_, c)| char_look(s, None, c) != look) {
@@ -465,7 +478,12 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     styled.props.style = Some(id.clone());
     consume_para_formatting(&mut styled.props);
     styled.format(0, styled.len(), &consume_char_formatting).ok()?;
-    consume_char_formatting(&mut styled.mark);
+    // The paragraph mark loses only the formatting the style gives it in the same way.
+    let mut mark = styled.mark.clone();
+    consume_char_formatting(&mut mark);
+    if char_look(s, Some(&id), &mark) == char_look(s, None, &para.mark) {
+        styled.mark = mark;
+    }
     styled.normalize();
     // The paragraph must look as it did before, without a number from the style's list.
     let after = styles.resolve_para(&styled.props);
