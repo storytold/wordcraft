@@ -584,7 +584,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut sh.b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
-    let bt = BreakText::new(&p.text, skip);
+    let glued = note_refs_glued(p);
+    let bt = BreakText::new(&glued, skip);
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
@@ -692,6 +693,26 @@ fn collapse(pl: &mut ParaLayout) {
     // Its shading and borders would be drawn across the page at no height.
     pl.rp.shading = None;
     pl.rp.borders = None;
+}
+
+/// The paragraph's text for finding line breaks, with each note reference read as a word joiner
+/// (U+2060): Word keeps a footnote or endnote mark with the text before it ("end.¹" never leaves
+/// "¹" alone at the start of the next line, #5402) and with punctuation after it. The reference's
+/// U+FFFC has the line-break class CB, which UAX #14 breaks on both sides. A word joiner takes as
+/// many bytes in UTF-8, so offsets are unchanged; a space beside the mark still breaks after it.
+fn note_refs_glued(p: &Paragraph) -> std::borrow::Cow<'_, str> {
+    const JOINER: char = '\u{2060}';
+    if JOINER.len_utf8() != OBJ.len_utf8() || !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) {
+        return p.text.as_str().into();
+    }
+    let mut text = p.text.clone();
+    let refs: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
+    for i in refs {
+        if text.get(i..).is_some_and(|t| t.starts_with(OBJ)) {
+            text.replace_range(i..i + OBJ.len_utf8(), JOINER.encode_utf8(&mut [0; 4]));
+        }
+    }
+    text.into()
 }
 
 fn break_text<'a>(source: &'a str, skip: &[std::ops::Range<usize>]) -> (std::borrow::Cow<'a, str>, Vec<(usize, usize)>) {

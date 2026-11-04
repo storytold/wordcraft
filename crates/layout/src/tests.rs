@@ -6063,6 +6063,45 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+/// #5402: a footnote mark stays with the text before it, as in Word: at no width does a line
+/// start with a mark that follows a full stop, a closing parenthesis or a word, and the comma
+/// after a mark stays with it too. Only the space after a mark is a place to break.
+#[test]
+fn a_note_mark_stays_with_the_text_before_it() {
+    let text = "The kilns were fired twice a week (in winter). Glazes came from the coast, and the ash glaze ran thin.";
+    let mut d = Document::from_text(text);
+    // Back to front, so the earlier offsets stay put: after "thin.", after "coast", after "(in winter)."
+    let marks = [text.len(), text.find(", and").unwrap(), text.find(" Glazes").unwrap()];
+    for &at in &marks {
+        footnote(&mut d, &Pos::body(0, at), "A note.");
+    }
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap().clone();
+    let refs: Vec<usize> = p.objects_with_offsets().filter(|(_, o)| matches!(o, InlineObject::NoteRef { .. })).map(|(i, _)| i).collect();
+    assert_eq!(refs.len(), 3);
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    let mut wrapped = 0;
+    for m in 100..=430 {
+        let mut d = d.clone();
+        d.last_section.margin_right = m as f32;
+        let l = lay(&d);
+        let starts: Vec<usize> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(
+                |it| if let Placed::Lines { story: StoryRef::Body, para, l0, l1, .. } = it { Some(para.lines[*l0..*l1].to_vec()) } else { None },
+            )
+            .flatten()
+            .map(|line| line.start)
+            .collect();
+        wrapped += starts.len();
+        for r in &refs {
+            assert!(!starts.contains(r), "margin {m}: a line starts with the note mark at {r}: {:?}", &p.text[*r..]);
+            assert!(!starts.contains(&(r + obj)) || p.text[r + obj..].starts_with(' '), "margin {m}: a line starts right after the mark at {r}");
+        }
+    }
+    assert!(wrapped > 500, "{wrapped} lines");
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
