@@ -159,7 +159,7 @@ const PICKER_HEIGHT: f32 = 3.0 * 96.0 + 2.0 * 8.0;
 fn picker_row(ui: &mut Ui, columns: impl FnOnce(&mut Ui)) {
     ui.scope(|ui| {
         ui.set_max_height(PICKER_HEIGHT);
-        ui.horizontal_top(columns);
+        crate::rtl::horizontal_top(ui, columns);
     });
 }
 
@@ -169,7 +169,7 @@ pub fn picker_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SmartArtForm) -> bool {
     let theme = app.session.doc.settings.theme_colors.clone();
     let mut chosen = None;
     picker_row(ui, |ui| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(120.0);
             for cat in CATEGORIES {
                 if ui.selectable_label(f.category == cat, tl!(cat)).clicked() {
@@ -183,65 +183,69 @@ pub fn picker_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SmartArtForm) -> bool {
             }
         });
         ui.separator();
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(3.0 * 96.0 + 16.0);
             ui.set_min_height(2.0 * 96.0 + 8.0);
-            egui::Grid::new("smart_art_layouts").spacing(vec2(8.0, 8.0)).show(ui, |ui| {
-                for (k, layout) in f.shown().into_iter().enumerate() {
-                    let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::click());
-                    let on = f.layout == layout;
-                    let fill = if on {
-                        t.checked
-                    } else if resp.hovered() {
-                        t.hover
-                    } else {
-                        t.input
-                    };
-                    ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                    preview(
-                        ui.painter(),
-                        Rect::from_min_size(rect.min + vec2(14.0, 4.0), vec2(68.0, 62.0)),
-                        layout,
-                        SmartArtColors::default(),
-                        &theme,
-                        t.text_dim,
-                    );
-                    // A label wider than the tile (a long translation) breaks at its middle space.
-                    let label = tl!(layout.label());
-                    let width = |text: &str| ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_string(), regular(10.5), t.text).size().x);
-                    let lines = if width(label) <= rect.width() - 6.0 {
-                        vec![label.to_string()]
-                    } else {
-                        let split = label
-                            .match_indices(' ')
-                            .map(|(i, _)| (label[..i].to_string(), label[i + 1..].to_string()))
-                            .min_by(|a, b| width(&a.0).max(width(&a.1)).total_cmp(&width(&b.0).max(width(&b.1))));
-                        split.map_or_else(|| vec![label.to_string()], |(a, b)| vec![a, b])
-                    };
-                    for (n, line) in lines.iter().rev().enumerate() {
-                        ui.painter().text(
-                            pos2(rect.center().x, rect.bottom() - 11.0 - 12.5 * n as f32),
-                            egui::Align2::CENTER_CENTER,
-                            line,
-                            regular(10.5),
-                            t.text,
-                        );
-                    }
-                    let resp = resp.on_hover_text(label);
-                    if resp.clicked() {
-                        f.layout = layout;
-                    }
-                    if resp.double_clicked() {
-                        chosen = Some(layout);
-                    }
-                    if k % 3 == 2 {
-                        ui.end_row();
-                    }
+            let shown = f.shown();
+            crate::rtl::Table::new("smart_art_layouts").columns(0).spacing(vec2(8.0, 8.0)).show(ui, |table| {
+                for layouts in shown.chunks(3) {
+                    table.row(|r| {
+                        for layout in layouts.iter().copied() {
+                            r.cell(|ui| {
+                                let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::click());
+                                let on = f.layout == layout;
+                                let fill = if on {
+                                    t.checked
+                                } else if resp.hovered() {
+                                    t.hover
+                                } else {
+                                    t.input
+                                };
+                                ui.painter().rect(rect, 4.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+                                preview(
+                                    ui.painter(),
+                                    Rect::from_min_size(rect.min + vec2(14.0, 4.0), vec2(68.0, 62.0)),
+                                    layout,
+                                    SmartArtColors::default(),
+                                    &theme,
+                                    t.text_dim,
+                                );
+                                // A label wider than the tile (a long translation) breaks at its middle space.
+                                let label = tl!(layout.label());
+                                let width = |text: &str| ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_string(), regular(10.5), t.text).size().x);
+                                let lines = if width(label) <= rect.width() - 6.0 {
+                                    vec![label.to_string()]
+                                } else {
+                                    let split = label
+                                        .match_indices(' ')
+                                        .map(|(i, _)| (label[..i].to_string(), label[i + 1..].to_string()))
+                                        .min_by(|a, b| width(&a.0).max(width(&a.1)).total_cmp(&width(&b.0).max(width(&b.1))));
+                                    split.map_or_else(|| vec![label.to_string()], |(a, b)| vec![a, b])
+                                };
+                                for (n, line) in lines.iter().rev().enumerate() {
+                                    ui.painter().text(
+                                        pos2(rect.center().x, rect.bottom() - 11.0 - 12.5 * n as f32),
+                                        egui::Align2::CENTER_CENTER,
+                                        line,
+                                        regular(10.5),
+                                        t.text,
+                                    );
+                                }
+                                let resp = resp.on_hover_text(label);
+                                if resp.clicked() {
+                                    f.layout = layout;
+                                }
+                                if resp.double_clicked() {
+                                    chosen = Some(layout);
+                                }
+                            });
+                        }
+                    });
                 }
             });
         });
         ui.separator();
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(200.0);
             let (rect, _) = ui.allocate_exact_size(vec2(200.0, 150.0), Sense::hover());
             ui.painter().rect(rect, 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
