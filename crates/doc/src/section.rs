@@ -767,6 +767,13 @@ pub struct SectionProps {
     /// Distance from the page edge to the header / footer.
     pub header: f32,
     pub footer: f32,
+    /// The space kept between a header and the body, and between the body and a footer, points
+    /// (ODF's header and footer spacing; Word keeps none). The margin already holds the band and
+    /// its spacing, so it only moves the body once content and spacing reach past the margin.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub header_gap: f32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub footer_gap: f32,
     pub gutter: f32,
     /// Mirror margins (inside/outside) — set from the document settings.
     pub columns: Columns,
@@ -816,6 +823,11 @@ pub struct SectionProps {
     pub no_endnote: Option<bool>,
     /// Independent footnote column count (`w15:footnoteColumns`).
     pub footnote_columns: Option<u32>,
+    /// Whether its columns end balanced (an ODF section's `text:dont-balance-text-columns`):
+    /// `None` is Word's rule, balanced when a continuous section follows; `Some(true)` also at
+    /// the end of the document, `Some(false)` never.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance_columns: Option<bool>,
 }
 
 impl Default for SectionProps {
@@ -832,6 +844,8 @@ impl Default for SectionProps {
             margin_right: 72.0,
             header: 36.0,
             footer: 36.0,
+            header_gap: 0.0,
+            footer_gap: 0.0,
             gutter: 0.0,
             columns: Columns::default(),
             headers: HeaderSet::default(),
@@ -857,8 +871,13 @@ impl Default for SectionProps {
             paper_src_other: None,
             no_endnote: None,
             footnote_columns: None,
+            balance_columns: None,
         }
     }
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_horizontal(d: &crate::props::TextDirection) -> bool {
