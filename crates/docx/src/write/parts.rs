@@ -40,6 +40,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         pending_watermark: None,
         para_ids: HashMap::new(),
         pending_mark: None,
+        pending_annotation_ref: false,
         current_note: None,
         toc_hold_end: false,
         toc_field: None,
@@ -414,7 +415,10 @@ fn write_comments(
             }
             w.open("w:comment", &a);
             let blocks: Blocks = doc.parts.get(&c.part).map(|p| p.blocks.clone()).unwrap_or_default();
+            // The comment's first paragraph starts with its annotation reference mark (#3541).
+            wr.pending_annotation_ref = true;
             wr.blocks(&mut w, &blocks, &mut prels, false, 0);
+            wr.pending_annotation_ref = false;
             w.close("w:comment");
         }
         w.close("w:comments");

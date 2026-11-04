@@ -112,6 +112,8 @@ pub(crate) struct Writer<'d> {
     para_ids: HashMap<usize, String>,
     /// A note reference mark to put at the start of the next paragraph.
     pending_mark: Option<&'static str>,
+    /// Put a comment's annotation reference mark (`w:annotationRef`) at the start of the next paragraph.
+    pending_annotation_ref: bool,
     /// The note being written (is footnote, part id): its reference to itself is the mark above.
     current_note: Option<(bool, u32)>,
     /// Writing a TOC heading: its TOC field is held back so the entries become the field's result.
