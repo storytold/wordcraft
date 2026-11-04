@@ -350,6 +350,18 @@ fn symbol_takes_its_own_font() {
 }
 
 #[test]
+fn date_pictures_keep_quoted_text() {
+    // Text in single quotes is shown as it is (Word's date-time picture); two quotes are one.
+    assert_eq!(format_date_parts("H' o''clock'", 2026, 10, 21, (8, 0, 0), 0), "8 o'clock");
+    assert_eq!(format_date_parts("'Day' d 'at' h", 2026, 10, 21, (17, 0, 0), 0), "Day 21 at 5");
+    // An unclosed quote runs to the end.
+    assert_eq!(format_date_parts("yyyy 'and so", 2026, 10, 21, (0, 0, 0), 0), "2026 and so");
+    // Two quotes outside quoted text are one too (an apostrophe), not an empty quoted text.
+    assert_eq!(format_date_parts("yyyy '' MM", 2026, 10, 21, (0, 0, 0), 0), "2026 ' 10");
+    assert_eq!(format_date_parts("d''MM", 2026, 10, 21, (0, 0, 0), 0), "21'10");
+}
+
+#[test]
 fn date_pictures() {
     // Word accepts either case for the day and year instructions.
     assert_eq!(format_date_parts("MM/DD/YYYY", 2026, 10, 21, (17, 27, 3), 0), "10/21/2026");
