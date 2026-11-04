@@ -4253,6 +4253,42 @@ fn the_title_bar_search_box_is_typed_in_place() {
     assert!(query(&h).is_none(), "a click on the page closes Search");
 }
 
+/// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame
+/// Focus comes on; and Search left open when Focus comes on doesn't keep Escape from leaving it.
+#[test]
+fn focus_mode_search_never_opens_in_the_hidden_box() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    // The last frame drew the box; Focus comes on just before Alt+Q.
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    h.event(key(egui::Key::Q, egui::Modifiers::ALT));
+    h.step();
+    assert!(query(&h).is_none(), "no Search in a box Focus hides");
+    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::Commands { .. })), "Search opens as the dialog");
+    h.state_mut().dialog = None;
+    h.state_mut().run("view.focus", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    // Search open in the title bar, then Focus comes on: Escape leaves Focus.
+    h.event(key(egui::Key::Q, egui::Modifiers::ALT));
+    h.run_steps(2);
+    assert!(query(&h).is_some());
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "Search whose box is gone is dropped");
+    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(!h.state().session.view.focus_mode, "Escape leaves Focus");
+}
+
 /// #819: `tools.search` with a query lists matching commands for scripts and agents; every
 /// word has to match, so "insert table" finds the command that inserts a table.
 #[test]

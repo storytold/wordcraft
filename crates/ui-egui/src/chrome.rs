@@ -465,8 +465,8 @@ const SEARCH_RESULTS_W: f32 = 380.0;
 /// its results under it, instead of in the Search Commands dialog. `true` when it did.
 pub(crate) fn open_title_search(app: &mut WordApp) -> bool {
     let Some(ctx) = app.ctx.clone() else { return false };
-    let shown = ctx.data(|d| d.get_temp::<u64>(app.window_id("title_search_shown")));
-    if !shown.is_some_and(|f| f.saturating_add(1) >= ctx.cumulative_frame_nr()) {
+    // Focus hides the box even when the last frame, before Focus came on, drew it.
+    if Screen::of(&app.session.view) == Screen::Focus || !search_box_drawn(app, &ctx) {
         return false;
     }
     let id = app.window_id("title_search");
@@ -482,9 +482,23 @@ pub(crate) fn title_search_query(app: &WordApp, ctx: &egui::Context) -> Option<S
     ctx.data(|d| d.get_temp::<TitleSearch>(app.window_id("title_search"))).map(|s| s.query)
 }
 
-/// Whether the title bar's Search is being typed in (Escape closes it, not Full Screen).
+/// Whether this window drew the Search box in its last frame.
+fn search_box_drawn(app: &WordApp, ctx: &egui::Context) -> bool {
+    let shown = ctx.data(|d| d.get_temp::<u64>(app.window_id("title_search_shown")));
+    shown.is_some_and(|f| f.saturating_add(1) >= ctx.cumulative_frame_nr())
+}
+
+/// Whether the title bar's Search is being typed in (Escape closes it, not Full Screen). Search
+/// whose box is no longer drawn (Focus came on) is dropped, so it can't keep Escape.
 pub(crate) fn title_search_open(app: &WordApp, ctx: &egui::Context) -> bool {
-    title_search_query(app, ctx).is_some()
+    if title_search_query(app, ctx).is_none() {
+        return false;
+    }
+    if search_box_drawn(app, ctx) {
+        return true;
+    }
+    ctx.data_mut(|d| d.remove::<TitleSearch>(app.window_id("title_search")));
+    false
 }
 
 /// The Search box being typed in: a text box in its place and the results under it. `false`
