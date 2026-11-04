@@ -18,10 +18,10 @@ pub const LEVELS: usize = 9;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("list.define", "Define New Multilevel List", "Home › Paragraph › Multilevel List", define).params(
-            r#"{"levels": [{"format"?: "decimal|lowerLetter|upperLetter|lowerRoman|upperRoman|decimalZero|ordinal|bullet|none", "text"?: "%1.%2." (%n = level n's number; the bullet character for bullet), "start"?: n, "restartAfter"?: 0-8 (0 = never; omit = the level above), "style"?: paragraph style linked to the level | null, "align"?: "left|center|right", "alignedAt"?: pt, "indentAt"?: pt, "follow"?: "tab|space|nothing", "tabAt"?: pt | null, "font"?: string | null, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | null, "legal"?: bool}, …] (index = level, up to 9; fields left out keep the base list's), "num"?: list id to change in place (default: a new list), "apply"?: bool (default true: number the selected paragraphs), "name"?: string}"#,
+            r#"{"levels": [{"format"?: "decimal|lowerLetter|upperLetter|lowerRoman|upperRoman|decimalZero|ordinal|bullet|none", "text"?: "%1.%2." (%n = level n's number; the bullet character for bullet), "start"?: n, "restartAfter"?: 0-8 (0 = never; omit = the level above), "style"?: paragraph style linked to the level | null, "align"?: "left|center|right", "alignedAt"?: pt, "indentAt"?: pt, "follow"?: "tab|space|nothing", "tabAt"?: pt | null, "font"?: string | null, "bold"?: bool, "italic"?: bool, "color"?: "RRGGBB" | null, "legal"?: bool}, …] (index = level, up to 9; fields left out keep the base list's), "num"?: non-negative 32-bit JSON integer list id to change in place (default: a new list), "apply"?: bool (default true: number the selected paragraphs), "name"?: string}"#,
         ),
         CommandSpec::new("list.get", "List Definition", "Home › Paragraph › Multilevel List", get)
-            .params(r#"{"num"?: list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
+            .params(r#"{"num"?: non-negative 32-bit JSON integer list id (default: the caret's list)} → {"num", "levels": [as list.define]}"#)
             .pure(),
         CommandSpec::new("list.multilevelPreset", "Multilevel List Library", "Home › Paragraph › Multilevel List", preset).params(
             r#"{"preset": "headings" (1 / 1.1 / 1.1.1) | "article" (Article I. / Section 1.01 / (a)) | "outlineHeadings" (I. / A. / 1.) | "chapter" (Chapter 1, lower levels unnumbered)} — a new list whose nine levels are linked to Heading 1–9: every paragraph in those styles is numbered, selected paragraphs already in a Heading style keep it, and any other selected paragraph becomes Heading 1 (the first level)"#,
@@ -156,16 +156,24 @@ fn default_level(i: usize) -> Level {
     levels_for(ListKind::Numbered).into_iter().nth(i).unwrap_or_default()
 }
 
+/// Only an omitted ID uses the command's default; numeric settings may coerce floats, IDs may not.
+fn list_id(v: &Value) -> Result<Option<u32>, CmdError> {
+    v.get("num")
+        .map(|id| {
+            id.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| CmdError::Params("`num` must be a non-negative 32-bit JSON integer".into()))
+        })
+        .transpose()
+}
+
 fn get(s: &mut Session, v: &Value) -> CmdResult {
-    let num =
-        p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32).or_else(|| caret_list(s)).ok_or_else(|| CmdError::Failed("not in a list".into()))?;
+    let num = list_id(v)?.or_else(|| caret_list(s)).ok_or_else(|| CmdError::Failed("not in a list".into()))?;
     let levels = levels_of(s, num).ok_or_else(|| CmdError::Params("no such list".into()))?;
     Ok(json!({"num": num, "levels": levels.iter().map(level_json).collect::<Vec<_>>()}))
 }
 
 fn define(s: &mut Session, v: &Value) -> CmdResult {
     let given = v.get("levels").and_then(Value::as_array).ok_or_else(|| CmdError::Params("`levels` (array) is required".into()))?;
-    let target = p::u64(v, "num").map(|n| n.min(u32::MAX as u64) as u32);
+    let target = list_id(v)?;
     let base = match target {
         Some(n) => levels_of(s, n).ok_or_else(|| CmdError::Params("no such list".into()))?,
         None => (0..LEVELS).map(default_level).collect(),
@@ -349,6 +357,61 @@ mod tests {
     use wordcraft_layout::Placed;
 
     use crate::Session;
+
+    /// Explicit list IDs are identifiers, not numeric settings: malformed values must neither
+    /// select the caret's list nor create and apply a replacement list.
+    #[test]
+    fn malformed_explicit_list_ids_do_not_create_or_change_lists() {
+        let mut s = Session::new(Document::from_text("Keep this list"));
+        let num = s.run("list.define", &json!({"levels": [{"text": "Keep %1."}]})).unwrap()["num"].clone();
+        let before = serde_json::to_value(&s.doc).unwrap();
+        let selection = s.sel.clone();
+        let dirty = s.dirty;
+        for bad in [json!(-1), json!(1.5), json!(1.0), json!("1"), serde_json::Value::Null, json!(true), json!([]), json!({})] {
+            for command in ["list.get", "list.define"] {
+                let error = s.run(command, &json!({"num": bad, "levels": [{"text": "Changed %1."}]}));
+                assert!(matches!(error, Err(crate::CmdError::Params(_))), "{command} accepted {bad}: {error:?}");
+                assert_eq!(serde_json::to_value(&s.doc).unwrap(), before, "{command} changed the document for {bad}");
+                assert_eq!(s.sel, selection);
+                assert_eq!(s.dirty, dirty);
+            }
+        }
+        assert_eq!(s.run("list.get", &json!({})).unwrap()["num"], num, "omitting num still uses the caret");
+        assert_eq!(s.run("list.get", &json!({"num": num})).unwrap()["levels"][0]["text"], "Keep %1.");
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let mut back = Session::new(back);
+        assert_eq!(back.run("list.get", &json!({})).unwrap()["levels"][0]["text"], "Keep %1.");
+        // Refused edits did not add an undo step before the original definition.
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(s.doc.numbering.nums.is_empty());
+    }
+
+    /// An ID above u32 must not be clamped onto the valid maximum-ID list imported in a file.
+    #[test]
+    fn oversized_list_ids_do_not_alias_the_maximum_list() {
+        let mut s = Session::new(Document::from_text("Keep this list"));
+        let num = s.run("list.define", &json!({"levels": [{"text": "Keep %1."}]})).unwrap()["num"].as_u64().unwrap() as u32;
+        s.doc.numbering.nums.iter_mut().find(|n| n.id == num).unwrap().id = u32::MAX;
+        let p = s.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        p.props.numbering.as_mut().unwrap().num = u32::MAX;
+        p.touch();
+        s.relayout();
+        let before = serde_json::to_value(&s.doc).unwrap();
+        assert_eq!(s.run("list.get", &json!({"num": u32::MAX})).unwrap()["levels"][0]["text"], "Keep %1.");
+        for bad in [u64::from(u32::MAX) + 1, u64::MAX] {
+            for command in ["list.get", "list.define"] {
+                let error = s.run(command, &json!({"num": bad, "levels": [{"text": "Changed %1."}]}));
+                assert!(matches!(error, Err(crate::CmdError::Params(_))), "{command} accepted {bad}: {error:?}");
+                assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+            }
+        }
+        s.run("list.define", &json!({"num": u32::MAX, "levels": [{"text": "Valid %1."}]})).unwrap();
+        assert_eq!(s.run("list.get", &json!({"num": u32::MAX})).unwrap()["levels"][0]["text"], "Valid %1.");
+        // The maximum ID remains usable in a native document too.
+        let back: Document = serde_json::from_value(serde_json::to_value(&s.doc).unwrap()).unwrap();
+        let mut back = Session::new(back);
+        assert_eq!(back.run("list.get", &json!({"num": u32::MAX})).unwrap()["levels"][0]["text"], "Valid %1.");
+    }
 
     fn labels(s: &mut Session) -> Vec<String> {
         let l = s.layout();
