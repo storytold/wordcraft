@@ -28,7 +28,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 # based on main 38740b4, including #589 (elision-first suggestions) and #590 (Catalan
 # Valencia lookup). Replace this unmerged PR head with the reviewed official merge commit
 # and rerun the app gates before integration. The font store's `language-pack` kind is #486.
-wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "b5bb5435de1dee52a5f73aa27ba99779854dbd99", version = "=0.1.0" }
+wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold/craft-libs", rev = "55a16b7a724cd7ab3f9873a415fbd6fbcd8b3c96", version = "=0.1.0" }
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "crates/engine" }

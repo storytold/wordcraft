@@ -16,8 +16,10 @@ regional overrides and hyphenation stay on the common pack paths. The removed Wo
 embedded French word list/pattern file. All language data remains in craft-i18n.
 
 The proposed app dependency temporarily pins the immutable library PR head
-`b5bb5435de1dee52a5f73aa27ba99779854dbd99` through the official storytold/craft-libs URL.
+`55a16b7a724cd7ab3f9873a415fbd6fbcd8b3c96` through the official storytold/craft-libs URL.
 The library includes upstream elision-first suggestions and the Catalan Valencia locale fix.
+Suggestions already admitted by the collector remain available after later collection consumes its
+budget; new candidates and changed letter case still retain the dictionary eligibility checks.
 That commit is not merged. Before integrating the application, merge/review the shared-library
 change, update the app pin and Cargo.lock to its official merge commit, and run the repository
 checks on that new application SHA. A passed check of a parent does not validate a new pin.
@@ -57,7 +59,7 @@ not claim a complete grammatical analysis or a guaranteed correction of every mi
 ## Verification
 
 Shared-library commands and the opt-in pinned Dicollecte gate are documented in
-[craft-proof's README](https://github.com/totoz64/craft-libs/blob/b5bb5435de1dee52a5f73aa27ba99779854dbd99/crates/proof/README.md).
+[craft-proof's README](https://github.com/totoz64/craft-libs/blob/55a16b7a724cd7ab3f9873a415fbd6fbcd8b3c96/crates/proof/README.md).
 The dictionary is a runtime input, never a committed test asset. The library tests cover
 regional pack overrides and reloads, apostrophes, options, NFC/NFD ranges and hyphenation.
 
