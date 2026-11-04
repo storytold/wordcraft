@@ -39,6 +39,9 @@ pub(crate) struct WindowUi {
     pub(crate) seen_full_screen: Option<bool>,
     pub(crate) escape_free: bool,
     pub(crate) word_count: (u64, usize),
+    /// Per window, as each window shows its own layout: one shared list would be read again
+    /// on every frame of every window.
+    pub(crate) missing_fonts: crate::chrome::MissingFontsMemo,
     pub(crate) last_autosave: f64,
     pub(crate) equation_prev_tab: Option<String>,
     pub(crate) smart_art_item: Option<usize>,
@@ -109,6 +112,7 @@ impl WindowUi {
             seen_full_screen: None,
             escape_free: false,
             word_count: NOT_COUNTED,
+            missing_fonts: Default::default(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -235,6 +239,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             word_count,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,
@@ -332,6 +337,7 @@ impl WordApp {
             seen_full_screen,
             escape_free,
             word_count,
+            missing_fonts,
             last_autosave,
             equation_prev_tab,
             smart_art_item,

@@ -827,7 +827,7 @@ fn formatting_revisions_read_as_the_spec_writes_them() {
 fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
     use model::{FmtChange, ListInfo};
     // A numbered item Alice centred (it was left-aligned), and a second plain item.
-    let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
+    let li = Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() });
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
     let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
     let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -857,7 +857,7 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
     item.push_text("Item", &Fmt::default());
     let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -873,9 +873,9 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
 fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para {
-        list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+        list: Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
         fmt_change: Some(Box::new(FmtChange { mark, old })),
         ..Default::default()
     };
@@ -1229,6 +1229,40 @@ fn a_code_paragraph_round_trips_without_a_direct_code_font() {
     assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
 }
 
+/// Escaped semicolons in a font name stop at the limit, as other characters do (review of #3862).
+#[test]
+fn escaped_semicolons_in_a_font_name_stop_at_the_limit() {
+    let mut r = reader::Reader::default();
+    r.st.dest = state::Dest::FontTbl;
+    for _ in 0..100_000 {
+        r.ch(';');
+    }
+    assert_eq!(r.font_name.len(), model::MAX_FONT_NAME + 1);
+    let rtf = format!(r"{{\rtf1{{\fonttbl{{\f0 {};}}}}\f0 x\par}}", r"\'3b".repeat(model::MAX_FONT_NAME + 1));
+    let runs = text_runs(rtf.as_bytes());
+    assert_eq!(run_fmt(&runs, "x").font, None);
+}
+
+#[test]
+fn a_semicolon_in_a_font_name_round_trips() {
+    // `;` ends a `\fonttbl` entry, so it is written `\'3b` and read back as part of the name (#3740).
+    let fonts = [("one", "Semi;Colon"), ("two", "Semi;Other"), ("three", "Tail;"), ("four", "Line\nBreak")];
+    let mut p = Para::default();
+    for (t, font) in fonts {
+        p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
+    }
+    let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+    let rtf = export(&model::to_doc(&flow));
+    assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
+    let runs = text_runs(rtf.as_bytes());
+    for (t, font) in fonts {
+        assert_eq!(run_fmt(&runs, t).font.as_deref(), Some(font.replace('\n', "").as_str()), "{rtf}");
+    }
+    // A Unicode escape is part of the name too, in a multibyte code page as well; a literal `;` ends it.
+    let runs = text_runs(br"{\rtf1\ansi\ansicpg932{\fonttbl{\f0 A\u59?B;}{\f1 C\'3bD;}}\f0 x {\f1 y}\par}");
+    assert_eq!((run_fmt(&runs, "x ").font.as_deref(), run_fmt(&runs, "y").font.as_deref()), (Some("A;B"), Some("C;D")));
+}
+
 #[test]
 fn a_stylesheet_entry_without_a_number_is_normal() {
     // An entry without `\sN` is style 0; it doesn't replace the entry before it.
@@ -1558,8 +1592,42 @@ fn hyperlink_field_targets() {
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \l "heading""#), Some("http://example.com#heading".into()));
     assert_eq!(hyperlink(r#"HYPERLINK \l "heading""#), Some("#heading".into()));
     assert_eq!(hyperlink(r#"Hyperlink "http://example.com""#), Some("http://example.com".into()));
-    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/path\\latest".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/pathlatest".into()));
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
+    // A tooltip or frame before the address, a longer field name, escapes and the writer's `%22`.
+    assert_eq!(hyperlink(r#"HYPERLINK \o "tip" \t "_blank" "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(hyperlink(r#"HYPERLINKX "http://example.com""#), None);
+    assert_eq!(hyperlink(r#"HYPERLINK "C:\\Docs\\f.rtf""#), Some(r"C:\Docs\f.rtf".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/a%22b""#), Some(r#"http://example.com/a"b"#.into()));
+}
+
+/// A link with a quote in it survives export and import: the writer stores it as `%22`.
+#[test]
+fn a_quote_in_a_link_round_trips() {
+    let rtf = br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "http://a.b/x%22y"}}{\fldrslt{link}}}\par}"#;
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    let d = import(rtf).unwrap();
+    assert_eq!(link(&d).as_deref(), Some(r#"http://a.b/x"y"#));
+    let exported = export(&d);
+    assert!(exported.contains("x%22y"), "{exported}");
+    assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(r#"http://a.b/x"y"#));
+}
+
+/// Backslashes in a link survive export and import, a trailing one and two in a row too.
+#[test]
+fn backslashes_in_a_link_round_trip() {
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    for target in [r"docs\", r"a\\b", r"..\up\f.doc"] {
+        let mut d = import(br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "x"}}{\fldrslt{link}}}\par}"#).unwrap();
+        for b in d.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.runs.iter_mut().filter(|r| r.props.link.is_some()).for_each(|r| r.props.link = Some(target.into()));
+            }
+        }
+        assert_eq!(link(&d).as_deref(), Some(target));
+        let exported = export(&d);
+        assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(target), "{exported}");
+    }
 }
 
 #[test]
