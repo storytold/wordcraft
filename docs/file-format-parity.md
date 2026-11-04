@@ -272,7 +272,7 @@ Original binary fixtures and actual WordApp/Session file I/O cover Save, toolbar
 
 ## Field arguments
 
-Quoted field arguments interpret backslash escapes for quotes, backslashes and literal asterisks as Word does. Escaped asterisks remain argument text instead of starting a format switch; unquoted switches retain their existing behavior. Parser tests cover quoted and unquoted arguments and trailing escapes.
+Inside quoted field arguments, a backslash escapes the next character as Word does, including quotes, backslashes and asterisks. Escaped asterisks remain argument text instead of starting a format switch; unquoted switches retain their existing behavior. Parser tests cover quoted and unquoted arguments and trailing escapes.
 
 ## Cached field result formatting
 
