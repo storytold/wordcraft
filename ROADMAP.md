@@ -1,7 +1,5 @@
 # WordCraft roadmap
 
-> **Romanian proofing update:** 2026-11-03 · #4743 now uses shared craft-proof for Romanian-specific spelling/context and new-document defaults; shared dependency integration pending. Readiness unchanged.
->
 > **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
@@ -714,8 +712,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 ## Revision history
 
-> 2026-11-03 · #4743: retain Romanian language-pack support while adding the shared Romanian specialization and conservative contextual suggestions; no readiness estimate changed.
->
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 >
 > 2026-10-30 · Technical synchronization: retain the Proofing pane and command/selection/undo contracts on main `3b7f7ed`; new-SHA validation pending, readiness unchanged.
@@ -739,6 +735,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-03 | trivial | Progress log: a long comment's card and balloon stop at ten lines (#3382) |
 | 2026-11-03 | trivial | Progress log: Replace and Remove Table of Contents with Word's title above a section break (#4041) |
 | 2026-11-03 | trivial | Progress log: language-packs-2 published and pinned, 75 Language packs |
+| 2026-11-03 | trivial | Romanian proofing update: 2026-11-03 · #4743 now uses shared craft-proof for Romanian-specific spelling/context and new-document defaults; shared dependency integration pending. Readiness unchanged. |
+| 2026-11-03 | trivial | 2026-11-03 · #4743: retain Romanian language-pack support while adding the shared Romanian specialization and conservative contextual suggestions; no readiness estimate changed. |
 | 2026-11-02 | trivial | Progress log: language-packs-1 published and pinned, 61 Language packs (CP4.4) |
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |

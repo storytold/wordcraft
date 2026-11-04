@@ -224,10 +224,10 @@ ro-legal-docx/wordcraft#1 and @vioreltus's shared port.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | #4743: Romanian-specific proofing migrated to shared craft-proof on 0.15; context/compound regressions and app defaults; shared dependency pending, readiness unchanged |
 | 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
 | 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the Dictionaries folder is in Options › Language, not Proofing |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
+| 2026-11-03 | minor | #4743: Romanian-specific proofing migrated to shared craft-proof on 0.15; context/compound regressions and app defaults; shared dependency pending, readiness unchanged |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |
 | 2026-11-01 | minor | Language packs (CP4.3): installing a language from File › Options › Language or the missing-pack bar, the download consent, About › Language data, the commands; an installed pack is searched after the dictionaries folders and before the system's |
