@@ -20,9 +20,17 @@ pub(super) enum Tok {
 pub(super) struct Lexer<'a> {
     pub(super) s: &'a str,
     pub(super) pos: usize,
+    /// Bytes [`skip_math_fallback`] may still search for a fallback's end. A fallback that is
+    /// never closed is searched to the end of the input, so repeating one would make the import
+    /// quadratic; past this budget (twice the input, plenty for real fallbacks) one is kept.
+    fallback_budget: usize,
 }
 
-impl Lexer<'_> {
+impl<'a> Lexer<'a> {
+    pub(super) fn new(s: &'a str) -> Self {
+        Lexer { s, pos: 0, fallback_budget: s.len().saturating_mul(2).saturating_add(64 * 1024) }
+    }
+
     fn rest(&self) -> &str {
         self.s.get(self.pos..).unwrap_or("")
     }
@@ -214,7 +222,10 @@ pub(super) fn skip_math_fallback(lx: &mut Lexer) {
         return;
     }
     let body = after.get(OPEN.len()..).unwrap_or(&[]);
-    if let Some(end) = matching_endif(body) {
+    let body = body.get(..lx.fallback_budget.min(body.len())).unwrap_or(body);
+    let end = matching_endif(body);
+    lx.fallback_budget = lx.fallback_budget.saturating_sub(end.unwrap_or(body.len()));
+    if let Some(end) = end {
         lx.pos += ws + OPEN.len() + end;
     }
 }
