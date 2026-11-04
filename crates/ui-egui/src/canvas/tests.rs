@@ -4996,9 +4996,23 @@ fn header_picture_click(x: f32, y: f32, band: Option<(f32, f32)>, selects: bool)
     click(&mut h);
     let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
     if selects {
-        assert_eq!(picked, Some(pos), "while editing the header a click on its picture selects it ({x}, {y})");
+        assert_eq!(picked, Some(pos.clone()), "while editing the header a click on its picture selects it ({x}, {y})");
     } else {
         assert_eq!(picked, None, "over the header's text the click edits the text ({x}, {y})");
         assert!(matches!(h.state().session.sel.focus.story, StoryRef::Part(_)), "still in the header");
     }
+    // A right-click does the same, so the context menu (Reset Picture, Wrap Text) acts on it.
+    h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos { off: 0, ..pos.clone() });
+    let right = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Default::default() };
+    h.event(Event::PointerMoved(at));
+    h.event(right(true));
+    h.step();
+    h.event(right(false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+    assert_eq!(picked, selects.then(|| pos.clone()), "a right-click picks the picture only where a click does ({x}, {y})");
+    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+    h.step();
 }

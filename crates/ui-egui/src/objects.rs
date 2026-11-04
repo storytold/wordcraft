@@ -449,9 +449,8 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
 /// Right-click at `at`: the picture, shape or text box under it becomes the selection (as a click
 /// would, without a drag), so the context menu acts on it. Returns whether there was one.
 pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> bool {
-    if crate::canvas::editing_header_footer(app, layout) {
-        return false;
-    }
+    // While editing a header/footer, `grab_at` looks at its own objects, so its picture is picked
+    // too and the menu's Reset Picture or Wrap Text acts on it.
     let Some((object, _)) = grab_at(app, layout, pages, scale, at) else { return false };
     let pos = object.pos();
     // Already selected (alone or among several picked for Group): keep the selection.
