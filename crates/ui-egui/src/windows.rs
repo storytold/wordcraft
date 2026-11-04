@@ -594,17 +594,32 @@ impl WordApp {
             return;
         }
         let Some(mut viewports) = self.windows.viewports.take() else { return };
-        if let Some(monitor) = ctx.input(|i| i.viewport().monitor_size).filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0) {
-            let previous = self.windows.list.cascade_origin(None);
+        let previous = self.windows.list.cascade_origin(None).or_else(|| ctx.input(|i| i.viewport().outer_rect.map(Rect::from)));
+        let origin_id = self.windows.list.recent().find(|&w| self.windows.list.outer_rect(w).is_some());
+        let origin_viewport = origin_id.map(|id| viewports.viewport_id(id)).unwrap_or(ViewportId::ROOT);
+        let origin_info = ctx.input(|i| i.raw.viewports.get(&origin_viewport).cloned());
+        let monitor = origin_info
+            .as_ref()
+            .and_then(|v| v.monitor_size)
+            .or_else(|| ctx.input(|i| i.viewport().monitor_size))
+            .filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0);
+        if let Some(monitor) = monitor {
             let bounds = previous
                 .and_then(|prev| {
-                    let center_x = prev.x + prev.width * 0.5;
-                    let center_y = prev.y + prev.height * 0.5;
-                    if center_x.is_finite() && center_y.is_finite() {
-                        let tile = |center: f32, len: f32| (center / len).floor() * len;
-                        Some(Rect::new(tile(center_x, monitor.x), tile(center_y, monitor.y), monitor.x, monitor.y))
+                    let inner = origin_info.as_ref().and_then(|v| v.inner_rect).filter(|r| r.is_finite());
+                    let maximized = origin_info.as_ref().and_then(|v| v.maximized).unwrap_or(false)
+                        || inner.is_some_and(|r| prev.x < r.min.x || prev.y < r.min.y);
+                    if let Some(inner) = inner.filter(|_| maximized) {
+                        Some(Rect::new(inner.min.x, inner.min.y, monitor.x, monitor.y))
                     } else {
-                        None
+                        let center_x = prev.x + prev.width * 0.5;
+                        let center_y = prev.y + prev.height * 0.5;
+                        if center_x.is_finite() && center_y.is_finite() {
+                            let tile = |center: f32, len: f32| (center / len).floor() * len;
+                            Some(Rect::new(tile(center_x, monitor.x), tile(center_y, monitor.y), monitor.x, monitor.y))
+                        } else {
+                            None
+                        }
                     }
                 })
                 .unwrap_or_else(|| Rect::new(0.0, 0.0, monitor.x, monitor.y));

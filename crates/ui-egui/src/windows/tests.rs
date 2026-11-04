@@ -155,8 +155,8 @@ fn new_opens_a_second_window_and_each_keeps_its_state() {
 }
 /// When cascading a new window from a maximized parent window on Windows (which has negative
 /// outer rect coordinates, e.g. x: -8, y: -8 due to invisible resize borders), the monitor bounds
-/// are calculated from the window's visual center rather than its negative top-left corner,
-/// ensuring the new window is placed on-screen at non-negative coordinates.
+/// are calculated from the window's visual bounds/inner rect, ensuring the new window is placed
+/// on-screen at non-negative coordinates on the primary display.
 #[test]
 fn cascading_from_maximized_window_with_negative_borders_stays_on_screen() {
     let ctx = backend();
@@ -178,9 +178,93 @@ fn cascading_from_maximized_window_with_negative_borders_stays_on_screen() {
     assert_ne!(child, ViewportId::ROOT);
 
     let builder = BUILDERS.with(|b| b.borrow().get(&child).cloned()).expect("child viewport has builder");
-    if let Some(pos) = builder.position {
-        assert!(pos.x >= 0.0 && pos.y >= 0.0, "cascaded window position ({}, {}) must be on-screen", pos.x, pos.y);
-    }
+    let pos = builder.position.expect("child viewport must have an explicit cascade position");
+    assert!(pos.x >= 0.0 && pos.y >= 0.0, "cascaded window position ({}, {}) must be on-screen", pos.x, pos.y);
+    assert!(pos.x + 1440.0 <= 1920.0, "cascaded window must not overflow primary monitor width");
+}
+
+/// On multi-monitor setups where a secondary monitor has non-uniform dimensions or starts at an
+/// arbitrary offset (e.g. 1920x1080 display at x: 1280 beside a 1280-wide laptop screen),
+/// cascading from a maximized window on that secondary display stays within the secondary
+/// monitor's bounds rather than snapping to an assumed uniform grid or primary monitor size.
+#[test]
+fn cascading_from_maximized_window_on_secondary_monitor_with_offset() {
+    let ctx = backend();
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let root_info = map.entry(ViewportId::ROOT).or_default();
+        root_info.monitor_size = Some(egui::vec2(1280.0, 800.0));
+        root_info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 800.0)));
+        root_info.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 800.0)));
+    });
+
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+
+    // Open a second window on the secondary display (1280, 0, 1920, 1080).
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let second = a.active_viewport();
+    assert_ne!(second, ViewportId::ROOT);
+
+    // Simulate the second window being maximized on the secondary monitor (1280, 0).
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let info = map.entry(second).or_default();
+        info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+        info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(1272.0, -8.0), egui::vec2(1936.0, 1096.0)));
+        info.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(1280.0, 0.0), egui::vec2(1920.0, 1080.0)));
+        info.maximized = Some(true);
+    });
+    focus(second);
+    frames(&ctx, &mut a, 2);
+
+    // Open a third window from the second window on the secondary monitor.
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let third = a.active_viewport();
+    assert_ne!(third, second);
+    assert_ne!(third, ViewportId::ROOT);
+
+    let builder = BUILDERS.with(|b| b.borrow().get(&third).cloned()).expect("third viewport has builder");
+    let pos = builder.position.expect("third viewport must have an explicit cascade position");
+    assert!(pos.x >= 1280.0, "cascaded window x ({}) must stay on secondary monitor (>= 1280)", pos.x);
+    assert!(pos.x + 1440.0 <= 3200.0, "cascaded window right edge ({}) must stay within secondary monitor (<= 3200)", pos.x + 1440.0);
+    assert!(pos.y >= 0.0, "cascaded window y ({}) must stay within secondary monitor (>= 0)", pos.y);
+    assert!(pos.y + 920.0 <= 1080.0, "cascaded window bottom edge ({}) must stay within secondary monitor (<= 1080)", pos.y + 920.0);
+}
+
+/// Cascading from a maximized window on a secondary monitor with negative vertical offset
+/// (e.g. at x: 1280, y: -400) places the child within the display bounds [1280..3200, -400..680].
+#[test]
+fn cascading_from_maximized_window_with_negative_vertical_offset() {
+    let ctx = backend();
+    INFOS.with(|i| {
+        let mut map = i.borrow_mut();
+        let root_info = map.entry(ViewportId::ROOT).or_default();
+        root_info.monitor_size = Some(egui::vec2(1920.0, 1080.0));
+        root_info.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(1272.0, -408.0), egui::vec2(1936.0, 1096.0)));
+        root_info.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(1280.0, -400.0), egui::vec2(1920.0, 1080.0)));
+        root_info.maximized = Some(true);
+    });
+
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT);
+
+    let builder = BUILDERS.with(|b| b.borrow().get(&child).cloned()).expect("child viewport has builder");
+    let pos = builder.position.expect("child viewport must have an explicit cascade position");
+    assert!(pos.x >= 1280.0, "cascaded window x ({}) must stay on secondary monitor (>= 1280)", pos.x);
+    assert!(pos.x + 1440.0 <= 3200.0, "cascaded window right edge ({}) must stay within secondary monitor (<= 3200)", pos.x + 1440.0);
+    assert!(pos.y >= -400.0, "cascaded window y ({}) must stay on secondary monitor (>= -400)", pos.y);
+    assert!(pos.y + 920.0 <= 680.0, "cascaded window bottom edge ({}) must stay within secondary monitor (<= 680)", pos.y + 920.0);
 }
 
 fn docx_on_disk(name: &str, body: &str) -> std::path::PathBuf {

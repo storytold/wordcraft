@@ -95,7 +95,7 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | Multi-window cascading: cascading from a maximized parent window with negative invisible border padding on Windows stays on-screen at non-negative coordinates |
+| 2026-11-05 | trivial | Multi-window cascading: cascading from a maximized parent window with negative invisible border padding on Windows stays on-screen within the parent monitor's bounds across single- and multi-monitor setups |
 | 2026-11-03 | trivial | Comments: a long comment's card, balloon and fields stop at ten lines; the fields scroll, and a balloon that isn't selected shows the first ten lines of the comment and of each reply (#3382) |
 | 2026-11-03 | minor | Arabic mirrored interface: title bar, ribbon, panes, File page, dialogs and menus run from the right; document canvas stays independent (#1195); Hebrew UI still open |
 | 2026-11-03 | minor | File › Options › Language: Your languages (English variants in use, installed Language packs, the document's languages) with each one's proofing status, Install, Remove and Set as default; Add a language… opens a searchable picker (dutch, nederlands, nl) sorted by name; the Dictionaries folder and the Dictionary files list moved here from Proofing, which has no Dictionaries section any more (CP4.3) |
