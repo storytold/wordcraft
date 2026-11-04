@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    AutoSaveBlock, AwaitingSave, PromptSave, SaveChoice, Value, WordApp, async_saves, dialogs, file_dialogs, i18n, json, keeps_everything, panes,
+    printing,
+};
 
 impl WordApp {
     /// Answer the Save Changes prompt: Save (through Save As for a new document) and carry on,
@@ -48,7 +51,7 @@ impl WordApp {
         if !go {
             return Ok(json!({"done": false}));
         }
-        self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+        self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
     }
 
     /// Save before New/Open/Close (and the mailings that replace the document): true once the
@@ -141,7 +144,11 @@ impl WordApp {
             match outcome {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
                 async_saves::SaveOutcome::Saved if !self.session.dirty && self.session.rev() == wait.rev && !self.save_unconfirmed() => {
-                    if let Err(e) = self.execute_user(&wait.then, wait.params) {
+                    // A failed open was already reported by name in `execute_user`.
+                    let is_open = wait.then == "file.open";
+                    if let Err(e) = self.execute_held_back(&wait.then, wait.params)
+                        && !is_open
+                    {
                         self.status(e);
                     }
                 }
@@ -325,7 +332,7 @@ impl WordApp {
             let lp = path.to_ascii_lowercase();
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
             let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
-            let _ = if img {
+            let opened = if img {
                 self.caret_after_placed_picture(placed_picture);
                 let r = self.run("insert.picture", json!({"path": path}));
                 placed_picture = Self::placed_in_text(&r);
@@ -338,6 +345,11 @@ impl WordApp {
             } else {
                 self.open_file(&path, None)
             };
+            if let Err(e) = opened {
+                self.report_open_failure(&path, &e);
+                // Backstage hides the status bar; leave it so the error shows.
+                self.ui.backstage = false;
+            }
         }
         if self.session.document_id() != before {
             self.autosave_path = None;

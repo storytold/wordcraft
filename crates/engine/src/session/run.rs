@@ -1,8 +1,45 @@
 use super::doc_state::{ColumnBlock, Selection};
+use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
-use super::*;
+use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
+use crate::CommandSpec;
+
+struct SuccessContext<'a> {
+    id: &'a str,
+    spec: &'a CommandSpec,
+    before_doc: &'a Option<RunSnapshot>,
+    pending_before: &'a Option<Option<CharProps>>,
+    document_id_before: u64,
+    replaces_document: bool,
+    dirty_before: Option<bool>,
+    rev_restore: Option<u64>,
+    pushed: bool,
+    mutates: bool,
+    ime_caret_before: ImeCaretState,
+    rev_before: u64,
+    sel_before: &'a Selection,
+}
+
+struct ElsewhereContext {
+    home: u64,
+    mark: u64,
+    before_doc: Option<RunSnapshot>,
+    blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
+    default_language_before: Option<String>,
+    pending_application_change_before: bool,
+}
 
 impl Session {
+    fn leave_math_for_command(&mut self, id: &str) {
+        if self.math.is_some()
+            && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
+            && let Some(m) = self.math.take()
+        {
+            let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
+            self.sel = Selection::caret(Pos { off, ..m.at });
+        }
+    }
+
     /// Whether the command changed nothing: the document, the selection, the formatting
     /// waiting at the caret and the column selection are as they were before it ran.
     ///
@@ -65,13 +102,7 @@ impl Session {
             self.last_command = Some((id.to_string(), kept()));
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
-        if self.math.is_some()
-            && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
-            && let Some(m) = self.math.take()
-        {
-            let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
-            self.sel = Selection::caret(Pos { off, ..m.at });
-        }
+        self.leave_math_for_command(id);
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
         let ime_epoch_before = spec.mutates.then_some(self.ime_body_epoch);
@@ -163,7 +194,10 @@ impl Session {
             }
         };
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
-            return self.finish_elsewhere(home, mark, result, before_doc, blocks_before, default_language_before, pending_application_change_before);
+            return self.finish_elsewhere(
+                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                result,
+            );
         }
         // Restrict Editing: outside the exceptions nothing may change.
         if result.is_ok()
@@ -174,110 +208,21 @@ impl Session {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
         }
         match &result {
-            Ok(_) => {
-                let mut no_op = false;
-                if spec.mutates {
-                    // Formatting changed while tracking becomes a formatting revision.
-                    if let Some((before, ..)) = &before_doc {
-                        crate::cmd::fmt_revisions::record(self, id, before);
-                    }
-                    self.doc.ensure_nonempty();
-                    self.doc.prune_text_boxes();
-                    // Whether the command left the document, the selection and the formatting
-                    // waiting at the caret as they were. A command that replaces the document —
-                    // a mail merge, a comparison — is not an edit of this one, whatever the new
-                    // document holds: `replaces_document` names the commands that may replace
-                    // it, and `document_id` catches any other that does (through
-                    // `set_document`, which starts a new history the old one must not overwrite).
-                    let unchanged = |s: &Session| match (&before_doc, &pending_before) {
-                        (Some((doc, sel, _, _, _, _, column)), Some(pending)) => {
-                            !replaces_document && s.document_id == document_id_before && s.unchanged(doc, sel, column, pending)
-                        }
-                        _ => false,
-                    };
-                    let changed = !unchanged(self);
-                    if changed {
-                        // The layout the connectors are rerouted against is the new one.
-                        self.touch();
-                    }
-                    // Glued connectors follow the shapes they join.
-                    let rerouted = crate::cmd::connectors::reroutes_after(id) && crate::cmd::connectors::reroute(self);
-                    if rerouted {
-                        self.touch();
-                    }
-                    // A command that changed nothing is not an edit (#23): it adds no undo
-                    // step, marks no unsaved changes, forces no relayout and leaves the redo
-                    // stack alone. What it left behind is compared with what it started from,
-                    // after the reroute: a reroute that moved a connector is an edit of its own.
-                    no_op = !changed && !rerouted && unchanged(self);
-                    if no_op {
-                        // The step the dispatch pushed is not an edit: put the stacks back as
-                        // they were, so the redo stack survives and no step is evicted. The
-                        // group it belonged to is left without a step of its own, so the next
-                        // command in it starts one.
-                        if let Some((_, _, history, redo, typing_open, evicted, _)) = &before_doc {
-                            self.history = history.clone();
-                            self.redo = redo.clone();
-                            self.typing_open = *typing_open;
-                            self.undo_evicted = *evicted;
-                        }
-                        if let Some(dirty) = dirty_before {
-                            self.dirty = dirty;
-                        }
-                        if let Some(rev) = rev_restore {
-                            let touched = self.rev;
-                            self.restore_rev(rev);
-                            crate::cmd::draw::rekey_lasso(self, touched, rev);
-                        }
-                        if pushed {
-                            self.join_anchor = false;
-                        }
-                    }
-                }
-                self.clamp_selection();
-                let mut ime_outcome = self.ime_edit_outcome;
-                if ime_outcome.content_changed {
-                    ime_outcome.state_changed = true;
-                }
-                // An unclassified mutating command is conservatively a state change. It can make
-                // a frame Other, but it can never mint a receipt because `classified` is false.
-                // A command that changed nothing is not an edit (#23), so it is not an IME
-                // state change either: otherwise Backspace at the document start would still
-                // signal an application change and move the settled IME revision.
-                if !ime_outcome.classified && mutates && !no_op {
-                    ime_outcome.state_changed = true;
-                }
-                ime_outcome.selection_changed = self.current_ime_caret_state() != ime_caret_before;
-                self.ime_edit_outcome = ime_outcome;
-                if ime_outcome.state_changed {
-                    let caret = self.current_ime_caret_state();
-                    self.ime_state_seen = Some(caret);
-                    self.reset_ime_state_revision();
-                }
-                if !self.ime_origin && !no_op && (ime_outcome.content_changed || ime_outcome.state_changed || (!ime_outcome.classified && mutates)) {
-                    self.pending_ime_application_change = true;
-                }
-                if sel_before.focus.story == StoryRef::Body && self.in_header_footer() {
-                    self.hf_return = Some(sel_before.clone());
-                }
-                // A selection command that moves the insertion point ends the typing group, like
-                // caret movement: typing, Select, typing are two undo steps (#419).
-                if !spec.mutates && self.sel != sel_before {
-                    self.typing_open = false;
-                }
-                if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.redo") {
-                    self.note_edit();
-                }
-                // Outline view: collapsed headings follow edits; the caret stays where it shows.
-                crate::cmd::outline::after_command(self, &sel_before, self.rev != rev_before);
-                // Extra selected objects last until something else is edited or selected; formatting
-                // them keeps them selected, as in Word.
-                if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != sel_before)
-                {
-                    self.also_selected.clear();
-                }
-                self.note_typing(id, before_doc.as_ref().map(|b| &b.0), &sel_before);
-            }
+            Ok(_) => self.finish_success(SuccessContext {
+                id,
+                spec,
+                before_doc: &before_doc,
+                pending_before: &pending_before,
+                document_id_before,
+                replaces_document,
+                dirty_before,
+                rev_restore,
+                pushed,
+                mutates,
+                ime_caret_before,
+                rev_before,
+                sel_before: &sel_before,
+            }),
             Err(e) => {
                 self.ime_edit_outcome = ImeEditOutcome::default();
                 self.pending_ime_application_change = pending_application_change_before;
@@ -330,22 +275,133 @@ impl Session {
         result
     }
 
+    fn finish_success(&mut self, context: SuccessContext<'_>) {
+        let SuccessContext {
+            id,
+            spec,
+            before_doc,
+            pending_before,
+            document_id_before,
+            replaces_document,
+            dirty_before,
+            rev_restore,
+            pushed,
+            mutates,
+            ime_caret_before,
+            rev_before,
+            sel_before,
+        } = context;
+        let mut no_op = false;
+        if spec.mutates {
+            // Formatting changed while tracking becomes a formatting revision.
+            if let Some((before, ..)) = before_doc {
+                crate::cmd::fmt_revisions::record(self, id, before);
+            }
+            self.doc.ensure_nonempty();
+            self.doc.prune_text_boxes();
+            // Whether the command left the document, the selection and the formatting
+            // waiting at the caret as they were. A command that replaces the document —
+            // a mail merge, a comparison — is not an edit of this one, whatever the new
+            // document holds: `replaces_document` names the commands that may replace
+            // it, and `document_id` catches any other that does (through
+            // `set_document`, which starts a new history the old one must not overwrite).
+            let unchanged = |s: &Session| match (before_doc, pending_before) {
+                (Some((doc, sel, _, _, _, _, column)), Some(pending)) => {
+                    !replaces_document && s.document_id == document_id_before && s.unchanged(doc, sel, column, pending)
+                }
+                _ => false,
+            };
+            let changed = !unchanged(self);
+            if changed {
+                // The layout the connectors are rerouted against is the new one.
+                self.touch();
+            }
+            // Glued connectors follow the shapes they join.
+            let rerouted = crate::cmd::connectors::reroutes_after(id) && crate::cmd::connectors::reroute(self);
+            if rerouted {
+                self.touch();
+            }
+            // A command that changed nothing is not an edit (#23): it adds no undo
+            // step, marks no unsaved changes, forces no relayout and leaves the redo
+            // stack alone. What it left behind is compared with what it started from,
+            // after the reroute: a reroute that moved a connector is an edit of its own.
+            no_op = !changed && !rerouted && unchanged(self);
+            if no_op {
+                // The step the dispatch pushed is not an edit: put the stacks back as
+                // they were, so the redo stack survives and no step is evicted. The
+                // group it belonged to is left without a step of its own, so the next
+                // command in it starts one.
+                if let Some((_, _, history, redo, typing_open, evicted, _)) = before_doc {
+                    self.history = history.clone();
+                    self.redo = redo.clone();
+                    self.typing_open = *typing_open;
+                    self.undo_evicted = *evicted;
+                }
+                if let Some(dirty) = dirty_before {
+                    self.dirty = dirty;
+                }
+                if let Some(rev) = rev_restore {
+                    let touched = self.rev;
+                    self.restore_rev(rev);
+                    crate::cmd::draw::rekey_lasso(self, touched, rev);
+                }
+                if pushed {
+                    self.join_anchor = false;
+                }
+            }
+        }
+        self.clamp_selection();
+        let mut ime_outcome = self.ime_edit_outcome;
+        if ime_outcome.content_changed {
+            ime_outcome.state_changed = true;
+        }
+        // An unclassified mutating command is conservatively a state change. It can make
+        // a frame Other, but it can never mint a receipt because `classified` is false.
+        // A command that changed nothing is not an edit (#23), so it is not an IME
+        // state change either: otherwise Backspace at the document start would still
+        // signal an application change and move the settled IME revision.
+        if !ime_outcome.classified && mutates && !no_op {
+            ime_outcome.state_changed = true;
+        }
+        ime_outcome.selection_changed = self.current_ime_caret_state() != ime_caret_before;
+        self.ime_edit_outcome = ime_outcome;
+        if ime_outcome.state_changed {
+            let caret = self.current_ime_caret_state();
+            self.ime_state_seen = Some(caret);
+            self.reset_ime_state_revision();
+        }
+        if !self.ime_origin && !no_op && (ime_outcome.content_changed || ime_outcome.state_changed || (!ime_outcome.classified && mutates)) {
+            self.pending_ime_application_change = true;
+        }
+        if sel_before.focus.story == StoryRef::Body && self.in_header_footer() {
+            self.hf_return = Some(sel_before.clone());
+        }
+        // A selection command that moves the insertion point ends the typing group, like
+        // caret movement: typing, Select, typing are two undo steps (#419).
+        if !spec.mutates && self.sel != *sel_before {
+            self.typing_open = false;
+        }
+        if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.redo") {
+            self.note_edit();
+        }
+        // Outline view: collapsed headings follow edits; the caret stays where it shows.
+        crate::cmd::outline::after_command(self, sel_before, self.rev != rev_before);
+        // Extra selected objects last until something else is edited or selected; formatting
+        // them keeps them selected, as in Word.
+        if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != *sel_before) {
+            self.also_selected.clear();
+        }
+        self.note_typing(id, before_doc.as_ref().map(|b| &b.0), sel_before);
+    }
+
     /// The end of [`Session::run`] for a command that ended up in another document than it
     /// started in (it opened, made, switched to or closed one) or that failed after opening one.
     /// The checks that compare the document before and after the command don't apply.
     /// Succeeded: the first document loses the undo step made for the command when its text is
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
-    fn finish_elsewhere(
-        &mut self,
-        home: u64,
-        mark: u64,
-        result: Result<Value, CmdError>,
-        before_doc: Option<RunSnapshot>,
-        blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
-        default_language_before: Option<String>,
-        pending_application_change_before: bool,
-    ) -> Result<Value, CmdError> {
+    fn finish_elsewhere(&mut self, context: ElsewhereContext, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
+        let ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before } = context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
         match &result {

@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, El, Embedded, Float, FloatAlign, Glow, Graphic, GraphicItem, GraphicKind,
+    INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, Reader, Rels, Rgb, Shadow, ShapeEffects, ShapeExtra, ShapeKind, StoryCtx,
+    TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint, u32_of,
+};
 
 impl Reader<'_> {
     // ---- drawings ----
@@ -214,8 +218,8 @@ impl Reader<'_> {
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
         }
-        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
-        self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
+        let items = if self.chunks.graphic == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        self.chunks.graphic = self.chunks.graphic.saturating_sub(graphic_work(&items));
         // A chart or SmartArt that is exactly what WordCraft writes for its model can be edited
         // (and is written from the model); any other stays as it was read.
         let chart = match kind {
@@ -495,10 +499,26 @@ impl Reader<'_> {
                 .and_then(|g| preset_adj(g, "adj"))
                 .and_then(|v| u32::try_from(v.clamp(0, i64::from(wordcraft_doc::connector::MAX_CORNER))).ok());
         }
-        // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle.
-        let arrow = |tag: &str| ln.and_then(|l| l.child(tag)).and_then(|e| e.attr("type")).is_some_and(|t| t != "none");
-        extra.arrow_start = arrow("a:headEnd");
-        extra.arrow_end = arrow("a:tailEnd");
+        // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle of its
+        // width and length.
+        let arrow = |tag: &str| {
+            let e = ln.and_then(|l| l.child(tag))?;
+            let kind = e.attr("type").filter(|t| *t != "none")?;
+            let size = |name: &str| wordcraft_doc::connector::ArrowSize::from_ooxml(e.attr(name).unwrap_or("med"));
+            Some(wordcraft_doc::connector::ArrowStyle {
+                kind: wordcraft_doc::connector::ArrowKind::from_ooxml(kind),
+                width: size("w"),
+                length: size("len"),
+            })
+        };
+        if let Some(style) = arrow("a:headEnd") {
+            extra.arrow_start = true;
+            extra.start_style = style;
+        }
+        if let Some(style) = arrow("a:tailEnd") {
+            extra.arrow_end = true;
+            extra.end_style = style;
+        }
         // A connector's glued ends (ECMA-376 §20.1.2.2.36, §20.1.2.2.13).
         if let Some(cn) = wsp.child("wps:cNvCnPr") {
             let end = |tag: &str| {
@@ -536,7 +556,7 @@ impl Reader<'_> {
         let mut blocks = Blocks::new();
         // Shapes in the text aren't members of a group the box may be in.
         let group = self.group_fill.take();
-        self.read_blocks(&mut inner, content, rels, &mut blocks, 0);
+        self.read_blocks(&mut inner, content, rels, &mut blocks, self.chunks.depth);
         self.group_fill = group;
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)

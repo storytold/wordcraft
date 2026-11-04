@@ -1,4 +1,4 @@
-use super::*;
+use super::{ImeEditOutcome, WordApp, json};
 
 /// The most pre-edit text a UI pass will hold and paint. A composition is a word or a phrase;
 /// anything larger is a malformed or hostile event, and laying it out every frame would cost.
