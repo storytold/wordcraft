@@ -747,6 +747,41 @@ fn save_as_adds_the_format_to_a_name_without_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #5368 (review): the system dialog asks only about the name it returns. When the save adds an
+/// extension to it and a file of that name exists, the built-in browser asks before replacing
+/// it: Cancel leaves the file alone, OK replaces it. A new name is written straight away.
+#[test]
+fn a_name_the_save_extends_asks_before_replacing_its_file() {
+    use crate::file_browser::Step;
+    let dir = scratch("save-as-ext-replace");
+    let (mut a, shown) = async_app();
+    typed(&mut a);
+    let target = dir.join("Handout.docx.pdf");
+    std::fs::write(&target, b"old").unwrap();
+    let export = |a: &mut WordApp| {
+        a.export_dialog("pdf");
+        answer(&shown, Some(&dir.join("Handout.docx").to_string_lossy()));
+        a.poll_file_dialog()
+    };
+    assert!(export(&mut a).is_none(), "nothing written yet: the question is open");
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+    assert!(a.file_browser.open.is_some(), "the built-in browser asks");
+    a.close_file_browser(None);
+    assert_eq!(std::fs::read(&target).unwrap(), b"old", "Cancel keeps the file");
+    assert!(export(&mut a).is_none());
+    let step = a.file_browser.open.as_mut().map(|b| b.accept());
+    assert_eq!(step, Some(Step::Pick(target.clone())), "OK on the name asked about replaces it");
+    a.close_file_browser(Some(target.clone()));
+    assert!(std::fs::read(&target).unwrap().starts_with(b"%PDF"), "replaced by the export");
+    // A name whose extended form doesn't exist yet: no question.
+    a.export_dialog("pdf");
+    answer(&shown, Some(&dir.join("Fresh.docx").to_string_lossy()));
+    assert!(a.poll_file_dialog().is_some_and(|r| r.is_ok()));
+    assert!(std::fs::read(dir.join("Fresh.docx.pdf")).unwrap().starts_with(b"%PDF"));
+    assert!(a.file_browser.open.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
 /// every savable extension exactly once.
 #[test]

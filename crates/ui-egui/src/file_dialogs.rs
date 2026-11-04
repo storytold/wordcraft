@@ -224,7 +224,7 @@ impl WordApp {
             }
             FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
-        Asked::Done(self.finish_pick(after, picked))
+        self.finish_system_pick(req, after, picked.into_iter().collect()).map_or(Asked::Pending, Asked::Done)
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -238,7 +238,7 @@ impl WordApp {
         };
         let d = self.file_dialog.take()?;
         match answer {
-            Ok(picked) => Some(self.finish_picks(d.after, picked)),
+            Ok(picked) => self.finish_system_pick(d.req, d.after, picked),
             Err(reason) => {
                 log::warn!("no system file dialog ({reason}); showing the built-in file browser");
                 self.dialog_unavailable(d.req, d.after)
@@ -266,6 +266,24 @@ impl WordApp {
     #[cfg(target_arch = "wasm32")]
     fn dialog_unavailable(&mut self, _req: FileDialogRequest, after: AfterPick) -> Option<Result<Value, String>> {
         Some(self.finish_pick(after, None))
+    }
+
+    /// Finish what the system dialog was for with its answer. A save or export that writes another
+    /// name than the one picked (its extension added, #5368) asks first when a file of that name
+    /// exists: the system dialog only asked about the name it returned (#5368 review). `None`
+    /// while that question is open in the built-in browser.
+    fn finish_system_pick(&mut self, req: FileDialogRequest, after: AfterPick, picked: Vec<String>) -> Option<Result<Value, String>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = picked.first() {
+            let written = after.written_path(p);
+            if written != *p && std::path::Path::new(&written).exists() {
+                self.confirm_replace(req, after, std::path::PathBuf::from(written));
+                return None;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = req;
+        Some(self.finish_picks(after, picked))
     }
 
     /// Do what the dialog was for with the picked paths (none: the user cancelled). Only Add Font

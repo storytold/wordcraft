@@ -289,6 +289,24 @@ impl WordApp {
         self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
     }
 
+    /// Ask whether to replace `path` before a save or export writes it: the built-in browser on
+    /// its folder and name, saying it exists (#5368 review). The system dialog only asked about
+    /// the name it returned, and the save added an extension to that. OK replaces the file,
+    /// another name saves there, Cancel cancels the save.
+    pub(crate) fn confirm_replace(&mut self, req: FileDialogRequest, after: AfterPick, path: PathBuf) {
+        let req = match req {
+            FileDialogRequest::Save { .. } => FileDialogRequest::Save {
+                name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                dir: path.parent().filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned()),
+            },
+            other => other,
+        };
+        self.show_file_browser(req, after, false);
+        if let Some(b) = self.file_browser.open.as_mut() {
+            b.note = Note::Replace(path);
+        }
+    }
+
     /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save),
     /// even when a system dialog was asked for and never showed up (it is given up as cancelled).
     pub(crate) fn browse_builtin(&mut self, purpose: &str) {
