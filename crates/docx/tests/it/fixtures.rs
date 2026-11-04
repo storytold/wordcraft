@@ -4034,6 +4034,51 @@ fn washout_picture_watermark_in_header() {
     assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
 }
 
+/// A faded DrawingML picture behind a header's text (#1766; #1961 review): `a:alphaModFix` reads
+/// and is written back once, as in the body.
+#[test]
+fn faded_picture_behind_text_in_header() {
+    let hdr = format!(
+        r#"<w:hdr {W_NS}><w:p><w:r><w:drawing><wp:anchor behindDoc="1" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="margin"><wp:align>center</wp:align></wp:positionV><wp:extent cx="2540000" cy="2540000"/><wp:wrapNone/><wp:docPr id="7" name="Faded"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rImg"><a:alphaModFix amt="20000"/></a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>"#
+    );
+    let hrels = rels(&[("rImg", "image", "media/wm.png")]);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHdr"/></w:sectPr>"#;
+    let header_picture = |d: &wordcraft_doc::Document| {
+        let id = d.last_section.headers.default.unwrap();
+        d.parts[&id]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .find_map(|o| if let InlineObject::Image { fx, float, .. } = o { Some((*fx, float.wrap)) } else { None })
+            .expect("header picture")
+    };
+    let d = wordcraft_docx::read(&docx(
+        body,
+        &[("rHdr", "header", "header1.xml")],
+        &[("word/header1.xml", &hdr), ("word/_rels/header1.xml.rels", &hrels), ("word/media/wm.png", "not really a png")],
+    ))
+    .unwrap();
+    let (fx, wrap) = header_picture(&d);
+    assert_eq!(fx, wordcraft_doc::picfx::PicFx::new(0, 0, 80_000));
+    assert_eq!(wrap, wordcraft_doc::para::Wrap::BehindText);
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(header_picture(&again), (fx, wrap), "the same picture after saving");
+}
+
+/// An OLE object's preview keeps the corrections of its picture (#1961 review).
+#[test]
+fn ole_preview_keeps_its_corrections() {
+    let body = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:36pt" o:ole=""><v:imagedata r:id="rIdImg" gain="19661f" blacklevel="22938f"/></v:shape></w:object></w:r></w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[("rIdImg", "image", "media/p.png")], &[("word/media/p.png", "not really a png")])).unwrap();
+    let fx = d.body[0]
+        .as_para()
+        .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None }))
+        .expect("the preview");
+    assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
+}
+
 #[test]
 fn row_table_borders_round_trip() {
     let d = read_body(
