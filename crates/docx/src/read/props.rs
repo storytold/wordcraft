@@ -760,11 +760,12 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             }
             "w:paperSrc" => {
                 let tray = |name| {
-                    k.attr(name)
-                        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-                        .and_then(u32_of)
-                        .filter(|v| *v <= u16::MAX as u32)
-                        .map(|v| v as u16)
+                    let value = k.attr(name)?.trim();
+                    let digits = value.strip_prefix('+').unwrap_or(value);
+                    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                        return None;
+                    }
+                    u32_of(digits).filter(|v| *v <= u16::MAX as u32).map(|v| v as u16)
                 };
                 s.paper_src_first = tray("w:first");
                 s.paper_src_other = tray("w:other");

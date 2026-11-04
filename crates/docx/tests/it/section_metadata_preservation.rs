@@ -25,7 +25,7 @@ fn document_xml(bytes: &[u8]) -> String {
 #[test]
 fn section_metadata_survives_native_json_and_two_docx_save_reopen_cycles() {
     let input = docx(
-        r#"<w:p><w:pPr><w:sectPr><w:paperSrc w:first="261" w:other="260"/><w:noEndnote/><w15:footnoteColumns w:val="2"/><w:pgNumType w:fmt="decimal" w:chapStyle="1" w:chapSep="hyphen"/></w:sectPr></w:pPr><w:r><w:t>First section</w:t></w:r></w:p><w:p><w:r><w:t>Second section</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="12" w:other="34"/><w:noEndnote w:val="0"/><w15:footnoteColumns w:val="3"/><w:pgNumType w:fmt="upperRoman" w:chapStyle="10" w:chapSep="colon"/></w:sectPr>"#,
+        r#"<w:p><w:pPr><w:sectPr><w:paperSrc w:first=" +261 " w:other=" 260 "/><w:noEndnote/><w15:footnoteColumns w:val="2"/><w:pgNumType w:fmt="decimal" w:chapStyle="1" w:chapSep="hyphen"/></w:sectPr></w:pPr><w:r><w:t>First section</w:t></w:r></w:p><w:p><w:r><w:t>Second section</w:t></w:r></w:p><w:sectPr><w:paperSrc w:first="12" w:other="34"/><w:noEndnote w:val="0"/><w15:footnoteColumns w:val="3"/><w:pgNumType w:fmt="upperRoman" w:chapStyle="10" w:chapSep="colon"/></w:sectPr>"#,
     );
     let mut document = wordcraft_docx::read(&input).unwrap();
     let json = serde_json::to_vec(&document).unwrap();
