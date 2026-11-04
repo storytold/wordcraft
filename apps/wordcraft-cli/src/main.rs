@@ -90,11 +90,18 @@ fn missing_argument() -> Failure {
 /// ([`password_from`]). As in the app, a document opened with one is saved with it again, so
 /// `convert` does not quietly write a copy the password no longer protects.
 fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
+    open_in(path, password, odf_profile()?)
+}
+
+/// [`open`] with the OpenDocument style `odf`, which the session keeps: a later `file.open` or
+/// `file.new` in a `run` script reads files the same way.
+fn open_in(path: &Path, password: Option<&str>, odf: wordcraft_doc::odf_profile::OdfProfile) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region, &odf_profile()?)?;
+    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region, &odf)?;
     let mut s = session(doc);
+    s.prefs.odf = odf;
     s.path = Some(path.into());
     if encrypted {
         s.password = password.map(wordcraft_engine::io::Password::new);
@@ -179,8 +186,13 @@ fn session(doc: wordcraft_doc::Document) -> Session {
 /// How OpenDocument files fill in what their standard leaves open: `WORDCRAFT_ODF` names a preset
 /// (`word`, Microsoft Word's style and the default, or `libreoffice`; `wordcraft` is taken too).
 fn odf_profile() -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
+    odf_from(std::env::var("WORDCRAFT_ODF").ok())
+}
+
+/// [`odf_profile`] from `WORDCRAFT_ODF`'s value, if set.
+fn odf_from(var: Option<String>) -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
     use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
-    match std::env::var("WORDCRAFT_ODF").ok().filter(|v| !v.trim().is_empty()) {
+    match var.filter(|v| !v.trim().is_empty()) {
         None => Ok(OdfProfile::default()),
         Some(v) => match OdfPreset::from_id(&v).filter(|p| *p != OdfPreset::Custom) {
             Some(p) => Ok(OdfProfile::of(p)),
@@ -521,6 +533,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 // run starts with one open document.
                 (None, t) => {
                     let mut s = session(wordcraft_doc::Document::new());
+                    // The script's own `file.open`s read OpenDocument files in `WORDCRAFT_ODF`'s style.
+                    s.prefs.odf = odf_profile()?;
                     let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
                     s.run("file.new", &params).map_err(|e| e.to_string())?;

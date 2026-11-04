@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-03 · **Change:** minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an

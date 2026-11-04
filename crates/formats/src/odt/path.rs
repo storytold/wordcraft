@@ -88,8 +88,10 @@ pub(super) fn path(d: &str, vb: Option<[f32; 4]>) -> Option<Freeform> {
             Token::Num(_) => match cmd {
                 Some('M') => 'L',
                 Some('m') => 'l',
+                // A close takes no numbers: a number after one ends the data (it would be read
+                // again for ever otherwise).
+                Some('Z' | 'z') | None => break,
                 Some(c) => c,
-                None => break,
             },
         };
         if let Token::Num(_) = t {
@@ -394,4 +396,21 @@ fn path_text(f: &Freeform, vw: u32, vh: u32, enhanced: bool) -> String {
         d.push(' ');
     }
     d.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    /// A number after a close ends the path data; it used to be read again for ever (a hang on a
+    /// hostile or malformed `svg:d`).
+    #[test]
+    fn a_number_after_a_close_ends_the_path() {
+        let f = super::path("M 0 0 L 10 0 L 10 10 Z 5 5", Some([0.0, 0.0, 10.0, 10.0]));
+        let paths = f.map(|f| f.paths).unwrap_or_default();
+        assert_eq!(paths.len(), 1, "{paths:?}");
+        assert!(paths[0].closed);
+        assert_eq!(paths[0].pts.len(), 3);
+        // Lower case too, and a close ending the data as before.
+        assert!(super::path("m 0 0 l 10 0 l 0 10 z 1", None).is_some());
+        assert!(super::path("M 0 0 L 10 0 L 10 10 Z", None).is_some());
+    }
 }

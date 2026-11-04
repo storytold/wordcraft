@@ -45,6 +45,20 @@ const ITERATIONS: u32 = 100_000;
 const MAX_ITERATIONS: u32 = 10_000_000;
 /// Most files in a package decrypted.
 const MAX_FILES: usize = 10_000;
+/// Most PBKDF2 work (iterations times the key's 20-byte blocks) for a whole package: a thousand
+/// files as LibreOffice and WordCraft write them (100,000 iterations, a 32-byte key), so many
+/// files at the per-file cap can't add up to a hang.
+const MAX_WORK: u64 = 200_000_000;
+
+/// `p`'s key derivation added to `spent`, an error once the package's work passes [`MAX_WORK`].
+fn charge(spent: &mut u64, p: &Params) -> Result<(), CryptError> {
+    let blocks = p.key_size.unwrap_or(16).clamp(16, 32).div_ceil(20) as u64;
+    *spent = spent.saturating_add(u64::from(p.iterations.min(MAX_ITERATIONS)).saturating_mul(blocks));
+    if *spent > MAX_WORK {
+        return Err(CryptError::Unsupported("the package's key derivations would take too long".into()));
+    }
+    Ok(())
+}
 
 /// How one file is encrypted (a `manifest:encryption-data`).
 #[derive(Default, Debug, Clone)]
@@ -254,6 +268,7 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
     let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     let io = |e: std::io::Error| CryptError::Unsupported(e.to_string());
     let mut checked = false;
+    let mut work = 0u64;
     for i in 0..z.len().min(MAX_FILES) {
         let Ok(mut f) = z.by_index(i) else { continue };
         let name = f.name().to_string();
@@ -264,6 +279,7 @@ pub fn decrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, CryptError> {
         f.by_ref().take(MAX_ENTRY).read_to_end(&mut data).map_err(io)?;
         let data = match encrypted.iter().find(|(p, _)| *p == name) {
             Some((_, p)) => {
+                charge(&mut work, p)?;
                 let plain = decrypt_file(&data, p, password)?;
                 checked = true;
                 plain
@@ -391,4 +407,25 @@ pub fn encrypt(bytes: &[u8], password: &str) -> Result<Vec<u8>, String> {
         w.write_all(data).map_err(io)?;
     }
     Ok(w.finish().map_err(err)?.into_inner())
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+
+    /// Key derivations are budgeted over the whole package, not only per file: a thousand of
+    /// LibreOffice's fit, twenty-one at the per-file cap don't.
+    #[test]
+    fn a_packages_key_derivations_share_one_budget() {
+        let ours = Params { iterations: ITERATIONS, key_size: Some(32), ..Default::default() };
+        let mut spent = 0;
+        for _ in 0..1000 {
+            assert!(charge(&mut spent, &ours).is_ok());
+        }
+        assert!(charge(&mut spent, &ours).is_err());
+        let hostile = Params { iterations: MAX_ITERATIONS, key_size: Some(16), ..Default::default() };
+        let mut spent = 0;
+        let ok = (0..30).take_while(|_| charge(&mut spent, &hostile).is_ok()).count();
+        assert_eq!(ok, 20);
+    }
 }
