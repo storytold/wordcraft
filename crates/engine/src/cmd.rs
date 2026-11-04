@@ -373,6 +373,9 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
     }
+    if fill_text_form_field(s, text)? {
+        return Ok(InsertEffect { content_changed: true, state_changed: true });
+    }
     // Content controls: a placeholder is replaced, locked ones refuse.
     let prepared = controls::prepare_edit(s)?;
     let placeholder_changed = prepared.is_some();
@@ -431,6 +434,118 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect,
     s.goal_x = None;
     let content_changed = deletion.content_changed || inserted;
     Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
+}
+
+/// A legacy text form field being filled in (#5525): typing goes on inside its result until the
+/// selection leaves the field. The field is one object in its paragraph, so the caret inside its
+/// result is kept here, not in the selection (which stays on the field).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormFill {
+    /// Where the field object is.
+    pub at: Pos,
+    /// The caret in the result, in characters.
+    pub caret: usize,
+    /// The result as the fill last wrote it: any other change to it ends the fill.
+    pub text: String,
+}
+
+/// The legacy text form field (`FORMTEXT`) the selection is exactly: its position, its length
+/// limit and its current result.
+fn selected_text_form_field(s: &Session) -> Option<(Pos, Pos, usize, String)> {
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path || a.off.checked_add(wordcraft_doc::para::OBJ.len_utf8()) != Some(b.off) {
+        return None;
+    }
+    let obj = s.doc.para_at(&a)?.object_at(a.off)?;
+    let max_len = match obj.legacy_form() {
+        Some(wordcraft_doc::legacy_form::LegacyForm::Text { max_len, .. }) => max_len,
+        _ => return None,
+    };
+    let wordcraft_doc::para::InlineObject::Field { result, .. } = obj else { return None };
+    let limit = max_len.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    Some((a, b, limit, result.clone()))
+}
+
+/// The fill in progress, taken out of the session: `None` (and the fill ended) when changes are
+/// tracked, the selection isn't exactly that field any more, or its result isn't what the fill
+/// wrote (an undo, a redo or another edit changed it).
+fn active_fill(s: &mut Session) -> Option<FormFill> {
+    let fill = s.form_fill.take()?;
+    if s.doc.settings.track_changes {
+        return None;
+    }
+    let (at, _, _, result) = selected_text_form_field(s)?;
+    (at == fill.at && result == fill.text && fill.caret <= result.chars().count()).then_some(fill)
+}
+
+/// Byte offset of character `i` in `t` (its end past the last one).
+fn char_byte(t: &str, i: usize) -> usize {
+    t.char_indices().nth(i).map_or(t.len(), |(b, _)| b)
+}
+
+/// Write a form field's result and carry the fill on with the caret at `caret`.
+fn write_fill(s: &mut Session, at: &Pos, text: String, caret: usize) -> Result<(), CmdError> {
+    let para = s.doc.para_mut(at.story, &at.path)?;
+    if let Some(wordcraft_doc::para::InlineObject::Field { result, dirty, .. }) = para.object_at_mut(at.off) {
+        result.clone_from(&text);
+        *dirty = false;
+    }
+    para.touch();
+    s.form_fill = Some(FormFill { at: at.clone(), caret, text });
+    s.goal_x = None;
+    Ok(())
+}
+
+/// Text typed over a selected legacy text form field (`FORMTEXT`, as Alt+F1 selects it) fills it
+/// in, as in Word: the text becomes the field's result (one line, cut to the field's maximum
+/// length) and the field, with its `w:ffData`, stays (#5525). The field stays selected and the
+/// next keystrokes go on inside its result ([`FormFill`]), the maximum length capping the whole
+/// result. Returns `false`, changing nothing, when the selection isn't exactly one such field or
+/// changes are tracked.
+fn fill_text_form_field(s: &mut Session, text: &str) -> Result<bool, CmdError> {
+    let active = active_fill(s);
+    if s.doc.settings.track_changes {
+        return Ok(false);
+    }
+    let Some((a, b, limit, result)) = selected_text_form_field(s) else { return Ok(false) };
+    controls::check_edit(s, &a, &b)?;
+    let typed = text.chars().filter(|c| !matches!(c, '\r' | '\n' | '\u{000B}' | '\u{2029}'));
+    let (filled, caret) = match active {
+        Some(fill) => {
+            let added: String = typed.take(limit.saturating_sub(result.chars().count())).collect();
+            let mut filled = result;
+            filled.insert_str(char_byte(&filled, fill.caret), &added);
+            (filled, fill.caret.saturating_add(added.chars().count()))
+        }
+        None => {
+            let filled: String = typed.take(limit).collect();
+            let n = filled.chars().count();
+            (filled, n)
+        }
+    };
+    write_fill(s, &a, filled, caret)?;
+    Ok(true)
+}
+
+/// Backspace (or, `forward`, Delete) while a form field is being filled ([`FormFill`]): removes
+/// the character before (after) the caret in its result. At the result's start (end) the fill
+/// ends and the caret goes before (after) the field, which is never deleted. `None` when no fill
+/// is in progress; else whether the result changed.
+pub(crate) fn form_fill_delete(s: &mut Session, forward: bool) -> Result<Option<bool>, CmdError> {
+    let Some(fill) = active_fill(s) else { return Ok(None) };
+    let (a, b) = s.sel.ordered();
+    let len = fill.text.chars().count();
+    let gone = if forward { (fill.caret < len).then_some(fill.caret) } else { fill.caret.checked_sub(1) };
+    let Some(i) = gone else {
+        s.sel = crate::Selection::caret(if forward { b } else { a });
+        return Ok(Some(false));
+    };
+    controls::check_edit(s, &a, &b)?;
+    let mut text = fill.text;
+    let (from, to) = (char_byte(&text, i), char_byte(&text, i.saturating_add(1)));
+    text.replace_range(from..to, "");
+    write_fill(s, &fill.at, text, i)?;
+    Ok(Some(true))
 }
 
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and

@@ -463,6 +463,172 @@ mod tests {
         assert!(s.run("fields.lock", &json!({})).is_err());
     }
 
+    /// #5525: typing over a legacy text form field (selected with Alt+F1) fills it in: the text
+    /// becomes its result and the field keeps its `w:ffData` through a DOCX save, as in Word,
+    /// instead of the field being replaced by plain text.
+    #[test]
+    fn typing_into_text_form_field_keeps_the_field() {
+        let ff = r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/><w:maxLength w:val="6"/></w:textInput></w:ffData>"#;
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Name: "})).unwrap();
+        s.run("insert.field", &json!({"instr": "FORMTEXT", "result": "XXXXX"})).unwrap();
+        let para = s.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        for o in &mut para.objects {
+            if let InlineObject::Field { form, .. } = o {
+                *form = ff.into();
+            }
+        }
+        para.touch();
+        let fields = |doc: &wordcraft_doc::Document| -> Vec<(String, String)> {
+            doc.body
+                .first()
+                .and_then(|b| b.as_para())
+                .map(|p| {
+                    p.objects
+                        .iter()
+                        .filter_map(|o| match o {
+                            InlineObject::Field { result, form, .. } => Some((result.clone(), form.clone())),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let before = fields(&s.doc);
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("fields.next", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Jane Doe"})).unwrap();
+        // Cut to the field's maximum length (6).
+        assert_eq!(fields(&s.doc), [("Jane D".to_string(), ff.to_string())]);
+        let reread = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        let saved = fields(&reread);
+        assert_eq!(saved.len(), 1, "the form field survives the save");
+        assert_eq!(saved[0].0, "Jane D");
+        assert!(saved[0].1.contains(r#"<w:name w:val="Text1"/>"#) && saved[0].1.contains(r#"<w:default w:val="XXXXX"/>"#), "{}", saved[0].1);
+        // One undo step brings the old result back.
+        assert!(s.undo());
+        assert_eq!(fields(&s.doc), before);
+    }
+
+    const FF6: &str = r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/><w:maxLength w:val="6"/></w:textInput></w:ffData>"#;
+    const FF: &str =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+
+    /// "Name: " and a legacy text form field with `form` as its `w:ffData`, the field selected
+    /// the way Alt+F1 selects it.
+    fn form_field_session(form: &str) -> Session {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Name: "})).unwrap();
+        s.run("insert.field", &json!({"instr": "FORMTEXT", "result": "XXXXX"})).unwrap();
+        let para = s.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        for o in &mut para.objects {
+            if let InlineObject::Field { form: f, .. } = o {
+                *f = form.into();
+            }
+        }
+        para.touch();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("fields.next", &json!({})).unwrap();
+        s
+    }
+
+    /// The body's form fields: (result, ffData).
+    fn form_fields(s: &Session) -> Vec<(String, String)> {
+        s.doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                InlineObject::Field { result, form, .. } if !form.is_empty() => Some((result.clone(), form.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn type_keys(s: &mut Session, keys: &str) {
+        for c in keys.chars() {
+            s.run("text.insert", &json!({"text": c.to_string()})).unwrap();
+        }
+    }
+
+    /// #5525: once typing has started in a form field, the next keystrokes go on inside its
+    /// result, as in Word, instead of landing after the field.
+    #[test]
+    fn typing_keystrokes_into_text_form_field_fills_it() {
+        let mut s = form_field_session(FF);
+        let selected = s.sel.clone();
+        type_keys(&mut s, "Jane");
+        assert_eq!(form_fields(&s), [("Jane".to_string(), FF.to_string())]);
+        assert_eq!(s.sel, selected, "the field stays selected while it is filled in");
+        // Spaces and punctuation are the result's text too: AutoCorrect leaves them alone.
+        type_keys(&mut s, " d.");
+        assert_eq!(form_fields(&s)[0].0, "Jane d.");
+        assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: Jane d.");
+    }
+
+    #[test]
+    fn backspace_and_delete_edit_inside_a_form_field_and_never_remove_it() {
+        let mut s = form_field_session(FF);
+        let (a, b) = s.sel.ordered();
+        type_keys(&mut s, "Jane");
+        s.run("text.backspace", &json!({})).unwrap();
+        assert_eq!(form_fields(&s), [("Jan".to_string(), FF.to_string())]);
+        type_keys(&mut s, "e");
+        assert_eq!(form_fields(&s)[0].0, "Jane");
+        for _ in 0..4 {
+            s.run("text.backspace", &json!({})).unwrap();
+        }
+        assert_eq!(form_fields(&s), [(String::new(), FF.to_string())]);
+        // At the start of the result Backspace leaves the field, before it, and deletes nothing.
+        s.run("text.backspace", &json!({})).unwrap();
+        assert_eq!(form_fields(&s), [(String::new(), FF.to_string())]);
+        assert_eq!(s.sel, crate::Selection::caret(a.clone()));
+        // Forward Delete at the caret: at the end of the result the caret goes after the field.
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "ab");
+        s.run("text.delete", &json!({})).unwrap();
+        assert_eq!(form_fields(&s), [("ab".to_string(), FF.to_string())]);
+        assert_eq!(s.sel, crate::Selection::caret(b));
+    }
+
+    #[test]
+    fn reselecting_a_form_field_replaces_its_result() {
+        let mut s = form_field_session(FF);
+        let selected = s.sel.clone();
+        type_keys(&mut s, "Jane");
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("fields.next", &json!({})).unwrap();
+        type_keys(&mut s, "Bo");
+        assert_eq!(form_fields(&s)[0].0, "Bo");
+        // An explicit selection of the field starts over too.
+        s.run("select.range", &json!({"anchor": selected.anchor, "focus": selected.focus})).unwrap();
+        type_keys(&mut s, "Al");
+        assert_eq!(form_fields(&s), [("Al".to_string(), FF.to_string())]);
+    }
+
+    #[test]
+    fn form_field_max_length_caps_the_whole_result_across_keystrokes() {
+        let mut s = form_field_session(FF6);
+        type_keys(&mut s, "Jonathan");
+        assert_eq!(form_fields(&s), [("Jonath".to_string(), FF6.to_string())]);
+    }
+
+    #[test]
+    fn undo_ends_a_form_field_fill() {
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "Jane");
+        assert!(s.undo());
+        assert_eq!(form_fields(&s)[0].0, "XXXXX");
+        // The fill's state is stale: typing replaces the restored result, nothing is appended.
+        type_keys(&mut s, "Z");
+        assert_eq!(form_fields(&s), [("Z".to_string(), FF.to_string())]);
+        // Through the command too.
+        s.run("edit.undo", &json!({})).unwrap();
+        type_keys(&mut s, "Y");
+        assert_eq!(form_fields(&s), [("Y".to_string(), FF.to_string())]);
+    }
+
     #[test]
     fn unlink_uses_section_context() {
         let mut s = Session::new(wordcraft_doc::Document::new());
