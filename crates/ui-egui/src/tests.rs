@@ -3471,6 +3471,28 @@ fn return_on_the_print_page_prints() {
     h.run_steps(2);
     assert_eq!(printed.get(), 1, "Return printed once");
     assert_eq!(body_text(h.state()), before, "the document is unchanged");
+    // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    for _ in 0..4 {
+        h.event(enter(true));
+        h.run_steps(1);
+    }
+    h.event(enter(false));
+    h.run_steps(1);
+    assert_eq!(printed.get(), 2, "a held Return prints once");
+    // The built-in file browser over the page takes Return for itself, even with nothing in it
+    // focused: Return there saves or opens, and prints nothing.
+    let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
+    h.run_steps(4);
+    assert!(h.state().file_browser.open.is_some(), "the browser opened");
+    h.ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(printed.get(), 2, "Return in the file browser prints nothing");
 }
 
 /// #2958: the Print button leads the settings, above the printer and the settings it prints
