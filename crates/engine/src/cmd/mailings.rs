@@ -203,7 +203,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("mailings.finish", "Finish & Merge", "Mailings › Finish", finish)
-            .params(r#"{"path"?: string (save the merged document), "records"?: "all|current" (current: the previewed record; default all, or from/to), "from"?: n, "to"?: n (record numbers, 1 = the first)}"#)
+            .params(r#"{"path"?: string (save the merged document), "records"?: "all|current" (current: the previewed record; default all, or from/to), "from"?: n, "to"?: n (record numbers, 1 = the first)} → {records: merged copies made; requested: records in the from–to range; skipped: copies SKIPIF dropped; omitted: records not reached because the merged document hit its size limit (then also limit, in paragraphs and tables, and warning)}. Copies and records differ (NEXT puts several records in one copy, and omitted records were never tested against SKIPIF), so the numbers need not add up to requested"#)
             .key(super::non_mac("Alt+Shift+N"))
             .when(has_recipients),
         CommandSpec::new("mailings.printDocuments", "Print Documents", "Mailings › Finish › Finish & Merge", |s, v| {

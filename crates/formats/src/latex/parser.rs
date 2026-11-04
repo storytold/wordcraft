@@ -8,12 +8,22 @@ use super::{Align, Document, FBlock, Flow, Fmt, Inline, Kind, ListInfo, Para, mo
 // =============================================================================================
 // Import
 
-/// Import a LaTeX source file.
-pub fn import(bytes: &[u8]) -> Document {
+/// Import a LaTeX source file. A source longer than [`MAX_SOURCE`] is an error: importing only
+/// its start would lose the rest of the writing without a word.
+pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    import_limited(bytes, MAX_SOURCE)
+}
+
+/// [`import`] with `max` bytes as the limit.
+pub(super) fn import_limited(bytes: &[u8], max: usize) -> Result<Document, String> {
+    if bytes.len() > max {
+        let limit = if max >= 1 << 20 && max.is_multiple_of(1 << 20) { format!("{} MiB", max >> 20) } else { format!("{max} bytes") };
+        return Err(format!("this LaTeX file is larger than {limit}, the most WordCraft imports; split it into smaller files"));
+    }
     model::begin_import();
-    let mut d = model::to_doc(&parse(&crate::txt::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
+    let mut d = model::to_doc(&parse(&crate::txt::decode(bytes)));
     d.ensure_nonempty();
-    d
+    Ok(d)
 }
 
 /// Commands dropped together with their arguments (layout and definitions, not text).

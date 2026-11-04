@@ -254,6 +254,10 @@ const MAX_MERGED_BLOCKS: usize = 200_000;
 /// are merged too: with merge fields in them, each letter becomes its own section with its own
 /// header/footer copies.
 pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
+    finish_within(s, v, MAX_MERGED_BLOCKS)
+}
+
+pub(super) fn finish_within(s: &mut Session, v: &Value, max_blocks: usize) -> CmdResult {
     let (from, to) = merge_range(s, v)?;
     let directory = s.merge.kind == "directory";
     let hf: Vec<u32> =
@@ -264,6 +268,8 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
     let mut next_id = s.doc.parts.keys().next_back().map_or(1, |k| k.saturating_add(1));
     let mut start = from;
     let mut count = 0usize;
+    // Copies SKIPIF dropped, and records left out once the merged document reached `max_blocks`.
+    let (mut skipped, mut omitted) = (0usize, 0usize);
     let mut first_record = None;
     // The section that ends the previous letter (per-record sections only).
     let mut prev_section: Option<SectionProps> = None;
@@ -274,7 +280,18 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
         let keep = merge_blocks(s, &mut body, &mut cur, to, 0);
         start = cur.saturating_add(1);
         if !keep {
+            skipped += 1;
             continue;
+        }
+        // A letter after the first needs a paragraph to carry the previous letter's section break,
+        // unless the output already ends in one.
+        let needs_separator = per_record && prev_section.is_some() && !matches!(out.body.last().map(|b| &**b), Some(Block::Para(_)));
+        // The first record is always kept, so a template over the limit still merges one copy.
+        if count > 0 && out.body.len().saturating_add(body.len()).saturating_add(usize::from(needs_separator)) > max_blocks {
+            // This record's copy (and its separator) would pass the limit: it and every record
+            // after it are left out, and the result says so.
+            omitted = to.saturating_sub(record);
+            break;
         }
         first_record.get_or_insert(record);
         if per_record {
@@ -304,7 +321,7 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
             let mut last = s.doc.last_section.clone();
             remap_headers(&mut last, &map, first);
             if let Some(prev) = prev_section.replace(last) {
-                if !matches!(out.body.last().map(|b| &**b), Some(Block::Para(_))) {
+                if needs_separator {
                     out.body.push(para_block(Paragraph::new()));
                 }
                 if let Some(Block::Para(p)) = out.body.last_mut().map(std::sync::Arc::make_mut) {
@@ -321,9 +338,6 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
         }
         out.body.extend(body);
         count += 1;
-        if out.body.len() > MAX_MERGED_BLOCKS {
-            break;
-        }
     }
     if let Some(last) = prev_section {
         // The template's own header/footer stories are replaced by the letters' copies.
@@ -342,13 +356,24 @@ pub(super) fn finish(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     out.ensure_nonempty();
+    let mut r = json!({"records": count, "requested": to.saturating_sub(from), "skipped": skipped, "omitted": omitted});
+    if omitted > 0 {
+        let warning = format!(
+            "{omitted} record(s) were left out: the merged document reached its limit of {max_blocks} paragraphs and tables; merge a smaller range (from/to)"
+        );
+        log::warn!("Finish & Merge: {warning}");
+        s.status = format!("Merged {count} record(s); {warning}");
+        r["limit"] = json!(max_blocks);
+        r["warning"] = json!(warning);
+    }
     if let Some(path) = p::str(v, "path") {
         crate::io::save_path(std::path::Path::new(path), &out).map_err(CmdError::Failed)?;
-        return Ok(json!({"records": count, "path": path}));
+        r["path"] = json!(path);
+        return Ok(r);
     }
     s.add_document(out);
     s.dirty = true;
-    Ok(json!({"records": count}))
+    Ok(r)
 }
 
 /// Point a letter's section at its own header/footer copies; the letter's first section starts

@@ -58,7 +58,8 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
         } else {
             cell.push(c);
         }
-        if rows.len() > 100_000 {
+        // Header row, the most records, and one more to tell a list that is too long.
+        if rows.len() > MAX_RECORDS.saturating_add(1) {
             break;
         }
     }
@@ -67,9 +68,9 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
-/// Most records and fields a recipient list keeps.
-const MAX_RECORDS: usize = 100_000;
-
+/// Most records a recipient list holds: a longer list is refused ([`over_records`]), never cut.
+pub(super) const MAX_RECORDS: usize = 100_000;
+/// Most fields a recipient list keeps.
 const MAX_FIELDS: usize = 1_000;
 
 pub(super) fn cell(x: &Value) -> String {
@@ -82,7 +83,7 @@ pub(super) fn cell(x: &Value) -> String {
 
 /// A recipient table from `rows` (objects keyed by field, or arrays in `fields` order). Without
 /// `fields`, the columns are the objects' keys.
-fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
+pub(super) fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value], max: usize) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
     let headers: Vec<String> = match fields {
         Some(f) => f.iter().take(MAX_FIELDS).map(|h| cell(h).trim().to_string()).collect(),
         None => {
@@ -100,9 +101,11 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
             headers
         }
     };
+    if arr.iter().filter(|r| r.is_array() || r.is_object()).count() > max {
+        return Err(over_records(max));
+    }
     let rows = arr
         .iter()
-        .take(MAX_RECORDS)
         .filter_map(|r| match r {
             Value::Array(cells) => Some((0..headers.len()).map(|i| cells.get(i).map(cell).unwrap_or_default()).collect()),
             Value::Object(o) => Some(headers.iter().map(|h| o.get(h).map(cell).unwrap_or_default()).collect()),
@@ -112,10 +115,15 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
     Ok((headers, rows))
 }
 
+/// The error for a recipient list longer than `max` records.
+fn over_records(max: usize) -> CmdError {
+    CmdError::Failed(format!("the recipient list has more than {max} records, the most a mail merge uses; split it into smaller lists"))
+}
+
 pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
     let mut sheet = Value::Null;
     let (headers, rows) = if let Some(arr) = v.get("rows").and_then(Value::as_array) {
-        table_from_rows(v.get("fields").and_then(Value::as_array), arr)?
+        table_from_rows(v.get("fields").and_then(Value::as_array), arr, MAX_RECORDS)?
     } else {
         let all = if let Some(c) = p::str(v, "csv") {
             parse_csv(c)
@@ -178,7 +186,7 @@ pub(super) fn recipients(s: &mut Session, v: &Value) -> CmdResult {
                 parse_csv(&decode(&bytes, v)?)
             }
         };
-        header_split(all, p::bool(v, "headers").unwrap_or(true))?
+        header_split(all, p::bool(v, "headers").unwrap_or(true), MAX_RECORDS)?
     };
     s.merge.headers = headers;
     s.merge.source = rows.clone();
@@ -223,8 +231,8 @@ fn read_file(path: &str) -> Result<Vec<u8>, CmdError> {
 
 /// Field names and records from a table's rows: with `headers`, the first row names the fields
 /// (blank names become `Column N`, repeats are numbered); otherwise every row is a record and
-/// the fields are `Column 1`…`Column N`. Records are padded or cut to the fields, and capped.
-fn header_split(mut all: Vec<Vec<String>>, headers: bool) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
+/// the fields are `Column 1`…`Column N`. Records are padded or cut to the fields; a list over `max` records is refused.
+pub(super) fn header_split(mut all: Vec<Vec<String>>, headers: bool, max: usize) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
     if all.is_empty() {
         return Err(CmdError::Failed("the recipient list is empty".into()));
     }
@@ -235,7 +243,9 @@ fn header_split(mut all: Vec<Vec<String>>, headers: bool) -> Result<(Vec<String>
         let width = all.iter().map(Vec::len).max().unwrap_or(0).min(MAX_FIELDS);
         (1..=width).map(|i| format!("Column {i}")).collect()
     };
-    all.truncate(MAX_RECORDS);
+    if all.len() > max {
+        return Err(over_records(max));
+    }
     for r in &mut all {
         r.resize(fields.len(), String::new());
     }

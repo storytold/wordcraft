@@ -517,7 +517,7 @@ fn latex_export_carries_no_commands_from_the_document() {
     assert_eq!(crate::latex::linear_to_latex("\\alpha+\\sin x+\\mathbb R"), "\\alpha+\\sin x+\\mathbb R");
     assert_eq!(crate::latex::linear_to_latex("x^2^3"), "x^2^3");
     // The same through a whole file, and for a bookmark name.
-    let d = crate::latex::import("Text $\\input secret.txt $ and \\hypertarget{^^5cinput secret.txt ^^5c}{here}.".as_bytes());
+    let d = crate::latex::import("Text $\\input secret.txt $ and \\hypertarget{^^5cinput secret.txt ^^5c}{here}.".as_bytes()).unwrap();
     let out = String::from_utf8(export("tex", &d).unwrap().unwrap()).unwrap();
     assert!(!out.contains("\\input") && !out.contains("^^"), "{out}");
 }
@@ -529,11 +529,11 @@ fn latex_export_carries_no_commands_from_the_document() {
 fn latex_labels_in_a_row_are_read_in_linear_time() {
     let started = std::time::Instant::now();
     for src in ["\\label{a} ".repeat(100_000) + "x", "\\label{a}".repeat(100_000) + "x", "\\hypertarget{a}{} ".repeat(100_000)] {
-        let d = crate::latex::import(src.as_bytes());
+        let d = crate::latex::import(src.as_bytes()).unwrap();
         assert!(d.body.len() <= 2);
     }
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
-    let d = crate::latex::import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes());
+    let d = crate::latex::import("\\label{one}First \\label{two}second \\label{three}third.".as_bytes()).unwrap();
     let p = d.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
     let names: Vec<&str> = p
         .objects

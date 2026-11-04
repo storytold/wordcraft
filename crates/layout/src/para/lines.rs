@@ -60,6 +60,8 @@ struct Breaker<'e> {
     skipped: usize,
     /// A left tab past the right indent that wrapped to start the next line.
     wrapped_tab: Option<usize>,
+    /// The paragraph reached the line limit with text left over.
+    cut: bool,
 }
 
 /// One line being broken: where it is, and what has been put on it.
@@ -210,6 +212,7 @@ impl<'e> Breaker<'e> {
             row_first: 0,
             skipped: 0,
             wrapped_tab: None,
+            cut: false,
         }
     }
 
@@ -550,7 +553,12 @@ impl<'e> Breaker<'e> {
             }
             return true;
         }
-        self.lines.len() > 200_000
+        if self.lines.len() >= super::line_limit() {
+            // The rest of the paragraph isn't laid out (nor shown); the layout counts the cut.
+            self.cut = true;
+            return true;
+        }
+        false
     }
 
     fn empty_last_line(&mut self, pl: &ParaLayout) {
@@ -617,6 +625,7 @@ impl<'e> Breaker<'e> {
     /// Store the lines and the paragraph's height, and move the label into place.
     fn finish(mut self, pl: &mut ParaLayout) {
         self.hang_drop_cap(pl);
+        pl.truncated = self.cut;
         pl.height = self.top;
         pl.lines = std::mem::take(&mut self.lines);
         let label_shift = self.label_shifts.get(pl.label_line()).copied().unwrap_or(0.0);
