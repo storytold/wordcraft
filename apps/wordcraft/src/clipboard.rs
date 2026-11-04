@@ -95,7 +95,8 @@ pub fn formats() -> Vec<String> {
 
 /// The picture on the clipboard: copied files, else image pixels, else (Wayland) an encoded
 /// picture in a format arboard doesn't decode. A picture that is there but can't be read says
-/// why (#833). The UI checks the sizes before inserting anything.
+/// why (#833). The UI checks the sizes before inserting anything; on Windows they are checked
+/// from the header before anything is decoded (#3623).
 pub fn picture() -> Option<ClipboardPicture> {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -109,6 +110,19 @@ pub fn picture() -> Option<ClipboardPicture> {
     {
         return Some(ClipboardPicture::Files(files));
     }
+    decoded_picture(&mut clipboard)
+}
+
+/// The clipboard's picture on Windows, read past arboard, which decodes the PNG and DIB formats
+/// with no size limits (#3623).
+#[cfg(target_os = "windows")]
+fn decoded_picture(_: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
+    platform::picture()
+}
+
+/// The picture arboard decodes from the clipboard, else an encoded one read past it.
+#[cfg(not(target_os = "windows"))]
+fn decoded_picture(clipboard: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
     match clipboard.get_image() {
         Ok(image) => Some(ClipboardPicture::Pixels { width: image.width, height: image.height, rgba: image.bytes.into_owned() }),
         Err(arboard::Error::ContentNotAvailable) => platform::encoded_picture().map(ClipboardPicture::Encoded),
@@ -187,6 +201,7 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use clipboard_win::{Clipboard, EnumFormats, raw};
+    use wordcraft_ui_egui::paste_picture::{self, ClipboardPicture};
 
     pub fn formats() -> Vec<String> {
         let Ok(_open) = Clipboard::new_attempts(10) else { return Vec::new() };
@@ -205,8 +220,31 @@ mod platform {
         Some(out)
     }
 
-    pub fn encoded_picture() -> Option<Vec<u8>> {
-        None
+    /// The clipboard's picture, read without arboard: its "PNG" format as it is, else a DIB as
+    /// pixels, each refused from its header when a paste can't take its size (#3623). None when
+    /// it holds neither.
+    pub fn picture() -> Option<ClipboardPicture> {
+        use clipboard_win::formats::{CF_DIB, CF_DIBV5};
+        let Ok(_open) = Clipboard::new_attempts(10) else {
+            return Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
+        };
+        if let Some(png) = raw::register_format("PNG").map(|f| f.get()).filter(|&f| raw::is_format_avail(f)) {
+            return Some(read(png).map_or_else(ClipboardPicture::Unreadable, paste_picture::encoded_picture));
+        }
+        let dib = [CF_DIBV5, CF_DIB].into_iter().find(|&f| raw::is_format_avail(f))?;
+        Some(read(dib).map_or_else(ClipboardPicture::Unreadable, paste_picture::dib_picture))
+    }
+
+    /// A clipboard format's bytes, refused past the largest picture a paste takes.
+    fn read(format: u32) -> Result<Vec<u8>, String> {
+        match raw::size(format) {
+            Some(n) if n.get() as u64 <= paste_picture::MAX_FILE_BYTES => {}
+            Some(_) => return Err("the clipboard picture is larger than 200 MB".into()),
+            None => return Err("the clipboard picture is empty".into()),
+        }
+        let mut out = Vec::new();
+        raw::get_vec(format, &mut out).map_err(|e| e.to_string())?;
+        Ok(out)
     }
 
     pub fn can_set() -> bool {
