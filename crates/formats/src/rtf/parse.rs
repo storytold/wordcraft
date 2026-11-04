@@ -166,7 +166,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         r.ch(n as char);
                         i += 2;
                     }
-                    _ => i += 2,
+                    _ => {
+                        r.skip_chars = r.skip_chars.saturating_sub(1);
+                        i += 2;
+                    }
                 }
                 first_in_group = false;
             }

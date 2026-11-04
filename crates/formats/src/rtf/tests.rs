@@ -42,6 +42,10 @@ fn unicode_fallback_uses_the_declared_count() {
     for (rtf, expected) in [
         (br"{\rtf1\uc18\u8804less than or equal rest}".as_slice(), "≤ rest"),
         (br"{\rtf1\uc10\u233\'30\'31\'32\'33\'34\'35\'36\'37\'38\'39 rest}", "é rest"),
+        (br"{\rtf1\uc2\u8804\:ab rest}", "≤b rest"),
+        (br"{\rtf1\uc18\u8804\:12345678901234567 rest}", "≤ rest"),
+        (br"{\rtf1\uc1\u8804\:ab rest}", "≤ab rest"),
+        (br"{\rtf1\uc0\u8804\:ab rest}", "≤ab rest"),
         (br"{\rtf1\uc0\u233X}", "éX"),
         (br"{\rtf1\uc1\u233?X}", "éX"),
         (br"{\rtf1{\uc2147483647\u233?}X}", "éX"),
