@@ -2578,6 +2578,36 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
     );
     assert!(xml.contains(r#"<a:prstGeom prst="bentConnector2"><a:avLst/></a:prstGeom>"#), "{xml}");
     assert_eq!(geoms(&wordcraft_docx::read(&bytes).unwrap()), expected);
+    // Geometry from a document's JSON skips ConnectorGeom::new; the writer normalizes it, so a
+    // preset that takes no adjust values gets none, and an out-of-range preset its nearest
+    // (noted in review).
+    let mut edited = d.clone();
+    let mut shapes = edited
+        .body
+        .iter_mut()
+        .filter_map(|b| match std::sync::Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => Some(p),
+            _ => None,
+        })
+        .flat_map(|p| p.objects.iter_mut())
+        .filter_map(|o| match o {
+            InlineObject::Shape { extra, .. } => Some(extra),
+            _ => None,
+        });
+    // the third connector (bentConnector3 at -30000) and the fourth (bentConnector2)
+    let raw = |preset, adj: Vec<i32>| Some(wordcraft_doc::connector::ConnectorGeom { preset, adj });
+    shapes.nth(2).unwrap().connector = raw(2, vec![25000]);
+    shapes.next().unwrap().connector = raw(9, vec![1, 2, 3, 4]);
+    let bytes = wordcraft_docx::write(&edited).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert_eq!(xml.matches(r#"<a:prstGeom prst="bentConnector2"><a:avLst/></a:prstGeom>"#).count(), 1, "{xml}");
+    assert!(!xml.contains(r#"prst="bentConnector2"><a:avLst><a:gd"#), "no adjust value for bentConnector2: {xml}");
+    assert!(
+        xml.contains(r#"<a:prstGeom prst="bentConnector5"><a:avLst><a:gd name="adj1" fmla="val 1"/><a:gd name="adj2" fmla="val 2"/><a:gd name="adj3" fmla="val 3"/></a:avLst></a:prstGeom>"#),
+        "{xml}"
+    );
 }
 
 /// #611: legacy VML lines and rectangles (documents without DrawingML).

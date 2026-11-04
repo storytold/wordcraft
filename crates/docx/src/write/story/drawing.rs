@@ -569,7 +569,10 @@ pub(super) fn write_fill(w: &mut W, f: Option<&Fill>) {
 /// `a:prstGeom` for preset `prst`: with a rounded rectangle's corner, or an elbow's or curve's
 /// preset and adjust values as they were read.
 fn prst_geom(w: &mut W, kind: ShapeKind, prst: &str, extra: &wordcraft_doc::connector::ShapeExtra) {
-    let connector = extra.connector.as_ref().filter(|_| matches!(kind, ShapeKind::ElbowConnector | ShapeKind::CurvedConnector));
+    // Normalized: a document's geometry didn't necessarily come through `ConnectorGeom::new`.
+    let connector =
+        extra.connector.as_ref().filter(|_| matches!(kind, ShapeKind::ElbowConnector | ShapeKind::CurvedConnector)).and_then(|c| c.normalized());
+    let connector = connector.as_ref();
     let named;
     let prst = match connector {
         Some(c) => {

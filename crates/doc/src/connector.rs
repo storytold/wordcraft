@@ -374,7 +374,7 @@ pub struct ConnectorGeom {
     pub preset: u8,
     /// The adjust values in 100000ths, as many as the preset takes; a missing one is
     /// [`ConnectorGeom::DEFAULT_ADJ`].
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adj: Vec<i32>,
 }
 
@@ -400,6 +400,13 @@ impl ConnectorGeom {
             .collect();
         adj.resize(Self::adj_count(preset), Self::DEFAULT_ADJ);
         (preset != 3 || adj != [Self::DEFAULT_ADJ]).then_some(ConnectorGeom { preset, adj })
+    }
+
+    /// This geometry as [`ConnectorGeom::new`] would make it: the preset clamped to 2..=5, as
+    /// many adjust values as it takes, each clamped. Geometry read back from a saved document
+    /// doesn't go through `new`, so writers normalize it first.
+    pub fn normalized(&self) -> Option<ConnectorGeom> {
+        Self::new(self.preset, self.adj.iter().map(|&v| Some(i64::from(v))))
     }
 
     /// Adjust value `i`, in 100000ths.
@@ -635,6 +642,28 @@ mod tests {
         // a frame with no width is a vertical line, as before
         assert_eq!(end_direction(e, 0.0, 100.0, true, None), (0.0, 1.0));
         assert_eq!(end_direction(e, 0.0, 0.0, true, None), (1.0, 0.0));
+    }
+
+    // A preset with no adjust values saves without `adj`, and must read back (noted in review).
+    #[test]
+    fn connector_geometry_round_trips_through_json() {
+        for g in [ConnectorGeom::new(2, []), ConnectorGeom::new(4, [Some(20000), Some(80000)]), ConnectorGeom::new(5, [Some(-1), None, Some(3)])] {
+            let extra = ShapeExtra { connector: g.clone(), ..ShapeExtra::default() };
+            let json = serde_json::to_value(&extra).unwrap();
+            let back: ShapeExtra = serde_json::from_value(json.clone()).unwrap_or_else(|e| panic!("{json}: {e}"));
+            assert_eq!(back.connector, g, "{json}");
+        }
+    }
+
+    // What a document says is normalized before it is written: a preset clamped, extra values
+    // dropped, every value clamped (noted in review).
+    #[test]
+    fn normalized_geometry_is_what_new_makes() {
+        let raw = |preset, adj: Vec<i32>| ConnectorGeom { preset, adj };
+        assert_eq!(raw(2, vec![25000]).normalized(), Some(raw(2, vec![])));
+        assert_eq!(raw(9, vec![1, 2, 3, 4]).normalized(), Some(raw(5, vec![1, 2, 3])));
+        assert_eq!(raw(4, vec![i32::MAX]).normalized(), Some(raw(4, vec![10_000_000, 50000])));
+        assert_eq!(raw(3, vec![50000]).normalized(), None, "the default");
     }
 
     #[test]
