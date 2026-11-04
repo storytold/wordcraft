@@ -189,14 +189,17 @@ fn shortcut_letter(app: &WordApp, id: &str) -> Option<char> {
 struct Control {
     tip: &'static str,
     target: Target,
+    /// A fixed badge, assigned before shortcut and name letters. A badge is one key, because
+    /// `Phase::Commands` matches a single key press.
+    keytip: Option<char>,
 }
 
 /// A tab's controls in the order they are drawn; mirrors `ribbon.rs`, so badges land in order.
 fn controls(tab: &str) -> Vec<Control> {
-    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) } };
+    let c = |tip: &'static str, id: &'static str| Control { tip, target: Target::Cmd { id, params: serde_json::json!({}) }, keytip: None };
     let m = c;
-    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name } };
-    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params } };
+    let d = |tip: &'static str, name: &'static str| Control { tip, target: Target::Dialog { name }, keytip: None };
+    let p = |tip: &'static str, id: &'static str, params: serde_json::Value| Control { tip, target: Target::Cmd { id, params }, keytip: None };
     match tab {
         "Home" => vec![
             m("Paste", "edit.paste"),
@@ -231,6 +234,8 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Select", "select.all"),
             c("Dictate", "tools.dictate"),
             c("Editor", "review.spelling"),
+            // Home has used every letter. A digit stays reachable without changing its old badges.
+            Control { keytip: Some('1'), ..c("Thai Distributed", "para.thaiDistribute") },
         ],
         "Insert" => vec![
             m("Cover Page", "insert.coverPage"),
@@ -453,9 +458,9 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
         Target::Tab(_) => "ui.tab",
     };
 
-    // Pass 1: own shortcut letters. First-come keeps it if two commands somehow share a letter.
+    // Pass 1: explicit keytips and own shortcut letters. First-come keeps a shared letter.
     for (i, ctl) in ctrls.iter().enumerate() {
-        if let Some(c) = shortcut_letter(app, id_of(ctl))
+        if let Some(c) = ctl.keytip.or_else(|| shortcut_letter(app, id_of(ctl)))
             && !used.contains(&c)
         {
             used.push(c);
