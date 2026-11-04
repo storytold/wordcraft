@@ -16,25 +16,25 @@ fn page_x_of_y_follows_the_document_language() {
     let mut s = Session::new(wordcraft_doc::Document::new());
     let x_of_y = json!({"format": "x of y"});
     assert_eq!(page_footer(&mut s, x_of_y.clone()), ("Page 1 of 1".into(), vec!["PAGE".into(), "NUMPAGES".into()]));
-    s.doc.styles.default_chr.lang = Some("it-IT".into());
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("it-IT".into());
     assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Pagina 1 di 1");
-    s.doc.styles.default_chr.lang = None;
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     s.editing_lang = Some("de-DE".into());
     assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Seite 1 von 1");
     // A document language with no words listed falls back to the editing language, not English;
     // a listed one (English too) wins over it.
-    s.doc.styles.default_chr.lang = Some("ja-JP".into());
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("ja-JP".into());
     assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Seite 1 von 1");
-    s.doc.styles.default_chr.lang = Some("en-US".into());
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("en-US".into());
     assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Page 1 of 1");
     s.editing_lang = Some("ja-JP".into());
-    s.doc.styles.default_chr.lang = Some("zh-CN".into());
+    std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("zh-CN".into());
     assert_eq!(page_footer(&mut s, x_of_y.clone()).0, "Page 1 of 1");
     // Serbian keeps its script: Cyrillic unless the tag says Latin.
     for (lang, words) in
         [("sr-Cyrl-RS", "Страница 1 од 1"), ("sr", "Страница 1 од 1"), ("sr-Latn-RS", "Stranica 1 od 1"), ("hr-HR", "Stranica 1 od 1")]
     {
-        s.doc.styles.default_chr.lang = Some(lang.into());
+        std::sync::Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(lang.into());
         assert_eq!(page_footer(&mut s, x_of_y.clone()).0, words, "{lang}");
     }
 
