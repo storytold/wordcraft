@@ -1,6 +1,7 @@
 //! Design tab: themes, style sets, colours, fonts, paragraph spacing, watermark, page colour, borders.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
 use wordcraft_doc::{Watermark, styles};
 
@@ -95,8 +96,8 @@ pub fn specs() -> Vec<CommandSpec> {
 fn set_fonts(s: &mut Session, heading: &str, body: &str) {
     s.doc.settings.major_font = heading.into();
     s.doc.settings.minor_font = body.into();
-    s.doc.styles.default_chr.font = Some(body.into());
-    for st in &mut s.doc.styles.styles {
+    Arc::make_mut(&mut s.doc.styles).default_chr.font = Some(body.into());
+    for st in &mut Arc::make_mut(&mut s.doc.styles).styles {
         if let Some(f) = &st.chr.font
             && (f == styles::HEADING_FONT || st.id.starts_with("Heading") || st.id == "Title")
         {
@@ -108,7 +109,7 @@ fn set_fonts(s: &mut Session, heading: &str, body: &str) {
 }
 
 fn set_accent(s: &mut Session, accent: Rgb) {
-    for st in &mut s.doc.styles.styles {
+    for st in &mut Arc::make_mut(&mut s.doc.styles).styles {
         if st.id.starts_with("Heading") && st.id.len() == 8 && st.id.as_bytes().get(7).is_some_and(|d| *d <= b'5')
             || st.id == "IntenseQuote"
             || st.id == "IntenseEmphasis"
@@ -173,15 +174,16 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
     }
     // Overlay the set onto the document's sheet: every other style, the latent styles and the
     // document defaults stay as they are (no set defines its own defaults).
+    let sheet = Arc::make_mut(&mut s.doc.styles);
     for mut st in fresh.styles {
-        match s.doc.styles.styles.iter_mut().find(|x| x.id == st.id) {
+        match sheet.styles.iter_mut().find(|x| x.id == st.id) {
             Some(old) => {
                 st.default = old.default;
                 st.locked = old.locked;
                 st.builtin = old.builtin;
                 *old = st;
             }
-            None => s.doc.styles.styles.push(st),
+            None => sheet.styles.push(st),
         }
     }
     let (h, b) = (s.doc.settings.major_font.clone(), s.doc.settings.minor_font.clone());
@@ -200,9 +202,9 @@ fn para_spacing(s: &mut Session, v: &Value) -> CmdResult {
         "double" => (0.0, 8.0, 2.0),
         _ => (0.0, 8.0, 1.15),
     };
-    s.doc.styles.default_para.space_before = Some(before);
-    s.doc.styles.default_para.space_after = Some(after);
-    s.doc.styles.default_para.line_spacing = Some(LineSpacing::Multiple(line));
+    Arc::make_mut(&mut s.doc.styles).default_para.space_before = Some(before);
+    Arc::make_mut(&mut s.doc.styles).default_para.space_after = Some(after);
+    Arc::make_mut(&mut s.doc.styles).default_para.line_spacing = Some(LineSpacing::Multiple(line));
     sel_result(s)
 }
 
@@ -227,7 +229,7 @@ fn scale_font_sizes(s: &mut Session, v: &Value) -> CmdResult {
         c.size = c.size.map(scale);
         c.size_cs = c.size_cs.map(scale);
     };
-    let st = &mut s.doc.styles;
+    let st = Arc::make_mut(&mut s.doc.styles);
     // An unset document default resolves to the fallback size; make it explicit so inheriting styles follow.
     st.default_chr.size = Some(scale(st.default_chr.size.unwrap_or(wordcraft_doc::props::DEFAULT_FONT_SIZE)));
     st.default_chr.size_cs = st.default_chr.size_cs.map(scale);

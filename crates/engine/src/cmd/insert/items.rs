@@ -83,6 +83,28 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
+        // Text in single quotes is shown as it is; two quotes in a row are one, inside quoted
+        // text or out of it.
+        if c == '\'' && chars.get(i + 1) == Some(&'\'') {
+            out.push('\'');
+            i += 2;
+            continue;
+        }
+        if c == '\'' {
+            i += 1;
+            while let Some(&q) = chars.get(i) {
+                i += 1;
+                if q != '\'' {
+                    out.push(q);
+                } else if chars.get(i) == Some(&'\'') {
+                    out.push('\'');
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
         // `am/pm` (any case) is one token: AM or PM.
         if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
             out.push_str(if hh < 12 { "AM" } else { "PM" });
