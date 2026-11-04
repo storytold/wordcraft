@@ -23,8 +23,21 @@ pub(super) fn text(wm: &Watermark) -> Option<String> {
 pub(super) fn run(wm: &Watermark, n: usize, page: &SectionProps) -> Option<String> {
     let text = text(wm)?;
     let [width, height] = wm.frame(page.page_w, page.page_h);
-    // A font name can't break out of the textpath's CSS-like style.
-    let font: String = wm.font.chars().filter(|c| !matches!(c, '"' | '\'' | ';' | ':')).take(100).collect();
+    // A font name can't break out of the textpath's CSS-like style or make it malformed (#3994):
+    // the characters a quoted CSS string can't carry raw (`\22 ` is `"`, `\3b ` `;`, `\3a ` `:`,
+    // `\5c ` `\`) are escaped and control characters are dropped (no font name carries one); the
+    // reader (`read::story::css_string`) maps the escapes back. An apostrophe is legal inside a
+    // double-quoted string, so it is kept.
+    let mut font = String::with_capacity(wm.font.len());
+    for c in wm.font.chars().filter(|c| !c.is_control()).take(100) {
+        match c {
+            '"' => font.push_str(r"\22 "),
+            ';' => font.push_str(r"\3b "),
+            ':' => font.push_str(r"\3a "),
+            '\\' => font.push_str(r"\5c "),
+            c => font.push(c),
+        }
+    }
     let font = if font.trim().is_empty() { Watermark::default().font } else { font };
     let rotation = if wm.diagonal { "rotation:315;" } else { "" };
     let style = format!(

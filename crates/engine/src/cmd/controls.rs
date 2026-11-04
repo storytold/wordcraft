@@ -286,7 +286,7 @@ fn content_base(s: &Session, r: &ControlRange) -> CharProps {
 /// and stops showing it. Returns the formatting the text should get, when it changes.
 pub fn prepare_edit(s: &mut Session) -> Result<Option<CharProps>, CmdError> {
     if s.sel.is_collapsed() {
-        let at = s.doc.typing_pos(&s.sel.focus);
+        let at = super::protect::typing_pos(s, &s.doc.typing_pos(&s.sel.focus));
         if at != s.sel.focus {
             s.sel = Selection::caret(at);
         }
@@ -579,27 +579,8 @@ fn info(s: &mut Session, v: &Value) -> CmdResult {
     Ok(describe(s, &r))
 }
 
-fn properties(s: &mut Session, v: &Value) -> CmdResult {
-    let r = target(s, v)?;
-    let mut c = r.control.clone();
-    let mut content: Option<String> = None;
-    if let Some(t) = short(v, "title") {
-        c.title = t;
-    }
-    if let Some(t) = short(v, "tag") {
-        c.tag = t;
-    }
-    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
-    c.lock = ControlLock::from_flags(no_delete, no_edit);
-    if let Some(t) = p::bool(v, "temporary") {
-        c.temporary = t;
-    }
-    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
-        if c.showing_placeholder && t != c.placeholder_shown() {
-            content = Some(t.clone());
-        }
-        c.placeholder_text = t;
-    }
+fn apply_kind_properties(c: &mut ContentControl, v: &Value) -> Option<String> {
+    let mut content = None;
     match &mut c.kind {
         ControlKind::Text { multi_line } => {
             if let Some(m) = p::bool(v, "multiLine") {
@@ -632,6 +613,33 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             content = Some((if *checked { *checked_char } else { *unchecked_char }).to_string());
         }
         _ => {}
+    }
+    content
+}
+
+fn properties(s: &mut Session, v: &Value) -> CmdResult {
+    let r = target(s, v)?;
+    let mut c = r.control.clone();
+    let mut content: Option<String> = None;
+    if let Some(t) = short(v, "title") {
+        c.title = t;
+    }
+    if let Some(t) = short(v, "tag") {
+        c.tag = t;
+    }
+    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
+    c.lock = ControlLock::from_flags(no_delete, no_edit);
+    if let Some(t) = p::bool(v, "temporary") {
+        c.temporary = t;
+    }
+    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
+        if c.showing_placeholder && t != c.placeholder_shown() {
+            content = Some(t.clone());
+        }
+        c.placeholder_text = t;
+    }
+    if let Some(kc) = apply_kind_properties(&mut c, v) {
+        content = Some(kc);
     }
     if let Some(text) = content {
         let base = content_base(s, &r);
@@ -854,6 +862,25 @@ mod editing_tests {
         let r = s.doc.control_at(&s.sel.focus).unwrap();
         let typed = s.doc.para_at(&r.content_start()).unwrap().props_of_char(r.content_start().off).style.clone();
         assert_eq!(typed, None, "a placeholder style localized in id and name");
+    }
+
+    /// Typed text with line breaks in it (`type_text` with paragraphs, a typed paste) is the
+    /// Enter key pressed between the lines, so a one-line control, where Enter does nothing, stays
+    /// one paragraph, and a multi-line one splits (#3973: the line breaks went in as one command
+    /// and split a one-line control).
+    #[test]
+    fn typed_line_breaks_do_not_split_a_one_line_control() {
+        for (multi_line, paragraphs) in [(false, 1), (true, 2)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            run(&mut s, "text.insert", json!({"text": "Name: "}));
+            run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+            run(&mut s, "developer.properties", json!({"control": "name", "multiLine": multi_line}));
+            run(&mut s, "caret.right", json!({}));
+            run(&mut s, "text.insert", json!({"text": "Ada\rLovelace", "raw": true}));
+            assert_eq!(s.doc.body.len(), paragraphs, "multi-line control: {multi_line}");
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            assert_eq!(r.control.tag, "name", "still inside the control");
+        }
     }
 
     #[test]

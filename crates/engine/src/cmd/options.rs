@@ -235,7 +235,7 @@ pub fn current(s: &Session) -> Value {
         "userTemplatesFolder": pr.user_templates_folder,
         "dictionaries": wordcraft_proof::installed_dictionaries()
             .into_iter()
-            .map(|(lang, dic)| json!({"language": lang.code(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
+            .map(|(lang, dic)| json!({"language": lang.tag(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
             .collect::<Vec<_>>(),
     })
 }
@@ -263,6 +263,8 @@ fn folder_setting(key: &str, f: &str, local_only: bool) -> Result<Option<String>
     if !path.is_absolute() {
         return Err(CmdError::Params(format!("`{key}`: {f:?} isn't a full path")));
     }
+    // Its files are read from now on, and on every start: only from inside the read root (#3737).
+    crate::file_access::check_read(&path.to_string_lossy()).map_err(CmdError::Failed)?;
     if !path.is_dir() {
         return Err(CmdError::Failed(format!("no folder at {}", path.display())));
     }

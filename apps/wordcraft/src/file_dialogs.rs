@@ -207,8 +207,8 @@ fn on_path(program: &str) -> bool {
 fn save_exts(name: &str) -> Vec<String> {
     let suggested = std::path::Path::new(name)
         .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
         .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()))
         .unwrap_or_else(|| "docx".to_string());
     let mut exts: Vec<String> = Vec::with_capacity(wordcraft_engine::io::SAVE_EXTS.len());

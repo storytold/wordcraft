@@ -20,8 +20,8 @@ use wordcraft_doc::props::{Border, BorderStyle, CharProps, Rgb, TextColor};
 use wordcraft_doc::{Document, Paragraph, Pos, StoryRef};
 use wordcraft_geom::Rect;
 
-use crate::display::revision_color;
-use crate::{BoxContext, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
+use crate::display::{author_order, revision_color};
+use crate::{BoxInput, BoxLayout, Ctx, DocLayout, Edges, Placed, fit_box, layout_box, push_para};
 
 /// Width of the markup area beside each page (points): the editor's.
 pub const MARKUP_AREA: f32 = 216.0;
@@ -103,17 +103,6 @@ pub fn replies(doc: &Document) -> BTreeMap<u32, Vec<u32>> {
     m
 }
 
-/// The comment authors in order of first appearance (for their colours).
-fn author_index(doc: &Document, author: &str) -> u32 {
-    let mut seen: Vec<&str> = Vec::new();
-    for c in doc.comments.values() {
-        if !seen.contains(&c.author.as_str()) {
-            seen.push(&c.author);
-        }
-    }
-    seen.iter().position(|a| *a == author).unwrap_or(0) as u32
-}
-
 fn author_name(a: &str) -> &str {
     if a.trim().is_empty() { "Author" } else { a }
 }
@@ -132,10 +121,12 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
     let card_w = MARKUP_AREA - 2.0 * SIDE;
     let inner = card_w - STRIPE - 2.0 * PAD;
     let mut cards: Vec<Card> = Vec::new();
+    // The comment authors in order of first appearance (for their colours), once for every card.
+    let authors = author_order(doc.comments.values().map(|c| c.author.as_str()));
     for (id, pos) in anchors {
         let Some(caret) = lay.caret_on(&pos, 0) else { continue };
         let Some(c) = doc.comments.get(&id) else { continue };
-        let color = revision_color(author_index(doc, &c.author));
+        let color = revision_color(authors.get(c.author.as_str()).copied().unwrap_or(0));
         let mut thread = vec![id];
         thread.extend(threads.get(&id).into_iter().flatten().copied());
         let x = STRIPE + PAD;
@@ -158,11 +149,11 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             );
             let pl = ctx.para_labelled(&head, inner, None, &[], None);
             let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
-            push_para(&mut items, story, &[HEADER_PATH], &pl, 0, pl.lines.len(), x, y + lead, inner, Edges::own(&pl, 0, pl.lines.len()));
+            push_para(&mut items, (story, &[HEADER_PATH]), &pl, (0, pl.lines.len()), (x, y + lead), inner, Edges::own(&pl, 0, pl.lines.len()));
             y += pl.height + 2.0;
             // The comment itself, as written (its own formatting).
             if let Some(part) = doc.parts.get(&cm.part) {
-                let BoxLayout { items: body, height, .. } = layout_box(ctx, story, &part.blocks, &[], inner, BoxContext::Other, 1, None);
+                let BoxLayout { items: body, height, .. } = layout_box(ctx, BoxInput::other(story, &part.blocks, inner, 1, None));
                 for mut it in body {
                     it.translate(x, y);
                     items.push(it);
