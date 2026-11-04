@@ -1804,7 +1804,7 @@ fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
         date: String::new(),
         move_name: None,
     });
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = std::sync::Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     d.format_range(&Pos::body(1, 0), &Pos::body(1, 11), &|c| c.del = Some(0)).unwrap();
     d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
@@ -1870,7 +1870,7 @@ fn a_deleted_list_items_number_is_drawn_as_deleted_text() {
     assert!(glyph_color(&plain, "Chapter").is_none() && glyph_color(&plain, "1.").is_none());
     // A number whose paragraph mark isn't deleted is drawn as before.
     let mut kept = Document::from_text("Intro\nChapter two\nBody");
-    let id = kept.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = std::sync::Arc::make_mut(&mut kept.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     kept.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 3), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let kl = lay(&kept);
     let plain = display::page_display(&kept, &kl.pages[0], &display::DisplayOptions { markup: false, ..Default::default() });
