@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-10-30: DOCX preserves the special hidden paragraph-mark flag `w:specVanish` independently from `w:vanish` and `w:webHidden`, including direct true/false/absent values, paragraph styles and native JSON through two save/reopen cycles (`run_props::special_hidden_paragraph_mark_survives_two_saves`). Readiness estimates unchanged.
+- 2026-10-30: DOCX preserves the special hidden paragraph-mark flag `w:specVanish` independently from `w:vanish`, including direct true/false/absent values, paragraph styles and native JSON through two save/reopen cycles (`run_props::special_hidden_paragraph_mark_survives_two_saves`). Readiness estimates unchanged.
 
 - 2026-11-03: Proofing (CP4.3): craft-proof moves to craft-libs main with #589 and #590. French spelling suggestions offer the elided form first (`Jadore` → `J'adore`, before `J adore`), and Valencian text (`ca-ES-valencia`) is proofed with the `ca-valencia` pack instead of plain Catalan. Readiness unchanged.
 - 2026-11-03: A long comment no longer grows its card or balloon without limit (#3382). Its field in the Comments pane and in a selected balloon stops at ten lines and scrolls, keeping the caret in view; a balloon that isn't selected shows the first ten lines of the comment and of each reply, and clicking it opens the scrolling field. The buttons and the next comment stay in view.

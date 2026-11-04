@@ -286,7 +286,7 @@ Table rows and cells inside `mc:AlternateContent` use the same selected-branch p
 
 ## Revision history
 
-> 2026-10-30 · DOCX keeps the special hidden paragraph-mark flag `w:specVanish` distinct from `w:vanish` and `w:webHidden`; direct true/false/absent values, paragraph styles, native JSON and two DOCX save/reopen cycles are covered by `run_props::special_hidden_paragraph_mark_survives_two_saves`.
+> 2026-10-30 · DOCX keeps the special hidden paragraph-mark flag `w:specVanish` distinct from `w:vanish`; direct true/false/absent values, paragraph styles, native JSON and two DOCX save/reopen cycles are covered by `run_props::special_hidden_paragraph_mark_survives_two_saves`.
 
 > 2026-10-28 · Charts and SmartArt: text the font lacks (Chinese axis labels and legends) is drawn in a fallback face instead of boxes, one face per run as in body text (#4720, `layout::tests::chart_text_the_font_lacks_is_drawn_in_a_fallback_face`).
 
