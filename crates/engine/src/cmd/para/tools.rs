@@ -96,9 +96,16 @@ fn apply_deletions(s: &mut Session, story: StoryRef, path: &Path, mut ranges: Ve
     Ok(())
 }
 
-/// The byte ranges of every manual line break in the paragraph.
+/// The characters of the paragraph that are not tracked-deleted, as (byte offset, char). Under
+/// Track Changes deleted text stays in `para.text`, so every scan that decides what to delete or
+/// count goes through this.
+fn live_chars(para: &wordcraft_doc::Paragraph) -> impl Iterator<Item = (usize, char)> + '_ {
+    para.text.char_indices().filter(|(i, _)| para.props_of_char(*i).del.is_none())
+}
+
+/// The byte ranges of every manual line break in the paragraph that is not already deleted.
 fn break_ranges(para: &wordcraft_doc::Paragraph) -> Vec<(usize, usize)> {
-    para.text.char_indices().filter(|(_, c)| *c == LINE_BREAK).map(|(i, _)| (i, i + 1)).collect()
+    live_chars(para).filter(|(_, c)| *c == LINE_BREAK).map(|(i, _)| (i, i + 1)).collect()
 }
 
 /// `para.convertBreaks`: every manual line break (Shift+Enter) in the selection becomes a
@@ -107,7 +114,7 @@ pub(super) fn convert_breaks(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
     check_target_edits(s, story, &paths)?;
-    let breaks: usize = paths.iter().filter_map(|path| s.doc.para(story, path)).map(|p| p.text.chars().filter(|c| *c == LINE_BREAK).count()).sum();
+    let breaks: usize = paths.iter().filter_map(|path| s.doc.para(story, path)).map(|p| break_ranges(p).len()).sum();
     if breaks > MAX_TOOL_PARAS {
         return Err(CmdError::Params(format!("convert at most {MAX_TOOL_PARAS} line breaks at once")));
     }
@@ -178,9 +185,15 @@ pub(super) fn remove_blank(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// The number of leading spaces in the paragraph's text.
+/// The number of leading spaces in the paragraph's text, deleted ones included (the range
+/// `trimLeadingSpaces` deletes).
 fn leading_spaces(para: &wordcraft_doc::Paragraph) -> usize {
     para.text.chars().take_while(|c| *c == ' ').count()
+}
+
+/// The byte offsets of the paragraph's leading spaces that are not tracked-deleted.
+fn live_leading_spaces(para: &wordcraft_doc::Paragraph) -> Vec<usize> {
+    live_chars(para).take_while(|(_, c)| *c == ' ').map(|(i, _)| i).collect()
 }
 
 /// `para.trimLeadingSpaces`: delete the spaces at the start of each selected paragraph.
@@ -205,24 +218,25 @@ pub(super) fn remove_extra_spaces(s: &mut Session, v: &Value) -> CmdResult {
     check_target_edits(s, story, &paths)?;
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
+        // Runs of live spaces (deleted characters are skipped, as if absent). A run at the
+        // paragraph's start stays; a run inside the text collapses to its last space, and one
+        // that reaches the paragraph's end to its first.
         let mut runs = Vec::new();
-        let mut start = None;
-        for (i, c) in para.text.char_indices() {
+        let mut run: Vec<usize> = Vec::new();
+        let mut leading = true;
+        for (i, c) in live_chars(para) {
             if c == ' ' {
-                start.get_or_insert(i);
-            } else if let Some(a) = start.take() {
-                // A run at the paragraph's start stays; a run inside the text collapses to one space.
-                if a > 0 && i - a > 1 {
-                    runs.push((a, i - 1));
-                }
+                run.push(i);
+                continue;
             }
+            if !leading && run.len() > 1 {
+                runs.extend(run[..run.len() - 1].iter().map(|&a| (a, a + 1)));
+            }
+            run.clear();
+            leading = false;
         }
-        // A run that reaches the paragraph's end collapses to one space too.
-        if let Some(a) = start
-            && a > 0
-            && para.len() - a > 1
-        {
-            runs.push((a + 1, para.len()));
+        if !leading && run.len() > 1 {
+            runs.extend(run[1..].iter().map(|&a| (a, a + 1)));
         }
         apply_deletions(s, story, &path, runs)?;
     }
@@ -235,9 +249,11 @@ pub(super) fn spaces_to_indent(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
     check_target_edits(s, story, &paths)?;
+    let tracker = crate::cmd::fmt_revisions::ParaPropTracker::new(s);
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
-        let spaces = leading_spaces(para);
+        let live = live_leading_spaces(para);
+        let spaces = live.len();
         if spaces == 0 {
             continue;
         }
@@ -250,14 +266,14 @@ pub(super) fn spaces_to_indent(s: &mut Session, v: &Value) -> CmdResult {
         let mut after = before.clone();
         after.indent_first = Some(current + represented as f32 * 72.0);
         after.cancel_char_indents(false, false, true);
-        after.fmt_change = crate::cmd::fmt_revisions::changed_para_props(s, &before, &after);
+        after.fmt_change = tracker.changed(s, &before, &after);
         {
             let p = s.doc.para_mut(story, &path)?;
             p.props = after;
             p.touch();
         }
-        // A space is one byte, so the byte range is the count.
-        apply_deletions(s, story, &path, vec![(0, represented)])?;
+        // A space is one byte; deleted spaces in between stay as they are.
+        apply_deletions(s, story, &path, live[..represented].iter().map(|&a| (a, a + 1)).collect())?;
     }
     sel_result(s)
 }
@@ -268,6 +284,7 @@ pub(super) fn indent_to_spaces(s: &mut Session, v: &Value) -> CmdResult {
     scope_all(s, v)?;
     let (story, paths) = targets(s)?;
     check_target_edits(s, story, &paths)?;
+    let tracker = crate::cmd::fmt_revisions::ParaPropTracker::new(s);
     for path in paths {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let pts = para.props.indent_left.unwrap_or(0.0) + para.props.indent_first.unwrap_or(0.0);
@@ -290,7 +307,7 @@ pub(super) fn indent_to_spaces(s: &mut Session, v: &Value) -> CmdResult {
         after.indent_first = Some(0.0);
         after.indent_left = Some(0.0);
         after.cancel_char_indents(true, false, true);
-        after.fmt_change = crate::cmd::fmt_revisions::changed_para_props(s, &before, &after);
+        after.fmt_change = tracker.changed(s, &before, &after);
         let p = s.doc.para_mut(story, &path)?;
         if n > 0 {
             p.insert_text(0, &" ".repeat(n), &props)?;

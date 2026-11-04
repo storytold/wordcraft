@@ -400,6 +400,53 @@ fn deletions_are_recorded_under_track_changes() {
     assert_eq!(text(&s), "a  b\nc", "accepting removes the leading space");
 }
 
+/// Tracked-delete the bytes `a..b` of the first body paragraph (Track Changes must be on).
+fn track_delete_in_first(s: &mut Session, a: usize, b: usize) {
+    let path = s.doc.para_paths(StoryRef::Body)[0].clone();
+    let at = |off: usize| Pos { story: StoryRef::Body, path: path.clone(), off };
+    crate::cmd::track_delete(s, &at(a), &at(b)).expect("tracked delete");
+}
+
+fn first_indent(s: &Session) -> Option<f32> {
+    let path = s.doc.para_paths(StoryRef::Body)[0].clone();
+    s.doc.para(StoryRef::Body, &path).expect("paragraph").props.indent_first
+}
+
+#[test]
+fn remove_extra_spaces_skips_tracked_deleted_spaces() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a  b"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    track_delete_in_first(&mut s, 2, 3); // the second space is already deleted
+    select_all(&mut s);
+    run(&mut s, "para.removeExtraSpaces", json!({"scope": "all"}));
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "a b", "the one live space survives");
+}
+
+#[test]
+fn spaces_to_indent_twice_does_not_count_deleted_spaces_again() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "  x"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    select_all(&mut s);
+    run(&mut s, "para.spacesToIndent", json!({"scope": "all"}));
+    assert_eq!(first_indent(&s), Some(144.0));
+    run(&mut s, "para.spacesToIndent", json!({"scope": "all"}));
+    assert_eq!(first_indent(&s), Some(144.0), "the deleted spaces are not indented a second time");
+}
+
+#[test]
+fn convert_breaks_leaves_a_tracked_deleted_break_alone() {
+    let mut s = s();
+    type_breaks(&mut s, "a\nb");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    track_delete_in_first(&mut s, 1, 2);
+    select_all(&mut s);
+    run(&mut s, "para.convertBreaks", json!({"scope": "all"}));
+    assert_eq!(s.doc.para_paths(StoryRef::Body).len(), 1, "a deleted break is not turned into a paragraph break");
+}
+
 #[test]
 fn junk_scope_is_refused() {
     let mut s = s();
