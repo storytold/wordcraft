@@ -1121,3 +1121,69 @@ mod spelling_navigation_tests {
         }
     }
 }
+
+/// The context menu's Accept and Reject show only where they resolve a change: on tracked text,
+/// in a range that touches it, not on plain text (where they would jump to the next change).
+#[test]
+fn change_at_selection_finds_the_change_accept_would_resolve() {
+    use super::change_at_selection;
+    use crate::Selection;
+    use wordcraft_doc::Pos;
+    let mut s = Session::new(Document::new());
+    s.run("document.setText", &json!({"text": "plain text"})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.set", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
+    s.run("text.insert", &json!({"text": "NEW "})).unwrap();
+    // "plain NEW text": the insertion is offsets 5..9.
+    for (off, want) in [(0, false), (2, false), (7, true), (12, false)] {
+        s.sel = Selection::caret(Pos::body(0, off));
+        assert_eq!(change_at_selection(&s), want, "caret at {off}");
+    }
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 3) };
+    assert!(!change_at_selection(&s), "a range of plain text");
+    s.sel = Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 6) };
+    assert!(change_at_selection(&s), "a range reaching into the insertion");
+    s.sel = Selection::caret(Pos::body(0, 7));
+    s.run("review.accept", &json!({})).unwrap();
+    assert!(!change_at_selection(&s), "nothing left once accepted");
+}
+
+/// A range across a paragraph mark whose only tracked change is its section break's formatting:
+/// Accept resolves it with the mark, so the context menu offers Accept and Reject there too.
+#[test]
+fn change_at_selection_sees_a_section_break_change_on_a_mark_in_the_range() {
+    use super::change_at_selection;
+    use crate::Selection;
+    use wordcraft_doc::props::PropChange;
+    use wordcraft_doc::{Pos, RevisionKind, SectionProps, StoryRef};
+    let mut s = Session::new(Document::from_text("one\ntwo"));
+    let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+    let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.section = Some(Box::new(SectionProps { fmt_change: PropChange::boxed(rev, SectionProps::default()), ..Default::default() }));
+    s.sel = Selection { anchor: Pos::body(0, 1), focus: Pos::body(1, 1) };
+    assert!(change_at_selection(&s), "a range across the section break's mark");
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 2) };
+    assert!(!change_at_selection(&s), "a range that stops before the mark");
+}
+
+/// A caret on a paragraph mark whose only change is its section break's formatting: the menu
+/// offers Accept and Reject, and each resolves that change instead of moving to the next one.
+#[test]
+fn accept_or_reject_at_the_caret_resolves_a_section_break_change() {
+    use super::change_at_selection;
+    use crate::Selection;
+    use wordcraft_doc::props::PropChange;
+    use wordcraft_doc::{Pos, RevisionKind, SectionProps, StoryRef};
+    for cmd in ["review.accept", "review.reject"] {
+        let mut s = Session::new(Document::from_text("one\ntwo"));
+        let rev = crate::cmd::new_revision(&mut s, RevisionKind::Format);
+        let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        p.section = Some(Box::new(SectionProps { fmt_change: PropChange::boxed(rev, SectionProps::default()), ..Default::default() }));
+        s.sel = Selection::caret(Pos::body(0, 3));
+        assert!(change_at_selection(&s), "{cmd}: the caret on the section break's mark");
+        s.run(cmd, &json!({})).unwrap();
+        let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        assert!(p.section.as_ref().is_none_or(|x| x.fmt_change.is_none()), "{cmd} resolved the section break's change");
+        assert_eq!(s.run("review.changes", &json!({})).unwrap(), json!([]), "{cmd}: nothing left");
+    }
+}

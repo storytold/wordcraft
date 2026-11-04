@@ -4893,3 +4893,53 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
         assert!(hidden.iter().all(|r| r.min.y >= clip.max.y - 0.5), "the rows after the tenth are cut off: {:?}, clip {clip:?}", hidden.first());
     }
 }
+
+/// Right-clicking tracked text offers Accept Change and Reject Change, which resolve that change;
+/// plain text's menu has neither.
+#[test]
+fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
+    use egui_kittest::kittest::Queryable;
+    for (choice, accept) in [("Accept Change", true), ("Reject Change", false)] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("plain text")), Default::default());
+        let before = a.session.doc.plain_text(StoryRef::Body);
+        a.run("review.trackChanges", json!({"value": true})).unwrap();
+        a.run("caret.set", json!({"pos": {"block": 0, "off": 5}})).unwrap();
+        a.run("text.insert", json!({"text": "NEW "})).unwrap();
+        let after = a.session.doc.plain_text(StoryRef::Body);
+        let want = if accept { after } else { before };
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let right_click = |h: &mut egui_kittest::Harness<'_, WordApp>, off: usize| {
+            h.key_press(egui::Key::Escape);
+            h.step();
+            let c = h.state_mut().session.layout().caret(&Pos::body(0, off)).expect("laid out");
+            let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+            h.event(egui::Event::PointerMoved(at));
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+                h.step();
+            }
+            h.step();
+        };
+        right_click(&mut h, 1);
+        assert!(h.query_all_by_label_contains("Paste").next().is_some(), "the context menu is open on plain text");
+        assert!(h.query_by_label_contains(choice).is_none(), "plain text offers no {choice}");
+        right_click(&mut h, 7);
+        h.get_by_label_contains(choice).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let s = &h.state().session;
+        assert_eq!(s.doc.plain_text(StoryRef::Body), want, "{choice}");
+        assert!(!wordcraft_engine::cmd::review::change_at_selection(s), "{choice} resolved the insertion");
+    }
+}
