@@ -12078,3 +12078,74 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
 }
+
+/// #5428: an inserted or pasted picture fits where it goes, as in Word: a table cell's width
+/// (a nested cell's too), a column's, not the whole page's text width.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_inserted_or_pasted_picture_fits_where_it_goes() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba([30, 90, 200, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png)
+            .unwrap();
+        cmd::insert::base64_encode(&b)
+    };
+    let widths = |s: &Session| {
+        let mut v = Vec::new();
+        for b in s.doc.body.iter() {
+            let mut b = (**b).clone();
+            cmd::paste::each_para(&mut b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let wordcraft_doc::InlineObject::Image { w, h, .. } = o {
+                        v.push((*w, *h));
+                    }
+                }
+            });
+        }
+        v
+    };
+    let text_w = crate::io::text_width(&Session::new(wordcraft_doc::Document::new()).doc);
+    let in_cell = |cols: u32| {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": cols}));
+        assert!(s.sel.focus.path.depth() > 0, "the caret is in the first cell");
+        s
+    };
+    // Insert › Pictures and Paste in a cell of a three-column table.
+    let cell = text_w / 3.0;
+    let mut s = in_cell(3);
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let mut p = in_cell(3);
+    let html = format!("<p><img src=\"data:image/png;base64,{}\"></p>", png(1000, 200));
+    run(&mut p, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    for (how, s) in [("inserted", &s), ("pasted", &p)] {
+        let got = widths(s);
+        let [(w, h)] = got.as_slice() else { panic!("{how}: {got:?}") };
+        assert!(*w <= cell && *w > cell - 20.0, "{how}: {w} fits the cell's text area ({cell} less its margins)");
+        assert!((h * 5.0 - w).abs() < 0.1, "{how}: proportions kept: {w} × {h}");
+    }
+    // A table in that cell: its own narrower cell.
+    let mut s = in_cell(2);
+    let outer = s.room_at(&s.sel.focus.clone());
+    // (A table inserted in a cell takes the page's text width for its columns, so four columns
+    // make its cells narrower than the outer one.)
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 4}));
+    assert!(s.sel.focus.path.depth() > 1, "the caret is in the nested cell");
+    let nested = s.room_at(&s.sel.focus.clone());
+    assert!(nested < outer - 50.0, "the nested cell ({nested}) is narrower than the outer one ({outer})");
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let w = widths(&s)[0].0;
+    assert!((w - nested).abs() < 0.5 && w <= text_w / 4.0, "{w} fits the nested cell ({nested})");
+    // Two text columns: one column's width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "layout.columns", json!({"count": 2}));
+    let column = s.doc.sections()[0].1.column_boxes()[0].1;
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    let w = widths(&s)[0].0;
+    assert!((w - column).abs() < 0.5, "{w} fits the column ({column})");
+    // Body text keeps the full text width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"data": png(1000, 200)}));
+    assert!((widths(&s)[0].0 - text_w).abs() < 0.5);
+}
