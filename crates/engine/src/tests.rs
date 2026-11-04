@@ -1396,7 +1396,7 @@ fn copying_a_list_puts_its_numbers_and_bullets_on_the_clipboard() {
     let mut s = session_with_lists();
     let num = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(3)).and_then(|p| p.props.numbering).map(|n| n.num).unwrap();
     let abs = s.doc.numbering.num(num).map(|n| n.abstract_id).unwrap();
-    let level = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == abs).and_then(|a| a.levels.first_mut()).unwrap();
+    let level = std::sync::Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == abs).and_then(|a| a.levels.first_mut()).unwrap();
     level.text = "\u{F0B7}".into();
     level.chr.font = Some("Symbol".into());
     run(&mut s, "select.range", json!({"anchor": Pos::body(3, 0), "focus": Pos::body(4, 7)}));
