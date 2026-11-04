@@ -232,6 +232,44 @@ impl PartSet {
     }
 }
 
+/// A cell's borders from the table style's parts it is in, later parts winning. Row parts give
+/// their left/right edges at the table's sides and `inside_v` between cells; column parts their
+/// top/bottom edges at the table's top and bottom and `between` between rows; corner cells their
+/// four edges.
+pub fn part_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (first_g, last_g): (bool, bool)) -> Borders {
+    let mut out = Borders::default();
+    for (part, b) in parts {
+        let b = *b;
+        let mapped = if part.is_row() {
+            Borders {
+                top: b.top,
+                bottom: b.bottom,
+                left: if first_g { b.left } else { b.inside_v },
+                right: if last_g { b.right } else { b.inside_v },
+                between: None,
+                inside_v: None,
+                tl2br: b.tl2br,
+                tr2bl: b.tr2bl,
+            }
+        } else if part.is_column() {
+            Borders {
+                top: if ri == 0 { b.top } else { b.between },
+                bottom: if ri + 1 >= nrows { b.bottom } else { b.between },
+                left: b.left,
+                right: b.right,
+                between: None,
+                inside_v: None,
+                tl2br: b.tl2br,
+                tr2bl: b.tr2bl,
+            }
+        } else {
+            Borders { between: None, inside_v: None, ..b }
+        };
+        out.overlay(&mapped);
+    }
+    out
+}
+
 /// What one table style part gives its cells.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -932,6 +970,19 @@ fn table_styles() -> Vec<Style> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_part_diagonal_borders_reach_the_cells() {
+        let tl2br = Border::single(1.0);
+        let tr2bl = Border::single(2.0);
+        let borders = Borders {
+            tl2br: Some(tl2br),
+            tr2bl: Some(tr2bl),
+            ..Default::default()
+        };
+        let mapped = part_borders(&[(TablePart::FirstRow, borders)], (0, 1), (true, true));
+        assert_eq!((mapped.tl2br, mapped.tr2bl), (Some(tl2br), Some(tr2bl)));
+    }
 
     #[test]
     fn builtins_present() {
