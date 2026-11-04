@@ -62,6 +62,17 @@ impl FontDb {
             return (Some(face), self.read_faces().len());
         }
         let (found, n) = self.loaded_fallback(c, exclude);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref f) = found
+            && subpar_script_fallback(f, c)
+        {
+            let _searching = self.searching.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (found2, n2) = self.loaded_fallback(c, exclude);
+            if found2.as_ref().is_some_and(|f2| subpar_script_fallback(f2, c)) && self.load_preferred_script_fallback(c) {
+                return self.loaded_fallback(c, exclude);
+            }
+            return (found2, n2);
+        }
         if found.is_some() {
             return (found, n);
         }
@@ -122,10 +133,13 @@ impl FontDb {
                 0
             }
         };
-        // Complex scripts (Myanmar, Khmer, Indic…): a font with OpenType layout tables, preferring
-        // the script's own families, so syllables reorder and stack (#604).
+        // Complex scripts (Myanmar, Khmer, Indic, conjoining Hangul Jamo…): a font with OpenType
+        // layout tables, preferring the script's own families, so syllables reorder and stack (#604).
+        // Scripts with preferred families (such as Hangul) also rank their own families ahead of
+        // already-loaded fonts for other CJK regions.
         let complex = crate::needs_layout_tables(c);
-        let shaping = |f: &FontFace| if complex { (!f.has_layout_tables(), crate::fallback_rank(c, &f.family)) } else { (false, 0) };
+        let has_pref = complex || !crate::script_fallbacks(c).is_empty();
+        let shaping = |f: &FontFace| (complex && !f.has_layout_tables(), if has_pref { crate::fallback_rank(c, &f.family) } else { 0 });
         order.sort_by_key(|f| (rank(f), shaping(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
         (order.into_iter().find(|f| f.covers(c)).cloned(), faces.len())
     }
@@ -180,6 +194,17 @@ impl FontDb {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let (mut base, mut checked) = self.loaded_covering(chars, exclude);
         #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref f) = base
+            && let Some(pc) = preferred_script_char(chars)
+            && subpar_script_fallback(f, pc)
+        {
+            let _searching = self.searching.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            (base, checked) = self.loaded_covering(chars, exclude);
+            if base.as_ref().is_some_and(|f2| subpar_script_fallback(f2, pc)) && self.load_preferred_script_fallback(pc) {
+                (base, checked) = self.loaded_covering(chars, exclude);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if base.is_none() {
             // A character no loaded face covers: load a system font for it, then retry (the run's
             // other characters may already be covered by loaded faces).
@@ -227,11 +252,43 @@ impl FontDb {
     fn loaded_covering(&self, chars: &[char], exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
         let rtl = chars.iter().any(|c| crate::is_rtl(*c) || arabic_block(*c));
-        // A complex-script character picks the families its script prefers (the lowest one: the
-        // run's characters come sorted).
-        let complex = chars.iter().copied().find(|c| crate::needs_layout_tables(*c));
-        let found = fallback_order(&faces, exclude, rtl, complex).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
+        // A script with preferred families (complex scripts first, then scripts like Hangul) picks
+        // those families ahead of generic faces (the lowest char: the run's characters come sorted).
+        let preferred = preferred_script_char(chars);
+        let found = fallback_order(&faces, exclude, rtl, preferred).into_iter().find(|f| chars.iter().all(|c| f.covers(*c))).cloned();
         (found, faces.len())
+    }
+
+    /// Load the first cataloged family from `script_fallbacks(c)` when only a non-preferred face
+    /// is loaded so far (for example, an already-loaded Chinese CJK font covering Hangul).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_preferred_script_fallback(&self, c: char) -> bool {
+        let preferred = crate::script_fallbacks(c);
+        if preferred.is_empty() || c.is_control() || c.is_whitespace() {
+            return false;
+        }
+        if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).enabled {
+            return false;
+        }
+        let complex = crate::needs_layout_tables(c);
+        let ok = |f: &FontFace| f.covers(c) && (!complex || f.has_layout_tables());
+        let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
+        for &fam in preferred {
+            if self.read_faces().iter().any(|f| f.family.eq_ignore_ascii_case(fam) && ok(f)) {
+                return false;
+            }
+            if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
+                continue;
+            }
+            if !self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tried.insert(fam) {
+                continue;
+            }
+            self.load_cataloged(fam);
+            if self.read_faces().iter().any(|f| f.family.eq_ignore_ascii_case(fam) && ok(f)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged
@@ -370,4 +427,18 @@ impl FontDb {
         }
         false
     }
+}
+
+/// Whether `f` is an inferior fallback for `c` that warrants checking cataloged `script_fallbacks`:
+/// either `c` needs OpenType layout tables and `f` lacks them, or `f` is outside `script_fallbacks(c)`.
+#[cfg(not(target_arch = "wasm32"))]
+fn subpar_script_fallback(f: &FontFace, c: char) -> bool {
+    let list = crate::script_fallbacks(c);
+    !list.is_empty() && ((crate::needs_layout_tables(c) && !f.has_layout_tables()) || crate::fallback_rank(c, &f.family) >= list.len())
+}
+
+/// First character in `chars` whose script needs layout tables, or else whose script names
+/// preferred fallback families (such as Hangul).
+fn preferred_script_char(chars: &[char]) -> Option<char> {
+    chars.iter().copied().find(|c| crate::needs_layout_tables(*c)).or_else(|| chars.iter().copied().find(|c| !crate::script_fallbacks(*c).is_empty()))
 }

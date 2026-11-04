@@ -44,12 +44,18 @@ use crate::xml::El;
 pub struct PropCtx {
     pub major_font: String,
     pub minor_font: String,
+    /// The theme's East Asian fonts (`a:ea`), which the `…EastAsia` theme slots fall back on.
+    pub major_ea: String,
+    pub minor_ea: String,
     /// The theme's complex-script fonts (`a:cs`), which the `…Bidi` theme slots fall back on.
     pub major_cs: String,
     pub minor_cs: String,
     /// The theme's per-script fonts (`a:font script="Arab" typeface="…"`).
     pub major_scripts: Vec<(String, String)>,
     pub minor_scripts: Vec<(String, String)>,
+    /// The script (ISO 15924) of `w:themeFontLang/@w:eastAsia`, which picks the font a
+    /// `…EastAsia` theme slot names. `None` = the settings name no East Asian language.
+    pub ea_script: Option<&'static str>,
     /// The script (ISO 15924) of `w:themeFontLang/@w:bidi`, which picks the font a `…Bidi` theme
     /// slot names. `None` = the settings name no bidi language.
     pub bidi_script: Option<&'static str>,
@@ -155,7 +161,23 @@ impl PropCtx {
         if t.ends_with("Bidi") {
             return Some(self.bidi_theme_font(major));
         }
+        if t.ends_with("EastAsia") {
+            return self.ea_theme_font(major);
+        }
         (!latin.is_empty()).then(|| latin.clone())
+    }
+
+    /// The font a `majorEastAsia`/`minorEastAsia` theme slot names: the theme's per-script font
+    /// for `w:themeFontLang/@w:eastAsia` (`Hang`, `Jpan`, `Hans`, `Hant`…), else its `a:ea`
+    /// typeface, or `None` when neither is named so fixed `w:eastAsia` or style inheritance holds.
+    fn ea_theme_font(&self, major: bool) -> Option<String> {
+        let (latin, ea, scripts) =
+            if major { (&self.major_font, &self.major_ea, &self.major_scripts) } else { (&self.minor_font, &self.minor_ea, &self.minor_scripts) };
+        let named = |f: &str| (!f.is_empty() && f.len() < 256).then(|| f.to_string());
+        let by_script = self
+            .ea_script
+            .and_then(|script| if script == "Latn" { named(latin) } else { scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)) });
+        by_script.or_else(|| named(ea))
     }
 
     /// The font a `majorBidi`/`minorBidi` theme slot names. Measured in Word for Mac: the theme's
@@ -239,9 +261,10 @@ impl PropCtx {
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
-                    // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
-                    // is left to inherit, like `w:cstheme`.
-                    c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // The East Asian font (Chinese, Japanese, Korean text): `w:eastAsiaTheme`
+                    // supersedes `w:eastAsia` when the theme resolves one.
+                    c.font_ea =
+                        themed("w:eastAsiaTheme").or_else(|| k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string));
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:bCs" => c.bold_cs = Some(on_off(k)),

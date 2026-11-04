@@ -45,31 +45,50 @@ pub(crate) fn script_runs(text: &str) -> Vec<std::ops::Range<usize>> {
 
 /// Scripts whose shaping reorders, stacks or forms clusters (OpenType script-specific engines),
 /// so a fallback font must carry OpenType layout tables to draw them properly.
+///
+/// Precomposed Hangul syllables (`U+AC00..=U+D7A3`) and compatibility Jamo (`U+3130..=U+318F`)
+/// have standalone outlines even in legacy TrueType faces without `GSUB`, whereas conjoining
+/// Hangul Jamo (`U+1100..=U+11FF`, `U+A960..=U+A97F`, `U+D7B0..=U+D7FF`) need `ljmo`/`vjmo`/`tjmo`
+/// layout tables to compose syllables.
 pub fn needs_layout_tables(c: char) -> bool {
-    matches!(
-        c.script(),
-        Script::Myanmar
-            | Script::Khmer
-            | Script::Devanagari
-            | Script::Bengali
-            | Script::Gurmukhi
-            | Script::Gujarati
-            | Script::Oriya
-            | Script::Tamil
-            | Script::Telugu
-            | Script::Kannada
-            | Script::Malayalam
-            | Script::Sinhala
-            | Script::Thai
-            | Script::Lao
-            | Script::Tibetan
-            | Script::Tai_Tham
-            | Script::Balinese
-            | Script::Javanese
-            | Script::Arabic
-            | Script::Syriac
-    )
+    matches!(u32::from(c), 0x1100..=0x11FF | 0xA960..=0xA97F | 0xD7B0..=0xD7FF)
+        || matches!(
+            c.script(),
+            Script::Myanmar
+                | Script::Khmer
+                | Script::Devanagari
+                | Script::Bengali
+                | Script::Gurmukhi
+                | Script::Gujarati
+                | Script::Oriya
+                | Script::Tamil
+                | Script::Telugu
+                | Script::Kannada
+                | Script::Malayalam
+                | Script::Sinhala
+                | Script::Thai
+                | Script::Lao
+                | Script::Tibetan
+                | Script::Tai_Tham
+                | Script::Balinese
+                | Script::Javanese
+                | Script::Arabic
+                | Script::Syriac
+        )
 }
+
+/// Korean system and open Hangul fonts preferred ahead of Chinese/Japanese CJK faces.
+const HANGUL_FALLBACKS: &[&str] = &[
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    "Noto Sans CJK KR",
+    "Noto Sans KR",
+    "NanumGothic",
+    "Source Han Sans KR",
+    "UnDotum",
+    "Baekmuk Gulim",
+    "Arial Unicode MS",
+];
 
 /// Families preferred, in order, for a character of `c`'s script when the document's font lacks
 /// it: the platforms' own OpenType fonts and the open Noto/SIL families. Apple's older fonts for
@@ -79,6 +98,7 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
         return COLOR_EMOJI;
     }
     match c.script() {
+        Script::Hangul => HANGUL_FALLBACKS,
         Script::Myanmar => &["Myanmar Text", "Noto Sans Myanmar", "Padauk", "Pyidaungsu", "Noto Serif Myanmar", "Myanmar Sangam MN", "Myanmar MN"],
         Script::Khmer => &["Leelawadee UI", "Khmer UI", "Noto Sans Khmer", "Noto Serif Khmer", "Khmer OS", "Khmer Sangam MN", "Khmer MN"],
         Script::Devanagari => &["Nirmala UI", "Mangal", "Kohinoor Devanagari", "Noto Sans Devanagari", "Noto Serif Devanagari", "Lohit Devanagari"],
@@ -191,6 +211,22 @@ mod tests {
         // Text-style symbols keep the symbol fonts.
         for c in ['✔', '☺', '→', 'a', '1'] {
             assert!(!is_emoji(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn hangul_prefers_korean_fonts_and_conjoining_jamo_require_layout_tables() {
+        for c in ['가', '한', 'ㄱ', '\u{1112}', '\u{1161}', '\u{A960}', '\u{D7B0}', '\u{FFA1}'] {
+            assert_eq!(script_fallbacks(c), HANGUL_FALLBACKS, "{c:?}");
+            assert!(fallback_rank(c, "Apple SD Gothic Neo") < fallback_rank(c, "PingFang SC"), "{c:?}");
+            assert!(fallback_rank(c, "Malgun Gothic") < fallback_rank(c, "MS Gothic"), "{c:?}");
+            assert!(fallback_rank(c, "Noto Sans CJK KR") < fallback_rank(c, "Noto Sans CJK SC"), "{c:?}");
+        }
+        for jamo in ['\u{1100}', '\u{1112}', '\u{1161}', '\u{11AB}', '\u{A960}', '\u{D7B0}'] {
+            assert!(needs_layout_tables(jamo), "{jamo:?}");
+        }
+        for precomposed in ['가', '한', '힣', 'ㄱ', 'ㅏ', '\u{FFA1}'] {
+            assert!(!needs_layout_tables(precomposed), "{precomposed:?}");
         }
     }
 }

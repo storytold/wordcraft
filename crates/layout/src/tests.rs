@@ -8517,6 +8517,32 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+#[test]
+fn korean_east_asia_font_routes_hangul_and_jamo_while_keeping_latin_body_font() {
+    let kr_resolved = wordcraft_fonts::word::resolve("맑은 고딕", false, false);
+    if !kr_resolved.face.covers('한') {
+        eprintln!("skipped: no Korean substitute covering Hangul installed");
+        return;
+    }
+    let latin = wordcraft_doc::styles::BODY_FONT;
+    let mixed = "Hello 한국어 \u{3131}";
+    let mut dm = Document::from_text(mixed);
+    dm.format_range(&Pos::body(0, 0), &Pos::body(0, mixed.len()), &|c| {
+        c.font = Some(latin.into());
+        c.font_ea = Some("맑은 고딕".into());
+    })
+    .unwrap();
+    let lm = lay(&dm);
+    let pm = lm.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let latin_id = wordcraft_fonts::word::resolve(latin, false, false).face.id();
+    for c in &pm.clusters {
+        let Some(ch) = mixed.get(c.start..c.end).and_then(|s| s.chars().next()).filter(|ch| !ch.is_whitespace()) else { continue };
+        let face_id = pm.styles[c.style as usize].face.id();
+        let want = if ch.is_ascii() { latin_id } else { kr_resolved.face.id() };
+        assert_eq!(face_id, want, "{ch:?}");
+    }
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]

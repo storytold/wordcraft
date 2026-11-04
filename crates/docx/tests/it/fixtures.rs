@@ -3785,6 +3785,51 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
     }
 }
 
+#[test]
+fn east_asia_theme_slots_follow_the_theme_font_language_and_ea_fallback() {
+    // (themeFontLang, a:ea, fixed w:eastAsia, expected [majorEastAsia, minorEastAsia])
+    let cases: &[(Option<&str>, &str, Option<&str>, [Option<&str>; 2])] = &[
+        (Some(r#"w:val="en-US" w:eastAsia="ko-KR""#), "", Some("SimSun"), [Some("맑은 고딕"), Some("바탕")]),
+        (Some(r#"w:eastAsia="ja-JP""#), "Malgun Gothic", None, [Some("游ゴシック Light"), Some("游明朝")]),
+        (Some(r#"w:eastAsia="zh-CN""#), "", None, [Some("等线 Light"), Some("等线")]),
+        (None, "NanumGothic", Some("Batang"), [Some("NanumGothic"), Some("NanumGothic")]),
+        (None, "", Some("Batang"), [Some("Batang"), Some("Batang")]),
+        (Some(r#"w:val="en-US""#), "", None, [None, None]),
+    ];
+    for (i, (lang, ea, fixed, want)) in cases.iter().enumerate() {
+        let theme = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Aptos Display"/><a:ea typeface="{ea}"/><a:cs typeface=""/><a:font script="Hang" typeface="맑은 고딕"/><a:font script="Jpan" typeface="游ゴシック Light"/><a:font script="Hans" typeface="等线 Light"/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/><a:ea typeface="{ea}"/><a:cs typeface=""/><a:font script="Hang" typeface="바탕"/><a:font script="Jpan" typeface="游明朝"/><a:font script="Hans" typeface="等线"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#,
+        );
+        let font_lang = lang.map(|l| format!("<w:themeFontLang {l}/>")).unwrap_or_default();
+        let settings = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}>{font_lang}</w:settings>"#);
+        let styles = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>"#
+        );
+        let ea_attr = fixed.map(|f| format!(r#" w:eastAsia="{f}""#)).unwrap_or_default();
+        let run = |slot: &str| format!(r#"<w:p><w:r><w:rPr><w:rFonts{ea_attr} w:eastAsiaTheme="{slot}"/></w:rPr><w:t>한국어</w:t></w:r></w:p>"#);
+        let body = [run("majorEastAsia"), run("minorEastAsia")].concat();
+        let rels = [
+            ("rId7", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml"),
+            ("rId8", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles", "styles.xml"),
+            ("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme", "theme/theme1.xml"),
+        ];
+        let parts = [("word/theme/theme1.xml", theme.as_str()), ("word/settings.xml", settings.as_str()), ("word/styles.xml", styles.as_str())];
+        let d = wordcraft_docx::read(&docx(&body, &rels, &parts)).unwrap();
+        let actual: Vec<Option<String>> = paras(&d).iter().map(|p| p.runs[0].props.font_ea.clone()).collect();
+        let expected: Vec<Option<String>> = want.iter().map(|w| w.map(str::to_string)).collect();
+        assert_eq!(actual, expected, "case {i}");
+        // Also verify docDefaults resolved minorEastAsia on default_chr when no fixed w:eastAsia was on docDefaults.
+        let expected_def = match (lang, *ea) {
+            (Some(l), _) if l.contains("ko-KR") => Some("바탕"),
+            (Some(l), _) if l.contains("ja-JP") => Some("游明朝"),
+            (Some(l), _) if l.contains("zh-CN") => Some("等线"),
+            (_, e) if !e.is_empty() => Some(e),
+            _ => None,
+        };
+        assert_eq!(d.styles.default_chr.font_ea.as_deref(), expected_def, "docDefaults case {i}");
+    }
+}
+
 /// The font table's family classes: Word draws a missing roman font in a serif face.
 #[test]
 fn roman_fonts_are_read_from_the_font_table() {

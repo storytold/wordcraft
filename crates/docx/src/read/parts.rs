@@ -189,6 +189,9 @@ impl Reader<'_> {
             if let Some(f) = face("a:minorFont") {
                 self.doc.settings.minor_font = f;
             }
+            let ea = |n: &str| fs.child(n).and_then(|f| f.child("a:ea")).and_then(|e| e.attr("typeface")).unwrap_or_default().to_string();
+            self.pc.major_ea = ea("a:majorFont");
+            self.pc.minor_ea = ea("a:minorFont");
             let cs = |n: &str| fs.child(n).and_then(|f| f.child("a:cs")).and_then(|c| c.attr("typeface")).unwrap_or_default().to_string();
             self.pc.major_cs = cs("a:majorFont");
             self.pc.minor_cs = cs("a:minorFont");
@@ -212,10 +215,14 @@ impl Reader<'_> {
     }
 
     /// `w:settings/w:clrSchemeMapping`: which scheme colour text1, background1… stand for. Also
-    /// `w:themeFontLang/@w:bidi`, the language whose script picks the `…Bidi` theme fonts.
+    /// `w:themeFontLang/@w:bidi` and `@w:eastAsia`, whose scripts pick the `…Bidi` and `…EastAsia`
+    /// theme fonts.
     pub(super) fn read_color_mapping(&mut self, path: &str) {
         let Ok(Some(root)) = self.xml(path) else { return };
-        self.pc.bidi_script = root.child("w:themeFontLang").and_then(|l| l.attr("w:bidi")).filter(|v| !v.trim().is_empty()).map(props::lang_script);
+        if let Some(lang) = root.child("w:themeFontLang") {
+            self.pc.bidi_script = lang.attr("w:bidi").filter(|v| !v.trim().is_empty()).map(props::lang_script);
+            self.pc.ea_script = lang.attr("w:eastAsia").filter(|v| !v.trim().is_empty()).map(props::lang_script);
+        }
         let Some(m) = root.child("w:clrSchemeMapping") else { return };
         let names = [
             "dark1",
