@@ -30,6 +30,16 @@ fn powershell_starts_without_a_console_window() {
 }
 
 #[test]
+/// The shared launch helper keeps the PowerShell path, arguments and flags in one place.
+fn powershell_command_uses_the_shared_program_and_flags() {
+    let w = windows_command(Some("D:\\Win".into()), "script");
+    assert_eq!(w.program, windows_powershell(Some("D:\\Win".into())));
+    assert_eq!(w.creation_flags, 0x0800_0000);
+    assert_eq!(w.args[..3], ["-NoProfile", "-NonInteractive", "-Command"]);
+    assert_eq!(w.args[3], "script");
+}
+
+#[test]
 fn splits_sentences_but_not_abbreviations() {
     let t = "Smith et al. found 3.5 times more (see Fig. 2). J. Smith agreed! Did they? Yes… Pick one, e.g. this one.";
     let spans = split_sentences(t);
@@ -196,6 +206,55 @@ fn empty_queue_does_not_play() {
     r.play_pause();
     assert_eq!(r.state(), State::Stopped);
 }
+
+#[test]
+/// Only `start` begins a new reading; the worker rebuilds its speaker when this changes.
+fn a_new_reading_bumps_the_speaker_generation() {
+    let mut r = ReadAloud::default();
+    let reading = |r: &ReadAloud| lock(&r.shared.0).reading;
+    assert_eq!(reading(&r), 0);
+    r.start(Vec::new());
+    assert_eq!(reading(&r), 1);
+    // Pausing and skipping are not new readings.
+    r.play_pause();
+    r.skip(1);
+    assert_eq!(reading(&r), 1);
+    r.start(Vec::new());
+    assert_eq!(reading(&r), 2);
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+/// A reading started while the old host shuts down keeps the worker and its `running` flag.
+fn finishing_a_worker_keeps_a_reading_started_during_shutdown() {
+    let utterance = Utterance { text: "One.".into(), start: Pos::body(0, 0), end: Pos::body(0, 4), lang: None };
+    let new_reading = std::sync::Mutex::new(Shared {
+        queue: vec![utterance],
+        index: 0,
+        state: State::Playing,
+        rate: 1.0,
+        generation: 0,
+        reading: 7,
+        error: None,
+        running: true,
+    });
+    assert_eq!(finish_worker(&new_reading, lock(&new_reading), SystemSpeaker::new()), Some(7));
+    assert!(lock(&new_reading).running, "the worker keeps the new reading");
+
+    let stopped = std::sync::Mutex::new(Shared {
+        queue: Vec::new(),
+        index: 0,
+        state: State::Stopped,
+        rate: 1.0,
+        generation: 0,
+        reading: 7,
+        error: None,
+        running: true,
+    });
+    assert_eq!(finish_worker(&stopped, lock(&stopped), SystemSpeaker::new()), None);
+    assert!(!lock(&stopped).running);
+}
+
 #[test]
 fn languages_are_detected_from_the_script() {
     for (text, tag) in [
