@@ -2925,5 +2925,13 @@ fn form_fields_are_fillable() {
     // Print Markup with no comments to show leaves the page as laid out: the fields stay. Another
     // paper size scales the page: none.
     assert_eq!(fields(PdfOptions { form_fields: true, include_markup: true, comments: true, ..Default::default() }).len(), 2);
+    // Nor on a print job's sheets: its pages are scaled onto them, or repeated as copies.
+    for imposition in [crate::imposition::Imposition::NUp(2), crate::imposition::Imposition::Booklet { reverse: false }] {
+        assert!(fields(PdfOptions { form_fields: true, imposition, ..Default::default() }).is_empty(), "{imposition:?}");
+    }
+    for sheet_collate in [true, false] {
+        assert!(fields(PdfOptions { form_fields: true, sheet_copies: 2, sheet_collate, ..Default::default() }).is_empty());
+    }
+    assert_eq!(fields(PdfOptions { form_fields: true, sheet_copies: 1, ..Default::default() }), got);
     assert!(fields(PdfOptions { form_fields: true, paper: Some((842.0, 1191.0)), ..Default::default() }).is_empty());
 }
