@@ -209,6 +209,12 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             && t.rows
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
+        // Word Mac 16.114.3: when the first cantSplit body row exceeds a whole text
+        // area, its original headers get their own page. Intermediate row fragments
+        // have no repeated headers; the final fragment repeats them if they fit.
+        // Do not change the fitting-row or ordinary splittable-row contracts.
+        let separate_headers =
+            ri == first && !pb.web && !header_rows.is_empty() && oversized_cant_split && row.height + row.edge > pb.sect.text_height() + 0.01;
         let mut rest: Option<table::RowLayout> = None;
         // On a new page holding only the repeated header rows.
         let mut fresh = false;
@@ -246,7 +252,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // (#4272): moving on can give the cell room there.
             let first_part = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers;
             let moves_on = first_part && short_of_min(ri, room);
-            let can_split = splittable || (oversized_cant_split && (pb.fresh() || fresh || under_fresh_headers));
+            let can_split = splittable || (oversized_cant_split && (pb.fresh() || fresh || (under_fresh_headers && !separate_headers)));
             let split = match (can_split && !moves_on && !defer_kept, first_part) {
                 (false, _) => None,
                 (true, true) => table::split_row_keeping_cells(cur, room),
@@ -267,7 +273,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
             // A column at a continuous section's mid-page top has not gained a fresh page.
             fresh = pb.fresh();
             // Repeat header rows, up to the layout's cap.
-            if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
+            let remaining = rest.as_ref().unwrap_or(row);
+            let repeat = !separate_headers || remaining.height + remaining.edge + repeated_height <= pb.bottom - pb.y + 0.01;
+            if ri >= header_rows.len() && repeat && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
                 ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
                 for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
                     place(pb, h);

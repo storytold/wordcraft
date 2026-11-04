@@ -120,9 +120,9 @@ fn cant_split_at_a_mid_page_section_top_moves_to_a_fresh_page() {
     }
 }
 
-/// Capture freshness before placing one or more repeated headers above the oversized row.
+/// The native single-header control gets a header-only page; retain the contract for a header prefix too.
 #[test]
-fn oversized_cant_split_row_starts_below_headers_on_the_first_fresh_page() {
+fn oversized_cant_split_row_repeats_headers_only_on_its_final_fragment() {
     for headers in [1, 2] {
         let (layout, rows) = at_least_rows(648.0, headers + 1, |table| {
             for row in table.rows.iter_mut().take(headers) {
@@ -134,22 +134,27 @@ fn oversized_cant_split_row_starts_below_headers_on_the_first_fresh_page() {
             table.rows[headers].cells[0].blocks = lines_in_cell(80, "Synthetic");
         });
         let pages = assert_complete_row(&layout, 0, headers as u32, 80);
-        assert_eq!(pages.first(), Some(&0), "do not leave an initial header-only page");
+        assert_eq!(pages.first(), Some(&1), "the original headers precede the first fragment, as observed in Word");
+        assert_eq!(rows[0], (0..headers).collect::<Vec<_>>());
         for page in &pages {
-            assert_eq!(rows[*page], (0..=headers).collect::<Vec<_>>(), "repeat every header with body content");
+            let expected = if Some(page) == pages.last() { (0..=headers).collect::<Vec<_>>() } else { vec![headers] };
+            assert_eq!(rows[*page], expected, "only the last fragment repeats the header prefix");
         }
     }
 }
 
-/// Headers at a mid-page continuous section move with their oversized first body row.
+/// A mid-page continuous section moves its original headers off the partly filled page first.
 #[test]
-fn continuous_section_does_not_leave_repeated_headers_stranded() {
+fn continuous_section_moves_original_headers_off_the_partly_filled_page() {
     let layout = continuous_section_table(80, true);
     let rows = at_least_rows_pages(&layout);
     assert!(rows[0].is_empty(), "the header must move with its body: {rows:?}");
     let pages = assert_complete_row(&layout, 1, 1, 80);
-    assert_eq!(pages.first(), Some(&1));
-    assert!(pages.iter().all(|page| rows[*page] == [0, 1]));
+    assert_eq!(rows[1], [0], "the original header starts a physically fresh page");
+    assert_eq!(pages.first(), Some(&2));
+    for page in &pages {
+        assert_eq!(rows[*page], if Some(page) == pages.last() { vec![0, 1] } else { vec![1] });
+    }
 }
 
 /// A fresh page's usable space includes the repeated headers; fitting rows stay whole.
@@ -226,12 +231,13 @@ fn office_corpus_row_after_another_table_keeps_every_line_inside_the_page() {
     assert_pagination_fixture_font(&layout);
     let pages = assert_complete_row(&layout, 3, 1, 100);
     assert!(pages.len() >= 2, "an oversized row must continue after the preceding table");
-    for page in pages {
-        assert!(
-            layout.pages[page].items.iter().any(|item| { matches!(item, Placed::Cell { table, row: 0, .. } if table.0 == [3]) }),
-            "the header follows every body fragment"
-        );
-    }
+    let headers: Vec<usize> = layout
+        .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(page, p)| p.items.iter().any(|item| matches!(item, Placed::Cell { table, row: 0, .. } if table.0 == [3])).then_some(page))
+        .collect();
+    assert_eq!(headers, [pages[0] - 1, *pages.last().unwrap()], "the original header and last-fragment repeat match the native corpus");
 }
 
 /// Advancing a mid-page continuous section's column does not gain a whole page.
@@ -250,4 +256,82 @@ fn fitting_cant_split_leaves_both_mid_page_columns_before_splitting() {
     doc.insert_block(StoryRef::Body, &Path::top(at), Block::Table(table)).unwrap();
     let layout = lay(&doc);
     assert_eq!(assert_complete_row(&layout, 1, 0, 20), vec![1], "a whole fresh page holds the row");
+}
+
+/// Word Mac 16.114.3, four local synthetic DOCX controls, 2026-11-04: with cantSplit
+/// and a row taller than the whole body, the original header precedes the first fragment;
+/// only the final fragment repeats it. Splittable rows repeat it on every fragment.
+#[test]
+fn native_oversized_cant_split_header_sequence() {
+    use wordcraft_doc::props::LineSpacing;
+    for heading in [false, true] {
+        for cant_split in [false, true] {
+            let plain = ParaProps {
+                line_spacing: Some(LineSpacing::Exactly(12.0)),
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                widow_control: Some(false),
+                ..Default::default()
+            };
+            let para = |text: &str, props| {
+                let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+                p.props = props;
+                wordcraft_doc::para_block(p)
+            };
+            let mut doc = pagination_fixture_document("SYNTHETIC FILLER");
+            doc.last_section.page_w = 400.0;
+            doc.last_section.page_h = 360.0;
+            doc.last_section.margin_top = 36.0;
+            doc.last_section.margin_bottom = 36.0;
+            doc.last_section.margin_left = 36.0;
+            doc.last_section.margin_right = 36.0;
+            let mut table = Table::new(2, 1, 328.0);
+            table.props.style = None;
+            table.props.fixed = true;
+            table.props.cell_margins = Some([0.0; 4]);
+            table.rows[0].props.header = true;
+            table.rows[0].props.height = Some(28.0);
+            table.rows[0].props.height_rule = HeightRule::AtLeast;
+            table.rows[0].cells[0].blocks = vec![para("SYNTHETIC HEADER", plain.clone())];
+            table.rows[1].props.cant_split = cant_split;
+            table.rows[1].cells[0].blocks = (1..=100).map(|n| para(&format!("SYNTHETIC ROW {n:03}"), plain.clone())).collect();
+            doc.body.clear();
+            if heading {
+                doc.body.push(para("SYNTHETIC FILLER", ParaProps { line_spacing: Some(LineSpacing::Exactly(170.0)), ..plain.clone() }));
+                doc.body.push(para(
+                    "SYNTHETIC HEADING",
+                    ParaProps {
+                        line_spacing: Some(LineSpacing::Exactly(14.0)),
+                        space_after: Some(6.0),
+                        keep_next: Some(true),
+                        keep_lines: Some(true),
+                        ..plain.clone()
+                    },
+                ));
+            }
+            let block = doc.body.len() as u32;
+            doc.body.push(Arc::new(Block::Table(table)));
+            let layout = lay(&doc);
+            assert_pagination_fixture_font(&layout);
+            let body = assert_complete_row(&layout, block, 1, 100);
+            let headers: Vec<usize> = layout
+                .pages
+                .iter()
+                .enumerate()
+                .filter_map(|(i, page)| {
+                    page.items.iter().any(|it| matches!(it, Placed::Cell { table, row: 0, .. } if table.0 == [block])).then_some(i)
+                })
+                .collect();
+            if cant_split {
+                // Caption placement is independently fixed by #5166. This regression also
+                // runs on #4840 alone and pins the table's header/fragment sequence.
+                let original = if heading { headers[0] } else { 0 };
+                assert_eq!(body.first(), Some(&(original + 1)), "original header precedes the oversized row, heading={heading}");
+                assert_eq!(headers, [original, *body.last().unwrap()], "only the final body fragment repeats its header");
+            } else {
+                assert_eq!(body.first(), Some(&0));
+                assert_eq!(headers, body, "ordinary split rows repeat their header on every page");
+            }
+        }
+    }
 }
