@@ -260,7 +260,7 @@ impl Writer<'_> {
             self.rev_close(w, props);
             return;
         }
-        let Some(file) = self.media_files.get(media).cloned() else { return };
+        let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
@@ -438,7 +438,7 @@ impl Writer<'_> {
             let at = (c.x, c.y);
             match &c.obj {
                 InlineObject::Image { media, .. } => {
-                    if let Some(file) = self.media_files.get(media).cloned() {
+                    if let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) {
                         self.pic(w, &c.obj, &file, at, rels);
                     }
                 }

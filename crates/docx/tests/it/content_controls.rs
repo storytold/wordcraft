@@ -342,3 +342,36 @@ fn toc_gallery_around_a_toc_whose_heading_is_in_a_block_control_round_trips() {
         assert!(xml.rfind("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
     }
 }
+
+#[test]
+fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
+    let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let content = format!(
+        "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+        style("TOCHeading", &t("Contents")),
+        style("TOC1", &format!("{begin}{}", t("Chapter One\t1"))),
+        style("TOC2", &t("Section\t2"))
+    );
+    let pr = r#"<w:id w:val="-1234567"/><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>"#;
+    let mut bytes = package(&format!("{}{}", sdt(pr, &content), p(&t("Chapter One"))));
+    for pass in 0..2 {
+        let d = read(&bytes).unwrap();
+        bytes = write(&d).unwrap();
+        let xml = document_xml(&bytes);
+        assert_eq!(xml.matches("<w:sdt>").count(), 1, "pass {pass}: {xml}");
+        assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "pass {pass}: {xml}");
+        assert!(xml.find("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
+    }
+}
+
+#[test]
+fn field_result_rpr_change_and_table_revisions_round_trip() {
+    let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section 3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let tbl = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2880"/></w:tblGrid><w:tr><w:tblPrEx><w:tblW w:w="2880" w:type="dxa"/><w:tblPrExChange w:id="1" w:author="Alice"><w:tblPrEx><w:tblW w:w="1440" w:type="dxa"/></w:tblPrEx></w:tblPrExChange></w:tblPrEx><w:trPr><w:ins w:id="2" w:author="Bob"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:cellIns w:id="3" w:author="Carol"/></w:tcPr><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let d = read(&package(&format!("{fld}{tbl}"))).unwrap();
+    let xml = document_xml(&write(&d).unwrap());
+    assert!(xml.contains("<w:rPrChange "), "{xml}");
+    assert!(xml.contains("<w:tblPrExChange "), "{xml}");
+    assert!(xml.contains("<w:cellIns "), "{xml}");
+}

@@ -257,7 +257,13 @@ impl Reader<'_> {
         float.pic_stroke = paint.stroke;
         float.pic_stroke_width = paint.stroke_width;
         float.pic_effects = sppr.and_then(|s| s.child("a:effectLst")).map(|l| effect_list(l, &self.doc.settings.theme_colors)).unwrap_or_default();
-        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id)).or_else(|| {
+            let id = blip.attr("r:link")?;
+            self.media_for(rels, id).or_else(|| {
+                let r = rels.by_id(id)?;
+                (r.external && !r.target.trim().is_empty()).then(|| format!("link:{}", r.target.trim()))
+            })
+        })?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {

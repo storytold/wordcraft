@@ -16,11 +16,16 @@ impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
-        let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-        self.used_media.insert(media.clone());
+        let (rid, cnv_name, blip_attr) = match media.strip_prefix("link:") {
+            Some(url) => (rels.add(rt::IMAGE, url, true), "Picture", "r:link"),
+            None => {
+                self.used_media.insert(media.clone());
+                (rels.add(rt::IMAGE, &format!("media/{file}"), false), file, "r:embed")
+            }
+        };
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden);
+        nv_props(w, "pic:cNvPr", "0", cnv_name, alt, &float.alt, float.hidden);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -30,9 +35,9 @@ impl Writer<'_> {
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
         if fx.is_identity() {
-            w.empty("a:blip", &[("r:embed", &rid)]);
+            w.empty("a:blip", &[(blip_attr, &rid)]);
         } else {
-            w.open("a:blip", &[("r:embed", &rid)]);
+            w.open("a:blip", &[(blip_attr, &rid)]);
             if fx.transparency != 0 {
                 w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
             }
