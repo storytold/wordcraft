@@ -119,7 +119,7 @@ fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
     text_doc_with(main, extra, FibSpec { ccp_hdd, ..Default::default() }, &[])
 }
 
-/// [`text_doc`] with the FIB knobs given (`ccp_text` is filled in from `main`) and extra
+/// [`text_doc`] with the FIB knobs given (`ccp_text` is filled in from `main`; `pairs` must be empty) and extra
 /// Table-stream data placed after the piece table: `(pair index, bytes)` for each.
 fn text_doc_with(main: &[Piece], extra: &[Piece], spec: FibSpec, table_data: &[(usize, &[u8])]) -> Vec<u8> {
     let all: Vec<Piece> = main.iter().chain(extra.iter()).cloned().collect();
@@ -139,6 +139,7 @@ fn text_doc_with(main: &[Piece], extra: &[Piece], spec: FibSpec, table_data: &[(
         pairs.push((*pair, table.len() as u32, bytes.len() as u32));
         table.extend_from_slice(bytes);
     }
+    debug_assert!(spec.pairs.is_empty(), "text_doc_with sets the pairs itself");
     let spec = FibSpec { ccp_text, pairs, ..spec };
     word[..fib_bytes(&spec).len()].copy_from_slice(&fib_bytes(&spec));
     cfb_file(&[("WordDocument", &word), ("0Table", &table)])
@@ -275,7 +276,7 @@ fn a_flood_of_paragraph_marks_is_refused() {
 }
 
 /// The paragraph cap is one budget for the whole document, not one per story: marks in the
-/// body and in a footnote add up. (A walk that got its own budget would open all three.)
+/// body and in a footnote add up. (A walk that got its own budget would open both over-cap files.)
 #[test]
 fn the_paragraph_cap_is_shared_by_the_body_and_a_footnote() {
     // One footnote at CP 0 whose text is `note` marks, stored right after the body in the stream.
@@ -283,7 +284,7 @@ fn the_paragraph_cap_is_shared_by_the_body_and_a_footnote() {
         let cps = |v: &[u32]| v.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
         let mut refs = cps(&[0, 1]);
         refs.extend_from_slice(&[0, 0]); // the one reference's data
-        let txt = cps(&[0, note as u32, note as u32 + 1]);
+        let txt = cps(&[0, note as u32, note as u32]); // story 0..note, then the limit
         let spec = FibSpec { ccp_ftn: note as u32, ..Default::default() };
         text_doc_with(
             &[Piece { compressed: true, text: "\r".repeat(body) }],
