@@ -1,7 +1,5 @@
 # Releasing WordCraft
 
-> **Last updated:** 2026-11-02 · **Change:** macOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication.
-
 1. Bump the version on `main`: `cargo xtask version set 0.2.0` (the one source of truth is
    `[workspace.package] version`; the app shows it in `--version` and About, with the commit from
    `WORDCRAFT_BUILD_SHA`).

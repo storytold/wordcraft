@@ -726,7 +726,6 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-02 | trivial | MacOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication. |
 | 2026-11-01 | trivial | Progress log: SEQ, STYLEREF and REF fields show fresh results in output |
 | 2026-10-29 | trivial | Progress log: Print Markup balloon anchors use one object walk per paragraph (#3614); readiness estimates unchanged |
 | 2026-10-28 | trivial | Print Markup text-copy comment discovery walks paragraph objects once (#3614); quotes, order, limits and readiness estimates unchanged |
@@ -743,6 +742,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-02 | trivial | Progress log: alternative format chunks and MHT open |
+| 2026-11-02 | trivial | MacOS packaging accepts a notarytool Keychain profile as an alternative to the three Apple authentication variables; synthetic tests cover profile priority and rejection-log authentication. |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
 | 2026-10-31 | trivial | Progress log: a table row doesn't split off a picture that doesn't fit (#4272) |
