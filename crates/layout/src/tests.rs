@@ -6113,18 +6113,21 @@ fn a_note_mark_stays_with_the_text_before_it() {
     assert!(broke_before_spaced_mark, "a line can start with a mark after a space");
 }
 
-/// #5402: a word too long for the line is split, and when only its note mark doesn't fit, the
-/// mark takes the word's last letter along instead of starting the next line alone.
+/// #5402: a word too long for the line is split, and when only its note mark or the comma after
+/// the mark doesn't fit, the mark takes the word's last letter along and keeps the comma, instead
+/// of a line starting with the mark or the comma.
 #[test]
 fn a_split_word_keeps_its_note_mark() {
-    let text = "Pneumonoultramicroscopicsilicovolcanoconiosis.";
-    let mut d = Document::from_text(text);
-    footnote(&mut d, &Pos::body(0, text.len()), "A note.");
+    let word = "Pneumonoultramicroscopicsilicovolcanoconiosis";
+    let mut d = Document::from_text(&format!("{word},"));
+    footnote(&mut d, &Pos::body(0, word.len()), "A note.");
+    let after = word.len() + wordcraft_doc::para::OBJ.len_utf8();
     let mut split = 0;
     for m in 200..=500 {
         let starts = body_line_starts(&d, m as f32);
         split += usize::from(starts.len() > 1);
-        assert!(!starts.contains(&text.len()), "margin {m}: a line starts with the note mark: {starts:?}");
+        assert!(!starts.contains(&word.len()), "margin {m}: a line starts with the note mark: {starts:?}");
+        assert!(!starts.contains(&after), "margin {m}: a line starts with the comma after the mark: {starts:?}");
     }
     assert!(split > 100, "{split} widths split the word");
 }

@@ -946,8 +946,9 @@ impl Scan {
         while b > c0 && pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start)) {
             b -= 1;
         }
-        // A note mark doesn't start a line: the letter before it goes along (#5402).
-        while b > c0 + 1 && pl.notes.iter().any(|(k, _)| *k == b) {
+        // A note mark neither starts a line nor ends one before the punctuation after it: the mark
+        // takes the letter before it along, and the punctuation after it stays with it (#5402).
+        while b > c0 + 1 && pl.notes.iter().any(|(k, _)| *k == b || *k + 1 == b) {
             b -= 1;
             while b > c0 + 1 && pl.clusters.get(b).is_some_and(|c| glyphless(b) || !pl.is_edit_boundary(c.start)) {
                 b -= 1;
