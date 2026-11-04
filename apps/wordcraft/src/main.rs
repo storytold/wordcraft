@@ -369,14 +369,15 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 /// Whether to force winit's X11 backend (XWayland on a Wayland desktop). `var` reads the
 /// environment. A Wayland session (`WAYLAND_DISPLAY` or `WAYLAND_SOCKET`, either of which winit
 /// connects with) stays native unless `WORDCRAFT_X11` asks for X11 (#2939); `WORDCRAFT_WAYLAND`
-/// keeps meaning native Wayland.
+/// keeps meaning native Wayland. Like winit, an empty display variable counts as unset.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn use_x11(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let present = |k: &str| var(k).is_some_and(|v| !v.is_empty());
     let set = |k: &str| var(k).is_some_and(|v| !v.is_empty() && v != "0");
-    if set("WORDCRAFT_WAYLAND") || var("DISPLAY").is_none() {
+    if set("WORDCRAFT_WAYLAND") || !present("DISPLAY") {
         return false;
     }
-    set("WORDCRAFT_X11") || (var("WAYLAND_DISPLAY").is_none() && var("WAYLAND_SOCKET").is_none())
+    set("WORDCRAFT_X11") || !(present("WAYLAND_DISPLAY") || present("WAYLAND_SOCKET"))
 }
 
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
@@ -697,5 +698,8 @@ mod backend_tests {
     fn without_a_wayland_session_x11_is_used_when_there_is_a_display() {
         assert!(use_x11(env(&[("DISPLAY", ":0")])));
         assert!(!use_x11(env(&[])));
+        // An empty variable is unset, as for winit.
+        assert!(use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", ""), ("WAYLAND_SOCKET", "")])));
+        assert!(!use_x11(env(&[("DISPLAY", ""), ("WAYLAND_DISPLAY", "wayland-1")])));
     }
 }
