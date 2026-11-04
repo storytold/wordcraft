@@ -483,9 +483,8 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (bl, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
-        layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame)))
-    });
+    let (bl, ..) =
+        with_pin(ctx, id, sect, 1, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))));
     ctx.track_totals = track;
     // A wrapping float anchored to the header's text reaches with it: the body clears the
     // logo, not just the header's lines (#2361). Page-fixed and non-wrapping floats (a
