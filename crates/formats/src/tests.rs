@@ -205,7 +205,10 @@ fn markdown_list_items_that_start_like_blocks_keep_their_text() {
         let bytes = export("md", &d).unwrap().unwrap();
         let blocks = flat(&import("md", &bytes).unwrap().unwrap());
         let [FBlock::Para(p)] = blocks.as_slice() else { panic!("{text}: {}", String::from_utf8_lossy(&bytes)) };
-        assert_eq!((p.text().as_str(), p.kind, p.list), (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1 })));
+        assert_eq!(
+            (p.text().as_str(), p.kind, p.list),
+            (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }))
+        );
     }
 }
 
