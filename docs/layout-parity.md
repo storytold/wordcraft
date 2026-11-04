@@ -190,6 +190,7 @@ No overall parity estimate changes from these probes.
 
 | Measure | WordCraft | Word | Kind |
 |---|---|---|---|
+| Print Markup balloon anchor discovery with many unrelated inline markers (#3614) | Single forward object walk; document order, first-root filtering, UTF-8 byte positions and the 5,000-anchor cap unchanged | not measured | `balloons::anchor_tests` semantic, cap and thread-CPU scaling regressions |
 | Cold layout, 188-page document | 61 ms | not measured | measured 2026-10-06 (not re-run this pass) |
 | Relayout after an edit | 1.4 ms | not measured | measured 2026-10-06 |
 | Font picker with many installed fonts | fixed freezes (#233) | instant | issue #31, #59 |
@@ -281,6 +282,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | trivial | Print Markup balloon anchor discovery walks paragraph objects once (#3614); readiness estimates unchanged |
 | 2026-10-30 | trivial | Layout work bounds for hostile documents (#3867): header-row repeats budgeted per layout and counting canvas members; picture-outline decode budget charged for cached outlines too, so cold and warm layouts wrap alike; linked-box chains keep exact widths up to a work cap, not 16 widths; `gridAfter` bounded |
 | 2026-10-29 | trivial | A missing font is drawn in an installed metric twin before any other substitute (`fonts::word::METRIC_TWINS`, also what the missing-font warning calls metric-compatible): Arial for Helvetica on Windows, Arial for Liberation Sans on a Mac, Tinos before macOS Times for Times New Roman, Cousine before Menlo for Courier New. Documents in fonts with no installed twin lay out as before |
 | 2026-11-01 | trivial | Columns: the line between them runs from the section's top on the page to the bottom of its tallest column; a continuous section mid-page gets its line (#5178) |
