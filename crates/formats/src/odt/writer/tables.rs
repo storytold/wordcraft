@@ -21,13 +21,8 @@ pub(in crate::odt) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<
 /// first row its top, the last column its right), so lines don't double; a side the cell
 /// doesn't state gets the table's grid line, or none in a table without lines.
 pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
-    let grid = (!t.borderless).then_some(Border {
-        style: BorderStyle::Single,
-        width: 0.5,
-        color: Some(Rgb(0, 0, 0)),
-        space: 0.0,
-        ..Default::default()
-    });
+    let grid =
+        (!t.borderless).then_some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0, 0, 0)), space: 0.0, ..Default::default() });
     let line = |c: &model::Cell, pick: fn(&Borders) -> Option<Border>| match c.borders.as_ref().and_then(pick) {
         Some(b) => Some(b).filter(|b| b.is_visible()),
         None => grid,
