@@ -5242,7 +5242,13 @@ fn padding_without_a_border_takes_room_in_odt_documents() {
             }
         }
         if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
-            let pad = wordcraft_doc::props::Border { style: wordcraft_doc::props::BorderStyle::None, width: 0.0, color: None, space: 20.0 };
+            let pad = wordcraft_doc::props::Border {
+                style: wordcraft_doc::props::BorderStyle::None,
+                width: 0.0,
+                color: None,
+                space: 20.0,
+                ..Default::default()
+            };
             p.props.borders = Some(wordcraft_doc::props::Borders::box_(pad));
         }
         let l = lay(&d);

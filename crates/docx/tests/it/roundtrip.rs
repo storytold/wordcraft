@@ -165,7 +165,7 @@ fn border_shadow_and_frame_survive_json_and_two_docx_saves() {
     let mut d = Document::new();
     let mut style = Style { id: "Bordered".into(), name: "Bordered".into(), ..Default::default() };
     style.para.borders = Some(Borders { top: Some(enabled), ..Default::default() });
-    d.styles.styles.push(style);
+    Arc::make_mut(&mut d.styles).styles.push(style);
 
     let mut p = Paragraph::with_text("survives", CharProps { style: Some("Bordered".into()), border: Some(enabled), ..Default::default() });
     p.props.borders = Some(Borders { bottom: Some(disabled), right: Some(Border::single(0.75)), ..Default::default() });
