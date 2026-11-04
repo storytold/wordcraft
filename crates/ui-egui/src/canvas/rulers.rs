@@ -1,7 +1,7 @@
-use egui::Color32;
 use super::margins::{MarginEdge, margin_handle};
 use super::pages::page_screen_scale;
 use super::{DocLayout, Pos2, Rect, Sense, Stroke, Tokens, Ui, WordApp, json, pos2, regular, vec2};
+use egui::Color32;
 
 /// Horizontal and vertical rulers for the caret's page and paragraph. Each spans that page's
 /// rect on screen at the page's own scale and is clipped to its strip, whatever the layout
