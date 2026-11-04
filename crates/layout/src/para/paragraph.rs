@@ -588,6 +588,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         levels,
         shown: Vec::new(),
         force_face: None,
+        substituted: Vec::new(),
     };
     let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
     let mut sh = Shaped::new(b, env.eq_number);
@@ -611,6 +612,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
     let mut pl = ParaLayout {
         rp,
+        substituted: b.substituted,
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
@@ -709,6 +711,8 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.space_before = 0.0;
     pl.rp.space_after = 0.0;
     pl.label = None;
+    // It draws nothing, so no font it asks for is shown in another (its label was shaped).
+    pl.substituted.clear();
     // Its shading and borders would be drawn across the page at no height.
     pl.rp.shading = None;
     pl.rp.borders = None;
