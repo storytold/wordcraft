@@ -121,7 +121,16 @@ impl Windows {
         self.native
     }
 
-    /// One window for every document, as in the web app.
+    /// One window for all documents. Changing the window model is only safe while
+    /// a single native window exists; never orphan an existing OS viewport.
+    pub(crate) fn set_document_tabs(&mut self, enabled: bool) -> Result<(), String> {
+        if self.open.len() > 1 && self.native != !enabled {
+            return Err("Close the extra WordCraft windows before changing document tabs".into());
+        }
+        self.native = !enabled && cfg!(not(target_arch = "wasm32"));
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn single(&mut self) {
         self.native = false;
