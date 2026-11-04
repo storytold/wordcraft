@@ -3444,6 +3444,43 @@ fn the_print_button_shows_only_with_a_print_hook() {
     }
 }
 
+/// Opened again, the Print page doesn't repeat how the last job went (that was said once, in the
+/// status bar), but a failure that comes in while it is open stays, and what the printers are
+/// doing (none found) shows each time.
+#[test]
+fn the_print_page_opens_without_the_last_jobs_message() {
+    use crate::printing::Feedback;
+    let mut a = app();
+    // A job went away earlier: its message was said in the status bar, and the page closed.
+    a.printing.message = Some(Feedback::Submitted("job 7".into()));
+    a.print_feedback_seen = a.printing.message.clone();
+    a.run("file.print", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert_eq!(h.state().printing.message, None, "the last job's message is gone");
+    h.state_mut().printing.message = Some(Feedback::Failed("no paper".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().printing.message, Some(Feedback::Failed("no paper".into())), "a failure on the open page stays");
+    let leave_and_reopen = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let _ = h.state_mut().run("ui.backstage", json!({"value": false}));
+        h.run_steps(2);
+        let _ = h.state_mut().run("file.print", json!({}));
+        h.run_steps(2);
+    };
+    leave_and_reopen(&mut h);
+    assert_eq!(h.state().printing.message, None, "reopened, the failure is gone");
+    h.state_mut().printing.message = Some(Feedback::NoPrinters);
+    leave_and_reopen(&mut h);
+    assert_eq!(h.state().printing.message, Some(Feedback::NoPrinters), "no printers still shows");
+}
+
 /// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
 /// button; the document isn't typed into.
 #[test]

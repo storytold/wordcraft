@@ -588,6 +588,9 @@ pub struct WordApp {
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
     pub word_count: (u64, usize),
+    /// The window's viewport and the pass its Print page was last drawn in: a gap means the
+    /// page has just been opened. Per window, as each window counts its own passes.
+    print_page_pass: Option<(egui::ViewportId, u64)>,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
