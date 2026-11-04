@@ -1394,6 +1394,35 @@ fn bookmark_destination_is_the_page_of_its_start() {
 }
 
 #[test]
+fn only_web_and_mail_links_become_uri_actions() {
+    // A script, file, data or UNC target exports as plain text, as in the other exporters (#3717).
+    let links = [
+        ("web", "https://example.com/ok"),
+        ("mail", "mailto:a@example.com"),
+        ("script", "javascript:alert(1)"),
+        ("file", "file:///etc/passwd"),
+        ("data", "data:text/html,x"),
+        ("unc", r"\\host\share"),
+    ];
+    let mut p = Paragraph::with_text("Links:", CharProps::default());
+    for (text, link) in links {
+        let n = p.len();
+        p.insert_text(n, &format!(" {text}"), &CharProps { link: Some(link.into()), ..Default::default() }).unwrap();
+    }
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    // `/URI (target)` per link (an action also says `/S /URI`).
+    assert_eq!(raw.matches("/URI (").count() + raw.matches("/URI(").count(), 2);
+    assert!(raw.contains("example.com/ok") && raw.contains("a@example.com"));
+    for bad in ["javascript", "passwd", "text/html", "share"] {
+        assert!(!raw.contains(bad), "{bad}");
+    }
+    let all = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(all.contains("Links: web mail script file data unc"), "{all:?}");
+}
+
+#[test]
 fn ref_fields_export_cached_links() {
     use hayro_syntax::object::{Array, Dict};
 
@@ -2433,12 +2462,13 @@ fn only_safe_link_targets_become_annotations() {
     use hayro_syntax::object::{Array, Dict, String as PdfString};
 
     let mut d = Document::new();
-    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
-        .into_iter()
-        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
-        .collect();
+    d.body =
+        ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", r"\\server\share\f.doc"]
+            .into_iter()
+            .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+            .collect();
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 6, "unlinked text stays");
     let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
     let uris: Vec<String> = pdf.pages()[0]
         .raw()

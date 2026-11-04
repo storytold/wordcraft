@@ -326,6 +326,17 @@ impl<'a> Shaped<'a> {
             // the margin and the page edge clips it (see `ParaEnv::fit_objects`).
             let maxw = (env.width - cx.rp.indent_left.max(0.0) - cx.rp.indent_right.max(0.0)).max(18.0);
             let h = env.fitted.iter().find(|(i, _)| *i == k).map_or(saved_h, |(_, h)| *h);
+            // A horizontal rule takes its whole line; display draws it at its share. Measured for
+            // a table column (an unbounded line) a share of its line asks for no width, following
+            // the column rather than widening it; one of its own width asks for that.
+            let w = match o {
+                InlineObject::Shape { extra, .. } => match extra.hr {
+                    Some(_) if env.width < crate::table::MEASURE_WIDE => maxw,
+                    Some(hr) if hr.pct > 0.0 => 1.0,
+                    _ => w,
+                },
+                _ => w,
+            };
             let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
             let s = if env.fit_objects && w > maxw { maxw / w } else { 1.0 };
             // The line makes room for effects (shadows) around the picture too, and
@@ -560,7 +571,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
+    let b = Builder {
+        env,
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+        substituted: Vec::new(),
+    };
     let cx = Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp) };
     let mut sh = Shaped::new(b, env.eq_number);
     let mark_rc = cx.res.char(&p.mark);
@@ -583,6 +603,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
     let mut pl = ParaLayout {
         rp,
+        substituted: b.substituted,
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
@@ -681,6 +702,8 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.space_before = 0.0;
     pl.rp.space_after = 0.0;
     pl.label = None;
+    // It draws nothing, so no font it asks for is shown in another (its label was shaped).
+    pl.substituted.clear();
     // Its shading and borders would be drawn across the page at no height.
     pl.rp.shading = None;
     pl.rp.borders = None;
