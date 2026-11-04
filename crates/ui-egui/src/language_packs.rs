@@ -1409,6 +1409,23 @@ mod tests {
         assert!(all.iter().any(|l| l == "Custom dictionary"));
     }
 
+    /// Installing and removing a pack show in Your languages at once (the rows follow the
+    /// dictionaries' generation, which both bump).
+    #[test]
+    fn removing_a_pack_takes_its_remove_button_away() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = ResetBackend;
+        let (mut a, ctx, _backend) = options_app("language", true);
+        let tree = settled(&mut a, &ctx);
+        assert!(!has(&tree, "Remove"));
+        install_nl(&mut a);
+        let tree = settled(&mut a, &ctx);
+        assert!(has(&tree, "Remove") && has(&tree, "Installed"), "{:?}", labels(&tree));
+        a.run("proof.removePack", json!({"locale": "nl"})).unwrap();
+        let tree = settled(&mut a, &ctx);
+        assert!(!has(&tree, "Remove") && !has(&tree, "Installed"), "{:?}", labels(&tree));
+    }
+
     /// A row's detail line shows the document's tag cut and without control or bidi characters.
     #[test]
     fn a_hostile_tag_is_shown_cleaned_and_cut() {
