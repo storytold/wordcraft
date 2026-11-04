@@ -276,7 +276,8 @@ fn caret_change(s: &Session, a: &Pos) -> Option<CaretChange> {
     if let Some(r) = p.and_then(|p| revision_span(p, a.off)) {
         return Some(CaretChange::Run(r));
     }
-    let mark_fmt = p.is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
+    // The mark's own formatting, or the section break's on it (resolve_para takes both with the mark).
+    let mark_fmt = p.is_some_and(|p| a.off == p.len() && (p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())));
     if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == *a) {
         return Some(CaretChange::Mark);
     }
