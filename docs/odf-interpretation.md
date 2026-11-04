@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-04 · **Change:** major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -10,62 +10,47 @@ knows of, so none gets lost.
 
 ## The rule
 
-1. **What the standard defines is law.** WordCraft follows it whatever the settings say. That
-   includes `fo:` properties, which the standard defines by referring to XSL 1.0, for their
-   meaning. Whether such a reference also brings XSL's initial value as the default the standard
-   doesn't say; where an application's choice differs from XSL's (page margins), the case is a
-   setting, with XSL's value as WordCraft's.
-2. **What the standard leaves open is a setting.** Each such case is one value of the ODF
-   interpretation profile (`OdfProfile`, `crates/doc/src/odf_profile.rs`):
-   Two of them are the styles a document can be shown in:
-   - **Microsoft Word style** (`word`), the default: what WordCraft does for its own and Word
-     documents. (`wordcraft`, its earlier id, is still taken.)
-   - **LibreOffice style** (`libreoffice`): what LibreOffice (and Collabora, which shares its engine) does. Measured
-     black-box in LibreOffice 24 where it isn't documented.
-   - **Custom**: the user's own value for each case. It starts from the preset that was in use.
-3. **A value the file states is the file's.** A preset never replaces it: the profile only fills
-   in what the file (its styles, defaults and `settings.xml`) leaves unsaid. Three cases are not
-   missing values but stated ones whose meaning the standard leaves open: how a header's stated
-   height and spacing combine, what a stated width of 0 draws at, and a frame position stated
-   against something the standard doesn't define for its anchor. They are marked *(meaning)*
-   below. `formats::odt::tests_more::profile` checks that stated values survive every preset.
+1. **What the standard defines is law.** WordCraft follows it. That includes `fo:` properties,
+   which the standard defines by referring to XSL 1.0, for their meaning. Whether such a reference
+   also brings XSL's initial value as the default the standard doesn't say; where an application's
+   choice differs from XSL's (page margins), the case is listed below, with XSL's value as
+   WordCraft's.
+2. **What the standard leaves open, WordCraft decides once.** Each case listed below has one
+   choice, the one WordCraft makes for its own and Word documents, and no setting. LibreOffice's
+   choice (and Collabora's, which shares its engine) is listed beside it, measured black-box in
+   LibreOffice 24 where it isn't documented, because a file made there can look different here.
+3. **A value the file states is the file's.** WordCraft's choices fill in only what the file (its
+   styles, defaults and `settings.xml`) leaves unsaid. Three cases are not missing values but
+   stated ones whose meaning the standard leaves open: how a header's stated height and spacing
+   combine, what a stated width of 0 draws at, and a frame position stated against something the
+   standard doesn't define for its anchor. They are marked *(meaning)* below.
+   `formats::odt::tests_more::unstated` checks that stated values are kept.
 4. **A deviation from the standard is made only out of necessity**: where the files in
    circulation contradict it and following it would damage every such file. Each one is listed
    under "Deviations from the standard, out of necessity" below, with the standard's rule, what
    WordCraft does instead and why; WordCraft never writes the deviating form.
-5. The profile applies to ODF files (`.odt`, `.ott`, `.fodt`) *as they are opened*. A document
-   keeps what it was opened with. Changing the setting affects the next file opened.
 
-Where to set it:
+## Cases the standard leaves open
 
-| Interface | How |
-|---|---|
-| App | File › Options › Advanced › OpenDocument files |
-| Command | `file.options` `{"odf": {"preset": "word"}}` or `{"odf": {"preset": "libreoffice"}}`, or one case's value: `{"odf": {"columnGap": 18}}` (this makes the profile custom) |
-| MCP | the same command |
-| CLI | `WORDCRAFT_ODF=word` (the default) or `WORDCRAFT_ODF=libreoffice` |
+| Case | Standard | What WordCraft does | What LibreOffice does |
+|---|---|---|---|
+| Page margins a page layout doesn't state | §20.206–20.209 refer to XSL §7.10 (initial value 0); whether that default comes with the reference is not said | 0 (XSL's initial value) | 2 cm (its own files always state theirs; some of its templates don't) |
+| Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | 0 (as tall as its text) | 0.5 cm |
+| *(meaning)* Whether a header's stated minimum height includes its stated spacing from the body | §20.212.2, §20.207: not said | no: spacing comes after the height | yes |
+| A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | off: the spacing is kept (on, with no height stated, would always drop the spacing the file states) | off |
+| Where paragraph tab stops, default ones too, are measured from when `settings.xml` doesn't say | §19.512.3 `style:position` doesn't say; §19.861 covers only indexes | the margin (as Word; ONLYOFFICE's files mean this too) | the paragraph's left indent (its `TabsRelativeToIndent` default): explicit stops, the default stops every interval and the hanging indent's stop all move with the indent (measured) |
+| Gap between columns when `style:columns` states none | §19.233 `fo:column-gap`: no default (and explicitly not XSL's) | 0.5 in (Word's) | 0 |
+| A drawing shape's fill colour when no style gives one | §20.119 `draw:fill-color`: no default | `#156082` (WordCraft's shape blue) | `#729FCF` |
+| A drawing shape's line colour when no style gives one | §20.408 `svg:stroke-color`: no default | `#0E405A` | `#3465A4` |
+| A shape's line width when unstated, and *(meaning)* what a stated width of 0 (a hairline) draws at | §20.410 `svg:stroke-width`: no default | 0.25 pt | 0.5 pt |
+| *(meaning)* A page-anchored frame positioned against a paragraph or character | §20.299, §20.398 Table 23: combination not defined | the page's text area | the page's edge |
+| *(meaning)* An in-line frame positioned against a paragraph or page | §20.398 Table 23: combination not defined | stands on the baseline | positioned against the baseline (raised by its offset) |
+| Height of a line holding only in-line pictures | no line-height algorithm in the standard | as tall as its text would be too | as tall as the pictures |
+| How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | the larger of the two (as Word) | their sum |
+| Widow and orphan control when neither the default paragraph style, Standard nor the paragraph's style states `fo:widows`/`fo:orphans` | §20.312, §20.244 refer to XSL's widows and orphans (initial value 2); whether that default comes with the reference is not said | on: 2 lines (XSL's initial value, and Word's) | off (a first or last line can stand alone at a page's edge) |
+| *(meaning)* Whether a columned section's columns end balanced when nothing follows it on the page, and when it doesn't say | §20.428 `text:dont-balance-text-columns`: no default, and its value descriptions contradict its name (WordCraft reads the name; so does LibreOffice) | as Word: only when text follows on the same page | balanced |
 
-## Cases the standard leaves open (the profile)
-
-| Case | Standard | Setting (`file.options` `odf.*`) | Microsoft Word style | LibreOffice style |
-|---|---|---|---|---|
-| Page margins a page layout doesn't state | §20.206–20.209 refer to XSL §7.10 (initial value 0); whether that default comes with the reference is not said | `pageMargin` | 0 (XSL's initial value) | 2 cm (its own files always state theirs; some of its templates don't) |
-| Height of a header or footer whose style states none | §20.212.2 `fo:min-height`: no default | `headerMinHeight` | 0 (as tall as its text) | 0.5 cm |
-| *(meaning)* Whether a header's stated minimum height includes its stated spacing from the body | §20.212.2, §20.207: not said | `headerHeightIncludesSpacing` | no: spacing comes after the height | yes |
-| A header taller than its height with `style:dynamic-spacing` unstated | §20.264: no default | `dynamicSpacing` | off: the spacing is kept (on, with no height stated, would always drop the spacing the file states) | off |
-| Where paragraph tab stops, default ones too, are measured from when `settings.xml` doesn't say | §19.512.3 `style:position` doesn't say; §19.861 covers only indexes | `tabsFromIndent` | the margin (as Word; ONLYOFFICE's files mean this too) | the paragraph's left indent (its `TabsRelativeToIndent` default): explicit stops, the default stops every interval and the hanging indent's stop all move with the indent (measured) |
-| Gap between columns when `style:columns` states none | §19.233 `fo:column-gap`: no default (and explicitly not XSL's) | `columnGap` | 0.5 in (Word's) | 0 |
-| A drawing shape's fill colour when no style gives one | §20.119 `draw:fill-color`: no default | `shapeFill` | `#156082` (WordCraft's shape blue) | `#729FCF` |
-| A drawing shape's line colour when no style gives one | §20.408 `svg:stroke-color`: no default | `shapeLine` | `#0E405A` | `#3465A4` |
-| A shape's line width when unstated, and *(meaning)* what a stated width of 0 (a hairline) draws at | §20.410 `svg:stroke-width`: no default | `hairline` | 0.25 pt | 0.5 pt |
-| *(meaning)* A page-anchored frame positioned against a paragraph or character | §20.299, §20.398 Table 23: combination not defined | `pageFrameParagraphIsPage` | the page's text area | the page's edge |
-| *(meaning)* An in-line frame positioned against a paragraph or page | §20.398 Table 23: combination not defined | `inlineInvalidRelationIsBaseline` | stands on the baseline | positioned against the baseline (raised by its offset) |
-| Height of a line holding only in-line pictures | no line-height algorithm in the standard | `pictureLinesFitPictures` | as tall as its text would be too | as tall as the pictures |
-| How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | `sumParagraphSpacing` | the larger of the two (as Word) | their sum |
-| Widow and orphan control when neither the default paragraph style, Standard nor the paragraph's style states `fo:widows`/`fo:orphans` | §20.312, §20.244 refer to XSL's widows and orphans (initial value 2); whether that default comes with the reference is not said | `widowControl` | on: 2 lines (XSL's initial value, and Word's) | off (a first or last line can stand alone at a page's edge) |
-| *(meaning)* Whether a columned section's columns end balanced when nothing follows it on the page, and when it doesn't say | §20.428 `text:dont-balance-text-columns`: no default, and its value descriptions contradict its name (WordCraft reads the name; so does LibreOffice) | `balanceSectionColumns` | as Word: only when text follows on the same page | balanced |
-
-## Law: what the standard defines and WordCraft follows whatever the profile
+## Law: what the standard defines and WordCraft follows
 
 | Case | Rule | Note |
 |---|---|---|
@@ -73,7 +58,7 @@ Where to set it:
 | A frame's `style:run-through` when unstated | §20.351: `foreground` | |
 | `style:dynamic-spacing="true"/"false"` when stated | §20.264 | WordCraft writes `false` when a header or footer has spacing, so every reader keeps it. |
 
-## Open in the standard, and the same in every preset
+## Other cases open in the standard
 
 These are documented so they aren't mistaken for law:
 
@@ -81,7 +66,7 @@ These are documented so they aren't mistaken for law:
 |---|---|---|
 | Paper size when no page layout states one | not defined | the region's paper (Letter in the US, A4 elsewhere), as for new documents |
 | `style:wrap` unstated on a frame | §20.400: no default | text wraps on both sides (LibreOffice too) |
-| A drawing shape's `draw:fill` / `draw:stroke` unstated | §20.118, §20.167: no default | solid (LibreOffice too); a text frame's are none; the colours are in the profile |
+| A drawing shape's `draw:fill` / `draw:stroke` unstated | §20.118, §20.167: no default | solid (LibreOffice too); a text frame's are none; the colours are listed above |
 | A document's default font and size when no default style gives them | not defined | WordCraft's defaults |
 
 ## How WordCraft writes ODF
@@ -136,7 +121,7 @@ such file. Each is kept as narrow as possible, and WordCraft never writes the de
 ## Known differences between WordCraft's and LibreOffice's layout of the same file
 
 Found by saving WordCraft's own documents as ODT and opening them in LibreOffice. These aren't
-choices the file can state, so the presets don't cover them:
+choices the file can state:
 
 - **Footers.** Word, and WordCraft for its own documents, places a footer's text so it ends at the
   footer's distance from the bottom of the page. ODF places it at the top of the footer area. A
@@ -150,7 +135,7 @@ choices the file can state, so the presets don't cover them:
   small gap in WordCraft.
 - **Line breaks after a slash.** LibreOffice breaks a long path after a `/`; WordCraft, as Word,
   keeps the text after a slash with it and breaks such a word where it must. The standard
-  doesn't define line breaking; this could become a setting.
+  doesn't define line breaking.
 - **Objects that may not overlap text** (`style:wrap="none"` with several on one paragraph):
   LibreOffice moves them down by its own rules (`draw:wrap-influence-on-position`).
 
@@ -168,18 +153,16 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
 - **Google Docs** exports through a LibreOffice build (its generator reads `LibreOfficeDev/6.0`).
   It states its page size and margins, writes `TabsRelativeToIndent=false`, and its default
   graphic style states LibreOffice's colours. Its headers are empty styles with no content.
-  Nothing in these files depends on the profile beyond what the LibreOffice preset covers.
+  Nothing in these files depends on the cases above more than LibreOffice's own files do.
 - **ONLYOFFICE** states page size and margins only. It has no header styles and no default
   graphic style. It writes tab stops with no `TabsRelativeToIndent` and means "from the margin"
-  (its documents come from Word's model), which is the Microsoft Word style, the default.
-
-So neither needs a preset of its own yet. If later files show cases where they differ, a preset is
-one more `OdfPreset` with its values, and the cases above stay the same.
+  (its documents come from Word's model), which is WordCraft's choice too.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-11-04 | The settings removed: File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values. WordCraft makes one choice for each case the standard leaves open, the one the default made, so nothing changes for a document opened with the default. What a file states is still followed, its `TabsRelativeToIndent` and `AddParaTableSpacing` among it. LibreOffice's choices stay listed beside WordCraft's. |
 | 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |
 | 2026-11-04 | The two presets are the two styles a document can be shown in: Microsoft Word style (`word`, the default; `wordcraft`, its earlier id, still taken) and LibreOffice style (`libreoffice`). The CLI's values listed one by one. |
 | 2026-11-03 | Deviations from the standard listed: unitless gradient and hatch angles in files older than ODF 1.3 are read as tenths of a degree, as their producers wrote them, out of necessity (in ODF 1.3 files, degrees, as the standard says). The ODF 1.2 → 1.3 changes checked. |
