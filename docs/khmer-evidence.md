@@ -109,9 +109,21 @@ Cache-saturation follow-up: the 3,331-paragraph probe did not exceed the origina
 4,096-entry limit. A regression now counts an actual 20,000-paragraph synthetic
 document repeatedly, measuring segmentation calls rather than elapsed time: no
 unchanged paragraph is segmented again, and one edit requires one new segmentation.
-Separate tests exceed entry and retained-text budgets and verify stable cache hits,
-correct byte accounting and bounded storage. Saturation stops admission rather
-than clearing existing entries; it does not promise to retain an unlimited working set.
+The KM17 follow-up replaces saturation's permanent admission stop with two
+generations: hits promote, rotation drops old history, and new documents/edits
+become cacheable again. Entry- and byte-limited tests verify promotion, rotation,
+byte accounting, stale-entry removal and continued admission. A real segmentation
+regression recovers after 5,000 abandoned entries, then counts 2,000 paragraphs
+(122,000 words) repeatedly with no additional segmentation; one edit adds one
+segmentation. These are deterministic work-count checks, not latency promises.
+
+Total retention is reduced to 16 MiB of keys and 65,536 entries across both
+generations, plus map/allocator overhead; paragraphs over 64 KiB remain uncached.
+Active working sets that exceed a generation can be re-segmented. A separate
+status-bar regression covers a selected paragraph over 64 KiB, verifies one count
+across unchanged repaints, and invalidation on selection, edits/undo, body
+replacement, document switches and window cache swaps. The document crate now
+depends directly on `craft-khmer`, without other `craft-proof` language data.
 
 The equation right-click regression now obtains one interior point from
 `DocLayout::equation_box` and calls `equation_hit` once, using the measured page.

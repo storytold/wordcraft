@@ -615,7 +615,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
                         crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
                     } else {
-                        let sw = wordcraft_doc::count_words(&app.session.selected_text());
+                        let sw = app.selected_word_count.get(&app.session);
                         crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
                     };
                     if st(ui, &wtxt).clicked() {
@@ -791,6 +791,46 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
     }
     icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
     resp.on_hover_text(tip).clicked()
+}
+
+/// One selection count per document revision and selection, including paragraphs
+/// too large for the shared paragraph cache. Keep this with each window's UI.
+#[derive(Default)]
+pub(crate) struct SelectedWordCount {
+    cached: Option<(SelectionCountKey, usize)>,
+    #[cfg(test)]
+    computations: usize,
+}
+struct SelectionCountKey {
+    document: u64,
+    revision: u64,
+    selection: wordcraft_engine::Selection,
+    // Column blocks and noncontiguous table selections can have the same corners
+    // but select different text. Compare their actual pieces without extracting it.
+    segments: Option<Vec<(wordcraft_doc::Pos, wordcraft_doc::Pos)>>,
+}
+impl SelectedWordCount {
+    fn get(&mut self, session: &wordcraft_engine::Session) -> usize {
+        let id = session.document_id();
+        let rev = session.rev();
+        if let Some((key, count)) = &self.cached
+            && key.document == id
+            && key.revision == rev
+            && key.selection == session.sel
+            && key.segments.as_deref() == session.column_segments()
+        {
+            return *count;
+        }
+        let count = wordcraft_doc::count_words(&session.selected_text());
+        let key =
+            SelectionCountKey { document: id, revision: rev, selection: session.sel.clone(), segments: session.column_segments().map(<[_]>::to_vec) };
+        self.cached = Some((key, count));
+        #[cfg(test)]
+        {
+            self.computations += 1;
+        }
+        count
+    }
 }
 
 impl WordApp {

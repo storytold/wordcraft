@@ -1,6 +1,7 @@
 # Khmer language integration
 
-Reconciled 2026-11-03 with WordCraft main `969df57e` and craft-libs main `01315d9`.
+Reconciled 2026-11-04 with WordCraft main `d64ef7c3`, craft-libs main `01315d9`,
+and craft-i18n main `d81532b` (including WordCraft’s catalog update `cde4900`).
 This draft pins the companion heads of [craft-libs #551](https://github.com/storytold/craft-libs/pull/551)
 and [craft-i18n #122](https://github.com/storytold/craft-i18n/pull/122), fetched through the upstream repositories.
 Merge the dependencies first and retain or update those pins. See [examples and evidence](khmer-evidence.md).
@@ -104,13 +105,24 @@ Document statistics use the shared model/dictionary Khmer word spans. The status
 bar, selected-text count, Word Count dialog, NUMWORDS fields and saved DOCX word
 statistics share the same counter within their existing story scopes. The count is independent of page width, fonts and justification;
 no separators are inserted into document text. Real whitespace remains the input
-for justification spacing. A paragraph-text memo retains at most 64 MiB of text
-and 262,144 entries; paragraphs over 64 KiB are not retained. Once either budget
-is full, new entries are not admitted, so sequential scans keep the reusable
-entries that fit instead of flushing them. These entries live until process exit;
-new text beyond a full budget is recomputed, and counts remain correct. Repeated
-20,000-paragraph counts reuse every unchanged paragraph; a one-paragraph edit
-segments only its new text. Without Khmer data, authored zero-width boundaries still count,
+for justification spacing. A two-generation paragraph-text cache retains at most
+16 MiB of keys and 65,536 entries in total (8 MiB and 32,768 entries per
+generation); these limits exclude HashMap buckets, allocator and model overhead.
+Paragraphs over 64 KiB are not retained. A hit in the previous generation moves
+to the current one; when the current generation fills, it becomes the previous
+one and the older generation is cleared. Old documents, intermediate edits and
+partial selections therefore age out, and newly opened/edited text can be cached
+without restarting. Sequential scans retain active working sets that fit one
+generation; larger working sets can require repeated segmentation.
+
+The status bar also caches its selection count by document id, revision and
+selection, so unchanged repaints do not extract/segment selected text, including
+paragraphs above 64 KiB. Each window owns this count and document switches reset
+it. The document model calls `craft-khmer` directly rather than depending on
+`craft-proof` and its other proofing data. Regressions preserve repeated
+20,000-paragraph counts and verify recovery on a 2,000-paragraph/122,000-word
+synthetic document after stale entries fill a cache, then a one-paragraph edit.
+Without Khmer data, authored zero-width boundaries still count,
 while otherwise unspaced Khmer uses the existing token fallback.
 
 The acceptance target is good Khmer wrapping: reject malformed cluster splits,

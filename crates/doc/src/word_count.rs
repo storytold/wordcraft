@@ -10,7 +10,7 @@ pub fn count_words(text: &str) -> usize {
     if !text.chars().any(|c| ('\u{1780}'..='\u{17ff}').contains(&c)) {
         return spaced_words(text);
     }
-    if !wordcraft_proof::khmer::data_available() {
+    if !craft_khmer::data_available() {
         return text.split('\u{200b}').fold(0usize, |n, part| n.saturating_add(spaced_words(part)));
     }
     // Each paragraph gets the same refinement budget as line breaking. Joining
@@ -18,30 +18,60 @@ pub fn count_words(text: &str) -> usize {
     text.split(['\n', '\r']).fold(0usize, |total, para| total.saturating_add(khmer_words(para)))
 }
 
-// Counts recur on every document edit and in multiple statistics surfaces. Cache
-// complete paragraph text, so changes to public fields cannot leave a stale count.
-// Bound retained text and entry count; unusually large paragraphs are not cached.
-// Saturation stops admission rather than evicting existing paragraphs: sequential
-// scans of a document larger than the cache must retain the hits that fit. This
-// bounded memo keeps those entries until process exit; it is not an LRU cache.
-const MAX_TEXT: usize = 64 * 1024 * 1024;
-const MAX_ENTRIES: usize = 1 << 18;
+// Counts recur on edits and statistics requests. Text keys also catch direct
+// changes to public document fields. Two generations recover after old documents,
+// partial selections and intermediate edits fill a budget: promote previous hits,
+// then rotate when the current generation fills. Active working sets that fit a
+// generation keep sequential-scan hits, without retaining every historical edit.
+// These limits count key bytes, not HashMap buckets or allocator/model overhead.
+const MAX_TEXT: usize = 8 * 1024 * 1024; // per generation; 16 MiB total key bytes
+const MAX_ENTRIES: usize = 1 << 15; // per generation; 65,536 entries total
 const MAX_PARAGRAPH: usize = 64 * 1024;
 #[derive(Default)]
-struct Counts {
+struct Generation {
     words: HashMap<String, usize>,
     bytes: usize,
 }
-impl Counts {
-    fn remember(&mut self, text: &str, words: usize) {
-        self.remember_with_limits(text, words, MAX_ENTRIES, MAX_TEXT);
+struct Counts {
+    current: Generation,
+    previous: Generation,
+    max_entries: usize,
+    max_text: usize,
+}
+impl Default for Counts {
+    fn default() -> Self {
+        Self::new(MAX_ENTRIES, MAX_TEXT)
     }
-    fn remember_with_limits(&mut self, text: &str, words: usize, max_entries: usize, max_text: usize) {
-        if self.words.contains_key(text) || self.words.len() >= max_entries || self.bytes.saturating_add(text.len()) > max_text {
+}
+impl Counts {
+    fn new(max_entries: usize, max_text: usize) -> Self {
+        Self { current: Generation::default(), previous: Generation::default(), max_entries, max_text }
+    }
+    fn get(&mut self, text: &str) -> Option<usize> {
+        if let Some(words) = self.current.words.get(text) {
+            return Some(*words);
+        }
+        let (key, words) = self.previous.words.remove_entry(text)?;
+        self.previous.bytes = self.previous.bytes.saturating_sub(key.len());
+        self.insert(key, words);
+        Some(words)
+    }
+    fn remember(&mut self, text: &str, words: usize) {
+        // An oversized entry must not rotate out useful paragraphs. A concurrent
+        // count may also have inserted this text while segmentation was unlocked.
+        if self.max_entries == 0 || text.len() > self.max_text || self.get(text).is_some() {
             return;
         }
-        self.bytes = self.bytes.saturating_add(text.len());
-        self.words.insert(text.to_owned(), words);
+        self.insert(text.to_owned(), words);
+    }
+    fn insert(&mut self, text: String, words: usize) {
+        if self.current.words.len() >= self.max_entries || self.current.bytes.saturating_add(text.len()) > self.max_text {
+            std::mem::swap(&mut self.current, &mut self.previous);
+            self.current.words.clear();
+            self.current.bytes = 0;
+        }
+        self.current.bytes = self.current.bytes.saturating_add(text.len());
+        self.current.words.insert(text, words);
     }
 }
 fn counts() -> &'static Mutex<Counts> {
@@ -49,17 +79,20 @@ fn counts() -> &'static Mutex<Counts> {
     COUNTS.get_or_init(Mutex::default)
 }
 fn khmer_words(text: &str) -> usize {
+    cached_khmer_words(text, counts())
+}
+fn cached_khmer_words(text: &str, cache: &Mutex<Counts>) -> usize {
     if !text.chars().any(|c| ('\u{1780}'..='\u{17ff}').contains(&c)) {
         return spaced_words(text);
     }
-    if let Some(words) = counts().lock().unwrap_or_else(std::sync::PoisonError::into_inner).words.get(text).copied() {
+    if let Some(words) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(text) {
         return words;
     }
     // Do the model work outside the lock so exporting cannot block an editor's
     // cache hits for the duration of segmentation.
     let words = segmented_words(text);
     if text.len() <= MAX_PARAGRAPH {
-        counts().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remember(text, words);
+        cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remember(text, words);
     }
     words
 }
@@ -73,7 +106,7 @@ fn segmented_words(text: &str) -> usize {
     SEGMENTATIONS.with(|n| n.set(n.get().saturating_add(1)));
     let mut words = 0usize;
     let mut end = 0;
-    for range in wordcraft_proof::khmer::word_ranges(text) {
+    for range in craft_khmer::word_ranges(text) {
         words = words.saturating_add(text.get(end..range.start).map(spaced_words).unwrap_or(0));
         // Detached marks and a standalone repetition sign are not words. Attached
         // signs stay within their preceding word's span.
@@ -118,7 +151,7 @@ mod tests {
     const PHRASE: &str = "ខ្ញុំស្រឡាញ់ភាសាខ្មែរ";
     #[test]
     fn khmer_words_follow_shared_spans_and_manual_breaks() {
-        let available = wordcraft_proof::khmer::data_available();
+        let available = craft_khmer::data_available();
         assert_eq!(count_words(PHRASE), if available { 4 } else { 1 });
         assert_eq!(count_words("ខ្មែរ\u{200b}ភាសា"), 2, "authored breaks work even without a dictionary");
         assert_eq!(count_words("ៗ។! ា្"), 0, "detached marks/signs are not words");
@@ -126,7 +159,7 @@ mod tests {
         if available {
             // A normal word, a compound, and the repetition sign's preceding word.
             assert_eq!(count_words("អ្នកចម្រៀង ក្រុមហ៊ុន អ្វីៗ"), 2 + 1 + 1);
-            let words = wordcraft_proof::khmer::line_breaks(PHRASE).len() + 1;
+            let words = craft_khmer::line_breaks(PHRASE).len() + 1;
             assert_eq!(count_words(PHRASE), words);
         }
     }
@@ -140,39 +173,82 @@ mod tests {
                 cache.remember(paragraph, 2);
             }
         }
-        assert_eq!(cache.words.len(), paragraphs.len(), "no entry was cleared before its next use");
-        assert!(paragraphs.iter().all(|paragraph| cache.words.contains_key(paragraph)));
+        assert_eq!(cache.current.words.len(), paragraphs.len(), "no entry was cleared before its next use");
+        assert!(paragraphs.iter().all(|paragraph| cache.current.words.contains_key(paragraph)));
         let bytes: usize = paragraphs.iter().map(String::len).sum();
-        assert_eq!(cache.bytes, bytes, "a repeated paragraph is not charged twice");
+        assert_eq!(cache.current.bytes, bytes, "a repeated paragraph is not charged twice");
     }
     #[test]
-    fn saturated_cache_preserves_reuse_across_scans_and_bounds_memory() {
-        // Exceed both budgets independently without allocating production-sized caches.
-        for (max_entries, max_text) in [(64, usize::MAX), (usize::MAX, 256)] {
-            let paragraphs: Vec<_> = (0..256).map(|n| format!("ខ្មែរ {n}")).collect();
-            let mut cache = Counts::default();
+    fn saturated_cache_recovers_for_new_documents_and_edits() {
+        // Exercise both rotation triggers with small limits. Each new working
+        // set fits one generation, just as the 20,000-paragraph document does.
+        for (max_entries, max_text) in [(4, usize::MAX), (usize::MAX, 80)] {
+            let mut cache = Counts::new(max_entries, max_text);
+            for i in 0..100 {
+                cache.remember(&format!("abandoned edit {i:03}"), i);
+            }
+            let mut paragraphs: Vec<_> = (0..4).map(|i| format!("new paragraph {i:03}")).collect();
             for text in &paragraphs {
-                cache.remember_with_limits(text, 2, max_entries, max_text);
+                cache.remember(text, 3);
             }
-            let retained = cache.words.len();
-            let bytes = cache.bytes;
-            assert!(retained > 0 && retained < paragraphs.len());
-            let mut hits = 0;
-            for _ in 0..3 {
+            // Continue to change the active document, without a process restart.
+            for edit in 0..20 {
                 for text in &paragraphs {
-                    hits += usize::from(cache.words.contains_key(text));
-                    cache.remember_with_limits(text, 2, max_entries, max_text);
+                    assert_eq!(cache.get(text), Some(3), "sequential scans promote previous-generation hits");
                 }
-                assert_eq!((cache.words.len(), cache.bytes), (retained, bytes));
+                paragraphs[0] = format!("edited text {edit:03}");
+                cache.remember(&paragraphs[0], 3);
+                for generation in [&cache.current, &cache.previous] {
+                    assert!(generation.words.len() <= max_entries && generation.bytes <= max_text);
+                    assert_eq!(generation.bytes, generation.words.keys().map(String::len).sum::<usize>());
+                }
+                assert!(cache.current.words.keys().all(|key| !cache.previous.words.contains_key(key)), "promotion moves the key without duplication");
             }
-            assert_eq!(hits, retained * 3, "a sequential scan cannot evict all earlier hits");
-            assert!(cache.words.len() <= max_entries && cache.bytes <= max_text);
-            assert_eq!(cache.bytes, cache.words.keys().map(String::len).sum::<usize>());
+            assert!(cache.get("abandoned edit 000").is_none(), "stale text ages out");
         }
     }
     #[test]
+    fn recovered_cache_segments_only_new_or_edited_paragraphs() {
+        if !craft_khmer::data_available() {
+            return;
+        }
+        let cache = Mutex::new(Counts::new(2048, MAX_TEXT));
+        for i in 0..5000 {
+            cache.lock().unwrap().remember(&format!("abandoned edit {i}"), 1);
+        }
+        let mut paragraphs: Vec<_> = (0..2000).map(|i| format!("{}recovered-document-{i}", "ខ្ញុំស្រឡាញ់ភាសាខ្មែរ ".repeat(15))).collect();
+        let count = |paragraphs: &[String]| -> usize { paragraphs.iter().map(|text| cached_khmer_words(text, &cache)).sum() };
+        let calls = || SEGMENTATIONS.with(std::cell::Cell::get);
+        let before = calls();
+        assert_eq!(count(&paragraphs), 122_000);
+        assert_eq!(calls() - before, 2000);
+        let warm = calls();
+        for _ in 0..3 {
+            assert_eq!(count(&paragraphs), 122_000);
+        }
+        assert_eq!(calls(), warm, "a new document becomes cacheable after the previous workload filled it");
+        paragraphs[0].push_str(" extra");
+        assert_eq!(count(&paragraphs), 122_001);
+        assert_eq!(calls(), warm + 1);
+        assert_eq!(count(&paragraphs), 122_001);
+        assert_eq!(calls(), warm + 1);
+    }
+    #[test]
+    fn oversized_entries_do_not_rotate_the_cache() {
+        let mut cache = Counts::new(2, 16);
+        cache.remember("useful", 1);
+        for _ in 0..3 {
+            cache.remember("too large for this cache", 5);
+        }
+        assert_eq!(cache.get("useful"), Some(1));
+        assert!(cache.previous.words.is_empty());
+        let mut disabled = Counts::new(0, 0);
+        disabled.remember("", 0);
+        assert!(disabled.get("").is_none());
+    }
+    #[test]
     fn repeated_large_document_counts_segment_only_changed_paragraphs() {
-        if !wordcraft_proof::khmer::data_available() {
+        if !craft_khmer::data_available() {
             return;
         }
         // This goes through Document::word_count, not just cache insertion, and
@@ -196,7 +272,7 @@ mod tests {
     }
     #[test]
     fn mixed_scripts_numbers_and_newlines_keep_their_counts() {
-        let khmer = if wordcraft_proof::khmer::data_available() { 4 } else { 1 };
+        let khmer = if craft_khmer::data_available() { 4 } else { 1 };
         // Latin touching Khmer, Khmer digits, ASCII digits, CJK and punctuation.
         assert_eq!(count_words(&format!("Hello{PHRASE}world ១២៣ 42 我们 日本។")), khmer + if khmer == 4 { 8 } else { 6 });
         assert_eq!(count_words(&format!("{PHRASE}\r\n{PHRASE}\n")), khmer * 2);
@@ -210,7 +286,7 @@ mod tests {
     fn counts_track_changed_text_and_do_not_mutate_documents() {
         let mut doc = crate::Document::from_text(PHRASE);
         let before = doc.clone();
-        let expected = if wordcraft_proof::khmer::data_available() { 4 } else { 1 };
+        let expected = if craft_khmer::data_available() { 4 } else { 1 };
         assert_eq!(doc.word_count(), expected);
         assert_eq!(doc, before);
         let path = crate::Path::top(0);

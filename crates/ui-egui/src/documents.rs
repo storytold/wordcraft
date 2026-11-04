@@ -76,6 +76,7 @@ impl WordApp {
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
         self.word_count = crate::window_ui::NOT_COUNTED;
+        self.selected_word_count = Default::default();
         self.find_fonts_for = None;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.

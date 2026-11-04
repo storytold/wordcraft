@@ -6856,7 +6856,7 @@ name = "wordcraft-doc"
 version = "0.15.0"
 dependencies = [
  "base64 0.23.1",
- "craft-proof",
+ "craft-khmer",
  "log",
  "proptest",
  "serde",
