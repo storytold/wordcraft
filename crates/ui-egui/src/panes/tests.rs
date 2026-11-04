@@ -468,3 +468,103 @@ fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
     assert_eq!(go_to.len(), 2, "one Go to button per card");
     assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
 }
+
+/// #5019: the Results list shows 500 results at most; once the arrows go past them, it shows the
+/// 500 around the current result, so that result is listed, marked and scrolled to.
+#[test]
+fn the_results_list_always_holds_the_current_result() {
+    use super::nav::results_window;
+    assert_eq!(results_window(30, None), 0..30);
+    assert_eq!(results_window(30, Some(29)), 0..30);
+    assert_eq!(results_window(2000, None), 0..500);
+    assert_eq!(results_window(2000, Some(499)), 0..500, "the list doesn't move while the result is in the first 500");
+    assert_eq!(results_window(2000, Some(500)), 250..750);
+    assert_eq!(results_window(2000, Some(1200)), 950..1450);
+    assert_eq!(results_window(2000, Some(1999)), 1500..2000, "the last result: the last 500");
+    for (len, current) in [(501, 500), (2000, 777), (usize::MAX, usize::MAX - 1)] {
+        let w = results_window(len, Some(current));
+        assert!(w.contains(&current) && w.len() <= 500, "{len}, {current}: {w:?}");
+    }
+}
+
+/// #5019: the Navigation pane counts the search result the selection is on, and its arrows, and
+/// Enter / Shift+Enter in its search box, go to the next and previous results, round at the ends.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_arrows_and_enter_step_through_the_search_results() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app =
+        crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("cat dog cat bird cat")), crate::Services::default());
+    // Find selects the first match. Ctrl+F then focuses the pane's search box once the page has
+    // settled, and searches for the selection from after it, so the second match is current.
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    app.run("edit.find", serde_json::json!({"text": "cat"})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().canvas.want_focus = false;
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused(), "the search box has the keyboard");
+    let start = |h: &egui_kittest::Harness<'static, crate::WordApp>| h.state().session.sel.ordered().0.off;
+    assert_eq!(start(&h), 8);
+    h.get_by_label("Result 2 of 3");
+    // Enter in the search box, which keeps the keyboard.
+    press(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(start(&h), 17);
+    h.get_by_label("Result 3 of 3");
+    press(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(start(&h), 0, "Enter past the last result goes round to the first");
+    h.get_by_label("Result 1 of 3");
+    press(&mut h, egui::Key::Enter, egui::Modifiers::SHIFT);
+    assert_eq!(start(&h), 17, "Shift+Enter goes back, round to the last");
+    h.get_by_label("Result 3 of 3");
+    assert!(h.ctx.text_edit_focused(), "the box keeps the keyboard");
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "cat dog cat bird cat", "Enter typed nothing");
+    // The arrow buttons.
+    h.get_by_label("Previous result").click();
+    h.run_steps(2);
+    assert_eq!(start(&h), 8);
+    h.get_by_label("Next result").click();
+    h.run_steps(2);
+    assert_eq!(start(&h), 17);
+    h.get_by_label("Result 3 of 3");
+    // A search with no match greys the arrows out.
+    h.state_mut().session.find.results.clear();
+    h.run_steps(2);
+    h.get_by_label("No results");
+    assert!(h.get_by_label("Next result").accesskit_node().is_disabled());
+}
+
+/// #5019: on a result past the first 500, the Results list shows the 500 around it, the result
+/// marked and scrolled into view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_results_list_shows_and_marks_a_result_past_the_first_500() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let text: Vec<String> = (0..1200).map(|i| format!("cat #{i}.")).collect();
+    let doc = wordcraft_doc::Document::from_text(&text.join("\n"));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+    app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+    // Find selects the first "cat"; Ctrl+F puts it in the pane's search box, as in the test above.
+    app.run("edit.find", serde_json::json!({"text": "cat"})).unwrap();
+    let mut h = pane_harness(app);
+    h.state_mut().canvas.want_focus = false;
+    h.state_mut().nav_search_focus = true;
+    h.run_steps(2);
+    assert_eq!(h.state().session.find.results.len(), 1200);
+    let (a, b) = h.state().session.find.results[500].clone();
+    h.state_mut().run("select.range", serde_json::json!({"anchor": a, "focus": b})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Result 501 of 1200");
+    // The page's own text is in the tree too: only the list's rows (buttons) count.
+    let marked = |h: &egui_kittest::Harness<'static, crate::WordApp>, label: &str| {
+        h.query_all_by_label_contains(label)
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button)
+            .map(|n| (n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True), n.rect().center().y))
+    };
+    let (current, y) = marked(&h, "#500.").expect("the current result is listed");
+    assert!(current, "and marked");
+    assert!((0.0..900.0).contains(&y), "and scrolled into view: {y}");
+    assert_eq!(marked(&h, "#499.").map(|(m, _)| m), Some(false), "only the current one is marked");
+    assert!(marked(&h, "#250.").is_some() && marked(&h, "#749.").is_some(), "the list holds the 500 around it");
+    assert!(marked(&h, "#200.").is_none() && marked(&h, "#750.").is_none(), "not the first 500");
+}
