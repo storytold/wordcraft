@@ -136,7 +136,7 @@ fn read_only_exception_around_a_table_lets_it_be_formatted() {
 #[test]
 fn formatting_restriction_refuses_attach_template_update() {
     let mut t = Document::from_text("Template.");
-    if let Some(st) = t.styles.styles.iter_mut().find(|st| st.id == "Heading1") {
+    if let Some(st) = Arc::make_mut(&mut t.styles).styles.iter_mut().find(|st| st.id == "Heading1") {
         st.chr.size = Some(31.0);
     }
     let data = crate::cmd::insert::base64_encode(&crate::io::save_bytes("t.docx", &t).unwrap());
@@ -147,7 +147,7 @@ fn formatting_restriction_refuses_attach_template_update() {
     assert!(e.contains("formatting is limited"), "{e}");
     assert_eq!(s.doc, before);
     // Copying styles in replaces their definitions, locked flag included (#3692).
-    s.doc.styles.styles.iter_mut().filter(|st| st.id == "Heading1").for_each(|st| st.locked = true);
+    Arc::make_mut(&mut s.doc.styles).styles.iter_mut().filter(|st| st.id == "Heading1").for_each(|st| st.locked = true);
     let before = s.doc.clone();
     let e = s.run("styles.copyFrom", &json!({"path": "Report.dotx", "styles": ["Heading 1"], "data": data})).unwrap_err().to_string();
     assert!(e.contains("formatting is limited"), "{e}");
