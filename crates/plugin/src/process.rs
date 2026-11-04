@@ -108,7 +108,7 @@ mod native {
 
     use crate::push::{self, FloodMeter, Incoming};
 
-    use super::*;
+    use super::{Duration, HostError, HostHandler, Json, Manifest, Notifier, Path, RequestError};
 
     /// Longest line read from a plugin (a large array result fits).
     const MAX_LINE: u64 = 64 << 20;

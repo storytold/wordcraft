@@ -631,6 +631,12 @@ mod requirements {
         assert_eq!(tree["satisfied"], true);
         assert_eq!((tree["tree"][0]["have"].as_str(), tree["tree"][0]["state"].as_str()), (Some("0.1.5"), Some("loaded")));
 
+        blocked_again_when_what_they_need_goes();
+    }
+
+    /// The rest of the test above: `t.req.vba` 0.1.5 is loaded and `t.req.reports` is active.
+    fn blocked_again_when_what_they_need_goes() {
+        let reports = crate::get("t.req.reports").unwrap();
         // Turning the required one off blocks the dependent; back on unblocks it.
         assert_eq!(crate::dependents("t.req.vba"), ["t.req.reports"]);
         crate::set_enabled("t.req.vba", false).unwrap();

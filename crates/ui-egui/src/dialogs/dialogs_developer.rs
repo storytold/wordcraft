@@ -326,7 +326,7 @@ fn buttons(app: &mut WordApp, ui: &mut Ui, f: &mut ButtonsForm) -> bool {
     ui.strong(tl!("New button"));
     egui::Grid::new("dev_button_form").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
         ui.label(tl!("Macro:"));
-        egui::ComboBox::from_id_salt("dev_button_macro").selected_text(f.macro_name.clone()).width(260.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("dev_button_macro").selected_text(f.macro_name.clone()).width(260.0).show_ui(ui, |ui| {
             for m in &f.macros {
                 ui.selectable_value(&mut f.macro_name, m.clone(), m);
             }
@@ -339,7 +339,7 @@ fn buttons(app: &mut WordApp, ui: &mut Ui, f: &mut ButtonsForm) -> bool {
         ui.add(egui::TextEdit::singleline(&mut f.label).hint_text(tl!("the macro's name")).desired_width(260.0));
         ui.end_row();
         ui.label(tl!("Tab:"));
-        egui::ComboBox::from_id_salt("dev_button_tab").selected_text(tl!(f.tab.as_str()).to_string()).width(260.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("dev_button_tab").selected_text(tl!(f.tab.as_str()).to_string()).width(260.0).show_ui(ui, |ui| {
             for t in BUTTON_TABS {
                 ui.selectable_value(&mut f.tab, t.to_string(), tl!(t));
             }

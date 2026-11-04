@@ -961,101 +961,14 @@ fn read_roots<T: ReadTxn>(txn: &T, d: &mut Document, base: Option<&Document>, ro
             d.parts.insert(id, Part { kind, blocks, body });
         }
     }
-    if roots.contains(&"comments")
-        && let Some(r) = txn.get_map("comments")
-    {
-        d.parts.retain(|_, p| p.kind != PartKind::Comment);
-        d.comments.clear();
-        for (k, v) in r.iter(txn) {
-            let (Ok(cid), Out::YMap(m)) = (k.parse::<u32>(), v) else { continue };
-            let get = |key: &str| out_json(m.get(txn, key));
-            let s = |key: &str| get(key).and_then(|v| v.as_str().map(str::to_string));
-            let Some(story) = get("story").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()) else { continue };
-            if d.parts.get(&story).is_some_and(|p| p.kind != PartKind::Comment) {
-                continue;
-            }
-            let c = Comment {
-                author: s("author").unwrap_or_default(),
-                initials: s("initials").unwrap_or_default(),
-                date: s("date").unwrap_or_default(),
-                parent: get("parent").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()),
-                resolved: get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
-                part: story,
-                durable_id: s("durableId"),
-                date_utc: s("dateUtc"),
-            };
-            let hint = hint_part(story);
-            let mut blocks = sub_fragment(txn, &m, "content").map(|f| read_blocks(txn, &f, hint.map(|p| &p.blocks), 0)).unwrap_or_default();
-            if blocks.is_empty() {
-                blocks.push(Arc::new(Block::Para(Paragraph::new())));
-            }
-            d.parts.insert(story, Part { kind: PartKind::Comment, blocks, body: TextBody::default() });
-            d.comments.insert(cid, c);
-        }
+    if roots.contains(&"comments") {
+        read_comments(txn, d, base);
     }
-    if roots.contains(&"styles")
-        && let Some(r) = txn.get_map("styles")
-        && r.len(txn) > 0
-    {
-        let mut sheet = d.styles.clone();
-        if let Some(Json::Object(def)) = out_json(r.get(txn, STYLE_DEFAULTS)) {
-            if let Some(v) = def.get("defaultChr") {
-                sheet.default_chr = from_json(v.clone()).unwrap_or_default();
-            }
-            if let Some(v) = def.get("defaultPara") {
-                sheet.default_para = from_json(v.clone()).unwrap_or_default();
-            }
-            sheet.default_para_present = def.get("defaultParaPresent").and_then(Json::as_bool).unwrap_or(false);
-            sheet.latent_styles = def.get("latentStyles").and_then(|v| v.as_str().map(str::to_string));
-        }
-        let mut by_id: BTreeMap<String, wordcraft_doc::Style> = BTreeMap::new();
-        for (k, v) in r.iter(txn) {
-            if k == STYLE_DEFAULTS {
-                continue;
-            }
-            if let Out::Any(a) = v
-                && let Some(mut st) = from_json::<wordcraft_doc::Style>(to_json(&a))
-            {
-                st.id = k.to_string();
-                by_id.insert(k.to_string(), st);
-            }
-        }
-        let mut styles = Vec::with_capacity(by_id.len());
-        if let Some(order) = txn.get_array("styleOrder") {
-            for v in order.iter(txn) {
-                if let Some(id) = out_str(Some(v))
-                    && let Some(st) = by_id.remove(&*id)
-                {
-                    styles.push(st);
-                }
-            }
-        }
-        styles.extend(by_id.into_values());
-        sheet.styles = styles;
-        d.styles = sheet;
+    if roots.contains(&"styles") {
+        read_styles(txn, d);
     }
-    if roots.contains(&"numbering")
-        && let Some(r) = txn.get_map("numbering")
-        && r.len(txn) > 0
-    {
-        let mut abstracts = Vec::new();
-        let mut nums = Vec::new();
-        for (k, v) in r.iter(txn) {
-            let Out::Any(a) = v else { continue };
-            if k.starts_with('a') {
-                if let Some(x) = from_json::<wordcraft_doc::numbering::AbstractNum>(to_json(&a)) {
-                    abstracts.push(x);
-                }
-            } else if k.starts_with('n')
-                && let Some(x) = from_json::<wordcraft_doc::numbering::Num>(to_json(&a))
-            {
-                nums.push(x);
-            }
-        }
-        abstracts.sort_by_key(|a| a.id);
-        nums.sort_by_key(|n| n.id);
-        d.numbering.abstracts = abstracts;
-        d.numbering.nums = nums;
+    if roots.contains(&"numbering") {
+        read_numbering(txn, d);
     }
     if roots.contains(&"settings")
         && let Some(r) = txn.get_map("settings")
@@ -1085,6 +998,110 @@ fn read_roots<T: ReadTxn>(txn: &T, d: &mut Document, base: Option<&Document>, ro
             d.media = out;
         }
     }
+}
+
+/// The `comments` root into `d`: the comments and their stories.
+fn read_comments<T: ReadTxn>(txn: &T, d: &mut Document, base: Option<&Document>) {
+    let hint_part = |id: u32| base.and_then(|b| b.parts.get(&id));
+    let Some(r) = txn.get_map("comments") else { return };
+    d.parts.retain(|_, p| p.kind != PartKind::Comment);
+    d.comments.clear();
+    for (k, v) in r.iter(txn) {
+        let (Ok(cid), Out::YMap(m)) = (k.parse::<u32>(), v) else { continue };
+        let get = |key: &str| out_json(m.get(txn, key));
+        let s = |key: &str| get(key).and_then(|v| v.as_str().map(str::to_string));
+        let Some(story) = get("story").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()) else { continue };
+        if d.parts.get(&story).is_some_and(|p| p.kind != PartKind::Comment) {
+            continue;
+        }
+        let c = Comment {
+            author: s("author").unwrap_or_default(),
+            initials: s("initials").unwrap_or_default(),
+            date: s("date").unwrap_or_default(),
+            parent: get("parent").and_then(|v| v.as_u64()).and_then(|v| u32::try_from(v).ok()),
+            resolved: get("resolved").and_then(|v| v.as_bool()).unwrap_or(false),
+            part: story,
+            durable_id: s("durableId"),
+            date_utc: s("dateUtc"),
+        };
+        let hint = hint_part(story);
+        let mut blocks = sub_fragment(txn, &m, "content").map(|f| read_blocks(txn, &f, hint.map(|p| &p.blocks), 0)).unwrap_or_default();
+        if blocks.is_empty() {
+            blocks.push(Arc::new(Block::Para(Paragraph::new())));
+        }
+        d.parts.insert(story, Part { kind: PartKind::Comment, blocks, body: TextBody::default() });
+        d.comments.insert(cid, c);
+    }
+}
+
+/// The `styles` root (with `styleOrder`) into `d`, unless it is empty.
+fn read_styles<T: ReadTxn>(txn: &T, d: &mut Document) {
+    let Some(r) = txn.get_map("styles") else { return };
+    if r.len(txn) == 0 {
+        return;
+    }
+    let mut sheet = d.styles.clone();
+    if let Some(Json::Object(def)) = out_json(r.get(txn, STYLE_DEFAULTS)) {
+        if let Some(v) = def.get("defaultChr") {
+            sheet.default_chr = from_json(v.clone()).unwrap_or_default();
+        }
+        if let Some(v) = def.get("defaultPara") {
+            sheet.default_para = from_json(v.clone()).unwrap_or_default();
+        }
+        sheet.default_para_present = def.get("defaultParaPresent").and_then(Json::as_bool).unwrap_or(false);
+        sheet.latent_styles = def.get("latentStyles").and_then(|v| v.as_str().map(str::to_string));
+    }
+    let mut by_id: BTreeMap<String, wordcraft_doc::Style> = BTreeMap::new();
+    for (k, v) in r.iter(txn) {
+        if k == STYLE_DEFAULTS {
+            continue;
+        }
+        if let Out::Any(a) = v
+            && let Some(mut st) = from_json::<wordcraft_doc::Style>(to_json(&a))
+        {
+            st.id = k.to_string();
+            by_id.insert(k.to_string(), st);
+        }
+    }
+    let mut styles = Vec::with_capacity(by_id.len());
+    if let Some(order) = txn.get_array("styleOrder") {
+        for v in order.iter(txn) {
+            if let Some(id) = out_str(Some(v))
+                && let Some(st) = by_id.remove(&*id)
+            {
+                styles.push(st);
+            }
+        }
+    }
+    styles.extend(by_id.into_values());
+    sheet.styles = styles;
+    d.styles = sheet;
+}
+
+/// The `numbering` root into `d`, unless it is empty.
+fn read_numbering<T: ReadTxn>(txn: &T, d: &mut Document) {
+    let Some(r) = txn.get_map("numbering") else { return };
+    if r.len(txn) == 0 {
+        return;
+    }
+    let mut abstracts = Vec::new();
+    let mut nums = Vec::new();
+    for (k, v) in r.iter(txn) {
+        let Out::Any(a) = v else { continue };
+        if k.starts_with('a') {
+            if let Some(x) = from_json::<wordcraft_doc::numbering::AbstractNum>(to_json(&a)) {
+                abstracts.push(x);
+            }
+        } else if k.starts_with('n')
+            && let Some(x) = from_json::<wordcraft_doc::numbering::Num>(to_json(&a))
+        {
+            nums.push(x);
+        }
+    }
+    abstracts.sort_by_key(|a| a.id);
+    nums.sort_by_key(|n| n.id);
+    d.numbering.abstracts = abstracts;
+    d.numbering.nums = nums;
 }
 
 // ---------------------------------------------------------------- writing the shared document

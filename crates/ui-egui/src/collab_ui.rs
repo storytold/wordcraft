@@ -443,7 +443,7 @@ fn body(ui: &mut Ui, d: &mut ShareDialog, dirty: bool) -> Action {
     egui::Grid::new("share_grid").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Connection:"));
         let current = d.transports.get(d.transport).map(|(_, l)| l.clone()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("share_transport").selected_text(current).width(240.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("share_transport").selected_text(current).width(240.0).show_ui(ui, |ui| {
             for (i, (_, label)) in d.transports.iter().enumerate() {
                 ui.selectable_value(&mut d.transport, i, label);
             }
