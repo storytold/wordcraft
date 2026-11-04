@@ -285,11 +285,7 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
         let mut updated = borders;
         if let Some(updated) = updated.as_mut() {
             let existing = s.doc.section_mut(block).page_borders.unwrap_or_default();
-            super::para::preserve_unspecified_border_flags(
-                updated,
-                existing,
-                v.get("sides").unwrap_or(&Value::Null),
-            );
+            super::para::preserve_unspecified_border_flags(updated, existing, v.get("sides").unwrap_or(&Value::Null));
         }
         s.doc.section_mut(block).page_borders = updated;
     }

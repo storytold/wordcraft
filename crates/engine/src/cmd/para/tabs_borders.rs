@@ -95,11 +95,7 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
 }
 
 /// Keep each target's existing border flags when a sides update does not explicitly name them.
-pub(crate) fn preserve_unspecified_border_flags(
-    updated: &mut Borders,
-    existing: Borders,
-    input: &Value,
-) {
+pub(crate) fn preserve_unspecified_border_flags(updated: &mut Borders, existing: Borders, input: &Value) {
     fn preserve(updated: &mut Option<Border>, existing: Option<Border>, input: Option<&Value>) {
         let Some(updated) = updated else { return };
         if input.and_then(|side| side.get("shadow")).is_none() {

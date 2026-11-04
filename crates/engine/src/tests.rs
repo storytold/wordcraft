@@ -6957,10 +6957,14 @@ fn document_page_border_updates_preserve_flags_per_section() {
         s.doc.section_mut(block).page_borders = Some(wordcraft_doc::props::Borders { top: Some(side), ..Default::default() });
     }
 
-    run(&mut s, "design.pageBorders", json!({
-        "sides": {"top": {"style": "dashed", "width": 2.0}},
-        "applyTo": "document"
-    }));
+    run(
+        &mut s,
+        "design.pageBorders",
+        json!({
+            "sides": {"top": {"style": "dashed", "width": 2.0}},
+            "applyTo": "document"
+        }),
+    );
     for (block, shadow, frame) in [(sections[0], false, true), (sections[1], true, false)] {
         let side = s.doc.section_mut(block).page_borders.unwrap().top.unwrap();
         assert_eq!((side.style, side.width), (BorderStyle::Dashed, 2.0));
