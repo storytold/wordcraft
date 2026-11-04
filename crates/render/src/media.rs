@@ -338,6 +338,20 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
         return;
     }
     let tile = pic.fill_type.eq_ignore_ascii_case("tile");
+    // Centred once at its natural size (an ODT page background that doesn't repeat).
+    if pic.fill_type.eq_ignore_ascii_case("center") {
+        let (iw, ih) = (0.75 * nw, 0.75 * nh);
+        let (x0, y0) = ((w - iw) / 2.0, (h - ih) / 2.0);
+        ctx.set_transform(view);
+        ctx.set_paint(vello_cpu::Image {
+            image: vello_cpu::ImageSource::Pixmap(pm),
+            sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium).with_extend(peniko::Extend::Pad),
+        });
+        ctx.set_paint_transform(Affine::translate((x0, y0)) * Affine::scale_non_uniform(iw / pw, ih / ph));
+        ctx.fill_rect(&kurbo::Rect::new(x0.max(0.0), y0.max(0.0), (x0 + iw).min(w), (y0 + ih).min(h)));
+        ctx.reset_paint_transform();
+        return;
+    }
     // Tiles at the picture's natural size, whatever size its cached pixmap is kept at.
     let (sx, sy) = if tile { (0.75 * nw / pw, 0.75 * nh / ph) } else { (w / pw, h / ph) };
     let extend = if tile { peniko::Extend::Repeat } else { peniko::Extend::Pad };

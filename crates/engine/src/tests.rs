@@ -6984,6 +6984,23 @@ fn inserted_chart_is_saved_and_reopened_with_its_data() {
 }
 
 #[test]
+fn redrawing_a_chart_keeps_the_chart_as_read() {
+    // A chart read from a file keeps its original (`source`) through drawing it again (when it
+    // opens or is resized): saving writes that back while the chart is unchanged.
+    use std::sync::Arc;
+    use wordcraft_doc::graphic::{Embedded, Graphic, GraphicKind};
+    use wordcraft_doc::para::InlineObject;
+    let spec = wordcraft_doc::chart::ChartSpec::sample(wordcraft_doc::chart::ChartType::Column);
+    let source = Arc::new(Embedded { xml: format!("{} mime=\"x\" ole=\"false\"/>", Embedded::ODF_OBJECT), refs: Vec::new() });
+    let graphic = Graphic { kind: GraphicKind::Chart, chart: Some(Arc::new(spec)), source: Some(source.clone()), ..Default::default() };
+    let mut o = InlineObject::Graphic { w: 300.0, h: 200.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    crate::cmd::chart::redraw(&mut o, &[]);
+    let InlineObject::Graphic { graphic, .. } = &o else { panic!() };
+    assert!(!graphic.items.is_empty(), "drawn");
+    assert_eq!(graphic.source.as_deref(), Some(&*source));
+}
+
+#[test]
 fn chart_edits_are_one_undo_step_each() {
     use wordcraft_doc::chart::{ChartType, LegendPos};
     let mut s = s();
@@ -7184,6 +7201,26 @@ fn password_protected_documents_round_trip() {
     // A password never shows in debug output.
     assert_eq!(format!("{:?}", crate::io::Password::new("hunter2")), "Password(***)");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn changing_a_shape_drops_the_geometry_kept_from_a_file() {
+    // An ODT custom shape keeps its geometry as read, to save back; made another shape, it isn't
+    // that shape any more.
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "rectangle"}));
+    let geometry = |s: &Session| match cmd::objects::selected(s) {
+        Some((_, wordcraft_doc::InlineObject::Shape { extra, .. })) => extra.odf_geometry.clone(),
+        o => panic!("{o:?}"),
+    };
+    let Some((pos, _)) = cmd::objects::selected(&s) else { panic!() };
+    let para = s.doc.para_mut(pos.story, &pos.path).unwrap();
+    if let Some(wordcraft_doc::InlineObject::Shape { extra, .. }) = para.object_at_mut(pos.off) {
+        extra.odf_geometry = Some(std::sync::Arc::new(r#"<draw:enhanced-geometry draw:type="cloud"></draw:enhanced-geometry>"#.to_string()));
+    }
+    assert!(geometry(&s).is_some());
+    run(&mut s, "shape.change", json!({"kind": "ellipse"}));
+    assert_eq!(geometry(&s), None);
 }
 
 /// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
@@ -11969,6 +12006,93 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     assert!(matches!(r, Err(crate::CmdError::Params(_))), "page u64::MAX: {r:?}");
     assert!(!target.exists(), "no file is written for an invalid page");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Font › Emphasis mark puts a mark over (or under) each selected character, and the layout
+/// draws one per character; Format state reports it, and none takes it off.
+#[test]
+fn emphasis_marks_are_set_and_drawn() {
+    use wordcraft_doc::props::EmphasisMark;
+    let mut s = Session::new(wordcraft_doc::Document::from_text("強調する"));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.emphasisMark", json!({"mark": "circle"}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(0).emphasis, Some(EmphasisMark::Circle));
+    assert_eq!(run(&mut s, "format.state", json!({}))["emphasisMark"], "circle");
+    // One mark per character: hollow circles, drawn as shapes.
+    let draws = s.layout().pages.first().map(|pg| wordcraft_layout::display::page_display(&s.doc, pg, &Default::default())).unwrap_or_default();
+    let marks = draws
+        .iter()
+        .filter(|d| matches!(d, wordcraft_layout::display::Draw::Shape { kind: wordcraft_doc::para::ShapeKind::Ellipse, fill: None, .. }))
+        .count();
+    assert_eq!(marks, 4);
+    run(&mut s, "format.emphasisMark", json!({"mark": "none"}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).emphasis, Some(EmphasisMark::None));
+    assert!(s.run("format.emphasisMark", &json!({"mark": "sparkles"})).is_err());
+}
+
+/// File › Options › Advanced › OpenDocument files: a preset, or one case's value (which makes the
+/// profile custom); junk is refused; files opened afterwards follow it.
+#[test]
+fn odf_interpretation_is_an_option_files_follow() {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    let mut s = s();
+    assert_eq!(s.prefs.odf, OdfProfile::word(), "Microsoft Word's style is the default");
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "LibreOffice"}}));
+    assert_eq!(r["odf"]["preset"], json!("libreoffice"));
+    assert_eq!(s.prefs.odf.effective(), OdfProfile::libreoffice());
+    // The two display styles, back and forth; Word's by its earlier id too.
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "word"}}));
+    assert_eq!(r["odf"]["preset"], json!("word"));
+    assert_eq!(s.prefs.odf.effective(), OdfProfile::word());
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
+    let r = run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
+    assert_eq!(r["odf"]["preset"], json!("word"));
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
+    run(&mut s, "file.options", json!({"odf": {"columnGap": 18.0}}));
+    assert_eq!((s.prefs.odf.preset, s.prefs.odf.effective().column_gap), (OdfPreset::Custom, 18.0));
+    for junk in [
+        json!({"odf": {"nope": 1}}),
+        json!({"odf": {"columnGap": -1}}),
+        json!({"odf": {"hairline": 1e9}}),
+        json!({"odf": 3}),
+        json!({"odf": {"preset": "google"}}),
+    ] {
+        assert!(s.run("file.options", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(s.prefs.odf.effective().column_gap, 18.0, "a refused change leaves it");
+
+    // A tab stop in an indented paragraph of a file that doesn't say how tabs are measured.
+    let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"><office:automatic-styles><style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in"><style:tab-stops><style:tab-stop style:position="1in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a</text:p></office:text></office:body></office:document-content>"#;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let bytes = z.finish().unwrap().into_inner();
+    let tab = |s: &Session| {
+        let (d, _) = crate::io::open_bytes_in("t.odt", &bytes, None, &s.region(), &s.prefs.odf).unwrap();
+        d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default().first().map(|t| t.pos)
+    };
+    run(&mut s, "file.options", json!({"odf": {"preset": "wordcraft"}}));
+    assert_eq!(tab(&s), Some(72.0), "WordCraft: from the margin");
+    run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
+    assert_eq!(tab(&s), Some(108.0), "LibreOffice: from the indent");
+}
+
+#[test]
+fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
+    // Opening an ODT draws its charts (from their data); that changes nothing in the document,
+    // so the paragraph showing one is still written as read.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let first = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let doc = crate::io::open_bytes("t.odt", &first).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&doc).unwrap())).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
 }
 
 /// A Word package whose body holds `body` and, as `rIdC`, the chunk part `word/afchunk.{ext}`.
