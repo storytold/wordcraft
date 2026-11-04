@@ -132,7 +132,10 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
-        let _ = app.run(spec.id, json!({}));
+        // Mod+Shift+V pastes the formatting Mod+Shift+C picked up; with none picked up it pastes
+        // the clipboard as text only, as Word for Windows does (#1537, #4943).
+        let id = if spec.id == "edit.pasteFormat" && app.session.painter.is_none() { "edit.pasteText" } else { spec.id };
+        let _ = app.run(id, json!({}));
         return true;
     }
     let Some(name) = name else { return false };
