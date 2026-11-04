@@ -233,3 +233,21 @@ fn office_corpus_row_after_another_table_keeps_every_line_inside_the_page() {
         );
     }
 }
+
+/// Advancing a mid-page continuous section's column does not gain a whole page.
+#[test]
+fn fitting_cant_split_leaves_both_mid_page_columns_before_splitting() {
+    let (mut doc, at) = at_least_rows_filler(200.0);
+    let mut previous = doc.last_section.clone();
+    previous.start = SectionStart::Continuous;
+    doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(previous));
+    doc.last_section.start = SectionStart::Continuous;
+    doc.last_section.columns.count = 2;
+    let mut table = Table::new(1, 1, 216.0);
+    table.rows[0].props.cant_split = true;
+    table.rows[0].cells[0].blocks = lines_in_cell(20, "Synthetic column");
+    set_at_least_row_spacing(&mut table);
+    doc.insert_block(StoryRef::Body, &Path::top(at), Block::Table(table)).unwrap();
+    let layout = lay(&doc);
+    assert_eq!(assert_complete_row(&layout, 1, 0, 20), vec![1], "a whole fresh page holds the row");
+}

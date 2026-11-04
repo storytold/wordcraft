@@ -193,7 +193,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         // Word for Mac 16.114.2 keeps cantSplit rows whole when they fit on a fresh page,
         // but continues an oversized automatic/minimum-height row from there (#4736).
         // Repeated header rows and explicitly exact heights keep their existing contracts.
-        let oversized_cant_split = !header_rows.contains(&ri)
+        let oversized_cant_split = ri >= header_rows.len()
             && t.rows
                 .get(ri)
                 .is_some_and(|r| r.props.cant_split && !(r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0)));
@@ -252,6 +252,8 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 None => {}
             }
             pb.advance(block, body_top);
+            // A column at a continuous section's mid-page top has not gained a fresh page.
+            fresh = pb.fresh();
             // Repeat header rows, up to the layout's cap.
             if ri >= header_rows.len() && ctx.header_repeats.saturating_add(header_cost) <= header_cap {
                 ctx.header_repeats = ctx.header_repeats.saturating_add(header_cost);
@@ -259,7 +261,6 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                     place(pb, h);
                 }
             }
-            fresh = true;
         }
         let last = rest.as_ref().unwrap_or(row);
         place(pb, last);
