@@ -75,21 +75,39 @@ pub(crate) struct Runtime {
     /// Failures the window had itself (turning downloading on, starting, removing), by locale
     /// ("" for the list), shown until the next try. The engine keeps the installs' own.
     errors: HashMap<String, String>,
-    /// (document, locale) pairs whose bar was closed.
+    /// (document, pack locale) pairs whose bar was closed.
     dismissed: HashSet<(u64, String)>,
-    /// The missing packs of the shown document, what they were worked out from, and when.
-    missing: Option<(MissingKey, f64, Vec<Pack>)>,
+    /// (document, language tag) pairs whose bar was closed before the list was known: the pack
+    /// the list then has for the tag stays closed.
+    dismissed_tags: HashSet<(u64, String)>,
+    /// What the bar offers for the shown document, what it was worked out from, and when.
+    missing: Option<(MissingKey, f64, Offers)>,
     /// [`packs::finished`] when last looked at.
     finished: u64,
+    /// The person clicked the bar's Install before the list was known: the list's failure then
+    /// shows in the bar (an automatic fetch's stays in Options).
+    asked: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What the bar can offer.
+#[derive(Clone, Default)]
+struct Offers {
+    /// Available packs the document asks for ([`packs::missing`]).
+    packs: Vec<Pack>,
+    /// Languages it asks for while there is no list yet ([`packs::unlisted`]).
+    unlisted: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
 struct MissingKey {
     document: u64,
     rev: u64,
     generation: u64,
     /// [`packs::index_generation`]: the list changed.
     packs: u64,
+    /// The caret's typing language ([`packs::caret_language`]): choosing a language with nothing
+    /// selected changes no text.
+    caret: Option<String>,
 }
 
 /// Bytes as people read them: `1.9 MB`, `640 KB`.
@@ -158,6 +176,8 @@ pub(crate) fn tick(app: &mut WordApp) {
     {
         packs::set_background(Some(Arc::new(move || ctx.request_repaint())));
     }
+    // Downloading already on and no list (none cached, or one for an older pin): fetch it once.
+    packs::refresh_if_stale();
     let finished = packs::finished();
     if finished != app.packs_rt.finished {
         app.packs_rt.finished = finished;
@@ -244,23 +264,43 @@ fn remove(app: &mut WordApp, locale: &str) {
     }
 }
 
-/// The packs the shown document asks for. Worked out again when the document, the packs or the
-/// list changed; while it is being typed in, at most once a second.
-fn missing(app: &mut WordApp, now: f64) -> Vec<Pack> {
+/// What the bar offers for the shown document. Worked out again when the document, the caret's
+/// language, the packs or the list changed; while it is being typed in, at most once a second.
+fn missing(app: &mut WordApp, now: f64) -> Offers {
     let key = MissingKey {
         document: app.session.document_id(),
         rev: app.session.rev(),
         generation: wordcraft_engine::proof::dictionary_generation(),
         packs: packs::index_generation(),
+        caret: packs::caret_language(&app.session),
     };
     if let Some((k, at, m)) = &app.packs_rt.missing
-        && (*k == key || (MissingKey { rev: key.rev, ..*k } == key && now - at < MISSING_REFRESH_SECS))
+        && (*k == key || (MissingKey { rev: key.rev, ..k.clone() } == key && now - at < MISSING_REFRESH_SECS))
     {
         return m.clone();
     }
-    let m = packs::missing(&app.session);
+    let packs = packs::missing(&app.session);
+    let unlisted = if packs.is_empty() { packs::unlisted(&app.session) } else { Vec::new() };
+    let m = Offers { packs, unlisted };
     app.packs_rt.missing = Some((key, now, m.clone()));
     m
+}
+
+/// Get `tag`'s pack before the list is known: the person clicked the bar's Install. Their click
+/// turns on downloading ([`consent`]); the list is fetched, then the pack installed if it lists
+/// one (on the engine's thread).
+fn start_get(app: &mut WordApp, ctx: &egui::Context, tag: &str) {
+    app.packs_rt.errors.remove("");
+    if !consent(app, ctx, "") {
+        return;
+    }
+    app.packs_rt.asked = true;
+    if let Err(e) = packs::start_get(tag) {
+        app.packs_rt
+            .errors
+            .insert(String::new(), crate::i18n::fmt(tl!("Couldn't get the list of languages: {error}"), &[("error", &shown_error(&e))]));
+    }
+    app.packs_rt.missing = None;
 }
 
 /// The missing-pack bar under the ribbon: "<Language> proofing isn't installed. Install (<size>)",
@@ -272,7 +312,13 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
     }
     let document = app.session.document_id();
     let now = ui.input(|i| i.time);
-    let Some(pack) = missing(app, now).into_iter().find(|p| !app.packs_rt.dismissed.contains(&(document, p.locale.clone()))) else {
+    let offers = missing(app, now);
+    // The whole list, for a tag closed before it was known (only then: it is a copy).
+    let index = if app.packs_rt.dismissed_tags.is_empty() { Vec::new() } else { packs::available() };
+    let Some(pack) = offers.packs.into_iter().find(|p| !dismissed(app, document, p, &index)) else {
+        if let Some(tag) = offers.unlisted.into_iter().find(|t| !app.packs_rt.dismissed_tags.contains(&(document, t.clone()))) {
+            unlisted_bar(app, ui, &tag);
+        }
         return;
     };
     let t = Tokens::get(ui.ctx());
@@ -305,6 +351,67 @@ pub(crate) fn bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
                         app.packs_rt.dismissed.insert((document, pack.locale.clone()));
+                    }
+                });
+            });
+        });
+}
+
+/// Whether the bar for `pack` was closed in `document`: for the pack itself, or for a language
+/// tag it serves, closed before the list was known (`kl-GL` for `kl`).
+fn dismissed(app: &WordApp, document: u64, pack: &Pack, index: &[Pack]) -> bool {
+    // A closed pack is that pack alone (closing `de-ch` leaves `de`); a closed tag is the pack it
+    // finds in the whole list (`de-CH` is `de-ch`'s, not `de`'s, once the list has both).
+    app.packs_rt.dismissed.contains(&(document, pack.locale.clone()))
+        || app
+            .packs_rt
+            .dismissed_tags
+            .iter()
+            .any(|(d, tag)| *d == document && packs::pack_for_tag(tag, index).is_some_and(|p| p.locale == pack.locale))
+}
+
+/// The bar for a language the document asks for while there is no list of packs yet (a fresh
+/// install, or a list cached for an older pin): "<Language> proofing isn't installed. Install".
+/// Install fetches the list, then installs the language's pack if it has one; if not, the bar
+/// goes. Hidden while an automatic fetch of the list runs.
+fn unlisted_bar(app: &mut WordApp, ui: &mut Ui, tag: &str) {
+    let fetching = packs::fetching();
+    if fetching && !app.packs_rt.asked {
+        return;
+    }
+    let document = app.session.document_id();
+    let t = Tokens::get(ui.ctx());
+    egui::Panel::top("language_pack_bar")
+        .exact_size(36.0)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(12, 0)))
+        .show(ui, |ui| {
+            let bottom = ui.max_rect().bottom();
+            let full = ui.max_rect();
+            ui.painter().hline(full.x_range(), bottom - 0.5, egui::Stroke::new(1.0, t.border));
+            ui.horizontal_centered(|ui| {
+                let language = shown(&language_of(&tag.to_ascii_lowercase(), ""), MAX_BAR_NAME);
+                ui.label(RichText::new(crate::i18n::fmt(tl!("{language} proofing isn't installed."), &[("language", &language)])).color(t.text));
+                if fetching {
+                    ui.spinner();
+                    ui.label(RichText::new(tl!("Getting the list of languages…")).color(t.text_dim));
+                } else {
+                    let mut hover = vec![tl!("Gets the list of Language packs, then this language's pack if there is one.").to_string()];
+                    if packs::backend().is_some_and(|b| !b.network_on()) {
+                        hover.push(tl!("Installing turns on downloading of fonts and Language packs from GitHub.").to_string());
+                    }
+                    if ui.add(crate::widgets::primary_button(ui, tl!("Install").to_string())).on_hover_text(hover.join("\n")).clicked() {
+                        start_get(app, &ui.ctx().clone(), tag);
+                    }
+                }
+                // The window's own failure (consent), else the list's when the person asked.
+                let e = app.packs_rt.errors.get("").cloned().or_else(|| if app.packs_rt.asked { error_of(app, "") } else { None });
+                if let Some(e) = e {
+                    ui.add(egui::Label::new(RichText::new(e).color(t.red)).truncate());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::widgets::icon_button(ui, "close", tl!("Not now")).clicked() {
+                        app.packs_rt.dismissed_tags.insert((document, tag.to_string()));
                     }
                 });
             });
@@ -919,5 +1026,123 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(packs::is_installed("pl"));
+    }
+
+    /// A font store that never fetched the list (a fresh install): `index` has nothing.
+    struct Uncached(FixedBackend);
+
+    impl Backend for Uncached {
+        fn index(&self) -> Result<Vec<packs::Pack>, String> {
+            Ok(Vec::new())
+        }
+        fn fetch_index(&self, c: &packs::Cancel) -> Result<Vec<packs::Pack>, String> {
+            self.0.fetch_index(c)
+        }
+        fn network_on(&self) -> bool {
+            self.0.network_on()
+        }
+        fn enable_network(&self) -> Result<(), String> {
+            self.0.enable_network()
+        }
+        fn install(&self, pack: &packs::Pack, cancel: &packs::Cancel, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+            self.0.install(pack, cancel, progress)
+        }
+        fn remove(&self, locale: &str) -> Result<(), String> {
+            self.0.remove(locale)
+        }
+        fn packs_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn installed(&self) -> Vec<packs::Installed> {
+            self.0.installed()
+        }
+    }
+
+    /// Martin's test of a fresh install: no list fetched, Greenlandic text. The bar still offers
+    /// it; a faked click leaves downloading off, and the person's click fetches the list and
+    /// installs the pack.
+    #[test]
+    fn with_no_list_yet_the_bar_offers_the_language_and_gets_it() {
+        let _g = BACKEND_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        ctx.enable_accesskit();
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                packs::set_background(None);
+                packs::set_backend(None);
+            }
+        }
+        let _reset = Reset;
+        let mut inner = FixedBackend::sample();
+        let kl = packs::Pack { locale: "kl".into(), name: "Kalaallisut".into(), ..inner.packs[0].clone() };
+        inner.packs.push(kl);
+        let backend = std::sync::Arc::new(Uncached(inner));
+        packs::set_backend(Some(backend.clone() as std::sync::Arc<dyn Backend>));
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("document.setText", json!({"text": "Aluu, qanoq ippit?"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("review.language", json!({"lang": "kl-GL"})).unwrap();
+        let mut tree = frame(&mut a, &ctx, Vec::new());
+        for _ in 0..4 {
+            tree = frame(&mut a, &ctx, Vec::new());
+        }
+        assert!(packs::available().is_empty());
+        let install = spot(&tree, "Install").expect("the bar offers Greenlandic with no list");
+        as_agent(&mut a, &ctx, "ui.click", json!({"x": install.0, "y": install.1}));
+        assert!(!backend.0.network.load(Ordering::Relaxed), "a faked click leaves downloading off");
+        assert!(!packs::fetched() && !packs::is_installed("kl"));
+        assert!(a.packs_rt.errors.get("").is_some_and(|e| e.contains("Only you")), "{:?}", a.packs_rt.errors);
+        user_click(&mut a, &ctx, install);
+        assert!(backend.0.network.load(Ordering::Relaxed), "the person's click turns it on");
+        for _ in 0..500 {
+            if packs::is_installed("kl") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(packs::fetched(), "the list was fetched");
+        assert!(packs::is_installed("kl"), "then its pack installed");
+    }
+
+    /// Review: a language whose bar was closed before the list was known stays closed once the
+    /// list lists its pack (the dismissal is kept by document tag, the pack bar by pack locale).
+    #[test]
+    fn a_language_closed_before_the_list_stays_closed_after_it() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let doc = a.session.document_id();
+        let kl = packs::Pack { locale: "kl".into(), ..FixedBackend::sample().packs[0].clone() };
+        let pt_pt = packs::Pack { locale: "pt-pt".into(), ..kl.clone() };
+        let index = vec![kl.clone(), pt_pt.clone()];
+        assert!(!super::dismissed(&a, doc, &kl, &index));
+        a.packs_rt.dismissed_tags.insert((doc, "kl-GL".into()));
+        assert!(super::dismissed(&a, doc, &kl, &index), "closed as kl-GL: kl stays closed");
+        assert!(!super::dismissed(&a, doc, &pt_pt, &index), "other languages aren't");
+        assert!(!super::dismissed(&a, doc.wrapping_add(1), &kl, &index), "nor other documents");
+        // Closing a regional pack's bar leaves the base language's (Swiss German, then German).
+        let de = packs::Pack { locale: "de".into(), ..kl.clone() };
+        let de_ch = packs::Pack { locale: "de-ch".into(), ..kl.clone() };
+        let index = vec![de.clone(), de_ch.clone()];
+        a.packs_rt.dismissed.insert((doc, "de-ch".into()));
+        assert!(super::dismissed(&a, doc, &de_ch, &index));
+        assert!(!super::dismissed(&a, doc, &de, &index), "German's bar still shows");
+        // Closed as de-CH before the list was known: Swiss German's pack, not German's.
+        a.packs_rt.dismissed.clear();
+        a.packs_rt.dismissed_tags.insert((doc, "de-CH".into()));
+        assert!(super::dismissed(&a, doc, &de_ch, &index));
+        assert!(!super::dismissed(&a, doc, &de, &index), "a de-CH tag doesn't close German");
+    }
+
+    /// Martin's test: a spelling issue's context menu heading is in the interface language, not
+    /// the text's (craft-proof's message for French text is "Faute d'orthographe possible").
+    #[test]
+    fn the_spelling_heading_is_in_the_interface_language() {
+        let french = json!({"kind": "spelling", "message": "Faute d\u{2019}orthographe possible", "lang": "fr"});
+        assert_eq!(crate::canvas::issue_heading(&french), tl!("Possible spelling mistake"));
+        let grammar = json!({"kind": "grammar", "message": "Repeated word"});
+        assert_eq!(crate::canvas::issue_heading(&grammar), tl!("Repeated word"));
     }
 }
