@@ -67,13 +67,16 @@ enum Attempt {
 /// `pdf` with the fillable fields `opts` asks for, on the exported `pages` (layout indexes).
 fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], pdf: Vec<u8>) -> Result<Vec<u8>, PdfError> {
     // Fields sit where layout put them: none when a page is drawn scaled or moved (Print
-    // Markup's comments beside it, another paper size).
-    let as_laid_out = pages.iter().all(|&i| {
-        lay.pages.get(i).is_some_and(|pg| {
-            let f = Fit::of(pg, opts.paper);
-            (f.k - 1.0).abs() < 1e-6 && f.dx.abs() < 1e-6 && f.dy.abs() < 1e-6
-        })
-    });
+    // Markup's comments beside it, another paper size, several pages on a sheet) or the output
+    // pages aren't `pages` (copies of the job).
+    let one_to_a_sheet = opts.imposition == imposition::Imposition::Single && opts.sheet_copies <= 1;
+    let as_laid_out = one_to_a_sheet
+        && pages.iter().all(|&i| {
+            lay.pages.get(i).is_some_and(|pg| {
+                let f = Fit::of(pg, opts.paper);
+                (f.k - 1.0).abs() < 1e-6 && f.dx.abs() < 1e-6 && f.dy.abs() < 1e-6
+            })
+        });
     if !opts.form_fields || !as_laid_out {
         return Ok(pdf);
     }
