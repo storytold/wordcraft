@@ -1137,7 +1137,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::About { tab } = d else {
         return false;
     };
-    ui.set_width(660.0);
+    ui.set_width(820.0);
     let names = ["About", "Contributors", "Models", "Language data"].map(|n| tl!(n).to_string());
     if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = i as u8;
