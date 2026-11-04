@@ -446,7 +446,7 @@ pub struct FormFill {
 
 /// The legacy text form field (`FORMTEXT`) the selection is exactly: its position, its length
 /// limit and its current result.
-fn selected_text_form_field(s: &Session) -> Option<(Pos, Pos, usize, String)> {
+pub(crate) fn selected_text_form_field(s: &Session) -> Option<(Pos, Pos, usize, String)> {
     let (a, b) = s.sel.ordered();
     if a.story != b.story || a.path != b.path || a.off.checked_add(wordcraft_doc::para::OBJ.len_utf8()) != Some(b.off) {
         return None;

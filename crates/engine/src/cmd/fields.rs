@@ -629,6 +629,17 @@ mod tests {
         assert_eq!(form_fields(&s), [("Y".to_string(), FF.to_string())]);
     }
 
+    /// #5525: copying while a fill is in progress does not end it: the next
+    /// keystrokes still go into the field's result.
+    #[test]
+    fn copy_during_a_form_field_fill_keeps_the_fill() {
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "Ja");
+        s.run("edit.copy", &json!({})).unwrap();
+        type_keys(&mut s, "ne");
+        assert_eq!(form_fields(&s), [("Jane".to_string(), FF.to_string())]);
+    }
+
     #[test]
     fn unlink_uses_section_context() {
         let mut s = Session::new(wordcraft_doc::Document::new());

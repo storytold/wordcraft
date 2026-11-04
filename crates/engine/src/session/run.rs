@@ -30,10 +30,10 @@ struct ElsewhereContext {
 }
 
 impl Session {
-    /// Filling in a form field goes on through typing and deleting; any other edit, caret
-    /// movement, selection, field navigation or undo ends it (#5525). Queries keep it.
+    /// Filling in a form field goes on through typing, deleting and copying; any other edit,
+    /// caret movement, selection, field navigation or undo ends it (#5525). Queries keep it.
     fn end_form_fill_for_command(&mut self, id: &str, mutates: bool) {
-        if !matches!(id, "text.insert" | "text.backspace" | "text.delete")
+        if !matches!(id, "text.insert" | "text.backspace" | "text.delete" | "edit.copy")
             && (mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)))
         {
             self.form_fill = None;

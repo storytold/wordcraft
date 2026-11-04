@@ -3837,3 +3837,76 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #5525: typing into a legacy text form field through the command path (one
+/// `text.insert` per keystroke, as the keyboard does) fills its result and keeps
+/// the field, as the typing-parity rule requires a test here.
+#[test]
+fn typing_into_text_form_field_fills_it_through_the_command_path() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    // A bare FORMTEXT field is not a legacy form field until its `w:ffData` says so.
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "Jane");
+    let fields: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields, ["Jane"]);
+    assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: Jane");
+}
+
+/// #5525: a straight quote typed into a selected text form field stays straight:
+/// smart quotes must not read the paragraph text (the field object, or the text
+/// before it) instead of the field's result, on the first keystroke or during
+/// a fill.
+#[test]
+fn typing_a_quote_into_a_text_form_field_stays_straight() {
+    let mut s = s();
+    typ(&mut s, "Name: ");
+    run(&mut s, "insert.field", json!({"instr": "FORMTEXT", "result": "XXXXX"}));
+    // A bare FORMTEXT field is not a legacy form field until its `w:ffData` says so.
+    let ff =
+        r#"<w:ffData><w:name w:val="Text1"/><w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="XXXXX"/></w:textInput></w:ffData>"#;
+    let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    for o in &mut para.objects {
+        if let wordcraft_doc::InlineObject::Field { form, .. } = o {
+            *form = ff.into();
+        }
+    }
+    para.touch();
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "fields.next", json!({}));
+    typ(&mut s, "\"\"");
+    let fields: Vec<String> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            wordcraft_doc::InlineObject::Field { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fields, ["\"\""]);
+    assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: \"\"");
+}
