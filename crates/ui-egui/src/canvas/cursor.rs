@@ -77,3 +77,8 @@ pub(crate) fn caret_color_on(app: &WordApp, layout: &DocLayout, page: usize, x: 
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
     caret_contrast(wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dims_body(app, layout)), x, y))
 }
+
+/// The caret colour over the bare paper, as in the margins: cheap enough for every frame.
+pub(crate) fn paper_caret_color(app: &WordApp) -> Color32 {
+    caret_contrast(page_render_options(app, false).paper_of(&app.session.doc))
+}

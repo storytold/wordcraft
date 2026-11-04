@@ -643,6 +643,26 @@ impl DocLayout {
         None
     }
 
+    /// The left edge of the text box holding `pos`'s line on `page` (its column, before indents):
+    /// where a floating object's anchor mark goes, beside its paragraph. None for turned text.
+    pub fn line_box_left(&self, pos: &Pos, page: usize) -> Option<f32> {
+        self.pieces_on(page, pos.story, &pos.path).into_iter().find_map(|(_, it)| match it {
+            Placed::Lines { para, l0, l1, x, turn, .. } if !turn.is_turned() && (*l0..*l1).contains(&para.line_of(pos.off)) => Some(*x),
+            _ => None,
+        })
+    }
+
+    /// The start of `pos`'s paragraph's first line on `page`: where Word shows a floating
+    /// object's anchor mark, also when the paragraph began on an earlier page. None if no line of
+    /// it is on that page.
+    pub fn para_start_on(&self, pos: &Pos, page: usize) -> Option<usize> {
+        let starts = self.pieces_on(page, pos.story, &pos.path).into_iter().filter_map(|(_, it)| match it {
+            Placed::Lines { para, l0, .. } => para.lines.get(*l0).map(|l| l.start),
+            _ => None,
+        });
+        starts.min()
+    }
+
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
         let c = self.caret_on(pos, page_hint)?;

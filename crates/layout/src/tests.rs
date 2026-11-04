@@ -2646,6 +2646,38 @@ fn column_segments_take_the_same_x_range_on_every_line() {
 }
 
 #[test]
+fn line_box_left_is_the_column_edge_before_indents_and_alignment() {
+    // Where a floating object's anchor mark goes (#4195): the same edge for a plain, an indented
+    // and a centred paragraph; nothing for a page the line isn't on.
+    let mut d = Document::from_text("Plain\nIndented\nCentred");
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.indent_left = Some(36.0);
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(2)).unwrap().props.align = Some(Align::Center);
+    let l = lay(&d);
+    let edge = l.caret(&Pos::body(0, 0)).unwrap().x;
+    for i in 0..3 {
+        assert_eq!(l.line_box_left(&Pos::body(i, 0), 0), Some(edge), "paragraph {i}");
+    }
+    assert!(l.caret(&Pos::body(1, 0)).unwrap().x > edge && l.caret(&Pos::body(2, 0)).unwrap().x > edge);
+    assert_eq!(l.line_box_left(&Pos::body(0, 0), 1), None);
+}
+
+#[test]
+fn para_start_on_is_the_paragraphs_first_line_on_that_page() {
+    // Where a floating object's anchor mark goes (#4195): the paragraph's first line, or on a
+    // page it continues onto, its top line there, as Word shows it; nothing for a page it isn't on.
+    let d = Document::from_text(&format!("{}\nShort.", "The quick brown fox jumps over the lazy dog. ".repeat(400)));
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "pages {}", l.pages.len());
+    let long = Pos::body(0, 0);
+    assert_eq!(l.para_start_on(&long, 0), Some(0));
+    let top = l.para_start_on(&long, 1).unwrap();
+    assert!(top > 0);
+    assert_eq!(l.caret_on(&Pos::body(0, top), 1).unwrap().page, 1);
+    assert_eq!(l.caret_on(&Pos::body(0, top - 1), 1).unwrap().page, 0, "the line before it ends page 0");
+    assert_eq!(l.para_start_on(&Pos::body(1, 0), 0), None, "the short paragraph is on the last page");
+}
+
+#[test]
 fn display_has_glyphs_and_marks() {
     let mut d = Document::from_text("Hello\tworld");
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();

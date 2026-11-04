@@ -35,7 +35,7 @@ use balloons::{balloons, dashed, over_balloon};
 pub use balloons::{deselect_balloon, select_balloon};
 use context_menu::{context_menu, context_suggestions};
 use cursor::{caret_color_at, preedit_cursor_chars};
-pub(crate) use cursor::{caret_color_on, caret_contrast};
+pub(crate) use cursor::{caret_color_on, caret_contrast, paper_caret_color};
 pub use cursor::{caret_screen, pos_from_screen};
 pub(crate) use geometry::SEAM;
 #[cfg(test)]
