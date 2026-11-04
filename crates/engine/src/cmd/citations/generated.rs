@@ -350,12 +350,12 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
     let mut marks: Vec<(String, Pos)> = Vec::new();
     let figures = figures_label(kind);
     let bare = FieldCode::parse(kind).has('a');
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+    for (story, path) in s.doc.body_para_paths() {
+        let Some(p) = s.doc.para(story, &path) else { continue };
         if let Some(ident) = &figures {
             if captioned_as(&s.doc, p, ident) {
                 let text = if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() };
-                marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+                marks.push((text, Pos { story, path: path.clone(), off: 0 }));
             }
             continue;
         }
@@ -365,40 +365,12 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
                 if t.starts_with(want) {
                     let e = t.split('"').nth(1).unwrap_or("").to_string();
-                    marks.push((e, Pos { story: StoryRef::Body, path: path.clone(), off }));
+                    marks.push((e, Pos { story, path: path.clone(), off }));
                 }
             }
         }
     }
-    let mut with_pages: Vec<(String, u32)> = marks.into_iter().map(|(e, _)| (e, 0)).collect();
-    // Pages (layout once).
-    let positions: Vec<Pos> = {
-        let mut v = Vec::new();
-        for path in s.doc.para_paths(StoryRef::Body) {
-            let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-            if let Some(ident) = &figures {
-                if captioned_as(&s.doc, p, ident) {
-                    v.push(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
-                }
-                continue;
-            }
-            for off in p.object_offsets() {
-                if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
-                    let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
-                    if instr.trim_start().starts_with(want) {
-                        v.push(Pos { story: StoryRef::Body, path: path.clone(), off });
-                    }
-                }
-            }
-        }
-        v
-    };
-    for (i, pos) in positions.iter().enumerate() {
-        let pg = page_of(s, pos);
-        if let Some(x) = with_pages.get_mut(i) {
-            x.1 = pg;
-        }
-    }
+    let with_pages: Vec<(String, u32)> = marks.into_iter().map(|(e, pos)| (e, page_of(s, &pos))).collect();
     if figures.is_some() {
         // `\n` without page numbers; `\p` the separator before them (a tab by default).
         let f = FieldCode::parse(kind);

@@ -342,6 +342,24 @@ fn a_floating_box_on_a_later_page_of_its_paragraph_fits_its_text() {
     assert!(hit.rect.h > 15.0 && hit.rect.h < 30.0, "one line and the margins: {:?}", hit.rect);
 }
 
+/// #3129: Word saves a floating caption's box 0.05 pt tall, with no margins, and fits it to its
+/// line when it lays the document out, in Web Layout too.
+#[test]
+fn a_caption_box_saved_almost_flat_fits_its_line_in_print_and_web_layout() {
+    use wordcraft_doc::para::{Float, Wrap};
+    let height = |view: ViewMode| {
+        let mut d = Document::from_text("Kilns");
+        let float = Float { wrap: Wrap::Square, ..Default::default() };
+        let id = text_box_with(&mut d, 0, "Figure 1", 120.0, 0.05, TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() }, float);
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { view, ..Default::default() });
+        frame_of(&l, id).h
+    };
+    for view in [ViewMode::Print, ViewMode::Web] {
+        let h = height(view);
+        assert!(h > 8.0 && h < 30.0, "{view:?}: {h}");
+    }
+}
+
 #[test]
 fn a_turned_linked_box_turns_only_its_own_lines() {
     // Linked boxes show the first box's story; turning the second box turns the lines it shows,

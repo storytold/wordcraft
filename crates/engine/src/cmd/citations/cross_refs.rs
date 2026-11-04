@@ -1,6 +1,14 @@
 use super::generated::page_of;
 use super::{CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p};
 
+/// Whether `a` comes before `b` in reading order: a text box's text right after the paragraph
+/// it is anchored in ([`Document::body_para_paths`]); elsewhere (a header), by position.
+fn reads_before(doc: &Document, a: &Pos, b: &Pos) -> bool {
+    let paths = doc.body_para_paths();
+    let key = |pos: &Pos| paths.iter().position(|(s, p)| *s == pos.story && *p == pos.path).map(|i| (i, pos.off));
+    if let (Some(x), Some(y)) = (key(a), key(b)) { x < y } else { a < b }
+}
+
 pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");
     let targets = ref_targets(s, to);
@@ -15,7 +23,7 @@ pub(super) fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
         "page" => page.to_string(),
         "number" => text.split(':').next().unwrap_or(&text).trim().to_string(),
         "aboveBelow" => {
-            if pos < s.sel.focus {
+            if reads_before(&s.doc, &pos, &s.sel.focus) {
                 "above".into()
             } else {
                 "below".into()
@@ -83,21 +91,21 @@ pub(super) fn is_caption(doc: &Document, p: &Paragraph) -> bool {
     p.props.style.as_deref().is_some_and(|id| id == "Caption" || doc.styles.chain(id).iter().any(|s| s.id == "Caption"))
 }
 
-/// The caption paragraphs of the body: (text, position, label).
+/// The caption paragraphs of the body and its text boxes: (text, position, label).
 fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
     s.doc
-        .para_paths(StoryRef::Body)
+        .body_para_paths()
         .into_iter()
-        .filter_map(|path| {
-            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption(&s.doc, p))?;
+        .filter_map(|(story, path)| {
+            let p = s.doc.para(story, &path).filter(|p| is_caption(&s.doc, p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
-            Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
+            Some((text, Pos { story, path, off: 0 }, label))
         })
         .collect()
 }
 
-/// The labels the body's captions use, first seen first: Figure, Table and Equation, and any the
+/// The labels the captions use, first seen first: Figure, Table and Equation, and any the
 /// person made with Insert Caption › New Label. Each is a cross-reference type, `label:<Name>` (#2940).
 pub fn caption_labels(s: &Session) -> Vec<String> {
     let mut labels: Vec<String> = Vec::new();
@@ -129,12 +137,12 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
                 "equation" => "Equation",
                 _ => "Figure",
             };
-            for path in s.doc.para_paths(StoryRef::Body) {
-                if let Some(p) = s.doc.para(StoryRef::Body, &path)
+            for (story, path) in s.doc.body_para_paths() {
+                if let Some(p) = s.doc.para(story, &path)
                     && is_caption(&s.doc, p)
                     && p.plain_text().starts_with(label)
                 {
-                    targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+                    targets.push((p.plain_text(), Pos { story, path: path.clone(), off: 0 }));
                 }
             }
         }
