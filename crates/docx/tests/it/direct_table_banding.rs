@@ -97,6 +97,14 @@ fn direct_band_sizes_ignore_fractional_and_exponent_values() {
 }
 
 #[test]
+fn direct_band_sizes_trim_and_cap_integer_values() {
+    let input = docx(&table(r#"<w:tblStyleRowBandSize w:val=" 2 "/><w:tblStyleColBandSize w:val=" 1001 "/>"#, "", ""));
+    let doc = wordcraft_docx::read(&input).unwrap();
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((tbl.props.band_size, tbl.props.col_band_size), (Some(2), Some(1000)));
+}
+
+#[test]
 fn absent_direct_band_sizes_stay_absent() {
     let input = docx(&table("", "", ""));
     let doc = wordcraft_docx::read(&input).unwrap();
