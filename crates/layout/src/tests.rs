@@ -7220,6 +7220,29 @@ fn a_floating_table_in_the_footer_leaves_the_footer_where_it_is() {
 }
 
 #[test]
+fn a_footer_table_offset_past_the_page_stays_on_the_page() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    // Offsets from the text that a converter wrote as page offsets: far below the footer's
+    // paragraph, and starting too far right for the table's width.
+    let mut d = Document::from_text("Body");
+    let mut t = Table::new(1, 1, 400.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Stamp", Default::default()))];
+    t.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 300.0, y: 785.0, ..Default::default() });
+    let blocks = vec![
+        wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("", Default::default())),
+        std::sync::Arc::new(wordcraft_doc::Block::Table(t)),
+    ];
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, blocks);
+    d.last_section.footers.default = Some(id);
+    let l = lay(&d);
+    let (pw, ph) = (l.pages[0].w, l.pages[0].h);
+    let cell = l.pages[0].footer.iter().find_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).unwrap();
+    assert!(cell.right() <= pw + 0.01 && cell.x >= -0.01, "table across {}..{} on a page {pw} wide", cell.x, cell.right());
+    assert!(cell.bottom() <= ph + 0.01 && cell.y >= -0.01, "table down {}..{} on a page {ph} tall", cell.y, cell.bottom());
+}
+
+#[test]
 fn a_split_row_moves_shading_below_the_cut_with_it() {
     use crate::table::{CellPart, RowLayout, split_row};
     let line_row = |y: f32| {

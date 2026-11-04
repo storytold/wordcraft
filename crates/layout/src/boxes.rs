@@ -484,7 +484,18 @@ fn box_float_table_rect(
     // Nor is there an area to align in: the table starts where the text is.
     let v_align = if frame.is_none() && matches!(f.v_rel, Anchor::Page | Anchor::Margin) { None } else { f.v_align };
     let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy } else { 0.0 };
-    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy, h_area.0, float_tables);
+    let mut r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy, h_area.0, float_tables);
+    // A header or footer has no next page to move to: a table placed by an offset from its
+    // paragraph that runs off the page (converters write page offsets that way) stays on it.
+    if let Some(fr) = frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin) {
+        let page_h = fr.sect.page_h;
+        r.y = r.y.min(page_h - fr.origin.1 - h).max(-fr.origin.1);
+    }
+    // Likewise across, for one placed from its column (and so for a page-wide table that
+    // starts at a column offset).
+    if let Some(fr) = frame.filter(|_| f.h_rel != Anchor::Page && f.h_rel != Anchor::Margin) {
+        r.x = r.x.min(fr.sect.page_w - fr.origin.0 - w).max(-fr.origin.0);
+    }
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }
