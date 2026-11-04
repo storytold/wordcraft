@@ -142,7 +142,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 r.cell(|ui| ui.label(""));
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong()));
             });
-            // Indents in the File › Options unit.
+            // Indents in the File › Options unit. A value outside a field's range is shown as it is,
+            // not clamped and applied: switching to this tab edits nothing (#3943).
             let u = crate::options::unit();
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
@@ -151,7 +152,15 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
                 r.cell(|ui| {
                     if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
+                        .add_sized(
+                            FIELD,
+                            egui::DragValue::new(&mut l)
+                                .speed(3.6 / k)
+                                .range(-792.0 / k..=1584.0 / k)
+                                .clamp_existing_to_range(false)
+                                .measure(u)
+                                .max_decimals(2),
+                        )
                         .changed()
                     {
                         let _ = app.run("para.indents", json!({"left": l * k}));
@@ -159,7 +168,17 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    if ui
+                        .add_sized(
+                            FIELD,
+                            egui::DragValue::new(&mut b)
+                                .speed(1.0)
+                                .range(0.0..=1584.0)
+                                .clamp_existing_to_range(false)
+                                .suffix(format!(" {}", tl!("pt"))),
+                        )
+                        .changed()
+                    {
                         let _ = app.run("para.spacing", json!({"before": b}));
                     }
                 });
@@ -170,7 +189,15 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
                 r.cell(|ui| {
                     if ui
-                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2))
+                        .add_sized(
+                            FIELD,
+                            egui::DragValue::new(&mut right)
+                                .speed(3.6 / k)
+                                .range(-792.0 / k..=1584.0 / k)
+                                .clamp_existing_to_range(false)
+                                .measure(u)
+                                .max_decimals(2),
+                        )
                         .changed()
                     {
                         let _ = app.run("para.indents", json!({"right": right * k}));
@@ -178,7 +205,17 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
                 r.cell(|ui| {
-                    if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+                    if ui
+                        .add_sized(
+                            FIELD,
+                            egui::DragValue::new(&mut a)
+                                .speed(1.0)
+                                .range(0.0..=1584.0)
+                                .clamp_existing_to_range(false)
+                                .suffix(format!(" {}", tl!("pt"))),
+                        )
+                        .changed()
+                    {
                         let _ = app.run("para.spacing", json!({"after": a}));
                     }
                 });

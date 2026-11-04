@@ -885,3 +885,47 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #3943: showing a ribbon tab only shows its fields. A value outside a field's range (a −1000 pt
+/// indent, a column wider than 22 mm) stays as it is: no edit, no undo step, until the person changes it.
+#[test]
+fn showing_a_ribbon_tab_leaves_values_outside_a_fields_range_alone() {
+    let show = |a: crate::WordApp| {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(6);
+        h
+    };
+    // Layout › Paragraph: a −1000 pt left indent (the field's range starts at −792 pt).
+    let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "Indented"})).unwrap();
+    a.run("para.indents", json!({"left": -1000.0, "right": -900.0})).unwrap();
+    a.run("ui.tab", json!({"tab": "Layout"})).unwrap();
+    let (undo, rev) = (a.session.undo_depth(), a.session.rev());
+    let h = show(a);
+    let para = h.state().session.doc.para_at(&h.state().session.sel.focus).map(|p| (p.props.indent_left, p.props.indent_right));
+    assert_eq!(para, Some((Some(-1000.0), Some(-900.0))), "the indents are as they were");
+    assert_eq!((h.state().session.undo_depth(), h.state().session.rev()), (undo, rev), "no edit, no undo step");
+
+    // Table Layout › Cell Size: a column wider than 22 mm, with millimetres as the unit.
+    let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("file.options", json!({"units": "millimeters"})).unwrap();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    a.run("table.columnWidth", json!({"width": 100.0})).unwrap();
+    a.run("ui.tab", json!({"tab": "Table Layout"})).unwrap();
+    let widths = |a: &crate::WordApp| {
+        let story = a.session.sel.focus.story;
+        a.session.sel.focus.path.cell().and_then(|(tp, _, _)| a.session.doc.table(story, &tp).map(|t| t.grid.clone()))
+    };
+    let (before, undo, rev) = (widths(&a), a.session.undo_depth(), a.session.rev());
+    assert!(before.as_ref().is_some_and(|g| g.iter().any(|w| *w > 70.0)), "a column wider than 22 mm: {before:?}");
+    let h = show(a);
+    assert_eq!(widths(h.state()), before, "the column keeps its width");
+    assert_eq!((h.state().session.undo_depth(), h.state().session.rev()), (undo, rev), "no edit, no undo step");
+}
