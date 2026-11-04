@@ -71,6 +71,7 @@ impl WordApp {
             tab,
             backstage,
             backstage_page,
+            save_to_cloud: _,
             print,
             nav_collapsed,
             keytip_prefix,
