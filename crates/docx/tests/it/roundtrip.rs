@@ -89,10 +89,13 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
+        web_hidden: Some(true),
+        snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
         position: Some(3.0),
         kern: Some(8.0),
+        emphasis: Some(wordcraft_doc::props::EmphasisMark::Comma),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
         outline: Some(true),
         shadow: Some(true),
@@ -246,7 +249,7 @@ fn every_para_prop_round_trips() {
 #[test]
 fn styles_and_lists_round_trip() {
     let mut d = Document::new();
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyle".into(),
         name: "My Style".into(),
         kind: StyleKind::Paragraph,
@@ -263,7 +266,7 @@ fn styles_and_lists_round_trip() {
         default: false,
         table: None,
     });
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyleChar".into(),
         name: "My Style Char".into(),
         kind: StyleKind::Character,
@@ -272,10 +275,10 @@ fn styles_and_lists_round_trip() {
         hidden: true,
         ..Default::default()
     });
-    let bullets = d.numbering.add_list(ListKind::Bullet);
-    let nums = d.numbering.add_list(ListKind::Legal);
-    let outline = d.numbering.add_list(ListKind::Outline);
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == outline) {
+    let bullets = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
+    let nums = Arc::make_mut(&mut d.numbering).add_list(ListKind::Legal);
+    let outline = Arc::make_mut(&mut d.numbering).add_list(ListKind::Outline);
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == outline) {
         n.start_overrides.push((0, 4));
     }
     let mut ps = Vec::new();
@@ -565,7 +568,7 @@ fn table_style_formatting_round_trips() {
         band_size: Some(3),
         ..Default::default()
     };
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "Whole".into(),
         name: "Whole".into(),
         kind: StyleKind::Table,
@@ -618,7 +621,7 @@ fn every_table_style_part_round_trips() {
         };
         st.set_table_part(part, f);
     }
-    d.styles.upsert(st.clone());
+    Arc::make_mut(&mut d.styles).upsert(st.clone());
     let r = rt(&d);
     let got = r.styles.get("Parts").unwrap();
     for part in TablePart::ALL {
@@ -1706,7 +1709,7 @@ fn kitchen_sink() -> Document {
     let mut d = Document::new();
     let png = tiny_png();
     let key = d.add_media(png, "png");
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let h = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]);
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
@@ -1938,10 +1941,10 @@ fn list_level_overrides_round_trip() {
     use wordcraft_doc::numbering::{Counters, Level};
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::new();
-    let num = d.numbering.add_list(ListKind::Numbered);
-    let restart = d.numbering.restart(num).unwrap();
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let restart = Arc::make_mut(&mut d.numbering).restart(num).unwrap();
     let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == restart) {
         n.level_overrides = vec![(1, own.clone())];
     }
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
@@ -2265,6 +2268,39 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+}
+
+/// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
+/// one or the other), and reads back whole.
+#[test]
+fn a_corporate_author_round_trips() {
+    let mut d = Document::new();
+    d.sources.push(Source {
+        tag: "Wor20".into(),
+        kind: "report".into(),
+        corporate: "World Health Organization".into(),
+        title: "World report on hearing".into(),
+        year: "2020".into(),
+        editor: "Chadha, Shelly".into(),
+        ..Default::default()
+    });
+    d.sources.push(Source {
+        tag: "Both".into(),
+        author: "Rivera, Alex".into(),
+        corporate: "Harbor Guild, Inc.".into(),
+        title: "Shared Spaces".into(),
+        ..Default::default()
+    });
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut item_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert!(item_xml.contains("<b:Author><b:Author><b:Corporate>World Health Organization</b:Corporate></b:Author><b:Editor>"), "{item_xml}");
+    assert!(item_xml.contains("<b:Corporate>Harbor Guild, Inc.</b:Corporate>"), "{item_xml}");
+    assert!(!item_xml.contains("<b:Last>Rivera</b:Last>"), "the corporate author takes the person authors' place: {item_xml}");
+    let back = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<(&str, &str, &str)> = back.sources.iter().map(|s| (s.corporate.as_str(), s.author.as_str(), s.editor.as_str())).collect();
+    assert_eq!(got, [("World Health Organization", "", "Chadha, Shelly"), ("Harbor Guild, Inc.", "", "")]);
 }
 
 fn assert_bibliography_parts(bytes: &[u8]) {

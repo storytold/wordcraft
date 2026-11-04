@@ -25,7 +25,9 @@ mod stsh;
 mod table;
 
 use std::io::{Read, Seek};
+use std::sync::Arc;
 
+use wordcraft_doc::link::hyperlink_target;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::Paragraph;
@@ -233,6 +235,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         Some((f, l)) => stsh::parse(&table, f, l)?,
         None => Vec::new(),
     };
+    let standard_fonts = fib.pair(fib::pair::STSHF).map(|(f, l)| stsh::standard_fonts(&table, f, l)).unwrap_or_default();
     let chpx_bins = match fib.pair(fib::pair::PLCF_BTE_CHPX) {
         Some((f, l)) => Bins::parse(&table, f, l)?,
         None => Bins::parse(&[], 0, 0)?,
@@ -247,9 +250,9 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts);
-    doc.numbering = list::parse(&table, &fib, &fonts);
-    let sheet: StyleSheet = doc.styles.clone();
+    doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts, standard_fonts));
+    doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
     let sects = sections::parse(&word, &table, &fib);
     let stories = sections::header_stories(&table, &fib);
     // Subdocument layout in the CP space: main document, footnotes, headers, comments,
@@ -363,6 +366,11 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
     let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pics);
+    // The first paragraph ending at each CP, found once rather than by a scan per section.
+    let mut ending: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (i, p) in paras.iter().enumerate() {
+        ending.entry(p.end_cp).or_insert(i);
+    }
     let last = sects.last().map(|s| s.props.clone());
     for (si, sec) in sects.iter().enumerate() {
         let mut props = sec.props.clone();
@@ -373,11 +381,8 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         if is_final {
             continue; // handled below through `last`
         }
-        for p in paras.iter_mut() {
-            if p.end_cp == sec.end_cp {
-                p.para.section = Some(Box::new(props));
-                break;
-            }
+        if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
+            p.para.section = Some(Box::new(props));
         }
     }
     if let Some(mut l) = last {
@@ -717,85 +722,6 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
     let result_text: String = result.iter().map(|(c, _)| *c).collect();
     pb.push('\u{FFFC}', CharProps::default());
     pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, dirty: false, code: false, form: String::new() });
-}
-
-/// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target
-/// (`#bookmark` for internal links); `None` when not a hyperlink.
-fn hyperlink_target(instr: &str) -> Option<String> {
-    let t = instr.trim();
-    let rest = if t.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("hyperlink")) {
-        t.get(9..).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace))?.trim()
-    } else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let mut url: Option<String> = None;
-    let mut local: Option<String> = None;
-    let mut switch: Option<&str> = None;
-
-    let mut i = 0;
-    let bytes = rest.as_bytes();
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'\\' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'*') {
-                i += 1;
-            }
-            switch = Some(rest.get(start..i).unwrap_or(""));
-            continue;
-        }
-        let arg = if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let val = rest.get(start..i).unwrap_or("");
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-            }
-            val.to_string()
-        } else {
-            let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            rest.get(start..i).unwrap_or("").to_string()
-        };
-        let clean_arg = arg.replace("%22", "\"");
-        match switch.take() {
-            Some("\\l") => local = Some(clean_arg),
-            Some(_) => {}
-            None => {
-                if url.is_none() {
-                    url = Some(clean_arg);
-                }
-            }
-        }
-    }
-
-    match (url, local) {
-        (Some(u), Some(l)) if !u.is_empty() && !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            if u.contains('#') { Some(u) } else { Some(format!("{u}#{frag}")) }
-        }
-        (Some(u), _) if !u.is_empty() => Some(u),
-        (None, Some(l)) if !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            Some(format!("#{frag}"))
-        }
-        _ => None,
-    }
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.

@@ -10,6 +10,10 @@ pub struct Source {
     pub kind: String,
     /// "Last, First; Last, First"
     pub author: String,
+    /// A corporate author ("World Health Organization"): written as it is, never split into
+    /// names, and in place of `author` when set (Create Source › Corporate Author, `b:Corporate`,
+    /// #4848).
+    pub corporate: String,
     pub title: String,
     pub year: String,
     pub publisher: String,
@@ -39,6 +43,13 @@ pub struct CustomProp {
     /// the property's XML content kept verbatim (vectors, blobs).
     pub kind: String,
     pub value: String,
+    /// Bookmark associated with this property (`linkTarget`), retained without evaluating it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
+    /// Declared in an ODF document as a user field (§7.4.7 `text:user-field-decl`) rather than
+    /// a document property: written back as one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub odf_user_field: bool,
 }
 
 /// Document properties (File › Info).
@@ -155,6 +166,11 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// The document was opened from ODF: the standard's rules that differ from Word's apply as
+    /// it is laid out, with the choices it leaves open made as the user's profile made them
+    /// (see [`crate::odf_profile`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub odf: Option<crate::odf_profile::OdfLayout>,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -300,6 +316,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            odf: None,
         }
     }
 }
