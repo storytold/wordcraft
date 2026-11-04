@@ -488,7 +488,11 @@ fn row_names(row: &LanguageRow, index: &[Pack], installed: &[packs::Installed]) 
         })
         .unwrap_or_default();
     let named = crate::ribbon::language_name(Some(&tag));
-    let name = if named.eq_ignore_ascii_case(&tag) && !endonym.trim().is_empty() { shown(&endonym, MAX_BAR_NAME) } else { tl!(&named).to_string() };
+    let name = if named.eq_ignore_ascii_case(&tag) && !endonym.trim().is_empty() {
+        shown(&endonym, MAX_BAR_NAME)
+    } else {
+        crate::ribbon::display_name(Some(&tag))
+    };
     let endonym = shown(&endonym, MAX_BAR_NAME);
     // The tag comes from the document (or the index): shown like the pack's own name.
     let tag = shown(&tag, MAX_BAR_NAME);
@@ -1421,6 +1425,8 @@ mod tests {
         assert!(detail.chars().count() <= super::MAX_BAR_NAME, "{}", detail.chars().count());
         let (_, detail) = super::row_names(&row("xx-\u{202e}AA\u{0}\u{200f}-\n"), &[], &[]);
         assert_eq!(detail, "xx-AA-");
+        // A language with a region the lists don't name is translated in parts (English as built).
+        assert_eq!(super::row_names(&row("sv-FI"), &[], &[]), ("Swedish (Finland)".to_string(), "sv-FI".to_string()));
         // Next to a pack's own name, too.
         let index = [packs::Pack { locale: "nl".into(), name: "Neder\u{202e}lands".into(), ..FixedBackend::sample().packs[0].clone() }];
         let mut r = row("nl-NL");
