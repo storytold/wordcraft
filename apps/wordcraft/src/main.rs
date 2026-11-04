@@ -429,6 +429,7 @@ fn main() -> eframe::Result {
             None => logger.no_file(),
         }
     }
+    let window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("WORDCRAFT_SYSTEM_TITLEBAR").is_none();
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
@@ -438,7 +439,8 @@ fn main() -> eframe::Result {
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
-            .with_title_shown(false),
+            .with_title_shown(false)
+            .with_decorations(!window_controls),
         ..Default::default()
     };
     if let Some(icon) = app_icon() {
@@ -510,6 +512,7 @@ fn main() -> eframe::Result {
             app.ui.window = restored;
             app.set_window_builder(window_builder);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            app.window_controls = window_controls;
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
                 log::info!("title bar: {bar:?}");

@@ -101,6 +101,8 @@ impl WordApp {
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,
+            window_controls: false,
+            viewport_commands: Vec::new(),
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
             packs_rt: Default::default(),
@@ -440,6 +442,8 @@ impl WordApp {
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
+        chrome::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
         if !moved(self) {
             self.show_overlays(ui, &ctx);
         }
@@ -448,5 +452,11 @@ impl WordApp {
         }
         // The synthetic step this frame took is done even when drawing ended early.
         self.flush_shot_and_synthetic(&ctx);
+    }
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 }
