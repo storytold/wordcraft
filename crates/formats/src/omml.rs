@@ -140,7 +140,8 @@ fn node(k: &El, depth: usize, budget: &mut usize, out: &mut Arg) {
             let kind = match val(pr, "type") {
                 Some("skw") => FracKind::Skewed,
                 Some("lin") => FracKind::Linear,
-                Some("nobar") => FracKind::NoBar,
+                // `ST_FType` spells it `noBar`; attribute values keep their case.
+                Some("noBar" | "nobar") => FracKind::NoBar,
                 _ => FracKind::Bar,
             };
             out.push(MNode::Frac { kind, num: sub_arg(k, "num", d, budget), den: sub_arg(k, "den", d, budget) });
@@ -245,6 +246,16 @@ mod tests {
         assert_eq!(lin(&m(&r("x=1"))), Some(("x=1".into(), false)));
         let frac = format!("<m:f><m:num>{}</m:num><m:den>{}</m:den></m:f>", r("a"), r("b"));
         assert_eq!(lin(&m(&frac)).map(|l| l.0), Some("a/b".into()));
+        let no_bar = format!("<m:f><m:fPr><m:type m:val=\"noBar\"/></m:fPr><m:num>{}</m:num><m:den>{}</m:den></m:f>", r("n"), r("k"));
+        assert_eq!(
+            lin(&m(&no_bar)).map(|l| l.0),
+            Some(wordcraft_doc::math::to_linear(&[MNode::Frac {
+                kind: FracKind::NoBar,
+                num: vec![MNode::Run(MRun::new("n"))],
+                den: vec![MNode::Run(MRun::new("k"))]
+            }]))
+        );
+        assert_ne!(lin(&m(&no_bar)).map(|l| l.0), Some("n/k".into()));
         let sup = format!("<m:sSup><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup>", r("x"), r("2"));
         assert_eq!(lin(&m(&sup)).map(|l| l.0), Some("x^2".into()));
         let rad = format!("<m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/><m:e>{}</m:e></m:rad>", r("y"));
