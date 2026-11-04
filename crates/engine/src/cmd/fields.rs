@@ -641,6 +641,16 @@ mod tests {
     }
 
     #[test]
+    fn queries_during_a_form_field_fill_keep_the_fill() {
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "Ja");
+        s.run("fields.selected", &json!({})).unwrap();
+        s.run("edit.undoHistory", &json!({})).unwrap();
+        type_keys(&mut s, "ne");
+        assert_eq!(form_fields(&s), [("Jane".to_string(), FF.to_string())]);
+    }
+
+    #[test]
     fn unlink_uses_section_context() {
         let mut s = Session::new(wordcraft_doc::Document::new());
         // Insert section break so there are 2 sections
