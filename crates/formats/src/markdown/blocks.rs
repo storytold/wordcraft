@@ -1,5 +1,5 @@
 use super::inlines::parse_inlines;
-use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, Para, model};
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Inline, Kind, ListInfo, Para, model};
 
 /// Nesting limit for block containers (quotes, list items) and inline links.
 pub(super) const MAX_NEST: usize = 32;
@@ -343,6 +343,12 @@ fn interrupts(l: &str) -> bool {
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
+/// [`interrupts`], or a display equation opening at `lines[i]`: it ends a paragraph at the top
+/// level, so it ends a list item's or a quote's lazy continuation too.
+fn interrupts_at(lines: &[String], i: usize) -> bool {
+    lines.get(i).is_some_and(|l| interrupts(l) || (indent(l) < 4 && display_math(lines, i).is_some()))
+}
+
 fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
     if lines.is_empty() {
         return;
@@ -383,6 +389,38 @@ fn code_para(line: &str) -> FBlock {
     let mut p = Para::new(Kind::Code);
     p.push_text(line, &Fmt::default());
     FBlock::Para(p)
+}
+
+/// A display equation opening at `lines[i]` (`$$x$$`, or `$$` lines around LaTeX), as linear
+/// text, and the index after its last line. The first later line holding `$$` must close it;
+/// a blank line first (TeX math has no paragraph breaks), a stray `$$` or nothing to convert
+/// leaves the lines as text. Each search stops at the next opener, so a run of unclosed
+/// openers is read once.
+fn display_math(lines: &[String], i: usize) -> Option<(String, usize)> {
+    let first = lines.get(i)?.trim_start_matches([' ', '\t']).strip_prefix("$$")?.trim_end();
+    let mut src = first.to_string();
+    let mut next = i + 1;
+    match first.strip_suffix("$$") {
+        Some(one) => src = one.to_string(),
+        None => loop {
+            let l = lines.get(next).filter(|l| !is_blank(l))?;
+            next += 1;
+            src.push('\n');
+            match l.trim().strip_suffix("$$") {
+                Some(last) => {
+                    src.push_str(last);
+                    break;
+                }
+                None if l.contains("$$") => return None,
+                None => src.push_str(l),
+            }
+        },
+    }
+    if src.contains("$$") {
+        return None;
+    }
+    let linear = crate::latex::latex_to_linear(&src);
+    (!linear.trim().is_empty()).then_some((linear, next))
 }
 
 /// Parse block structure. `level` is the list nesting level for lists found here.
@@ -448,6 +486,21 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
             }
             continue;
         }
+        if let Some((linear, next)) = display_math(lines, i) {
+            // A break before it: kept in a list item, which joins its paragraphs, else dropped.
+            let breaks = para.last().is_some_and(|l| l.ends_with("  ") || (l.ends_with('\\') && !l.ends_with("\\\\")));
+            if breaks && level > 0 {
+                para.push(String::new());
+            } else if breaks && let Some(last) = para.last_mut() {
+                let text = last.trim_end();
+                *last = text.strip_suffix('\\').unwrap_or(text).to_string();
+            }
+            flush_para(&mut para, &mut out, depth, refs);
+            let p = Para { inlines: vec![Inline::Equation { linear, display: true }], ..Default::default() };
+            out.push(FBlock::Para(p));
+            i = next;
+            continue;
+        }
         if t.starts_with("<!--") {
             flush_para(&mut para, &mut out, depth, refs);
             while let Some(l) = lines.get(i) {
@@ -477,7 +530,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                 table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
                 i += 2;
                 while let Some(l) = lines.get(i) {
-                    if is_blank(l) || !l.contains('|') || interrupts(l) {
+                    if is_blank(l) || !l.contains('|') || interrupts_at(lines, i) {
                         break;
                     }
                     let mut cells = split_row(l);
@@ -528,7 +581,7 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
         if indent(line) < 4 && trimmed.starts_with('>') {
             let content = &trimmed[1..];
             inner.push(content.strip_prefix(' ').unwrap_or(content).to_string());
-        } else if !is_blank(line) && !interrupts(line) && inner.last().is_some_and(|line| !is_blank(line)) {
+        } else if !is_blank(line) && !interrupts_at(lines, *i) && inner.last().is_some_and(|line| !is_blank(line)) {
             inner.push(line.clone());
         } else {
             break;
@@ -608,7 +661,10 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                 item.push(String::new());
             } else if indent(l) >= content_indent {
                 item.push(strip_indent(l, content_indent).to_string());
-            } else if item.last().is_some_and(|x| !is_blank(x)) && !interrupts(l) && list_marker(l.trim_start_matches([' ', '\t'])).is_none() {
+            } else if item.last().is_some_and(|x| !is_blank(x))
+                && !interrupts_at(lines, i)
+                && list_marker(l.trim_start_matches([' ', '\t'])).is_none()
+            {
                 // Lazy continuation of the item's paragraph.
                 item.push(l.trim_start_matches([' ', '\t']).to_string());
             } else {

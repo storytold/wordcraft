@@ -6,8 +6,11 @@
 //! and inlines: emphasis/strong (the CommonMark delimiter algorithm), `~~strike~~`, code spans,
 //! inline links, autolinks, images (`data:` URIs become pictures, others their alt text),
 //! backslash escapes, entities, HTML comments (`<!-- ... -->`), `<br>` and `<a id>` anchors.
+//! A `$$…$$` block (one line or several) is a display equation, read through the LaTeX math reader.
 //!
-//! Export writes the same constructs; pictures become `![alt](media-name)` placeholders.
+//! Export writes the same constructs; pictures become `![alt](media-name)` placeholders, and
+//! equations LaTeX: a `$$…$$` line for a display equation alone in its paragraph or on a line of
+//! its own in a list item, `$…$` for any other.
 
 use std::collections::HashMap;
 use std::sync::Arc;
