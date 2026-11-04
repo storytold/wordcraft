@@ -45,8 +45,10 @@ impl Glide {
     }
 }
 
-fn glide_id() -> Id {
-    Id::unique("ribbon_tab_underline_glide")
+/// Each window has its own: they all draw in the same frame and share the context's memory, and
+/// another window's tab must not read as a change of tab.
+fn glide_id(ctx: &egui::Context) -> Id {
+    Id::unique(("ribbon_tab_underline_glide", ctx.viewport_id()))
 }
 
 /// The hover fill for a tab this frame: `fill` faded in as far as the pointer has been over it
@@ -61,7 +63,7 @@ pub fn hover(ui: &Ui, id: Id, on: bool, fill: Color32) -> Option<Color32> {
 /// » menu), and then nothing is drawn.
 pub fn underline(ui: &Ui, active: Option<(&str, Rect)>) -> Option<Rect> {
     let ctx = ui.ctx();
-    let id = glide_id();
+    let id = glide_id(ctx);
     let Some((tab, target)) = active else {
         ctx.data_mut(|d| d.remove::<Glide>(id));
         return None;
@@ -83,10 +85,10 @@ pub fn underline(ui: &Ui, active: Option<(&str, Rect)>) -> Option<Rect> {
     Some(at)
 }
 
-/// Whether the underline set off from another tab the last time it was drawn (for tests).
+/// Whether the stored underline glide is for `tab` and set off from another place (for tests).
 #[cfg(test)]
-pub(crate) fn glided(ctx: &egui::Context) -> bool {
-    ctx.data(|d| d.get_temp::<Glide>(glide_id())).is_some_and(|g| g.from != g.to)
+pub(crate) fn glided(ctx: &egui::Context, tab: &str) -> bool {
+    ctx.data(|d| d.get_temp::<Glide>(glide_id(ctx))).is_some_and(|g| g.tab == tab && g.from != g.to)
 }
 
 #[cfg(test)]
@@ -117,7 +119,7 @@ mod tests {
             h.get_by_label(to).click();
             h.run_steps(2);
             assert_eq!(h.state().ui.tab, to);
-            assert!(glided(&h.ctx), "{from} to {to} glides");
+            assert!(glided(&h.ctx, to), "{from} to {to} glides");
             h.run_steps(20);
         }
     }
@@ -171,6 +173,39 @@ mod tests {
         assert_eq!(frame(&ctx, 1.0, true, |ui| underline(ui, Some(("Home", insert())))), Some(insert()), "moved with the strip");
         assert_eq!(frame(&ctx, 2.0, true, |ui| underline(ui, None)), None, "File: no underline");
         assert_eq!(frame(&ctx, 3.0, true, |ui| underline(ui, Some(("Home", home())))), Some(home()), "back in place");
+    }
+
+    /// Every window draws in the same frame and shares the context's memory: two windows on
+    /// different tabs keep their own underline, neither gliding towards the other's for ever.
+    #[test]
+    fn each_window_keeps_its_own_underline() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        crate::theme::apply_animations(&ctx, true);
+        let clock = time.clone();
+        egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {
+            let mut input = egui::RawInput { viewport_id: viewport.ids.this, time: Some(clock.get()), ..Default::default() };
+            input.viewports.entry(viewport.ids.this).or_default().parent = Some(viewport.ids.parent);
+            let mut cb = viewport.viewport_ui_cb;
+            ctx.run_ui(input, |ui| cb(ui)).drop_without_applying_deltas();
+        });
+        let second = egui::ViewportId::from_hash_of("second");
+        let mut last = None;
+        for n in 0..30 {
+            time.set(f64::from(n) / 60.0);
+            let input = egui::RawInput { time: Some(time.get()), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                let root = underline(ui, Some(("Home", home())));
+                let other =
+                    ui.ctx().show_viewport_immediate(second, egui::ViewportBuilder::default(), |ui, _| underline(ui, Some(("Insert", insert()))));
+                last = Some((root, other));
+            })
+            .drop_without_applying_deltas();
+        }
+        let (root, other) = last.unwrap();
+        assert_eq!(root, Some(home()), "the first window");
+        assert_eq!(other, Some(insert()), "the second window");
     }
 
     /// The hover fill fades in with animations on and is all there at once with them off.
