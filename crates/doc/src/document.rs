@@ -800,6 +800,21 @@ impl Document {
         }
     }
 
+    /// Set a custom property of any variant type (`kind` is the OOXML variant element's local
+    /// name, e.g. `i4`, `bool`, `filetime`), replacing one of the same name in place; its
+    /// bookmark link is kept.
+    pub fn set_custom_prop_typed(&mut self, name: &str, kind: &str, value: &str) {
+        match self.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => {
+                p.kind = kind.to_string();
+                p.value = value.to_string();
+            }
+            None => {
+                self.custom_props.push(CustomProp { name: name.to_string(), kind: kind.to_string(), value: value.to_string(), ..Default::default() })
+            }
+        }
+    }
+
     /// Remove a custom property. Returns whether it existed.
     pub fn remove_custom_prop(&mut self, name: &str) -> bool {
         let n = self.custom_props.len();
