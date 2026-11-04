@@ -6919,6 +6919,10 @@ fn border_sides_apply_exactly() {
     assert_eq!(s.doc.last_section.page_borders.unwrap().left.map(|t| t.style), Some(BorderStyle::Thick));
     run(&mut s, "design.pageBorders", json!({"sides": {}}));
     assert!(s.doc.last_section.page_borders.is_none());
+    // A section whose borders were measured from the text: borders set here are from the page edge.
+    s.doc.last_section.page_borders_from_text = true;
+    run(&mut s, "design.pageBorders", json!({"kind": "box"}));
+    assert!(s.doc.last_section.page_borders.is_some() && !s.doc.last_section.page_borders_from_text);
 }
 
 /// Encrypt with Password (#55): a document saved with a password opens only with it, keeps it
