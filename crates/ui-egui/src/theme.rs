@@ -490,23 +490,6 @@ pub fn install_fonts_language_extra(
     install_font_definitions(ctx, font_definitions_language(prefer_hans, prefer_korean, prefer_hant, system_cjk), faces, composition);
 }
 
-/// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
-/// set and no embedded face has Arabic letters. Asked for by an Arabic interface only, apart from
-/// the installed CJK font: reading either is a font file read the other languages never need.
-pub fn install_fonts_language_arabic(
-    ctx: &egui::Context,
-    prefer_hans: bool,
-    prefer_korean: bool,
-    prefer_hant: bool,
-    system_cjk: bool,
-    system_arabic: bool,
-    faces: &[Arc<wordcraft_fonts::FontFace>],
-    composition: Option<wordcraft_fonts::FaceRef>,
-) {
-    let fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
-    install_font_definitions(ctx, fonts, faces, composition);
-}
-
 /// Install the interface `fonts` with document-font `faces` after them ([`add_fallback_faces`])
 /// and the document face the input method's composition is drawn in ([`set_composition_face`]).
 pub fn install_font_definitions(
