@@ -387,15 +387,35 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
     }
 }
 
+/// A picture `image` in `rect` and its outline (Picture Border, #5544), `stroke` of `width`
+/// points, stroked on the picture's frame as a rectangle's outline is: turned with it when it is
+/// drawn inside its spin. No outline without a colour or a width.
+pub(super) fn picture_draws(rect: Rect, image: Draw, stroke: Option<Rgb>, width: f32) -> Vec<Draw> {
+    let width = wordcraft_geom::finite(width).clamp(0.0, 100.0);
+    let outline = stroke.filter(|_| width > 0.0).map(|c| Draw::Shape {
+        rect,
+        kind: ShapeKind::Rectangle,
+        fill: None,
+        stroke: Some(c),
+        stroke_width: width,
+        effects: Default::default(),
+        corner: None,
+        dash: Vec::new(),
+        cap: Default::default(),
+    });
+    std::iter::once(image).chain(outline).collect()
+}
+
 /// A picture, shape or group drawn in `rect` (its unturned frame), turned by its own spin about
 /// the rect's centre; a group's members are turned inside it. `outer` is the spin it is already
 /// drawn inside (its group's). Nothing for anything else.
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, .. } => {
+        InlineObject::Image { media, crop, alt, stroke, stroke_width, .. } => {
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative }], out)
+            let image = Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative };
+            spun(own, rect, picture_draws(rect, image, *stroke, *stroke_width), out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));

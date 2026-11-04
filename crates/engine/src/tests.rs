@@ -7935,8 +7935,17 @@ fn convert_text_to_table_keeps_inline_content() {
         p.format(0, 4, &|c| c.bold = Some(true)).unwrap();
         p.format(6, 10, &|c| c.link = Some("https://example.com".into())).unwrap();
         p.format(11, 14, &|c| c.del = Some(1)).unwrap();
-        let img =
-            InlineObject::Image { media: "pic".into(), w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let img = InlineObject::Image {
+            media: "pic".into(),
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+        };
         p.insert_object(5, img, &Default::default()).unwrap();
     }
     run(&mut s, "select.all", json!({}));
@@ -11842,8 +11851,17 @@ fn text_from_file_brings_the_files_pictures() {
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering =
         Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
     let key = src.doc.add_media(tiny_png(), "png");
-    let image =
-        wordcraft_doc::InlineObject::Image { media: key, w: 20.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = wordcraft_doc::InlineObject::Image {
+        media: key,
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        stroke: None,
+        stroke_width: 0.0,
+    };
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(0, image, &Default::default()).unwrap();
     let path = dir.join("pictures.docx");
     std::fs::write(&path, wordcraft_docx::write(&src.doc).unwrap()).unwrap();
