@@ -548,6 +548,25 @@ fn caption_for_an_object_in_a_cell_stays_in_the_cell() {
     assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
 }
 
+/// A TOC inserted before a heading leaves the caret at the heading's first character, past the
+/// `_Toc` bookmark its entry links to: Delete then deletes that character, and the entry still
+/// finds its heading (Delete at offset zero took the bookmark).
+#[test]
+fn the_caret_after_a_toc_sits_past_the_headings_bookmark() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns\nBody text."));
+    s.run("para.style", &json!({"style": "Heading 1"})).unwrap();
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    s.run("references.toc", &json!({"levels": 2})).unwrap();
+    let heading = s.doc.para_at(&s.sel.focus).cloned().unwrap();
+    assert_eq!(heading.plain_text(), "Kilns");
+    let marks = |p: &Paragraph| p.objects.iter().filter(|o| matches!(o, InlineObject::BookmarkStart { .. })).count();
+    assert_eq!(marks(&heading), 1, "the heading has its bookmark");
+    s.run("text.delete", &json!({})).unwrap();
+    let heading = s.doc.para_at(&s.sel.focus).cloned().unwrap();
+    assert_eq!(heading.plain_text(), "ilns", "Delete took the first character");
+    assert_eq!(marks(&heading), 1, "the bookmark stays");
+}
+
 /// Inserting a table of contents (Word itself warns when there's no heading yet, but still
 /// creates an empty one) must leave the caret in a fresh paragraph just after it, like Word
 /// does — not inside the table's own title, where typing the rest of the document (and later

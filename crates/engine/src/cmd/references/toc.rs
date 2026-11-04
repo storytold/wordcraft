@@ -444,7 +444,19 @@ fn caret_after_toc(s: &mut Session) -> Result<(), CmdError> {
             regenerate_toc(s, None, &tabs)?;
         }
         if let Some((_, end)) = toc_range(s) {
-            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(end + 1), off: 0 });
+            // Past the markers the paragraph starts with (a heading's `_Toc` bookmark, which its
+            // entry links to): Delete there takes the first character, not the bookmark.
+            let off = s.doc.body.get(end + 1).and_then(|b| b.as_para()).map_or(0, |p| {
+                let mut off = 0;
+                for (at, o) in p.objects_with_offsets() {
+                    if at != off || !o.is_marker() {
+                        break;
+                    }
+                    off += OBJ.len_utf8();
+                }
+                off
+            });
+            s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(end + 1), off });
         }
     }
     s.clamp_selection();
