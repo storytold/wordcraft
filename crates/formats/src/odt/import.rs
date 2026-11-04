@@ -426,26 +426,141 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
     parse_tracked(bytes, default_paper(), &OdfProfile::default()).map(|p| (p.flow, p.last))
 }
 
-/// `blocks` without the markup kept as read that holds a text box another box continues in
-/// (one of `targets`): WordCraft names both boxes afresh.
-fn unkeep_chained(blocks: &mut [FBlock], targets: &[String], depth: usize) {
-    if targets.is_empty() {
+/// The paragraphs kept as read that their links tie together (see `model::Group`), in `blocks`:
+/// each group given its id and size when every link it needs is there, its paragraphs written
+/// from the model otherwise (a comment's end in a paragraph not kept, say), and a run kept
+/// whole (a list) with them.
+fn resolve_groups(blocks: &mut [FBlock]) {
+    // The linked paragraphs, in order, and the paragraphs holding each key.
+    let mut links: Vec<Vec<(String, bool)>> = Vec::new();
+    walk_grouped(blocks, 0, &mut |g| links.push(g.links.clone()));
+    if links.is_empty() {
         return;
     }
-    let names: Vec<String> = targets.iter().map(|t| format!("draw:name=\"{}\"", super::writer::x(t))).collect();
-    let holds = |x: &str| names.iter().any(|n| x.contains(n.as_str()));
+    let mut holders: std::collections::HashMap<&str, Vec<usize>> = std::collections::HashMap::new();
+    for (i, l) in links.iter().enumerate() {
+        for (k, _) in l {
+            let h = holders.entry(k.as_str()).or_default();
+            if h.last() != Some(&i) {
+                h.push(i);
+            }
+        }
+    }
+    // Groups: paragraphs sharing a key one of them needs.
+    let mut root: Vec<usize> = (0..links.len()).collect();
+    fn find(root: &mut [usize], mut i: usize) -> usize {
+        while let Some(&r) = root.get(i) {
+            if r == i {
+                break;
+            }
+            i = r;
+        }
+        i
+    }
+    let needed: std::collections::HashSet<&str> = links.iter().flatten().filter(|(_, n)| *n).map(|(k, _)| k.as_str()).collect();
+    for (k, h) in &holders {
+        if needed.contains(k)
+            && let Some(&first) = h.first()
+        {
+            for &i in h.iter().skip(1) {
+                let (a, b) = (find(&mut root, first), find(&mut root, i));
+                if let Some(r) = root.get_mut(b) {
+                    *r = a;
+                }
+            }
+        }
+    }
+    // A group is whole when each key one of its paragraphs needs another holds.
+    let mut whole: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
+    let mut size: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+    for (i, l) in links.iter().enumerate() {
+        let r = find(&mut root, i);
+        *size.entry(r).or_default() += 1;
+        let ok = l.iter().filter(|(_, n)| *n).all(|(k, _)| holders.get(k.as_str()).is_some_and(|h| h.len() >= 2));
+        let w = whole.entry(r).or_insert(true);
+        *w &= ok;
+    }
+    let mut ids: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+    let mut verdicts: Vec<Option<Option<(u32, u32)>>> = Vec::with_capacity(links.len());
+    for i in 0..links.len() {
+        let r = find(&mut root, i);
+        let s = size.get(&r).copied().unwrap_or(1);
+        let needs = links.get(i).is_some_and(|l| l.iter().any(|(_, n)| *n));
+        verdicts.push(match (whole.get(&r).copied().unwrap_or(false), s) {
+            // Alone, needing nothing: its own (what it has, nobody needed).
+            (true, 1) if !needs => Some(None),
+            (true, s) if s > 1 => {
+                let next = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+                Some(Some((*ids.entry(r).or_insert(next), s)))
+            }
+            _ => None,
+        });
+    }
+    let mut at = 0usize;
+    apply_groups(blocks, 0, &verdicts, &mut at);
+}
+
+/// Each paragraph kept as read with links in `blocks` (its [`model::Group`]), in order.
+fn walk_grouped(blocks: &[FBlock], depth: usize, f: &mut dyn FnMut(&crate::model::Group)) {
     for b in blocks {
         match b {
-            FBlock::Para(p) => p.kept = p.kept.take().filter(|x| !holds(x)),
-            FBlock::Table(t) => {
-                t.kept = t.kept.take().filter(|x| !holds(x));
-                if depth < crate::model::MAX_DEPTH {
-                    for r in &mut t.rows {
-                        for c in r {
-                            unkeep_chained(&mut c.blocks, targets, depth + 1);
+            FBlock::Para(p) => {
+                if let (Some(_), Some(g)) = (&p.kept, &p.group) {
+                    f(g);
+                }
+            }
+            FBlock::Table(t) if depth < crate::model::MAX_DEPTH => {
+                for c in t.rows.iter().flatten() {
+                    walk_grouped(&c.blocks, depth + 1, f);
+                }
+            }
+            FBlock::Table(_) => {}
+        }
+    }
+}
+
+/// The groups' `verdicts` (in [`walk_grouped`]'s order, from `at`) applied to `blocks`: a group's
+/// id and size, none, or the paragraph written from the model (with a run kept whole holding it).
+fn apply_groups(blocks: &mut [FBlock], depth: usize, verdicts: &[Option<Option<(u32, u32)>>], at: &mut usize) {
+    let mut dropped = Vec::new();
+    for (i, b) in blocks.iter_mut().enumerate() {
+        match b {
+            FBlock::Para(p) => {
+                if p.kept.is_some() && p.group.is_some() {
+                    match verdicts.get(*at).copied().flatten() {
+                        Some(None) => p.group = None,
+                        Some(Some(id)) => {
+                            if let Some(g) = &mut p.group {
+                                g.links.clear();
+                                g.id = Some(id);
+                            }
+                        }
+                        None => {
+                            (p.kept, p.group) = (None, None);
+                            dropped.push(i);
                         }
                     }
+                    *at += 1;
+                } else if p.kept.is_none() {
+                    p.group = None;
                 }
+            }
+            FBlock::Table(t) if depth < crate::model::MAX_DEPTH => {
+                for c in t.rows.iter_mut().flatten() {
+                    apply_groups(&mut c.blocks, depth + 1, verdicts, at);
+                }
+            }
+            FBlock::Table(_) => {}
+        }
+    }
+    // A run kept whole (a list) holding a paragraph written from the model is too.
+    if !dropped.is_empty() {
+        for (i, b) in blocks.iter_mut().enumerate() {
+            if let FBlock::Para(p) = b
+                && let Some(ix) = p.index.as_deref()
+                && dropped.iter().any(|d| *d >= i && *d < i + ix.1)
+            {
+                p.index = None;
             }
         }
     }
@@ -673,7 +788,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32), profile: &OdfProfile) -> Resul
     let hyphenate = hyphenation(&mut blocks);
     let track = body.track;
     let sources = std::mem::take(&mut body.sources);
-    unkeep_chained(&mut blocks, &body.chain_targets, 0);
+    resolve_groups(&mut blocks);
     let section_masters = std::mem::take(&mut body.section_masters);
     // And the pictures paragraphs and tables kept as read show.
     let mut linking: Vec<(String, std::sync::Arc<str>)> = kept_defs.clone();

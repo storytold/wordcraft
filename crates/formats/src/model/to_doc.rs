@@ -476,6 +476,7 @@ impl<'a> Builder<'a> {
         if p.kept.is_none() && p.wrap.is_none() && p.index.is_none() {
             return;
         }
+        let group = p.group.as_ref().and_then(|g| g.id).filter(|_| p.kept.is_some());
         if self.doc.kept.get().is_none() {
             self.doc.kept = wordcraft_doc::kept::Kept::new(Default::default());
         }
@@ -488,6 +489,9 @@ impl<'a> Builder<'a> {
             }
             if let Some(ix) = &p.index {
                 k.keep_pending_index(rev, ix.1, ix.0.clone());
+            }
+            if let Some(g) = group {
+                k.keep_pending_group(rev, g);
             }
         }
     }

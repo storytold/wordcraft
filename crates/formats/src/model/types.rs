@@ -676,6 +676,19 @@ pub struct Para {
     /// An index (a table of contents…) kept as read that starts with this paragraph
     /// ([`wordcraft_doc::kept`]): its markup, and how many blocks of the flow it takes.
     pub index: Option<Box<(std::sync::Arc<str>, usize)>>,
+    /// The group of paragraphs its markup kept as read belongs to (see [`Group`]).
+    pub group: Option<Box<Group>>,
+}
+
+/// Paragraphs whose markup kept as read ties them together (a comment from one to another, a
+/// tracked change, a text box continuing in another's): written as read all, or none.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Group {
+    /// While reading: what ties it to others, each `(key, needed)`: a key it needs another
+    /// paragraph to have (`needed`), or one it has for another to need.
+    pub links: Vec<(String, bool)>,
+    /// The group's id and how many paragraphs it has, once known.
+    pub id: Option<(u32, u32)>,
 }
 
 impl Para {

@@ -464,6 +464,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         kept: None,
         wrap: None,
         index: None,
+        group: None,
     };
     if opts.paras {
         out.extra = para_extra(doc, &p.props);
@@ -505,6 +506,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         kept: None,
                         wrap: None,
                         index: None,
+                        group: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
@@ -630,6 +632,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                 k.para(p).filter(|xml| (!xml.contains("<office:annotation") || k.comments_as_read(doc, p, xml)) && k.stories_as_read(doc, p))
             })
             .cloned();
+        // With the group it is written as read with, if any (see `model::Group`).
+        out.group =
+            out.kept.as_ref().and_then(|_| doc.kept.of("odt")?.group(p)).map(|id| Box::new(crate::model::Group { links: Vec::new(), id: Some(id) }));
     }
     // The sections kept as read that it opens or closes.
     if opts.paras {

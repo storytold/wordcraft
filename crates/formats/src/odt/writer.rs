@@ -226,6 +226,8 @@ pub(super) struct Writer {
     /// The file's tracked changes markup written as read marks, written as read among the
     /// regions (each once).
     kept_changes: std::collections::BTreeSet<String>,
+    /// The groups of paragraphs written as read together that are whole (see `model::Group`).
+    pub(super) groups_whole: std::collections::HashSet<u32>,
     /// The sections kept as read opened so far (their markup's address: see `open_wrap`).
     wraps_opened: std::collections::HashSet<usize>,
     /// Lists kept as read given an `xml:id` (see `kept_run`).
@@ -637,7 +639,16 @@ impl Writer {
     /// `super::kept`); false when it is written from the model.
     fn kept_para(&mut self, p: &Para, out: &mut String) -> bool {
         let Some(xml) = &p.kept else { return false };
+        if !self.group_whole(p) {
+            return false;
+        }
         self.kept_markup(xml, out)
+    }
+
+    /// Whether paragraph `p`'s markup kept as read can be written so: it belongs to no group, or
+    /// to one whose every paragraph is as read.
+    fn group_whole(&self, p: &Para) -> bool {
+        p.group.as_ref().and_then(|g| g.id).is_none_or(|(id, _)| self.groups_whole.contains(&id))
     }
 
     /// Markup kept as read (a paragraph's or a table's), with the definitions it names; false
@@ -770,6 +781,11 @@ impl Writer {
     fn kept_run(&mut self, blocks: &[FBlock], i: usize, out: &mut String) -> Option<usize> {
         let Some(FBlock::Para(p)) = blocks.get(i) else { return None };
         let ix = p.index.as_deref()?;
+        // Its paragraphs' groups whole (one tied to a paragraph since edited writes it anew).
+        let run = blocks.get(i..i + ix.1.max(1)).unwrap_or(&[]);
+        if !run.iter().all(|b| !matches!(b, FBlock::Para(q) if !self.group_whole(q))) {
+            return None;
+        }
         if !(self.master.is_none() || self.kept_pages) {
             return None;
         }

@@ -820,6 +820,33 @@ fn soft_page_breaks(kept: Option<&wordcraft_doc::kept::KeptXml>, body: &str) -> 
     }
 }
 
+/// The groups of paragraphs written as read together (see `model::Group`) whose paragraphs
+/// are all still as read in `blocks`: each group's every paragraph has its markup (none edited),
+/// and no more (none copied).
+fn whole_groups(blocks: &[FBlock]) -> std::collections::HashSet<u32> {
+    fn count(blocks: &[FBlock], depth: usize, seen: &mut std::collections::HashMap<u32, (u32, u32)>) {
+        for b in blocks {
+            match b {
+                FBlock::Para(p) => {
+                    if let (Some(_), Some((id, size))) = (&p.kept, p.group.as_ref().and_then(|g| g.id)) {
+                        let e = seen.entry(id).or_insert((0, size));
+                        e.0 = e.0.saturating_add(1);
+                    }
+                }
+                FBlock::Table(t) if depth < model::MAX_DEPTH => {
+                    for c in t.rows.iter().flatten() {
+                        count(&c.blocks, depth + 1, seen);
+                    }
+                }
+                FBlock::Table(_) => {}
+            }
+        }
+    }
+    let mut seen = std::collections::HashMap::new();
+    count(blocks, 0, &mut seen);
+    seen.into_iter().filter(|(_, (n, size))| n == size).map(|(id, _)| id).collect()
+}
+
 /// The prefix of WordCraft's own automatic style names in a document with paragraphs kept as
 /// read (theirs keep the names they were read with).
 const KEPT_PREFIX: &str = "wc";
@@ -906,6 +933,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     }));
     w.kept_defs = std::sync::Arc::new(kept.map(|k| k.defs.clone()).unwrap_or_default());
     w.reserved = std::sync::Arc::new(kept.map(|k| k.files.keys().cloned().collect()).unwrap_or_default());
+    w.groups_whole = whole_groups(&flow.blocks);
     // The file's master pages are written as read: what was kept may start them.
     w.kept_pages = kept.is_some_and(|k| k.pages_as_read(doc));
     w.accents.clone_from(&accents);

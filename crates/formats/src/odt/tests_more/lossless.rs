@@ -314,8 +314,17 @@ const MARKS: Sample = Sample {
     meta: "",
 };
 
+/// What ties paragraphs together: a comment over text from one paragraph into the next, an
+/// insertion likewise, and a text box continuing in another's in a later paragraph.
+const GROUPS: Sample = Sample {
+    name: "groups",
+    content: r##"<office:body><office:text><text:tracked-changes><text:changed-region xml:id="ct20" text:id="ct20"><text:insertion><office:change-info><dc:creator>Ada Lovelace</dc:creator><dc:date>2026-11-01T09:00:00</dc:date></office:change-info></text:insertion></text:changed-region></text:tracked-changes><text:p wcx:part="one">The remark <office:annotation office:name="Across" wcx:mark="kept"><dc:creator>Alan Turing</dc:creator><dc:date>2026-11-01T10:00:00</dc:date><text:p>Both paragraphs.</text:p></office:annotation>starts here</text:p><text:p wcx:part="two">and ends<office:annotation-end office:name="Across"/> here; <text:change-start text:change-id="ct20"/>an insertion</text:p><text:p wcx:part="three">going on<text:change-end text:change-id="ct20"/> to here.</text:p><text:p>A box <draw:frame draw:name="First" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box draw:chain-next-name="Second"><text:p>Words flowing on.</text:p></draw:text-box></draw:frame>here.</text:p><text:p>Its next <draw:frame draw:name="Second" text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box/></draw:frame>there.</text:p></office:text></office:body>"##,
+    styles: "",
+    meta: "",
+};
+
 /// Every sample.
-const SAMPLES: [Sample; 17] = [
+const SAMPLES: [Sample; 18] = [
     TEXT,
     STYLES,
     META,
@@ -333,6 +342,7 @@ const SAMPLES: [Sample; 17] = [
     NOTES_AND_FORMULAS,
     LISTS,
     MARKS,
+    GROUPS,
 ];
 
 /// Whether `xml` is well-formed: every element closed, in order, once.
@@ -840,4 +850,38 @@ fn a_section_opened_by_an_empty_paragraph_is_kept_and_opened_once() {
     let c = content_of(&saved);
     assert_eq!(c.matches("<text:section ").count(), 1, "{c}");
     assert_eq!(c.matches("</text:section>").count(), 1, "{c}");
+}
+
+#[test]
+fn a_group_edited_anywhere_is_written_from_the_model_whole() {
+    // A paragraph of a group edited: every paragraph of it written from the model, which names
+    // what ties them afresh, consistently.
+    let d = import(&package(&GROUPS)).unwrap();
+    assert!(content_of(&export(&d).unwrap()).contains(r#"wcx:part="two""#));
+    for (start, kept) in [
+        ("The remark", "wcx:part"),
+        ("and ends", "wcx:part"),
+        ("going on", "wcx:part"),
+        ("A box", r#"draw:name="First""#),
+        ("Its next", r#"draw:name="First""#),
+    ] {
+        let mut e = d.clone();
+        let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with(start))).unwrap();
+        if let Some(wordcraft_doc::Block::Para(p)) = e.body.get_mut(i).map(std::sync::Arc::make_mut) {
+            p.props.style = Some("Edited".into());
+            p.touch();
+        }
+        let saved = export(&e).unwrap();
+        assert!(parts_well_formed(&saved).is_ok(), "{start}");
+        let c = content_of(&saved);
+        assert!(!c.contains(kept), "{start}: {c}");
+        // What ties them still does: one comment from its start to its end, one insertion, a box
+        // naming the next one there is.
+        let back = import(&saved).unwrap();
+        assert_eq!(back.comments.len(), 1, "{start}");
+        let names: Vec<&str> = c.split(r#"office:name=""#).skip(1).filter_map(|r| r.split('"').next()).collect();
+        assert!(names.len() == 2 && names[0] == names[1], "{start}: {c}");
+        let next = c.split(r#"draw:chain-next-name=""#).nth(1).and_then(|r| r.split('"').next()).unwrap_or("-");
+        assert!(c.contains(&format!(r#"draw:name="{next}""#)), "{start}: {c}");
+    }
 }

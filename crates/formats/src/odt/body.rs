@@ -39,9 +39,6 @@ pub(super) struct Body<'a> {
     pub(super) entries: &'a [String],
     /// The bibliography sources the citations carry.
     pub(super) sources: Vec<wordcraft_doc::Source>,
-    /// The names of text boxes others continue in (§19.112 `draw:chain-next-name`): markup
-    /// holding one isn't kept, its name being WordCraft's to give.
-    pub(super) chain_targets: Vec<String>,
     /// The paragraph before had a page break after it: the next one starts a page.
     break_next: bool,
     /// Shapes' ids (`xml:id`, `draw:id`) as WordCraft drawing ids, and where the shapes with one
@@ -219,7 +216,6 @@ impl<'a> Body<'a> {
             watermark_shape: None,
             break_next: false,
             sources: Vec::new(),
-            chain_targets: Vec::new(),
             ruby: None,
             placeholder: None,
             index_marks: Vec::new(),
@@ -632,6 +628,7 @@ impl<'a> Body<'a> {
                     && let Some(xml) = self.raw.get(k.from..at.1).and_then(|b| std::str::from_utf8(b).ok())
                 {
                     p.kept = Some(std::sync::Arc::from(format!("{}{xml}", k.prefix)));
+                    p.group = k.comments.group();
                 }
             }
             _ => {}
@@ -1862,14 +1859,18 @@ struct KeptOpen {
     prefix: String,
 }
 
-/// The comments (§14.1 `office:annotation`) and tracked changes (§5.5.7) in a paragraph being
-/// kept, which it can be only when they are its own: each named comment and each change begun
-/// ends in it, each end and each reply names one begun in it.
+/// The comments (§14.1 `office:annotation`), tracked changes (§5.5.7), index and reference
+/// marks over text in a paragraph being kept, and the text boxes it shows. Begun and ended in
+/// it, they are its own; one reaching into another paragraph (a comment ending there, a
+/// change, a box continuing in another's) ties it to that one, as a link of its [`Group`]
+/// (`model::Group`): the paragraphs are kept as read together, or not at all.
 #[derive(Default)]
 struct KeptComments {
-    /// The names of those begun, and of those ended.
+    /// The keys of those begun, and of those ended.
     opened: Vec<String>,
     ended: Vec<String>,
+    /// What ties the paragraph to others: `(key, needed)` (see `model::Group::links`).
+    links: Vec<(String, bool)>,
     /// The comment or drawing being read: its depth and how many paragraphs were finished
     /// before it.
     open: Option<(usize, usize)>,
@@ -1877,69 +1878,94 @@ struct KeptComments {
     paras: usize,
 }
 
+/// Most pairs and links a paragraph kept as read has (hostile input).
+const MAX_PAIRS: usize = 64;
+
 impl KeptComments {
     /// Element `q` (`a` its attributes, at `depth`) starting in the paragraph, `done`
     /// paragraphs finished so far: false when the paragraph can't be kept for it.
     fn start(&mut self, q: &str, a: &Attrs, depth: usize, done: usize) -> bool {
-        let name = || get(a, "office:name").map(str::to_string);
+        if self.opened.len() + self.links.len() >= MAX_PAIRS {
+            return false;
+        }
+        let comment = |n: &str| format!("\u{3}{n}");
         match q {
             // A comment in a drawing's text (its own story): not kept.
             "office:annotation" if self.open.is_some() => false,
-            "office:annotation" if self.opened.len() < 64 => {
-                if get(a, "loext:parent-name").is_some_and(|p| !self.opened.iter().any(|n| n == p)) {
-                    return false;
+            "office:annotation" => {
+                // A reply to one in another paragraph needs it.
+                if let Some(p) = get(a, "loext:parent-name").map(comment)
+                    && !self.opened.contains(&p)
+                {
+                    self.links.push((p, true));
                 }
-                self.opened.extend(name());
+                if let Some(n) = get(a, "office:name").map(comment) {
+                    self.opened.push(n);
+                }
                 self.open = Some((depth, done));
                 true
             }
-            "office:annotation-end" => match name() {
-                Some(n) if self.opened.contains(&n) => {
-                    self.ended.push(n);
+            "office:annotation-end" => match get(a, "office:name").map(comment) {
+                Some(n) => {
+                    self.end_or_need(n);
                     true
                 }
-                _ => false,
+                None => false,
             },
-            // A tracked change's start and end both in it (a deletion's place stands alone).
-            "text:change-start" if self.opened.len() < 64 => {
-                self.opened.extend(get(a, "text:change-id").map(|i| format!("\u{0}{i}")));
-                true
-            }
-            "text:change-end" => match get(a, "text:change-id").map(|i| format!("\u{0}{i}")) {
-                Some(n) if self.opened.contains(&n) => {
-                    self.ended.push(n);
+            "text:change-start" => match get(a, "text:change-id") {
+                Some(i) => {
+                    self.opened.push(format!("\u{0}{i}"));
                     true
                 }
-                _ => false,
+                None => false,
+            },
+            "text:change-end" => match get(a, "text:change-id") {
+                Some(i) => {
+                    self.end_or_need(format!("\u{0}{i}"));
+                    true
+                }
+                None => false,
             },
             "text:change" => get(a, "text:change-id").is_some(),
-            // An index or reference mark over text (§6.6.2, §8.1.10): its start and end in it.
+            // An index or reference mark over text (§6.6.2, §8.1.10).
             q if mark_pair(q).is_some() => {
                 let Some((kind, attr, start)) = mark_pair(q) else { return false };
                 let Some(key) = get(a, attr).map(|k| format!("\u{2}{kind}\u{2}{k}")) else { return false };
                 if start {
-                    if self.opened.len() >= 64 {
-                        return false;
-                    }
                     self.opened.push(key);
-                    true
-                } else if self.opened.contains(&key) {
-                    self.ended.push(key);
-                    true
                 } else {
-                    false
+                    self.end_or_need(key);
                 }
+                true
             }
-            // A text box continuing in another box, or continued from one: their names tie them.
-            "draw:text-box" if get(a, "draw:chain-next-name").is_some() => false,
+            // A text box continuing in another (§19.112 `draw:chain-next-name`) needs it.
+            "draw:text-box" => {
+                if let Some(next) = get(a, "draw:chain-next-name").map(str::trim).filter(|n| !n.is_empty()) {
+                    self.links.push((format!("\u{4}{next}"), true));
+                }
+                true
+            }
             // A drawing or a note: the paragraphs of its text (a text box's, a shape's, the
-            // note's) are its story's.
+            // note's) are its story's. A named frame is there for a box continuing in it.
             q if self.open.is_none() && (q == "text:note" || q.starts_with("draw:") && is_drawing(q)) => {
+                if q == "draw:frame"
+                    && let Some(n) = get(a, "draw:name").map(str::trim).filter(|n| !n.is_empty())
+                {
+                    self.links.push((format!("\u{4}{n}"), false));
+                }
                 self.open = Some((depth, done));
                 true
             }
-            "text:change-start" => false,
             _ => true,
+        }
+    }
+
+    /// `key` ended: one begun in the paragraph, or one begun in another, needed.
+    fn end_or_need(&mut self, key: String) {
+        if self.opened.contains(&key) {
+            self.ended.push(key);
+        } else {
+            self.links.push((key, true));
         }
     }
 
@@ -1955,9 +1981,20 @@ impl KeptComments {
         }
     }
 
-    /// Whether every comment begun with a name ended.
+    /// Whether nothing is left open in it (a comment being read); and its links: what it begun
+    /// and didn't end needs the paragraph ending it, and what it begun is there for another
+    /// to need (a reply, an end).
     fn closed(&self) -> bool {
-        self.open.is_none() && self.opened.iter().all(|n| self.ended.contains(n))
+        self.open.is_none()
+    }
+
+    /// The paragraph's [`Group`](model::Group) links, when it has any.
+    fn group(&self) -> Option<Box<model::Group>> {
+        let mut links = self.links.clone();
+        for k in &self.opened {
+            links.push((k.clone(), !self.ended.contains(k)));
+        }
+        (!links.is_empty()).then(|| Box::new(model::Group { links, id: None }))
     }
 }
 

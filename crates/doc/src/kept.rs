@@ -51,6 +51,11 @@ pub struct KeptXml {
     pub indexes: HashMap<u64, (usize, u64, Arc<str>)>,
     /// While reading: by the first paragraph's `rev`, how many paragraphs, and the markup.
     pub pending_indexes: HashMap<u64, (usize, Arc<str>)>,
+    /// The group of paragraphs written as read together (see `wordcraft_formats::model::Group`)
+    /// each paragraph kept belongs to, by its fingerprint: the group's id and size.
+    pub groups: HashMap<u64, (u32, u32)>,
+    /// While reading: the same by paragraph `rev`, until `seal_kept`.
+    pub pending_groups: HashMap<u64, (u32, u32)>,
     /// Each text box's, shape's or note's story's [`story_fingerprint`] when read: a paragraph
     /// showing one is written as read only while it is as read.
     pub story_fps: HashMap<u32, u64>,
@@ -197,6 +202,19 @@ impl KeptXml {
             self.bytes += xml.len();
             self.pending_indexes.insert(rev, (n, xml));
         }
+    }
+    /// The paragraph whose `rev` is `rev` belongs to group `group` (id, size).
+    pub fn keep_pending_group(&mut self, rev: u64, group: (u32, u32)) {
+        if self.pending_groups.len() < 100_000 {
+            self.pending_groups.insert(rev, group);
+        }
+    }
+    /// The group paragraph `p`'s markup kept as read belongs to (id, size).
+    pub fn group(&self, p: &Paragraph) -> Option<(u32, u32)> {
+        if self.groups.is_empty() {
+            return None;
+        }
+        self.groups.get(&fingerprint(p)).copied()
     }
     /// Keep wrapper markup for the paragraph whose `rev` is `rev`, within the budget.
     pub fn keep_pending_wrap(&mut self, rev: u64, wrap: (Vec<Arc<str>>, u32)) {
@@ -543,6 +561,35 @@ impl crate::Document {
             paras(&p.blocks, 0, &mut all);
         }
         let mut kept = std::mem::take(&mut self.kept);
+        // Groups, by fingerprint; a group with a paragraph that has twins (which a writer can't
+        // tell apart) isn't kept.
+        if let Some(k) = kept.get_mut()
+            && !k.pending_groups.is_empty()
+        {
+            let mut count: HashMap<u64, usize> = HashMap::new();
+            let fps: Vec<(u64, u64)> = all.iter().map(|p| (p.rev, fingerprint(p))).collect();
+            for (_, fp) in &fps {
+                *count.entry(*fp).or_default() += 1;
+            }
+            let pending = std::mem::take(&mut k.pending_groups);
+            let mut broken = std::collections::HashSet::new();
+            let mut members: Vec<(u64, u64, (u32, u32))> = Vec::new();
+            for (rev, fp) in &fps {
+                if let Some(g) = pending.get(rev) {
+                    if count.get(fp) != Some(&1) {
+                        broken.insert(g.0);
+                    }
+                    members.push((*rev, *fp, *g));
+                }
+            }
+            for (rev, fp, g) in members {
+                if broken.contains(&g.0) {
+                    k.pending.remove(&rev);
+                } else {
+                    k.groups.insert(fp, g);
+                }
+            }
+        }
         // Wrappers, for paragraphs that are the only one of their kind.
         if let Some(k) = kept.get_mut()
             && !k.pending_wraps.is_empty()
