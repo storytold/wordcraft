@@ -7,7 +7,7 @@ use super::placed::Placed;
 use super::table_flow::below;
 use super::{
     Anchor, Arc, Block, Blocks, Border, Document, Float, FloatAlign, HashMap, ParaLayout, Paragraph, Path, Rect, StoryRef, TableFloat, TextDirection,
-    Wrap, WrapText, para, table,
+    Wrap, WrapText, para, table, textbox,
 };
 
 /// Cell identity is independent of optional table-style formatting.
@@ -280,6 +280,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     if left_out(oi) {
                         continue;
                     }
+                    let (w, h) = textbox::fit_size(ctx, o, w, h, depth);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page =
                             PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
