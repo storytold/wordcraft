@@ -510,6 +510,9 @@ fn draw_rows(ui: &mut Ui, options: RowDrawOptions<'_, '_>) -> Option<String> {
     // their field width.
     let popup_width = if preview.is_some() { width.max(254.0) } else { width };
     ui.set_min_width(popup_width);
+    if preview.is_some() {
+        ui.set_max_width(popup_width);
+    }
     for k in range {
         let it = match row(k) {
             Some(Row::Item(it)) => it,
