@@ -538,9 +538,11 @@ fn changes(s: &Session) -> Vec<Change> {
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
-            // Neighbouring runs changed the same way by the same revision are one change.
-            if let Some(last) =
-                out.last_mut().filter(|l| l.kind == "format" && l.rev == Some(ch.rev) && l.b == mk(&path, r.start) && l.props == props)
+            // Neighbouring runs changed the same way by the same revision are one change (not a
+            // table cell's change that ends where the cell's first run starts).
+            if let Some(last) = out
+                .last_mut()
+                .filter(|l| l.kind == "format" && l.target == Target::Runs && l.rev == Some(ch.rev) && l.b == mk(&path, r.start) && l.props == props)
             {
                 last.b = mk(&path, r.end);
             } else {

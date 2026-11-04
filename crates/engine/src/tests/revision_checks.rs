@@ -813,3 +813,40 @@ fn a_listed_paragraph_formatting_change_keeps_another_revisions_numbering_change
     assert_eq!(p.props.align, None, "and undone");
     assert_eq!(p.props.num_change.map(|n| n.rev), Some(alice), "Alice's numbering change stays");
 }
+
+#[test]
+fn shading_on_a_cell_and_on_its_text_by_one_revision_are_listed_apart() {
+    let mut s = table_session();
+    let rev = {
+        s.doc.revisions.push(wordcraft_doc::Revision { kind: wordcraft_doc::RevisionKind::Format, author: "Bob".into(), ..Default::default() });
+        u32::try_from(s.doc.revisions.len() - 1).unwrap_or_default()
+    };
+    let green = Some(wordcraft_doc::Rgb(0, 128, 0));
+    // Bob shades cell A1 and, in the same revision, its text.
+    if let Ok(t) = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)) {
+        let cell = &mut t.rows[0].cells[0];
+        let old = cell.props.clone();
+        cell.props.shading = green;
+        cell.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, old);
+    }
+    let a1 = wordcraft_doc::Path(vec![0, 0, 0, 0]);
+    if let Ok(p) = s.doc.para_mut(StoryRef::Body, &a1) {
+        let len = p.len();
+        p.format(0, len, &|c| {
+            let old = c.formatting();
+            c.shading = green;
+            c.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, old.clone());
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        p.touch();
+    }
+    let n = listed(&mut s, |c| c["kind"] == "format" && c["text"] == "A1");
+    let list = run(&mut s, "review.changes", json!({}));
+    let cell_listed = list.as_array().is_some_and(|a| a.iter().any(|c| c["kind"] == "format" && c["start"] == c["end"]));
+    assert!(cell_listed, "the cell's change is listed too: {list}");
+    run(&mut s, "review.reject", json!({"change": n}));
+    let text_shaded = s.doc.para(StoryRef::Body, &a1).is_some_and(|p| p.run_ranges().any(|(_, c)| c.shading.is_some()));
+    let cell_shaded = table(&s).map(|t| t.rows[0].cells[0].props.shading);
+    assert!(!text_shaded, "the text's shading is undone");
+    assert_eq!(cell_shaded, Some(green), "the cell keeps its shading");
+}
