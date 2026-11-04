@@ -437,6 +437,14 @@ impl Ctx<'_> {
     }
 }
 
+/// Lay out with percentage-width tables sized by `base` (see [`HfLinks::defining_width`]).
+pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -> T) -> T {
+    let before = std::mem::replace(&mut ctx.pct_base, base);
+    let out = f(ctx);
+    ctx.pct_base = before;
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,12 +525,4 @@ mod tests {
         ctx.fitted_boxes(&p);
         assert_eq!(ctx.fitted.len(), 2, "matching field context reuses the fitted height");
     }
-}
-
-/// Lay out with percentage-width tables sized by `base` (see [`HfLinks::defining_width`]).
-pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -> T) -> T {
-    let before = std::mem::replace(&mut ctx.pct_base, base);
-    let out = f(ctx);
-    ctx.pct_base = before;
-    out
 }
