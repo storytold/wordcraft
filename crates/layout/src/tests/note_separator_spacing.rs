@@ -15,7 +15,7 @@ fn fixture(long: bool, after: Option<f32>, continuation_after: Option<f32>) -> (
     let text =
         (1..=45).map(|i| format!("SYNTHETIC BODY {i:02}: {}", "Sample text for paragraph pagination. ".repeat(8))).collect::<Vec<_>>().join("\n");
     let mut doc = pagination_fixture_document(&text);
-    doc.styles.default_para.space_after = Some(6.0);
+    std::sync::Arc::make_mut(&mut doc.styles).default_para.space_after = Some(6.0);
     let positions: Vec<usize> = if long { vec![4] } else { (4..45).step_by(5).collect() };
     let mut ids = Vec::new();
     for block in positions {
