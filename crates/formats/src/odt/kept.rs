@@ -44,6 +44,15 @@ pub(super) fn defs(xml: &[u8], content: bool) -> Vec<(String, Arc<str>)> {
                 }
                 return;
             }
+            // A reference mark (§6.6.2), which `text:reference-ref` names: WordCraft reads it as a
+            // bookmark, and writes it as both.
+            if content
+                && matches!(q.as_str(), "text:reference-mark" | "text:reference-mark-start")
+                && let Some(n) = get(&a, "text:name").filter(|n| !n.is_empty() && n.len() <= 256)
+                && out.len() < MAX_DEFS
+            {
+                out.push((format!("refmark:{n}"), Arc::from("")));
+            }
             if open.is_some() || out.len() >= MAX_DEFS {
                 return;
             }

@@ -741,3 +741,17 @@ fn a_list_without_an_id_is_kept_and_given_one() {
     let going_on = c.split("Between the lists.").nth(1).unwrap_or("");
     assert!(going_on.contains(r#"text:continue-list="wclstk1""#) || going_on.contains(r#"text:continue-numbering="true""#), "{c}");
 }
+
+#[test]
+fn a_reference_mark_is_written_as_one_and_as_a_bookmark() {
+    // §6.6.2: `text:reference-ref` names a reference mark; WordCraft reads it as a bookmark (its
+    // references, written from the model, are `text:bookmark-ref`): both are written.
+    let content = r##"<office:body><office:text><text:p>See <text:reference-mark-start text:name="intro"/>the introduction<text:reference-mark-end text:name="intro"/> and <text:reference-mark text:name="point"/>here.</text:p><text:p>As said in <text:reference-ref text:reference-format="text" text:ref-name="intro">the introduction</text:reference-ref>.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "reference marks", content, styles: "", meta: "" })).unwrap();
+    let saved = export(&d).unwrap();
+    assert!(parts_well_formed(&saved).is_ok());
+    let c = content_of(&saved);
+    assert!(c.contains(r#"<text:reference-mark-start text:name="intro"/>"#) && c.contains(r#"<text:reference-mark-end text:name="intro"/>"#), "{c}");
+    assert!(c.contains(r#"<text:reference-mark text:name="point"/>"#) && c.contains(r#"text:name="intro"/>"#), "{c}");
+    assert!(c.contains(r#"<text:bookmark-start text:name="intro"/>"#) || c.contains(r#"<text:bookmark text:name="intro"/>"#), "{c}");
+}

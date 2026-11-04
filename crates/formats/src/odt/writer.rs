@@ -228,6 +228,8 @@ pub(super) struct Writer {
     kept_changes: std::collections::BTreeSet<String>,
     /// Lists kept as read given an `xml:id` (see `kept_run`).
     kept_lists: usize,
+    /// The reference marks (§6.6.2) begun over text in the paragraph being written, to end.
+    refs_open: std::collections::BTreeSet<String>,
     /// The file's own package paths, kept as read: names WordCraft's own pictures don't take.
     pub(super) reserved: std::sync::Arc<std::collections::BTreeSet<String>>,
     pub(super) kept_used: super::kept::Needed,
@@ -497,13 +499,10 @@ impl Writer {
                     }
                     let el = if self.ranged.contains(a) && !empty { "bookmark-start" } else { "bookmark" };
                     out.push_str(&format!("<text:{el} text:name=\"{}\"/>", x(a)));
+                    self.reference_mark(a, inl.get(idx + 1..).unwrap_or(&[]), empty, out);
                 }
                 Inline::Anchor(_) => {}
-                Inline::AnchorEnd(a) => {
-                    if self.ranged.contains(a) && self.bookmarks.contains(a) && self.bookmark_ends.insert(a.clone()) {
-                        out.push_str(&format!("<text:bookmark-end text:name=\"{}\"/>", x(a)));
-                    }
-                }
+                Inline::AnchorEnd(a) => self.anchor_end(a, out),
                 Inline::Note { endnote, custom, blocks, fmt } => {
                     self.styled_note(*endnote, custom, blocks, fmt, out);
                     prev_space = false;
@@ -805,6 +804,32 @@ impl Writer {
         }
         out.push('\n');
         Some(ix.1.max(1))
+    }
+
+    /// The end of bookmark `a` (and of the reference mark by its name, when one is open).
+    fn anchor_end(&mut self, a: &str, out: &mut String) {
+        if self.ranged.contains(a) && self.bookmarks.contains(a) && self.bookmark_ends.insert(a.to_string()) {
+            out.push_str(&format!("<text:bookmark-end text:name=\"{}\"/>", x(a)));
+        }
+        if self.refs_open.remove(a) {
+            out.push_str(&format!("<text:reference-mark-end text:name=\"{}\"/>", x(a)));
+        }
+    }
+
+    /// Bookmark `a` was the file's reference mark (§6.6.2, read as a bookmark): one by its name
+    /// too, which `text:reference-ref` names (the bookmark is for `text:bookmark-ref`). Over the
+    /// text up to its end when that is in the paragraph (`rest`, after it), else at a point.
+    fn reference_mark(&mut self, a: &str, rest: &[Inline], empty: bool, out: &mut String) {
+        if !self.kept_defs.contains_key(&format!("refmark:{a}")) {
+            return;
+        }
+        let ends_here = !empty && rest.iter().any(|i| matches!(i, Inline::AnchorEnd(e) if e == a));
+        if ends_here && self.refs_open.len() < 1000 {
+            self.refs_open.insert(a.to_string());
+            out.push_str(&format!("<text:reference-mark-start text:name=\"{}\"/>", x(a)));
+        } else {
+            out.push_str(&format!("<text:reference-mark text:name=\"{}\"/>", x(a)));
+        }
     }
 
     /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`).
