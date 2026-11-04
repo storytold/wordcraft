@@ -54,6 +54,10 @@ pub(crate) enum Dropped {
     RunStrings,
     /// A style name cut to [`MAX_FONT_NAME`].
     StyleName,
+    /// ODT `text:s` spaces past the document's budget.
+    Spaces,
+    /// Markdown table rows and columns past the table limits or the document's cell budget.
+    TableCells,
 }
 
 impl Dropped {
@@ -65,7 +69,22 @@ impl Dropped {
                 format!("import: the document's runs carry more than {MAX_RUN_STRINGS} bytes of links and font names; later runs lose them")
             }
             Dropped::StyleName => format!("import: style names longer than {MAX_FONT_NAME} bytes are cut short"),
+            Dropped::Spaces => {
+                "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
+            }
+            Dropped::TableCells => format!(
+                "import: Markdown tables keep {} columns and {} rows at most, and {} cells in all; the rest are left out",
+                wordcraft_doc::table::MAX_COLS,
+                wordcraft_doc::table::MAX_ROWS,
+                crate::markdown::MAX_TABLE_CELLS
+            ),
         }
+    }
+
+    /// Whether this thread's import has logged this kind ([`dropped`]).
+    #[cfg(test)]
+    pub(crate) fn reported(self) -> bool {
+        REPORTED.with(|r| r.get() & (1u8 << (self as u8)) != 0)
     }
 }
 
