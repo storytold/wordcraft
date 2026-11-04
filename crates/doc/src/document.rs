@@ -737,6 +737,37 @@ impl Document {
         }
     }
 
+    /// [`Document::objects_mut`] for filling in what an object shows from what it is (a chart's
+    /// drawing from its data), which doesn't change the document: the markup kept as read for
+    /// the paragraphs and tables holding them (see [`crate::kept`]) follows them.
+    pub fn fill_objects(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
+        let mut moves: Vec<crate::kept::Moved> = Vec::new();
+        let mut stories: Vec<&mut Blocks> = vec![&mut self.body];
+        stories.extend(self.parts.values_mut().map(|p| &mut p.blocks));
+        for blocks in stories {
+            for b in blocks.iter_mut() {
+                let mut any = false;
+                edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+                if !any {
+                    continue;
+                }
+                let before = crate::kept::identities(b);
+                edit::each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                    if p.objects.iter().any(wants) {
+                        p.objects.iter_mut().filter(|o| wants(o)).for_each(&mut *f);
+                        p.touch();
+                    }
+                });
+                moves.push((before, crate::kept::identities(b)));
+            }
+        }
+        if let Some(k) = self.kept.get_mut() {
+            for (before, after) in moves {
+                k.follow(&before, &after);
+            }
+        }
+    }
+
     /// Repair every paragraph's runs (see [`Paragraph::normalize`]); for models from untrusted
     /// JSON, whose run lengths may overflow, fall short or split a character.
     pub fn normalize_runs(&mut self) {

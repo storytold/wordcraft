@@ -1,6 +1,6 @@
 # ODT element audit
 
-> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** trivial (sections in table cells and at empty paragraphs kept); previously trivial (password, number, time and grid form controls kept); previously minor (first version: every element of the ODF 1.3 schema against two corpora and a generated sample of each element never seen)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** trivial (paragraphs with charts kept as read); previously trivial (sections in table cells and at empty paragraphs kept); previously trivial (password, number, time and grid form controls kept); previously minor (first version: every element of the ODF 1.3 schema against two corpora and a generated sample of each element never seen)
 
 Every element the ODF 1.3 schema (OASIS, Part 3, RELAX NG) defines, checked against what WordCraft's ODT reader and writer do with it. The question for each: does a file holding it open, and does a save without edits keep it? (See [file-format-parity.md](file-format-parity.md) for what WordCraft models; markup it doesn't model is written back as read while unedited: [odf-interpretation.md](odf-interpretation.md).)
 
@@ -102,7 +102,7 @@ The check found these, each fixed with a test (see [file-format-parity.md](file-
 
 ## Left
 
-- **A paragraph showing a chart, a form control, a linked text box, or a comment or tracked change reaching into another paragraph**: written from the model, which keeps what WordCraft models of it.
+- **A paragraph showing a form control or a linked text box, or holding a comment or tracked change reaching into another paragraph**: written from the model, which keeps what WordCraft models of it.
 - **Calligra's page sequence** (`text:page-sequence`, a layout of fixed pages) and **numbered paragraphs** (`text:numbered-paragraph`): read as text, written from the model.
 - **Soft page breaks between paragraphs** (a layout hint LibreOffice recomputes) and **unused automatic styles**: not written.
 
@@ -113,3 +113,4 @@ The check found these, each fixed with a test (see [file-format-parity.md](file-
 | 2026-11-04 | minor | First version |
 | 2026-11-04 | trivial | Password, number, time and grid form controls kept |
 | 2026-11-04 | trivial | Sections in table cells and at empty paragraphs kept |
+| 2026-11-04 | trivial | Paragraphs with charts kept as read |

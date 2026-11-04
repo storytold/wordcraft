@@ -47,7 +47,8 @@ fn draw_charts(doc: &mut Document) {
         }
     }
     let theme = doc.settings.theme_colors.clone();
-    doc.objects_mut(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, 0));
+    // (Drawing them doesn't change the document: markup kept as read for them still is.)
+    doc.fill_objects(&|o| undrawn(o, 0), &mut |o| draw(o, &theme, 0));
 }
 
 /// Save to a format other than plain text / JSON.

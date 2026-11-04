@@ -263,6 +263,63 @@ pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
     h.finish()
 }
 
+/// What a block is, as the kept markup knows it: its paragraphs' fingerprints and
+/// [`Paragraph::rev`]s in order, and a table's [`table_fingerprint`].
+pub struct Identities {
+    paras: Vec<(u64, u64)>,
+    table: Option<u64>,
+}
+
+/// A block's [`Identities`] before and after a change that keeps what it is.
+pub type Moved = (Identities, Identities);
+
+/// The [`Identities`] of block `b`.
+pub fn identities(b: &crate::Block) -> Identities {
+    let mut paras_of = Vec::new();
+    match b {
+        crate::Block::Para(p) => paras_of.push(p),
+        crate::Block::Table(t) => {
+            for r in &t.rows {
+                for c in &r.cells {
+                    paras(&c.blocks, 1, &mut paras_of);
+                }
+            }
+        }
+    }
+    Identities { paras: paras_of.iter().map(|p| (fingerprint(p), p.rev)).collect(), table: b.as_table().map(table_fingerprint) }
+}
+
+impl KeptXml {
+    /// The markup kept for a block's paragraphs and table follows them from `before` to `after`
+    /// (what they were and are: see [`crate::Document::fill_objects`]).
+    pub fn follow(&mut self, before: &Identities, after: &Identities) {
+        for ((fp, rev), (nfp, nrev)) in before.paras.iter().zip(&after.paras) {
+            if fp == nfp && rev == nrev {
+                continue;
+            }
+            if let Some(x) = self.paras.remove(fp) {
+                self.paras.entry(*nfp).or_insert(x);
+            }
+            if let Some(w) = self.wraps.remove(fp) {
+                self.wraps.entry(*nfp).or_insert(w);
+            }
+            if let Some(w) = self.twin_wraps.remove(&(*fp, *rev)) {
+                self.twin_wraps.entry((*nfp, *nrev)).or_insert(w);
+            }
+        }
+        if let (Some(t), Some(nt)) = (before.table, after.table)
+            && t != nt
+        {
+            if let Some(x) = self.tables.remove(&t) {
+                self.tables.entry(nt).or_insert(x);
+            }
+            if let Some(w) = self.table_wraps.remove(&t) {
+                self.table_wraps.entry(nt).or_insert(w);
+            }
+        }
+    }
+}
+
 /// How deep [`story_fingerprint`] follows stories in stories (text boxes in text boxes, notes).
 const MAX_STORY_DEPTH: usize = 8;
 

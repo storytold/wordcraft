@@ -11681,3 +11681,17 @@ fn odf_interpretation_is_an_option_files_follow() {
     run(&mut s, "file.options", json!({"odf": {"preset": "libreoffice"}}));
     assert_eq!(tab(&s), Some(108.0), "LibreOffice: from the indent");
 }
+
+#[test]
+fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
+    // Opening an ODT draws its charts (from their data); that changes nothing in the document,
+    // so the paragraph showing one is still written as read.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let first = wordcraft_formats::odt::export(&s.doc).unwrap();
+    let doc = crate::io::open_bytes("t.odt", &first).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&doc).unwrap())).unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
+    assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
