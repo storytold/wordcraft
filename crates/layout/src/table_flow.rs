@@ -70,6 +70,30 @@ pub(crate) fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapAre
     areas
 }
 
+/// The room a table in the text needs to start on a page: its repeated header rows and the least
+/// room its first row can start in (whole, or the part of it that splits off). A paragraph kept
+/// with the table goes over with it when that much is not left, as in Word.
+pub(crate) fn table_start_need(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32) -> f32 {
+    // A look ahead: list and equation numbers in the cells don't count yet.
+    let (counters, eq_count) = (ctx.counters.clone(), ctx.eq_count);
+    let tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    (ctx.counters, ctx.eq_count) = (counters, eq_count);
+    let headers = t.rows.iter().take_while(|r| r.props.header).count();
+    let head: f32 = tl.rows.iter().take(headers).map(|r| r.height).sum();
+    let (Some(row), Some(laid)) = (t.rows.get(headers), tl.rows.get(headers)) else { return head };
+    // ponytail: bisection assumes starting a row gets no harder with more room.
+    let (mut lo, mut hi) = (0.0f32, laid.height + laid.edge);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if row_can_start(row, laid, mid, f32::MAX) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    head + hi
+}
+
 fn row_keeps_next(row: &table::RowLayout) -> bool {
     let Some(items) = row.cells.first().and_then(|cell| row.items.get(cell.items.clone())) else { return false };
     let Some((depth, story)) = items
@@ -95,7 +119,8 @@ fn row_keeps_next(row: &table::RowLayout) -> bool {
 }
 
 fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
-    if laid.height <= room + 0.01 {
+    // Whole, the row needs the border below it too, as `place_table` places it.
+    if laid.height + laid.edge <= room + 0.01 {
         return true;
     }
     if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
