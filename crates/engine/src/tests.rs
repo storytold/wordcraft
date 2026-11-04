@@ -4,6 +4,7 @@ use wordcraft_proof::cs::install_dictionary;
 mod czech_test_dict;
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -2571,25 +2572,66 @@ fn select_extend_from_a_table_paragraph_selects_the_document() {
     assert_eq!(b, s.doc.end_of(StoryRef::Body));
 }
 
-/// #1596: tables nest 24 deep at most, the depth the DOCX reader and writer keep. Insert › Table
-/// in the deepest cell says so; a table pasted there brings its text as paragraphs.
+/// #1596, #3618: tables nest only as deep as a `.json` save (and so an AutoRecover snapshot)
+/// reads back. Insert › Table in the deepest cell says so; a table pasted there brings its text
+/// as paragraphs.
 #[test]
-fn tables_nest_at_most_24_deep() {
+fn tables_nest_only_as_deep_as_a_json_save_reads() {
     use wordcraft_doc::table::MAX_TABLE_DEPTH;
     let mut s = s();
     for _ in 0..MAX_TABLE_DEPTH {
         run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
     }
     assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
+    let saved = crate::io::save_bytes("deep.json", &s.doc).unwrap();
+    assert_eq!(crate::io::open_bytes("deep.json", &saved).map(|d| d == s.doc), Ok(true));
     let before = s.doc.clone();
     let e = s.run("insert.table", &json!({"rows": 1, "cols": 1})).unwrap_err();
-    assert!(e.to_string().contains("24 deep"), "{e}");
+    assert!(e.to_string().contains(&format!("{MAX_TABLE_DEPTH} deep")), "{e}");
     assert_eq!(s.doc, before);
     run(&mut s, "edit.paste", json!({"text": "b", "html": "<table><tr><td>b</td></tr></table>"}));
     let cell = s.sel.focus.path.clone();
     let blocks: Vec<_> = (0..).map_while(|i| s.doc.block(StoryRef::Body, &cell.with_last(i))).collect();
     assert!(blocks.iter().all(|b| b.as_table().is_none()), "no table below the limit");
     assert!(blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains('b'))), "the pasted text is there");
+}
+
+/// #3618: a text box story sits two JSON levels below the body, and its deepest cell still reads
+/// back from a `.json` save with the richest content measured pasted in: a gradient shape, and
+/// gradient text effects changed with Track Changes on (the change keeps the old effects too).
+#[test]
+fn the_deepest_cell_of_a_text_box_reads_back_with_rich_content() {
+    use wordcraft_doc::table::MAX_TABLE_DEPTH;
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "rectangle"}));
+    run(&mut s, "shape.fill", json!({"gradient": {"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}]}}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "text.insert", json!({"text": "word"}));
+    run(&mut s, "select.text", json!({"text": "word"}));
+    run(&mut s, "format.textEffects", json!({"fill": {"gradient": ["FF0000", "0000FF"]}, "shadow": {"color": "FF0000"}}));
+    run(&mut s, "review.trackChanges", json!({"on": true}));
+    run(&mut s, "format.textEffects", json!({"fill": {"gradient": ["00FF00", "0000FF"]}, "glow": {"color": "00FF00"}}));
+    run(&mut s, "review.trackChanges", json!({"on": false}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "insert.textBox", json!({"text": "in box"}));
+    for _ in 0..MAX_TABLE_DEPTH {
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    }
+    assert_ne!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(s.sel.focus.path.depth(), MAX_TABLE_DEPTH);
+    run(&mut s, "edit.paste", json!({}));
+    // Commands don't reach this deep (the paragraph walk stops at 16), so check the paste did.
+    let para = s.doc.block(s.sel.focus.story, &s.sel.focus.path).and_then(|b| b.as_para()).unwrap();
+    let gradient = |f: &Option<wordcraft_doc::fill::Fill>| matches!(f, Some(wordcraft_doc::fill::Fill::Gradient(_)));
+    assert!(para.objects.iter().any(|o| matches!(o, wordcraft_doc::InlineObject::Shape { fill, .. } if gradient(fill))), "{para:?}");
+    assert!(
+        para.runs.iter().any(|r| r.props.text_effects.is_some() && r.props.fmt_change.as_ref().is_some_and(|c| c.old.text_effects.is_some())),
+        "{para:?}"
+    );
+    let saved = crate::io::save_bytes("deep.json", &s.doc).unwrap();
+    assert_eq!(crate::io::open_bytes("deep.json", &saved).map(|d| d == s.doc), Ok(true));
 }
 
 /// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
@@ -4357,7 +4399,7 @@ fn toc_page_numbers_reach_the_right_margin() {
     let long = "A deliberately long section title that does not fit on one line of the table of contents and wraps onto a second line";
     let mut d = wordcraft_doc::Document::from_text(&format!("Contents\n\nNo entries.\n\nShort\n{long}\nTop\nAppendix"));
     {
-        let toc2 = d.styles.get_mut("TOC2").unwrap();
+        let toc2 = Arc::make_mut(&mut d.styles).get_mut("TOC2").unwrap();
         toc2.para.tabs = Some(vec![
             TabStop { pos: 77.0, align: TabAlign::Left, leader: TabLeader::None },
             TabStop { pos: 467.2, align: TabAlign::Right, leader: TabLeader::Dot },
@@ -4494,7 +4536,7 @@ fn toc_entries_carry_heading_numbers() {
         run(&mut s, "para.heading1", json!({}));
         run(&mut s, "text.newParagraph", json!({}));
     }
-    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for b in s.doc.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
             && p.props.style.as_deref() == Some("Heading1")
@@ -4594,11 +4636,39 @@ fn hostile_params_never_panic() {
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
             assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
-            let _ = s.run(spec.id, j);
+            let r = s.run(spec.id, j);
+            assert!(!caught_panic(&reg, &r), "{} panicked on {j}: {r:?}", spec.id);
             s.clamp_selection();
             let _ = s.layout();
         }
     }
+}
+
+/// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a
+/// crash path (#3718). Only the guard's own `"{id} panicked: "` counts, not an error that echoes
+/// those words.
+fn caught_panic(reg: &crate::Registry, r: &Result<serde_json::Value, crate::CmdError>) -> bool {
+    matches!(r, Err(crate::CmdError::Failed(m)) if m.split_once(" panicked: ").is_some_and(|(id, _)| reg.get(id).is_some()))
+}
+
+#[test]
+fn caught_panic_flags_a_command_that_panics() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let boom = crate::CommandSpec::new("test.boom", "Boom", "", |_, _| panic!("boom")).pure();
+    // Outline's commands run Paragraph ones: the inner command's name is in the error (review of #4207).
+    let outer = crate::CommandSpec::new("test.outer", "Outer", "", |s, v| s.run("test.boom", v)).pure();
+    s.registry = std::sync::Arc::new(crate::Registry::new(vec![boom, outer]));
+    let boom = s.run("test.boom", &json!({}));
+    assert!(caught_panic(&s.registry, &boom));
+    let nested = s.run("test.outer", &json!({}));
+    assert!(matches!(&nested, Err(crate::CmdError::Failed(m)) if m.starts_with("test.boom panicked: ")), "{nested:?}");
+    assert!(caught_panic(&s.registry, &nested));
+    assert!(!caught_panic(&s.registry, &Err(crate::CmdError::Failed("no picture".into()))));
+    // A command's own error can quote what it was given.
+    let mut full = Session::new(crate::sample::sample_document());
+    let echoed = full.run("developer.control", &json!({"control": "x panicked: y"}));
+    assert!(matches!(&echoed, Err(crate::CmdError::Failed(m)) if m.contains(" panicked: ")), "{echoed:?}");
+    assert!(!caught_panic(&full.registry, &echoed), "{echoed:?}");
 }
 
 #[test]
@@ -4767,10 +4837,10 @@ fn commands_after_the_largest_ids_take_free_ones() {
         s.doc.parts.insert(id, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Comment, blocks, ..Default::default() });
         s.doc.comments.insert(id, wordcraft_doc::Comment { part: id, ..Default::default() });
     }
-    s.doc.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    s.doc.numbering.abstracts[0].id = u32::MAX;
-    s.doc.numbering.nums[0].id = u32::MAX;
-    s.doc.numbering.nums[0].abstract_id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    Arc::make_mut(&mut s.doc.numbering).abstracts[0].id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).nums[0].id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).nums[0].abstract_id = u32::MAX;
     let before = s.doc.clone();
     assert_eq!(run(&mut s, "review.newComment", json!({"text": "new"})), json!({"id": 1, "story": 1}));
     assert_eq!(run(&mut s, "review.reply", json!({"id": 0, "text": "re"})), json!({"id": 2}));
@@ -4867,7 +4937,7 @@ fn word_count_includes_text_boxes_by_default() {
 #[test]
 fn word_count_includes_numbered_list_labels_in_words_but_not_characters() {
     let mut d = wordcraft_doc::Document::new();
-    let num_id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let mut p = wordcraft_doc::Paragraph::with_text("Apple", wordcraft_doc::CharProps::default());
     p.props.numbering = Some(wordcraft_doc::props::NumRef { num: num_id, level: 0 });
     d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
@@ -5840,6 +5910,111 @@ fn modify_style_takes_hex_colours_like_format_color() {
     assert_eq!(color(&s), Some(TextColor::Rgb(Rgb(0x1B, 0x16, 0x11))), "the hex string also reads inside {{\"Rgb\": …}}");
 }
 
+#[test]
+fn undo_steps_share_the_style_sheet_and_lists_until_a_command_changes_them() {
+    // Every undo step copied the whole style sheet and list definitions: kilobytes a style, so
+    // typing into a document with hundreds of styles cost megabytes a step.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One two three."));
+    for _ in 0..5 {
+        run(&mut s, "text.insert", json!({"text": "word "}));
+        run(&mut s, "caret.left", json!({}));
+    }
+    assert_eq!(s.undo_labels().len(), 5, "five undo steps");
+    assert!(Arc::strong_count(&s.doc.styles) >= 6, "the document and each step hold one style sheet");
+    assert!(Arc::strong_count(&s.doc.numbering) >= 6, "and one set of list definitions");
+    // A command that changes a style copies the sheet once; undo puts the shared one back.
+    let sheet = Arc::clone(&s.doc.styles);
+    run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"bold": true}}));
+    assert!(!Arc::ptr_eq(&sheet, &s.doc.styles));
+    assert_ne!(*sheet, *s.doc.styles, "the change is in the new copy only");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(Arc::ptr_eq(&sheet, &s.doc.styles), "undo restores the step's own sheet");
+    // Lists likewise.
+    let lists = Arc::clone(&s.doc.numbering);
+    run(&mut s, "para.numbering", json!({}));
+    assert!(!Arc::ptr_eq(&lists, &s.doc.numbering));
+    assert!(s.doc.numbering.nums.len() > lists.nums.len());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(Arc::ptr_eq(&lists, &s.doc.numbering));
+}
+
+/// The same at scale: 1,000 edits of a document with 600 styles and 60 lists of nine levels. The
+/// history keeps the newest `MAX_UNDO` steps and drops the oldest. Its steps hold one style sheet
+/// for each style change they span, however many steps there are, and one set of lists. A sheet
+/// that only dropped steps held is freed.
+#[test]
+fn a_thousand_edits_of_a_large_document_keep_the_newest_steps_and_share_its_styles() {
+    use crate::doc_state::MAX_UNDO;
+    use std::collections::HashSet;
+    use std::sync::Weak;
+
+    let body: Vec<String> = (0..200).map(|i| format!("Paragraph {i} of the body, with a few words in it.")).collect();
+    let mut doc = wordcraft_doc::Document::from_text(&body.join("\n"));
+    let sheet = Arc::make_mut(&mut doc.styles);
+    let normal = sheet.get("Normal").cloned().unwrap();
+    for i in 0..600 {
+        let (id, name) = (format!("Custom{i}"), format!("Custom {i}"));
+        sheet.upsert(wordcraft_doc::Style {
+            id,
+            name,
+            based_on: Some("Normal".into()),
+            builtin: false,
+            default: false,
+            quick: false,
+            ..normal.clone()
+        });
+    }
+    for _ in 0..60 {
+        Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Legal);
+    }
+    let mut s = Session::new(doc);
+
+    // An edit types a word, except every hundredth, which changes a style: one undo step each.
+    // After each edit: the text, and the sheet and lists the document then had.
+    let edits = 1000;
+    let mut after = Vec::with_capacity(edits);
+    let mut probe = Weak::new();
+    for i in 0..edits {
+        if i % 100 == 50 {
+            run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"size": 10 + i / 100}}));
+        } else {
+            run(&mut s, "text.insert", json!({"text": format!("w{i} ")}));
+            run(&mut s, "caret.left", json!({}));
+        }
+        after.push((text(&s), Arc::downgrade(&s.doc.styles), Arc::downgrade(&s.doc.numbering)));
+        // Edit 50's sheet is replaced at edit 150, so the step taken before edit 150 is the last
+        // to hold it. That step is the oldest one kept until edit 650 pushes it out.
+        match i {
+            50 => probe = Arc::downgrade(&s.doc.styles),
+            649 => assert!(probe.upgrade().is_some(), "a kept step still holds edit 50's sheet"),
+            650 => assert!(probe.upgrade().is_none(), "dropping the last step that held edit 50's sheet frees it"),
+            _ => {}
+        }
+    }
+    assert_eq!(s.undo_steps_so_far(), edits as u64, "one undo step an edit");
+    assert_eq!(s.undo_depth(), MAX_UNDO);
+
+    // Undo goes back through the newest steps, newest first. Each restores the text and the very
+    // sheet and lists the document had after that edit: the steps share them, not copies.
+    let (mut sheets, mut lists) = (HashSet::new(), HashSet::new());
+    for k in 0..=MAX_UNDO {
+        let (txt, sheet, numbering) = &after[edits - 1 - k];
+        assert_eq!(&text(&s), txt, "after {k} undos");
+        assert!(Arc::ptr_eq(&s.doc.styles, &sheet.upgrade().unwrap()), "the sheet after {k} undos");
+        assert!(Arc::ptr_eq(&s.doc.numbering, &numbering.upgrade().unwrap()), "the lists after {k} undos");
+        sheets.insert(Arc::as_ptr(&s.doc.styles));
+        lists.insert(Arc::as_ptr(&s.doc.numbering));
+        if k < MAX_UNDO {
+            assert!(s.undo(), "undo {}", k + 1);
+        }
+    }
+    assert!(!s.undo(), "the oldest 500 steps were dropped: edits 0 to 499 can't be undone");
+    // The 501 states, the document's and the kept steps', hold six sheets (edit 450's, and those
+    // of the changes at 550 to 950) and one set of lists.
+    assert_eq!(sheets.len(), 6);
+    assert_eq!(lists.len(), 1);
+}
+
 /// #865: the other colours in CharProps and ParaProps (`underlineColor`, `shading`, a border's
 /// `color`) take `RRGGBB` / `#RRGGBB` like `para.borders` and `table.shading`, and still `[r, g, b]`.
 #[test]
@@ -6561,7 +6736,7 @@ fn reading_mode_reflows_per_viewport_without_changing_document_or_export() {
 }
 
 /// Read Mode › View › Page Color: None, Sepia or Inverse, a view setting that leaves the
-/// document alone, is not saved, and starts at None on each entry to Read Mode.
+/// document alone, starts at None and is kept between documents and runs as a preference.
 #[test]
 fn reading_page_color_is_a_transient_view_setting() {
     use crate::cmd::view::ReadPageColor;
@@ -6572,18 +6747,46 @@ fn reading_page_color_is_a_transient_view_setting() {
     assert_eq!(s.view.read_page_color, ReadPageColor::None);
     assert_eq!(s.run("view.readPageColor", &json!({"value": "sepia"})).unwrap(), json!({"pageColor": "sepia"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Sepia);
     run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     for bad in [json!({"value": "black"}), json!({"value": 1}), json!({})] {
         assert!(s.run("view.readPageColor", &bad).is_err(), "{bad}");
     }
     assert_eq!(s.view.read_page_color, ReadPageColor::Inverse, "rejected values keep the color");
+    assert_eq!(s.prefs.read_page_color, ReadPageColor::Inverse);
     assert!(serde_json::to_value(&s.view).unwrap().get("readPageColor").is_none());
     assert_eq!(s.doc, original);
     assert_eq!(s.dirty, dirty);
+    // The color stays for the next entry to Read Mode, while the other reading controls reset.
+    run(&mut s, "view.readTextSize", json!({"value": 150}));
     run(&mut s, "view.printLayout", json!({}));
     run(&mut s, "view.readMode", json!({}));
-    assert_eq!(s.view.read_page_color, ReadPageColor::None);
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    assert_eq!(s.view.read_zoom, 1.0);
+}
+
+#[test]
+fn reading_page_color_follows_saved_prefs_and_new_documents() {
+    use crate::cmd::view::ReadPageColor;
+    let mut s = s();
+    s.prefs.read_page_color = ReadPageColor::Sepia;
+    run(&mut s, "view.readMode", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    let first = s.document_id();
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
+    s.activate(first).unwrap();
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    run(&mut s, "file.open", json!({"path": "reading-color.docx", "data": ""}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    s.view.read_page_color = ReadPageColor::None;
+    s.set_document(wordcraft_doc::Document::new());
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
 }
 
 /// File › Options › Advanced › Numeral: the display mode for digits (display only).
@@ -7089,7 +7292,7 @@ fn deleting_a_table_style_from_manage_styles_uses_table_style_deletion() {
     assert_eq!((r["deleted"][0].as_str(), r["restyled"].as_u64()), (Some("Base"), Some(1)));
     assert_eq!(s.doc.table(StoryRef::Body, &tp).unwrap().props.style.as_deref(), Some("TableGrid"));
     assert_eq!(s.doc.styles.table_style("Child").unwrap().parts.header_fill, Some(Rgb(0xC0, 0, 0)), "the child keeps its look");
-    for st in s.doc.styles.styles.iter_mut() {
+    for st in Arc::make_mut(&mut s.doc.styles).styles.iter_mut() {
         st.builtin = false;
     }
     assert!(s.run("styles.delete", &json!({"style": "Table Grid"})).is_err());
@@ -7234,7 +7437,7 @@ fn delete_table_style_falls_back_and_undoes() {
 fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
-    for st in s.doc.styles.styles.iter_mut() {
+    for st in Arc::make_mut(&mut s.doc.styles).styles.iter_mut() {
         st.builtin = false;
     }
     for name in ["Table Grid", "Normal Table", "TableGrid"] {
@@ -7846,7 +8049,7 @@ fn list_buttons_follow_the_paragraphs_own_level() {
     // A bulleted list whose second level is numbered: at level 2 the paragraph is numbered.
     let num = s.doc.para_at(&s.sel.focus).unwrap().props.numbering.unwrap().num;
     let numbered = wordcraft_doc::numbering::Level { text: "%2.".into(), ..Default::default() };
-    s.doc.numbering.nums.iter_mut().find(|n| n.id == num).unwrap().level_overrides.push((1, numbered));
+    Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|n| n.id == num).unwrap().level_overrides.push((1, numbered));
     run(&mut s, "para.listLevel", json!({"level": 1}));
     assert_eq!(state(&s), ListButtons { bullets: false, numbering: true, multilevel: false });
     run(&mut s, "para.numbering", json!({}));
@@ -8639,7 +8842,7 @@ const PORTUGUESE_TEST_AFF: &str =
     "SET UTF-8\nFLAG UTF-8\nFORBIDDENWORD F\nTRY aeiousrntmdlcpvgqbzfhjxçãõáéíóúâêô\nMAP 2\nMAP aáã\nMAP eé\nREP 1\nREP seje seja\n";
 const PORTUGUESE_TEST_DIC: &str = "11\nsaudade\ncoração\ne\nele\ndisse\nnão\né\nque\nseja\nfrequencia/F\nmuito\n";
 
-/// #1063: File › Options › Proofing › Dictionaries folder. A folder of Hunspell files is saved,
+/// #1063: File › Options › Language › Dictionaries folder. A folder of Hunspell files is saved,
 /// searched first and reported per language; a missing folder or a relative path is refused and
 /// changes nothing. The folder holds the same test dictionaries the other tests install, so tests
 /// running meanwhile see the same words; it stays set for the rest of the run for that reason.
@@ -9233,7 +9436,7 @@ fn default_proofing_language_survives_a_restart() {
     assert_eq!(second.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
 
     let mut english = wordcraft_doc::Document::from_text("English document");
-    english.styles.default_chr.lang = Some("en-GB".into());
+    Arc::make_mut(&mut english.styles).default_chr.lang = Some("en-GB".into());
     let bytes = crate::io::save_bytes("english.docx", &english).unwrap();
     let data = crate::cmd::insert::base64_encode(&bytes);
     run(&mut second, "file.open", json!({"path": "english.docx", "data": data}));
@@ -9876,7 +10079,7 @@ fn ordinals_and_untagged_text_sort_and_sum_as_numbers() {
 
     let mut s = s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     run(&mut s, "insert.table", json!({"rows": 3, "cols": 1}));
     run(&mut s, "text.insert", json!({"text": "3,50"}));
     run(&mut s, "text.tab", json!({}));
@@ -10539,8 +10742,14 @@ fn inspect_document_hidden_text_in_every_story_and_from_styles() {
     run(&mut s, "insert.footer", json!({"text": "f"}));
     s.sel = crate::Selection::caret(Pos::body(0, 0));
     let hidden = CharProps { hidden: Some(true), ..Default::default() };
-    s.doc.styles.upsert(Style { id: "HideC".into(), name: "Hide C".into(), kind: StyleKind::Character, chr: hidden.clone(), ..Default::default() });
-    s.doc.styles.upsert(Style {
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
+        id: "HideC".into(),
+        name: "Hide C".into(),
+        kind: StyleKind::Character,
+        chr: hidden.clone(),
+        ..Default::default()
+    });
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
         id: "HideP".into(),
         name: "Hide P".into(),
         kind: StyleKind::Paragraph,
@@ -10651,7 +10860,7 @@ fn inspect_document_removes_text_hidden_by_document_defaults() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Paragraph, para_block};
     let mut s = s();
-    s.doc.styles.default_chr.hidden = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.hidden = Some(true);
     s.doc.body = vec![
         para_block(Paragraph::with_text("hide-default", CharProps::default())),
         para_block(Paragraph::with_text("keep-default", CharProps { hidden: Some(false), ..Default::default() })),
@@ -10694,7 +10903,7 @@ fn inspect_document_keeps_content_control_markers() {
 fn inspect_document_lists_tables_whose_style_hides_text() {
     use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
     let mut s = s();
-    s.doc.styles.upsert(Style {
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
         id: "HideHeader".into(),
         name: "Hide Header".into(),
         kind: StyleKind::Table,
@@ -11288,8 +11497,8 @@ fn toc_keeps_direct_number_tabs() {
     d.last_section.page_w = 220.0;
     d.last_section.margin_left = 20.0;
     d.last_section.margin_right = 20.0;
-    d.styles.get_mut("TOC2").unwrap().para.tabs = Some(vec![right]);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    Arc::make_mut(&mut d.styles).get_mut("TOC2").unwrap().para.tabs = Some(vec![right]);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
         p.props.style = Some("TOCHeading".into());
@@ -11591,11 +11800,11 @@ fn style_set_keeps_imported_styles_latent_styles_and_defaults() {
         body.chr.size = Some(20.0);
         body.chr.color = Some(TextColor::Rgb(Rgb(0xFF, 0, 0)));
         let grid = Style { id: "GridTable4".into(), name: "Grid Table 4".into(), kind: StyleKind::Table, builtin: true, ..Default::default() };
-        s.doc.styles.styles.push(body.clone());
-        s.doc.styles.styles.push(grid.clone());
-        s.doc.styles.latent_styles = Some("<w:latentStyles/>".into());
-        s.doc.styles.default_chr.lang = Some("de-DE".into());
-        s.doc.styles.default_chr.size = Some(11.0);
+        Arc::make_mut(&mut s.doc.styles).styles.push(body.clone());
+        Arc::make_mut(&mut s.doc.styles).styles.push(grid.clone());
+        Arc::make_mut(&mut s.doc.styles).latent_styles = Some("<w:latentStyles/>".into());
+        Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some("de-DE".into());
+        Arc::make_mut(&mut s.doc.styles).default_chr.size = Some(11.0);
         run(&mut s, "design.styleSet", json!({ "name": name }));
         assert_eq!(s.doc.styles.get("BodyText"), Some(&body), "{name}: BodyText");
         assert_eq!(s.doc.styles.get("GridTable4"), Some(&grid), "{name}: GridTable4");
@@ -11665,8 +11874,8 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Style, StyleKind, styles::TablePart};
     let mut s = s();
-    s.doc.styles.default_chr.size = None;
-    s.doc.styles.default_chr.size_cs = Some(10.0);
+    Arc::make_mut(&mut s.doc.styles).default_chr.size = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.size_cs = Some(10.0);
     let mut ch = Style { id: "Big".into(), name: "Big".into(), kind: StyleKind::Character, ..Default::default() };
     ch.chr.size = Some(20.0);
     ch.chr.size_cs = Some(22.0);
@@ -11675,7 +11884,7 @@ fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
     parts.header_chr.size = Some(14.0);
     parts.regions.entry(TablePart::Band2Horz).or_default().chr.size = Some(8.0);
     tb.table = Some(parts);
-    s.doc.styles.styles.extend([ch, tb]);
+    Arc::make_mut(&mut s.doc.styles).styles.extend([ch, tb]);
     run(&mut s, "design.scaleFontSizes", json!({"delta": 2}));
     let st = &s.doc.styles;
     assert_eq!(st.default_chr.size, Some(13.0), "unset default is 11 pt, made explicit");
@@ -11837,7 +12046,7 @@ fn alt_chunks_open_in_place_as_word_brings_them_in() {
 fn text_from_file_brings_the_files_pictures() {
     let dir = scratch_dir("text-from-file-pictures");
     let mut src = Session::new(wordcraft_doc::Document::new());
-    let list = src.doc.numbering.add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    let list = Arc::make_mut(&mut src.doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
     // A list item, then a paragraph (a single paragraph would take the caret's formatting).
     src.doc.split_paragraph(&Pos::body(0, 0)).unwrap();
     src.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering =
@@ -11852,7 +12061,7 @@ fn text_from_file_brings_the_files_pictures() {
     let mut s = s();
     // A picture and a list of our own first, so the file's key and list id would point at ours.
     let ours = s.doc.add_media(vec![9, 9, 9], "png");
-    let our_list = s.doc.numbering.add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    let our_list = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
     run(&mut s, "insert.textFromFile", json!({"path": path.to_string_lossy()}));
     let _ = std::fs::remove_dir_all(&dir);
     let shown: Vec<String> = s
