@@ -1,5 +1,7 @@
 use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_session};
 use super::{Arc, Document, Session};
+use wordcraft_doc::Pos;
+use wordcraft_doc::math_edit::MathPos;
 
 impl Session {
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
@@ -15,6 +17,7 @@ impl Session {
             sel: self.sel.clone(),
             pending: self.pending.clone(),
             column: self.column.clone(),
+            math: self.math_caret(),
         }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
@@ -29,7 +32,17 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
+        self.push_step(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None, math: None });
+    }
+
+    /// [`Self::push_undo`] for an equation being edited: Undo puts its caret back at `pos`.
+    pub fn push_math_undo(&mut self, label: &str, doc: Document, sel: Selection, pos: MathPos) {
+        let math = self.math.as_ref().map(|m| (m.at.clone(), pos));
+        self.push_step(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None, math });
+    }
+
+    fn push_step(&mut self, step: Undo) {
+        self.history.push(Arc::new(step));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -190,10 +203,12 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            math: self.math_caret(),
         };
         self.redo.push(Arc::new(cur));
         // Undo swaps the whole body back: a composition belongs to the text it showed.
         self.note_body_replaced();
+        self.restore_math_caret(u.math);
         self.refresh_math_session();
         self.touch();
         true
@@ -216,12 +231,30 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            math: self.math_caret(),
         };
         self.history.push(Arc::new(cur));
         self.note_body_replaced();
+        self.restore_math_caret(u.math);
         self.refresh_math_session();
         self.touch();
         true
+    }
+
+    fn math_caret(&self) -> Option<(Pos, MathPos)> {
+        self.math.as_ref().map(|m| (m.at.clone(), m.pos.clone()))
+    }
+
+    /// Puts the equation caret where the restored step had it, when the same equation is open.
+    fn restore_math_caret(&mut self, step: Option<(Pos, MathPos)>) {
+        let Some((at, pos)) = step else { return };
+        if self.math.as_ref().is_none_or(|m| m.at != at) {
+            return;
+        }
+        let Some(nodes) = self.equation_nodes(&at) else { return };
+        if let Some(m) = self.math.as_mut() {
+            m.pos = wordcraft_doc::math_edit::clamp(&nodes, &pos);
+        }
     }
 
     /// An equation's editing session cannot ride across Undo/Redo: the equation tree, or the

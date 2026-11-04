@@ -377,8 +377,9 @@ impl Session {
             self.hf_return = Some(sel_before.clone());
         }
         // A selection command that moves the insertion point ends the typing group, like
-        // caret movement: typing, Select, typing are two undo steps (#419).
-        if !spec.mutates && self.sel != *sel_before {
+        // caret movement: typing, Select, typing are two undo steps (#419). So does a move of
+        // the equation caret, which leaves `sel` on the equation.
+        if !spec.mutates && (self.sel != *sel_before || self.current_ime_caret_state() != ime_caret_before) {
             self.typing_open = false;
         }
         if spec.mutates && !no_op && !matches!(id, "edit.undo" | "edit.redo") {
