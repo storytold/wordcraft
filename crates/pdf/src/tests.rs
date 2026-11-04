@@ -78,7 +78,7 @@ fn sample() -> Document {
     p.insert_text(n, " back to top", &CharProps { link: Some("#intro".into()), italic: Some(true), ..Default::default() }).unwrap();
     b.push(para_block(p));
     b.push(para_block(Paragraph::with_text("Details", CharProps::default()).styled("Heading2")));
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     for t in ["alpha item", "beta item"] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(NumRef { num: list, level: 0 });
@@ -310,7 +310,7 @@ fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
 fn hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     let mut d = Document::new();
     // Hidden text both directly and through a character style.
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Secret".into(),
         name: "Secret".into(),
         kind: wordcraft_doc::StyleKind::Character,
@@ -421,7 +421,7 @@ fn table_style_hidden_heading_text_stays_out_of_bookmarks_and_tags() {
     // Hidden by the table style's header row, so only the layout's resolution (table conditional
     // formatting under the runs' own) says the text is hidden.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "SecretHeader".into(),
         name: "Secret Header".into(),
         kind: wordcraft_doc::StyleKind::Table,
@@ -1343,6 +1343,7 @@ fn metafile_text_records_are_drawn_as_text() {
 
 /// #455: a link to a bookmark after a page break inside its paragraph goes to the page the
 /// bookmark is on, not the paragraph's first page.
+/// A bookmark after a page break targets its laid-out start, independent of paragraph origin.
 #[test]
 fn bookmark_destination_is_the_page_of_its_start() {
     let mut d = Document::new();
@@ -1360,7 +1361,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         doc: &d,
         lay: &lay,
         opts: &PdfOptions::default(),
-        out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
+        out_index: pages.iter().enumerate().map(|(o, p)| (*p, (o, Fit::of(&lay.pages[*p], None)))).collect(),
         fonts: HashMap::new(),
         font_error: None,
         outlined: &outlined,
@@ -1391,6 +1392,35 @@ fn bookmark_destination_is_the_page_of_its_start() {
 
     // Whitespace in ISO date string is parsed successfully
     assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
+}
+
+#[test]
+fn only_web_and_mail_links_become_uri_actions() {
+    // A script, file, data or UNC target exports as plain text, as in the other exporters (#3717).
+    let links = [
+        ("web", "https://example.com/ok"),
+        ("mail", "mailto:a@example.com"),
+        ("script", "javascript:alert(1)"),
+        ("file", "file:///etc/passwd"),
+        ("data", "data:text/html,x"),
+        ("unc", r"\\host\share"),
+    ];
+    let mut p = Paragraph::with_text("Links:", CharProps::default());
+    for (text, link) in links {
+        let n = p.len();
+        p.insert_text(n, &format!(" {text}"), &CharProps { link: Some(link.into()), ..Default::default() }).unwrap();
+    }
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    // `/URI (target)` per link (an action also says `/S /URI`).
+    assert_eq!(raw.matches("/URI (").count() + raw.matches("/URI(").count(), 2);
+    assert!(raw.contains("example.com/ok") && raw.contains("a@example.com"));
+    for bad in ["javascript", "passwd", "text/html", "share"] {
+        assert!(!raw.contains(bad), "{bad}");
+    }
+    let all = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(all.contains("Links: web mail script file data unc"), "{all:?}");
 }
 
 #[test]
@@ -1586,7 +1616,7 @@ fn all_caps_and_small_caps_text_extracts_as_displayed() {
     // (as Word's PDFs do), and later text without caps keeps its own case: a capital glyph
     // first drawn for a lowercase letter must not make every later capital read as lowercase.
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
@@ -1623,14 +1653,14 @@ fn caps_list_labels_extract_as_displayed() {
     // #1473: a lowercase-letter list label in an All Caps paragraph is drawn with capital glyphs;
     // it reads as those capitals, and a later plain capital A still reads as "A".
     let mut d = Document::new();
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "CapsPara".into(),
         name: "Caps Para".into(),
         kind: wordcraft_doc::StyleKind::Paragraph,
         chr: CharProps { caps: Some(true), ..Default::default() },
         ..Default::default()
     });
-    let list = d.numbering.add_list(ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let mut item = Paragraph::with_text("item", CharProps::default()).styled("CapsPara");
     item.props.numbering = Some(NumRef { num: list, level: 1 });
     d.body = vec![para_block(item), para_block(Paragraph::with_text("Plain Apple.", CharProps::default()))];
@@ -2030,7 +2060,7 @@ fn metadata_language_overrides_and_fallbacks_are_preserved() {
         ..Default::default()
     };
     for language in [Some("es-CR"), Some("ja"), Some(""), Some("日本語"), None] {
-        d.styles.default_chr.lang = language.map(str::to_owned);
+        Arc::make_mut(&mut d.styles).default_chr.lang = language.map(str::to_owned);
         let bytes = export(&d, &opts).unwrap();
         let raw = String::from_utf8_lossy(&bytes);
         let pdf = hayro_syntax::Pdf::new(bytes.clone()).unwrap();
@@ -2428,17 +2458,124 @@ fn borders_are_dashed_with_words_patterns() {
     assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
 }
 
+/// Exported text remains selectable; copies repeat complete padded sheet plans.
+#[test]
+fn imposed_pdf_keeps_text_sheet_geometry_and_copy_boundaries() {
+    use crate::imposition::Imposition;
+    let d = Document::from_text("PAGEONE\u{c}PAGETWO\u{c}PAGETHREE\u{c}PAGEFOUR\u{c}PAGEFIVE");
+    for (mode, expected) in [
+        (Imposition::NUp(2), vec!["PAGEONEPAGETWO", "PAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::NUp(4), vec!["PAGEONEPAGETWOPAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::Booklet { reverse: false }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFOURPAGEFIVE"]),
+        (Imposition::Booklet { reverse: true }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFIVEPAGEFOUR"]),
+    ] {
+        for collate in [true, false] {
+            let opts = PdfOptions {
+                imposition: mode,
+                sheet_copies: 2,
+                sheet_collate: collate,
+                tagged: false,
+                paper: Some((612.0, 792.0)),
+                ..Default::default()
+            };
+            let bytes = export(&d, &opts).unwrap();
+            let actual: Vec<_> = extract_text(&bytes).iter().map(|s| s.split_whitespace().collect::<String>()).collect();
+            let want: Vec<_> = if collate {
+                expected.iter().chain(expected.iter()).copied().collect()
+            } else if matches!(mode, Imposition::Booklet { .. }) {
+                expected.chunks(2).flat_map(|pair| pair.iter().chain(pair.iter())).copied().collect()
+            } else {
+                expected.iter().flat_map(|p| [*p, *p]).collect()
+            };
+            assert_eq!(actual, want, "{mode:?}, collate={collate}");
+            let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+            assert_eq!(pdf.pages().len(), want.len());
+        }
+    }
+}
+
+/// Every supported grid preserves chosen page order and stays within the sheet.
+#[test]
+fn imposed_grids_are_bounded_and_invalid_modes_fail() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("a\u{c}b\u{c}c\u{c}d\u{c}e");
+    let lay = layout(&doc, &mut Default::default(), &Default::default());
+    for n in [2, 4, 6, 9, 16] {
+        let sheets = Imposition::NUp(n).sheets(&lay, &[4, 1, 3, 0, 2], Some((595.0, 842.0))).unwrap();
+        assert_eq!(sheets.len(), 5usize.div_ceil(n as usize));
+        assert_eq!(sheets.iter().flat_map(|s| &s.slots).map(|s| s.page).collect::<Vec<_>>(), [4, 1, 3, 0, 2]);
+        for sheet in sheets {
+            for slot in sheet.slots {
+                assert!(slot.x >= 0.0 && slot.y >= 0.0 && slot.x + slot.width <= sheet.width + 0.01 && slot.y + slot.height <= sheet.height + 0.01);
+            }
+        }
+    }
+    for n in [0, 1, 3, 255] {
+        assert!(Imposition::NUp(n).sheets(&lay, &[0], None).is_err());
+    }
+    assert!(Imposition::NUp(2).sheets(&lay, &[usize::MAX], None).is_err());
+    for paper in [(f32::NAN, 3.0), (0.0, 4.0), (1.0, f32::INFINITY), (20000.0, 2.0)] {
+        assert!(Imposition::NUp(2).sheets(&lay, &[0], Some(paper)).is_err());
+    }
+}
+
+/// A one-page booklet retains its blank back, and tags remain valid on multi-page sheet sides.
+#[test]
+fn imposed_tagged_pdf_and_blank_booklet_backs_are_valid() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("Front cover");
+    let bytes = export(&doc, &PdfOptions { imposition: Imposition::Booklet { reverse: false }, ..Default::default() }).unwrap();
+    assert_eq!(extract_text(&bytes), ["Front cover".to_owned(), String::new()]);
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 2);
+    for mode in [Imposition::NUp(2), Imposition::NUp(16), Imposition::Booklet { reverse: false }] {
+        let bytes = export(&sample(), &PdfOptions { imposition: mode, ..Default::default() }).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("/StructTreeRoot"));
+        assert!(squash(&extract_text(&bytes).concat()).contains("Second page"));
+    }
+}
+
+/// Internal links and heading outlines point to physical sheet pages after imposition.
+#[test]
+fn imposed_links_and_outlines_target_physical_sheets() {
+    use crate::imposition::Imposition;
+    use hayro_syntax::object::{Array, Dict};
+    let bytes = export(&sample(), &PdfOptions { imposition: Imposition::NUp(2), ..Default::default() }).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 1);
+    let physical = pdf.pages()[0].raw();
+    let annotations = physical.get::<Array>(b"Annots").unwrap();
+    let mut internal = 0;
+    for annotation in annotations.iter::<Dict>() {
+        if let Some(dest) = annotation.get::<Array>(b"Dest") {
+            assert_eq!(dest.raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+            internal += 1;
+        }
+    }
+    assert!(internal > 0);
+    let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let mut entry = root.get::<Dict>(b"Outlines").unwrap().get::<Dict>(b"First");
+    let mut headings = 0;
+    while let Some(e) = entry {
+        assert_eq!(e.get::<Array>(b"Dest").unwrap().raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+        headings += 1;
+        entry = e.get::<Dict>(b"Next");
+    }
+    assert!(headings >= 2);
+}
+
 #[test]
 fn only_safe_link_targets_become_annotations() {
     use hayro_syntax::object::{Array, Dict, String as PdfString};
 
     let mut d = Document::new();
-    d.body = ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd"]
-        .into_iter()
-        .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
-        .collect();
+    d.body =
+        ["https://example.com/", "mailto:ada@example.com", "javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", r"\\server\share\f.doc"]
+            .into_iter()
+            .map(|url| para_block(Paragraph::with_text("Click here", CharProps { link: Some(url.into()), ..Default::default() })))
+            .collect();
     let bytes = export(&d, &PdfOptions::default()).unwrap();
-    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 4, "unlinked text stays");
+    assert_eq!(squash(&extract_text(&bytes)[0]).matches("Click here").count(), 6, "unlinked text stays");
     let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
     let uris: Vec<String> = pdf.pages()[0]
         .raw()
