@@ -11133,6 +11133,42 @@ fn vertical_align_command_sets_justified() {
     }
 }
 
+/// Hangul documents open by extension and, since their containers look like Word's, by what they
+/// hold: a `.hwp` named `.doc`, a `.hwpx` named `.docx` or with no extension at all.
+#[test]
+fn hangul_documents_open_by_name_and_content() {
+    let hwp = wordcraft_formats::hangul_samples::hwp(true);
+    let hwpx = wordcraft_formats::hangul_samples::hwpx();
+    for (name, bytes) in
+        [("a.hwp", &hwp), ("a.HWPX", &hwpx), ("renamed.doc", &hwp), ("renamed.docx", &hwpx), ("noext", &hwp), ("noext", &hwpx), ("a.hwpx", &hwp)]
+    {
+        let doc = crate::io::open_bytes(name, bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let text = doc.plain_text(StoryRef::Body);
+        assert!(text.contains("Hello bold") && text.contains("merged"), "{name}: {text}");
+    }
+    assert!(crate::io::OPEN_EXTS.contains(&"hwp") && crate::io::OPEN_EXTS.contains(&"hwpx"));
+    // A damaged Hangul file says what went wrong.
+    let err = crate::io::open_bytes("x.hwp", b"HWP Document File V3.00").unwrap_err();
+    assert!(err.contains("HWP"), "{err}");
+    // An encrypted package is refused, without a password prompt no password can satisfy.
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default();
+    z.start_file("mimetype", o).unwrap();
+    std::io::Write::write_all(&mut z, b"application/hwp+zip").unwrap();
+    z.start_file("META-INF/manifest.xml", o).unwrap();
+    std::io::Write::write_all(&mut z, b"<manifest><file-entry><encryption-data/></file-entry></manifest>").unwrap();
+    let err = crate::io::open_bytes("locked.hwpx", &z.finish().unwrap().into_inner()).unwrap_err();
+    assert!(err.contains("password") && !crate::io::needs_password(&err), "{err}");
+    // So is a password- or certificate-protected HWP file (FileHeader flags at +36).
+    for flag in [0x02u32, 0x100] {
+        let mut bytes = wordcraft_formats::hangul_samples::hwp(false);
+        let at = bytes.windows(17).position(|w| w == b"HWP Document File").unwrap();
+        bytes[at + 36..at + 40].copy_from_slice(&flag.to_le_bytes());
+        let err = crate::io::open_bytes("locked.hwp", &bytes).unwrap_err();
+        assert!(err.contains("password") && !crate::io::needs_password(&err), "{flag:#x}: {err}");
+    }
+}
+
 /// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
 /// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
 #[test]

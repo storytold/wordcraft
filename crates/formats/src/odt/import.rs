@@ -4,7 +4,7 @@ use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Columns, Cursor, Document, FBlock, Flow, HashMap, Meta, Para, Read, SectionProps, model, page_parts};
 
-pub(super) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
+pub(crate) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let f = z.by_name(name).ok()?;
     if f.size() > MAX_ENTRY {
         return None;
@@ -18,7 +18,7 @@ pub(super) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> 
 /// at most once, and only when the size it declares fits in what is left; the bytes inflated
 /// (even from an entry bigger than it declares) and every later copy are charged, so repeated
 /// references and lying entries can't go past the budget, and nothing is inflated after it.
-pub(super) struct Pictures {
+pub(crate) struct Pictures {
     /// Entry name → its bytes (`None`: missing, unreadable or over the budget; not retried).
     seen: HashMap<String, Option<Vec<u8>>>,
     /// Bytes still allowed.
@@ -26,12 +26,12 @@ pub(super) struct Pictures {
 }
 
 impl Pictures {
-    pub(super) fn new(budget: u64) -> Self {
+    pub(crate) fn new(budget: u64) -> Self {
         Pictures { seen: HashMap::new(), room: budget }
     }
 
     /// The bytes of entry `name`, or `None` when it can't be read or doesn't fit.
-    pub(super) fn get(&mut self, z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
+    pub(crate) fn get(&mut self, z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
         if let Some(hit) = self.seen.get(name) {
             let d = hit.as_ref().filter(|d| d.len() as u64 <= self.room)?;
             self.room = self.room.saturating_sub(d.len() as u64);

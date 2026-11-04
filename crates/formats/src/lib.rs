@@ -1,7 +1,7 @@
 //! WordCraft import/export for the "other" text formats: plain text, Markdown (CommonMark subset
 //! plus GFM tables and strikethrough), HTML (and MHT web archives, read-only), RTF, OpenDocument
-//! Text and LaTeX — and, read-only, spreadsheet cells for mail-merge recipient lists ([`sheet`]:
-//! .xlsx/.xlsm/.xls/.ods).
+//! Text and LaTeX — and, read-only, Hangul documents ([`hwp`]: HWP 5.0, [`hwpx`]: HWPX) and
+//! spreadsheet cells for mail-merge recipient lists ([`sheet`]: .xlsx/.xlsm/.xls/.ods).
 //!
 //! Every format maps to a small flow model ([`model::Flow`]: paragraphs with a kind, list
 //! membership, alignment and formatted spans; tables of cells), which [`model::to_doc`] and
@@ -11,7 +11,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod comments;
+mod hangul;
+#[doc(hidden)]
+pub mod hangul_samples;
 pub mod html;
+pub mod hwp;
+pub mod hwpx;
 pub mod latex;
 pub mod markdown;
 pub mod mathml;
@@ -29,7 +34,8 @@ use wordcraft_doc::Document;
 pub const MAX_ZIP_ENTRIES: u64 = 20_000;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "tex", "latex", "ltx"];
+pub const EXTENSIONS: &[&str] =
+    &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "mht", "mhtml", "rtf", "odt", "tex", "latex", "ltx", "hwp", "hwpx"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -42,6 +48,8 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "rtf" => rtf::import(bytes),
         "odt" => odt::import(bytes),
         "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
+        "hwp" => hwp::import(bytes),
+        "hwpx" => hwpx::import(bytes),
         _ => return None,
     };
     Some(r.map(|mut d| {
@@ -103,3 +111,5 @@ pub fn export_with(ext: &str, doc: &Document, opts: &ExportOptions) -> Option<Re
 mod test_log;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hangul;

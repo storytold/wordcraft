@@ -39,8 +39,9 @@ mod xml;
 
 use body::Body;
 use import::Pages;
+pub(crate) use import::{Pictures, read_entry};
 #[cfg(test)]
-use import::{Pictures, apply_page_layout, read_entry, read_meta};
+use import::{apply_page_layout, read_meta};
 pub use import::{import, parse};
 #[cfg(test)]
 use limits::MAX_XML_DEPTH;
@@ -50,7 +51,7 @@ use styles::Styles;
 use writer::x;
 #[cfg(test)]
 use xml::length;
-use xml::{Ev, events, get};
+pub(crate) use xml::{Attrs, Ev, events, get, local};
 
 mod page_parts;
 
