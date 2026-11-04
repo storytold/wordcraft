@@ -22,6 +22,8 @@ struct Breaker<'e> {
     first_left: f32,
     default_tab: f32,
     hanging_at: Option<f32>,
+    /// Where default tab stops are counted from (see [`next_tab`]).
+    tab_origin: f32,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
@@ -40,6 +42,9 @@ struct Breaker<'e> {
     rtl_para: bool,
     /// The document grid's line pitch, for paragraphs that snap to it.
     grid: Option<Grid>,
+    /// A line of only pictures is as tall as they are (an ODF document opened with that choice,
+    /// [`wordcraft_doc::odf_profile::OdfProfile::picture_lines_fit_pictures`]).
+    picture_lines_fit: bool,
     bidi: bool,
     est_h: f32,
     table_h: f32,
@@ -186,6 +191,7 @@ impl<'e> Breaker<'e> {
             first_left: rp.indent_left + rp.indent_first,
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
+            tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
@@ -193,6 +199,7 @@ impl<'e> Breaker<'e> {
             widths: word_widths(&pl.clusters, &pl.hyph_after),
             rtl_para: rp.bidi,
             grid: Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid),
+            picture_lines_fit: settings.odf.is_some_and(|o| o.picture_lines_fit_pictures),
             bidi: rp.bidi || !pl.bidi_levels.is_empty(),
             est_h,
             // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
@@ -295,7 +302,7 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
+                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
                 // The level's own tab stop after the number, when it comes first.
                 match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
                     Some(p) if p < t => p,
@@ -406,6 +413,9 @@ impl<'e> Breaker<'e> {
         let rp = &self.rp;
         let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let mut any = false;
+        // Only pictures on the line, and the document lays such lines out to fit them.
+        let mut only_pictures = self.picture_lines_fit;
+        let mut pictures = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
             // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
@@ -417,18 +427,23 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
-            // A picture sits on the baseline of its run: the line keeps that font's ascent
-            // and descent, and grows above the baseline to fit a taller picture.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
+            // A picture sits on the baseline of its run (raised or lowered by its position):
+            // the line keeps that font's ascent and descent, and grows to fit it.
+            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h + c.obj_d > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                    only_pictures = false;
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    (st.ascent, st.descent)
+                    pictures.asc = pictures.asc.max(c.obj_h);
+                    pictures.desc = pictures.desc.max(c.obj_d);
+                    // A lowered picture reaches below the baseline: the line's descent grows.
+                    (st.ascent, st.descent.max(c.obj_d))
                 }
             } else {
+                only_pictures = false;
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
                 let (a, d) = st.line_extent();
                 (a.max(c.obj_h + st.shift), d)
@@ -436,6 +451,10 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
+        }
+        if any && only_pictures && pictures.asc + pictures.desc > 0.0 {
+            pictures.obj_asc = pictures.asc;
+            return pictures;
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
@@ -730,7 +749,7 @@ impl Scan {
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
-        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
+        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
         if ptab.is_some() && stop.pos < self.x - 0.01 && has_content(pl, self.c0, j) {
