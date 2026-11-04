@@ -31,6 +31,7 @@ fn name(e: &El) -> String {
     local(&e.name).to_ascii_lowercase()
 }
 
+/// The element's child elements (text left out).
 fn els(e: &El) -> impl Iterator<Item = &El> {
     e.children.iter().filter_map(|c| match c {
         Item::El(e) => Some(e),
@@ -43,6 +44,7 @@ fn child<'a>(e: &'a El, n: &str) -> Option<&'a El> {
     els(e).find(|c| name(c) == n)
 }
 
+/// The child elements called `n` (local name, lowercase).
 fn children<'a>(e: &'a El, n: &'a str) -> impl Iterator<Item = &'a El> {
     els(e).filter(move |c| name(c) == n)
 }
@@ -102,6 +104,7 @@ fn run_text(e: &El, out: &mut String, depth: usize) {
     }
 }
 
+/// An `m:r` run: its text and the style its `m:rPr` gives; `None` when it holds no text.
 fn run(r: &El) -> Option<MRun> {
     let mut text = String::new();
     run_text(r, &mut text, 0);
@@ -122,6 +125,7 @@ fn run(r: &El) -> Option<MRun> {
     Some(out)
 }
 
+/// Read element `k` into `out`, counting it against `budget`.
 fn node(k: &El, depth: usize, budget: &mut usize, out: &mut Arg) {
     if depth > MAX_DEPTH || *budget == 0 {
         return;
