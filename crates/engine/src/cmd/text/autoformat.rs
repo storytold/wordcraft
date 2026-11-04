@@ -491,6 +491,44 @@ pub(super) fn apply_defined_style(s: &mut Session, at: &Pos, styled: wordcraft_d
         && let Some(before) = before
     {
         crate::cmd::fmt_revisions::record_para(s, &before, at)?;
+        track_own_inserted_runs(s, &before, at)?;
+    }
+    Ok(())
+}
+
+/// After [`apply_defined_style`] with Track Changes on: the recorder leaves text the author is
+/// inserting without a formatting change, so the direct formatting the style replaced on that
+/// text becomes part of the style change's revision. Reject then brings it back, and Accept
+/// leaves the text with the style's formatting only.
+fn track_own_inserted_runs(s: &mut Session, before: &wordcraft_doc::Paragraph, at: &Pos) -> Result<(), CmdError> {
+    let (revisions, author) = (&s.doc.revisions, &s.author);
+    let own = |rev: u32| revisions.get(rev as usize).is_some_and(|r| &r.author == author);
+    let Some(after) = s.doc.para(at.story, &at.path) else { return Ok(()) };
+    let Some(rev) = after.props.fmt_change.as_ref().map(|c| c.rev) else { return Ok(()) };
+    let (rb, ra): (Vec<_>, Vec<_>) = (before.run_ranges().collect(), after.run_ranges().collect());
+    let (mut runs, mut changed, mut i, mut j) = (Vec::new(), false, 0, 0);
+    while let (Some((x, pb)), Some((y, pa))) = (rb.get(i), ra.get(j)) {
+        let (from, to) = (x.start.max(y.start), x.end.min(y.end));
+        if from < to {
+            let mut props = (*pa).clone();
+            if pb.ins.is_some_and(own) && pa.fmt_change.is_none() && pb.formatting() != pa.formatting() {
+                props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, pb.formatting());
+                changed = true;
+            }
+            runs.push(wordcraft_doc::Run { len: to - from, props });
+        }
+        if x.end <= y.end {
+            i += 1;
+        }
+        if y.end <= x.end {
+            j += 1;
+        }
+    }
+    if changed {
+        let p = s.doc.para_mut(at.story, &at.path)?;
+        p.runs = runs;
+        p.normalize();
+        p.touch();
     }
     Ok(())
 }

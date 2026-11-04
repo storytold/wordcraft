@@ -1409,6 +1409,40 @@ fn a_tracked_define_styles_change_can_be_rejected() {
     let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
     assert_eq!(p.props.style, None);
     assert_eq!((p.props.space_before, p.run_ranges().next().and_then(|(_, c)| c.size)), (Some(18.0), Some(20.0)), "the direct formatting is back");
+
+    // Text the author typed with Track Changes on: the direct formatting the style replaces is part
+    // of the tracked change. Accepting it leaves only the style's formatting; accepting the
+    // insertion and then rejecting the style change brings back how the text looked.
+    let typed = || {
+        let mut s = self::s();
+        run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        typ(&mut s, "Results");
+        format_like_heading(&mut s, 0, 1);
+        let before = looks(&s, 0);
+        typ(&mut s, "\n");
+        assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.style.clone()).as_deref(), Some("Heading1"));
+        assert_eq!(wordcraft_doc::resolve::ResolvedChar { fmt: None, ..looks(&s, 0) }, before);
+        (s, before)
+    };
+    let (mut s, _) = typed();
+    run(&mut s, "review.acceptAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+    assert!(p.run_ranges().all(|(_, c)| c.font.is_none() && c.size.is_none() && c.color.is_none() && c.fmt_change.is_none()), "{:?}", p.runs);
+    let (mut s, before) = typed();
+    // Accept the insertions: the text and both paragraph marks are no longer inserted.
+    for block in 0..2 {
+        let p = s.doc.para_mut(StoryRef::Body, &Pos::body(block, 0).path).unwrap();
+        let len = p.len();
+        p.format(0, len, &|c| c.ins = None).unwrap();
+        p.mark.ins = None;
+        p.touch();
+    }
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let before = wordcraft_doc::resolve::ResolvedChar { ins: None, ..before };
+    assert_eq!((p.props.style.as_deref(), looks(&s, 0)), (None, before), "the look is back");
 }
 
 #[test]

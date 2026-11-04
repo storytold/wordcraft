@@ -287,7 +287,9 @@ no-break space, a figure space or an ideographic space (`autocorrect_finds_the_w
   ⌘Z right after brings back
   the Normal style and the direct formatting, and the Enter stays
   (`undo_right_after_define_styles_keeps_the_enter`); with Track Changes on, the change is a
-  tracked formatting change (`a_tracked_define_styles_change_can_be_rejected`).
+  tracked formatting change that also covers the direct formatting removed from text the author
+  typed with Track Changes on, so rejecting it brings back how the text looked
+  (`a_tracked_define_styles_change_can_be_rejected`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
