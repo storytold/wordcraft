@@ -259,14 +259,14 @@ pub fn text_table_lines(s: &Session) -> Result<Vec<String>, CmdError> {
     if a.path.parent() != b.path.parent() || a.story != b.story {
         return Err(CmdError::Failed("select paragraphs to convert".into()));
     }
+    let end = b.path.last() - usize::from(a.path.last() < b.path.last() && b.off == 0);
     // Section breaks cannot live in table cells. Refuse before conversion would discard their page setup.
-    if (a.path.last()..=b.path.last()).any(|i| s.doc.para(a.story, &a.path.with_last(i)).is_some_and(|p| p.section.is_some())) {
+    if (a.path.last()..=end).any(|i| s.doc.para(a.story, &a.path.with_last(i)).is_some_and(|p| p.section.is_some())) {
         return Err(CmdError::Failed("select paragraphs without section breaks to convert".into()));
     }
-    let lines: Vec<String> =
-        (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).map(|p| p.plain_text())).collect();
+    let lines: Vec<String> = (a.path.last()..=end).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).map(|p| p.plain_text())).collect();
     // Refuse rather than drop content: a table between the paragraphs would be removed with them.
-    if lines.len() != b.path.last() - a.path.last() + 1 {
+    if lines.len() != end - a.path.last() + 1 {
         return Err(CmdError::Failed("select only paragraphs to convert".into()));
     }
     Ok(lines)
@@ -384,7 +384,8 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // Checks the selection: only paragraphs, a table between them is refused.
     text_table_lines(s)?;
-    let paras: Vec<Paragraph> = (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).cloned()).collect();
+    let end = b.path.last() - usize::from(a.path.last() < b.path.last() && b.off == 0);
+    let paras: Vec<Paragraph> = (a.path.last()..=end).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).cloned()).collect();
     let (cells, cols) = text_table_paras(paras, sep, columns)?;
     // A table has at most 63 columns; a longer row would lose its last fields.
     if cols > wordcraft_doc::table::MAX_COLS {
@@ -408,7 +409,7 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     }
-    for i in (a.path.last()..=b.path.last()).rev() {
+    for i in (a.path.last()..=end).rev() {
         s.doc.remove_block(a.story, &a.path.with_last(i))?;
     }
     s.doc.insert_block(a.story, &a.path, Block::Table(t))?;

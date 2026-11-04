@@ -59,7 +59,7 @@ Set Proofing Language › Set As Default now persists in user preferences and ap
 
 Text context menus now include the existing formatting mini toolbar (#2959), including at a caret. Object, equation and whole-cell menus keep their own controls; Read Mode and the mini-toolbar preference suppress it. The toolbar reuses the selection toolbar's commands; additional controls from Word's toolbar are not added. Context-menu paste choices remain tracked by #2583 / PR #2599.
 
-Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
 
 ## Ranked
 

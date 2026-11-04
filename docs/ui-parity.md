@@ -68,7 +68,7 @@ Save Changes exposes the document-specific question as an alert-dialog name and 
 
 The Language dialog reads effective character formatting, including document defaults, paragraph styles and character styles. Accepting it unchanged keeps inherited language and no-proof choices (#2717); explicit direct formatting still takes precedence. Other proofing and Windows-specific reports remain separate.
 
-Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
 
 ## Find and Replace: regular expressions (#4177)
 

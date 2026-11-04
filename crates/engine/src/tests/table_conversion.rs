@@ -64,3 +64,31 @@ fn text_to_table_keeps_section_breaks_outside_the_selection() {
         assert!(matches!(s.doc.body[1].as_ref(), Block::Table(_)));
     }
 }
+
+/// A selection ending at the next paragraph's start does not include that paragraph's section break.
+#[test]
+fn text_to_table_excludes_offset_zero_section_endpoint() {
+    for reversed in [false, true] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "Alpha\tOne\nBeta\tTwo\nAfter"}));
+        s.doc.para_mut(StoryRef::Body, &Path::top(2)).unwrap().section =
+            Some(Box::new(SectionProps { page_w: 432.0, page_h: 648.0, ..Default::default() }));
+        let a = json!({"story": "body", "path": [0], "off": 0});
+        let b = json!({"story": "body", "path": [2], "off": 0});
+        run(&mut s, "select.range", if reversed { json!({"anchor": b, "focus": a}) } else { json!({"anchor": a, "focus": b}) });
+        let before = serde_json::to_value(&s.doc).unwrap();
+        run(&mut s, "table.fromText", json!({}));
+        assert_eq!(s.doc.body.len(), 2);
+        let table = s.doc.body[0].as_table().unwrap();
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[1].cells[1].blocks[0].as_para().unwrap().text, "Two");
+        let after = s.doc.body[1].as_para().unwrap();
+        assert_eq!(after.text, "After");
+        assert_eq!(after.section.as_ref().unwrap().page_w, 432.0);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        run(&mut s, "edit.redo", json!({}));
+        assert!(s.doc.body[0].as_table().is_some());
+        assert_eq!(s.doc.body[1].as_para().unwrap().section.as_ref().unwrap().page_w, 432.0);
+    }
+}

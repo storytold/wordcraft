@@ -139,7 +139,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-04: Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
+- 2026-11-04: Convert Text to Table refuses selections containing section breaks before changing the document (#5548). This preserves their page setup and Undo/Redo. Conversion within one section remains available; a selection ending at the next paragraph's start leaves that paragraph and its section break outside conversion. Native Word and desktop comparison remain untested; readiness estimates are unchanged.
 
 - 2026-10-30: Layout resource caps (#3867, #4385) and linear-time passes (#3866, #4392): repeated table-header rows are capped by item counts, a clipped group counting every nested member, the wrap cache by decoded pixels and the widths a linked text box chain lays out by their lines and items; PDF export, hit testing, tracked-change and clipped-table costs, and long endnote selections no longer grow quadratically. Synthetic regression tests only; no new Word comparison.
 - 2026-11-03: Proofing (CP4.3): craft-proof moves to craft-libs main with #589 and #590. French spelling suggestions offer the elided form first (`Jadore` → `J'adore`, before `J adore`), and Valencian text (`ca-ES-valencia`) is proofed with the `ca-valencia` pack instead of plain Catalan. Readiness unchanged.
