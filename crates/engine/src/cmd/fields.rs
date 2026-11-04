@@ -686,6 +686,33 @@ mod tests {
         assert_eq!(form_fields(&s), [("XXXXX".to_string(), FF.to_string())]);
     }
 
+    /// #5525: a separator-only insert during an active fill also reports no
+    /// change, and the fill survives: the next keystroke goes on inside the
+    /// result instead of starting over.
+    #[test]
+    fn separator_only_insert_during_a_fill_reports_no_change_and_keeps_the_fill() {
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "Ja");
+        let effect = crate::cmd::type_text_effect(&mut s, "\n").unwrap();
+        assert!(!effect.content_changed);
+        assert!(!effect.state_changed);
+        assert_eq!(form_fields(&s), [("Ja".to_string(), FF.to_string())]);
+        type_keys(&mut s, "n");
+        assert_eq!(form_fields(&s), [("Jan".to_string(), FF.to_string())]);
+    }
+
+    /// #5525: typing at the maximum length during an active fill adds nothing
+    /// and reports no change; the capped result is left alone.
+    #[test]
+    fn typing_at_max_length_during_a_fill_reports_no_change() {
+        let mut s = form_field_session(FF6);
+        type_keys(&mut s, "Janice");
+        let effect = crate::cmd::type_text_effect(&mut s, "x").unwrap();
+        assert!(!effect.content_changed);
+        assert!(!effect.state_changed);
+        assert_eq!(form_fields(&s), [("Janice".to_string(), FF6.to_string())]);
+    }
+
     /// #5525: restoring a version ends a fill: typing after the restore starts a
     /// new fill instead of appending to the replaced document's fill.
     #[test]
