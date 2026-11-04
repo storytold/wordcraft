@@ -646,8 +646,44 @@ mod tests {
         type_keys(&mut s, "Ja");
         s.run("fields.selected", &json!({})).unwrap();
         s.run("edit.undoHistory", &json!({})).unwrap();
+        s.run("edit.clipboardItems", &json!({})).unwrap();
         type_keys(&mut s, "ne");
         assert_eq!(form_fields(&s), [("Jane".to_string(), FF.to_string())]);
+    }
+
+    /// #5525: a multi-line insert over a selected field fills it instead of Enter
+    /// deleting the field: the lines run together into one result, as a plain
+    /// multi-line insert does, and the field keeps its `w:ffData`.
+    #[test]
+    fn paragraphs_insert_into_a_selected_form_field_keeps_the_field() {
+        let mut s = form_field_session(FF);
+        s.run("text.insert", &json!({"text": "Ja\nne", "paragraphs": true})).unwrap();
+        assert_eq!(form_fields(&s), [("Jane".to_string(), FF.to_string())]);
+        assert_eq!(s.doc.body[0].as_para().unwrap().plain_text(), "Name: Jane");
+        assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_some()).count(), 1);
+    }
+
+    /// #5525: an insert of only line or paragraph separators over a selected field
+    /// leaves its result alone instead of erasing it with an empty one.
+    #[test]
+    fn separator_only_insert_leaves_a_form_field_result_alone() {
+        let mut s = form_field_session(FF);
+        let depth = s.undo_depth();
+        s.run("text.insert", &json!({"text": "\n"})).unwrap();
+        assert_eq!(form_fields(&s), [("XXXXX".to_string(), FF.to_string())]);
+        assert_eq!(s.undo_depth(), depth, "nothing changed, so no undo step is kept");
+    }
+
+    /// #5525: restoring a version ends a fill: typing after the restore starts a
+    /// new fill instead of appending to the replaced document's fill.
+    #[test]
+    fn restoring_a_version_ends_a_form_field_fill() {
+        let mut s = form_field_session(FF);
+        type_keys(&mut s, "Ja");
+        s.run("file.versions", &json!({"save": "filled"})).unwrap();
+        s.run("file.versions", &json!({"restore": 0})).unwrap();
+        type_keys(&mut s, "ne");
+        assert_eq!(form_fields(&s), [("ne".to_string(), FF.to_string())]);
     }
 
     #[test]

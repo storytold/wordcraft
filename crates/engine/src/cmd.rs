@@ -519,6 +519,12 @@ fn fill_text_form_field(s: &mut Session, text: &str) -> Result<bool, CmdError> {
         }
         None => {
             let filled: String = typed.take(limit).collect();
+            // Separators are stripped from a result, so a separator-only insert has
+            // nothing to write: leave the existing result alone instead of erasing
+            // it with an empty one (#5525).
+            if filled.is_empty() {
+                return Ok(true);
+            }
             let n = filled.chars().count();
             (filled, n)
         }

@@ -34,8 +34,10 @@ impl Session {
     /// queries; any other edit, caret movement, selection, field navigation or undo ends
     /// it (#5525).
     fn end_form_fill_for_command(&mut self, id: &str, mutates: bool) {
-        if !matches!(id, "text.insert" | "text.backspace" | "text.delete" | "edit.copy" | "fields.selected" | "edit.undoHistory")
-            && (mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)))
+        if !matches!(
+            id,
+            "text.insert" | "text.backspace" | "text.delete" | "edit.copy" | "fields.selected" | "edit.undoHistory" | "edit.clipboardItems"
+        ) && (mutates || ["caret.", "select.", "fields.", "edit."].iter().any(|pre| id.starts_with(pre)))
         {
             self.form_fill = None;
         }
