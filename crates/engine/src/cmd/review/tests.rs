@@ -1121,3 +1121,29 @@ mod spelling_navigation_tests {
         }
     }
 }
+
+/// The context menu's Accept and Reject show only where they resolve a change: on tracked text,
+/// in a range that touches it, not on plain text (where they would jump to the next change).
+#[test]
+fn change_at_selection_finds_the_change_accept_would_resolve() {
+    use super::change_at_selection;
+    use crate::Selection;
+    use wordcraft_doc::Pos;
+    let mut s = Session::new(Document::new());
+    s.run("document.setText", &json!({"text": "plain text"})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.set", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
+    s.run("text.insert", &json!({"text": "NEW "})).unwrap();
+    // "plain NEW text": the insertion is offsets 5..9.
+    for (off, want) in [(0, false), (2, false), (7, true), (12, false)] {
+        s.sel = Selection::caret(Pos::body(0, off));
+        assert_eq!(change_at_selection(&s), want, "caret at {off}");
+    }
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 3) };
+    assert!(!change_at_selection(&s), "a range of plain text");
+    s.sel = Selection { anchor: Pos::body(0, 3), focus: Pos::body(0, 6) };
+    assert!(change_at_selection(&s), "a range reaching into the insertion");
+    s.sel = Selection::caret(Pos::body(0, 7));
+    s.run("review.accept", &json!({})).unwrap();
+    assert!(!change_at_selection(&s), "nothing left once accepted");
+}

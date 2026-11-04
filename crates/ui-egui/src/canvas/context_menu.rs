@@ -94,6 +94,12 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         ui.separator();
     }
+    // A tracked change at the caret or in the selection: resolve it from here, as in Word.
+    if wordcraft_engine::cmd::review::change_at_selection(&app.session) {
+        item(ui, app, "Accept Change", "review.accept", json!({}));
+        item(ui, app, "Reject Change", "review.reject", json!({}));
+        ui.separator();
+    }
     item(ui, app, "Cut", "edit.cut", json!({}));
     item(ui, app, "Copy", "edit.copy", json!({}));
     // How to paste, chosen before pasting (#2583): the ribbon's Paste menu, item for item. Paste
