@@ -164,7 +164,7 @@ fn the_list_paragraph_style_is_written() {
     p.runs = vec![wordcraft_doc::para::Run { len: 4, props: Default::default() }];
     p.props = ParaProps { style: Some("ListParagraph".into()), ..Default::default() };
     d.body = vec![para_block(p)];
-    if let Some(st) = d.styles.get_mut("ListParagraph") {
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).get_mut("ListParagraph") {
         st.para.contextual_spacing = Some(true);
         st.para.space_after = Some(3.0);
     }

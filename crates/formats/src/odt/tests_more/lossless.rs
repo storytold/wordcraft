@@ -400,7 +400,7 @@ fn edits_leave_kept_markup_well_formed() {
             }
         }
         let mut styled = d.clone();
-        if let Some(st) = styled.styles.styles.iter_mut().find(|s| s.id == "Normal") {
+        if let Some(st) = std::sync::Arc::make_mut(&mut styled.styles).styles.iter_mut().find(|s| s.id == "Normal") {
             st.chr.italic = Some(true);
         }
         edits.push(styled);

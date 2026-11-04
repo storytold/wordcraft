@@ -71,7 +71,7 @@ fn a_style_edited_in_wordcraft_is_written_as_edited() {
     );
     let mut d = import(&package(&content, Some(&styles))).unwrap();
     let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
-    if let Some(st) = d.styles.styles.iter_mut().find(|s| s.id == id) {
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == id) {
         st.chr.size = Some(20.0);
     }
     let saved = export(&d).unwrap();
@@ -129,7 +129,7 @@ fn unedited_style_definitions_are_written_as_read() {
     assert_eq!(s.matches("<text:notes-configuration text:note-class=\"footnote\"").count(), 1, "{s}");
     assert_eq!(s.matches(r#"<style:style style:name="Standard""#).count(), 1, "{s}");
     // A style changed in WordCraft: the definitions are WordCraft's.
-    if let Some(st) = d.styles.styles.iter_mut().find(|s| s.id == "Normal") {
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Normal") {
         st.chr.bold = Some(true);
     }
     let s = styles_of(&export(&d).unwrap());

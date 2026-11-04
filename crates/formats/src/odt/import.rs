@@ -3,6 +3,7 @@ use super::limits::{MAX_ENTRY, MAX_EXTRA_SPACES, MAX_SECTIONS};
 use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
 use super::{Columns, Cursor, Document, FBlock, Flow, HashMap, Meta, Para, Read, SectionProps, model, page_parts};
+use std::sync::Arc;
 use wordcraft_doc::odf_profile::OdfProfile;
 
 pub(super) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
@@ -208,7 +209,7 @@ fn custom_char_styles(blocks: &mut [FBlock], styles: &Styles, para_ids: &[String
 fn add_char_styles(doc: &mut Document, found: &[(String, String)], defs: &[(String, Option<String>, model::Fmt, [bool; 4])]) {
     for ((_, id), (name, parent, fmt, off)) in found.iter().zip(defs) {
         let based_on = parent.as_ref().and_then(|p| found.iter().find(|(o, _)| o == p).map(|(_, id)| id.clone())).filter(|b| b != id);
-        doc.styles.upsert(wordcraft_doc::styles::Style {
+        Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::styles::Style {
             id: id.clone(),
             name: name.clone(),
             kind: wordcraft_doc::styles::StyleKind::Character,
@@ -308,7 +309,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             chr: turned_off(model::char_props(&look.fmt), def.off),
             ..Default::default()
         };
-        doc.styles.upsert(style);
+        Arc::make_mut(&mut doc.styles).upsert(style);
     }
 }
 
@@ -343,7 +344,7 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
         model::Kind::Code => model::CODE_STYLE.into(),
         model::Kind::Normal | model::Kind::Rule => return,
     };
-    let Some(st) = doc.styles.get_mut(&id) else { return };
+    let Some(st) = Arc::make_mut(&mut doc.styles).get_mut(&id) else { return };
     st.chr = model::char_props(&look.fmt);
     let sp = &look.spacing;
     let p = &mut st.para;
@@ -390,13 +391,13 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
             level.style = Some(format!("Heading{}", i + 1));
         }
     }
-    let numbering = &mut doc.numbering;
+    let numbering = Arc::make_mut(&mut doc.numbering);
     let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
     numbering.abstracts.push(AbstractNum { id: aid, name: None, levels: out, ..Default::default() });
     let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
     numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
     for (i, on) in numbered.iter().enumerate() {
-        if *on && let Some(st) = doc.styles.get_mut(&format!("Heading{}", i + 1)) {
+        if *on && let Some(st) = Arc::make_mut(&mut doc.styles).get_mut(&format!("Heading{}", i + 1)) {
             st.para.numbering = Some(NumRef { num: nid, level: i as u8 });
         }
     }
@@ -938,16 +939,16 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;
     if font.is_some() {
-        doc.styles.default_chr.font = font;
+        Arc::make_mut(&mut doc.styles).default_chr.font = font;
     }
     if size.is_some() {
-        doc.styles.default_chr.size = size;
+        Arc::make_mut(&mut doc.styles).default_chr.size = size;
     }
     if let Some(c) = color {
-        doc.styles.default_chr.color = Some(wordcraft_doc::props::TextColor::Rgb(c));
+        Arc::make_mut(&mut doc.styles).default_chr.color = Some(wordcraft_doc::props::TextColor::Rgb(c));
     }
-    doc.styles.default_chr.kern = kern.then_some(1.0);
-    doc.styles.default_chr.overlay(&scripts);
+    Arc::make_mut(&mut doc.styles).default_chr.kern = kern.then_some(1.0);
+    Arc::make_mut(&mut doc.styles).default_chr.overlay(&scripts);
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }
@@ -968,7 +969,7 @@ pub fn import_with(bytes: &[u8], page: &SectionProps, profile: &OdfProfile) -> R
     if let Some((fmt, props)) = page_doc.notes[1] {
         (doc.settings.endnote_format, doc.settings.endnote_pr) = (fmt, props);
     }
-    let d = &mut doc.styles.default_para;
+    let d = &mut Arc::make_mut(&mut doc.styles).default_para;
     (d.space_before, d.space_after, d.line_spacing) = (spacing.before, spacing.after, spacing.line);
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     // Unstated, as the profile says (`widowControl`).
