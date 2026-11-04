@@ -95,7 +95,8 @@ fn adjust_right_indent_is_preserved() {
         z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
         assert!(xml.contains(r#"<w:adjustRightInd w:val="0""#), "explicit false was lost: {xml}");
         assert!(xml.contains("<w:adjustRightInd/>"), "explicit true was lost: {xml}");
-        let order = ["<w:adjustRightInd", "<w:snapToGrid", "<w:spacing", "<w:ind"].map(|tag| xml.find(tag).unwrap_or(usize::MAX));
+        let order = ["<w:adjustRightInd", "<w:snapToGrid", "<w:spacing", "<w:ind"]
+            .map(|tag| xml.find(tag).expect("paragraph property must be present"));
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "paragraph properties are out of schema order: {xml}");
         d = wordcraft_docx::read(&out).unwrap();
         assert_eq!(props(&d).iter().map(|p| p.adjust_right_indent).collect::<Vec<_>>(), [Some(false), Some(true), None]);
