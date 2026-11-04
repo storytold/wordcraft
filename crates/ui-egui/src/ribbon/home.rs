@@ -281,8 +281,9 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             mi(ui, app, &format!("{v}"), "para.lineSpacing", json!({"value": v}));
                         }
                         ui.separator();
-                        mi(ui, app, "Add Space Before Paragraph", "para.addSpaceBefore", json!({}));
-                        mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
+                        let (before, after) = wordcraft_engine::cmd::para::spacing_labels(&app.session);
+                        mi(ui, app, before, "para.addSpaceBefore", json!({}));
+                        mi(ui, app, after, "para.removeSpaceAfter", json!({}));
                         mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                     },
                 );

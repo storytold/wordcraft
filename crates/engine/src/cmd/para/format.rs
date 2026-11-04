@@ -16,6 +16,22 @@ pub(super) fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
     s.doc.styles.resolve_para(&props)
 }
 
+/// Every wording [`spacing_labels`] gives (add/remove before, add/remove after), for the
+/// missing-translation report.
+pub const SPACING_LABELS: [&str; 4] =
+    ["Add Space Before Paragraph", "Remove Space Before Paragraph", "Add Space After Paragraph", "Remove Space After Paragraph"];
+
+/// The Line Spacing menu's labels for `para.addSpaceBefore` and `para.removeSpaceAfter`. Both
+/// toggle, so as in Word each reads "Remove" while the caret's paragraph has that space and "Add"
+/// once it hasn't (#5175).
+pub fn spacing_labels(s: &Session) -> (&'static str, &'static str) {
+    let rp = cur(s);
+    let [add_before, remove_before, add_after, remove_after] = SPACING_LABELS;
+    let before = if rp.space_before > 0.0 { remove_before } else { add_before };
+    let after = if rp.space_after > 0.0 { remove_after } else { add_after };
+    (before, after)
+}
+
 pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
     let story = s.sel.focus.story;
     for path in crate::cmd::selected_paths(s) {
