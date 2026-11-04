@@ -322,11 +322,16 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
             let rel = matches!(wordcraft_doc::math::math_class(c), wordcraft_doc::math::MClass::Rel);
             if !style.nor && (c == ' ' || c == '\t' || rel) {
                 let mut changed = false;
-                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
+                let corrected = me::autocorrect(&mut math.nodes, &pos);
+                if let Some(p) = corrected.clone() {
                     pos = p;
                     changed = true;
                 }
-                if let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
+                // A space that finishes a `\name` only replaces it, as in Word: `\sqrt ` gives `√`
+                // to type the radicand after, not an empty radical (#4255).
+                if (c != ' ' || corrected.is_none())
+                    && let Some(p) = me::build_up(&mut math.nodes, &pos, latex)
+                {
                     pos = p;
                     changed = true;
                 }
@@ -335,6 +340,15 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                 }
                 if c == ' ' && changed {
                     continue;
+                }
+            } else if !style.nor && !latex && !c.is_alphanumeric() {
+                // Any other character that can't be part of a name ends it too: `\sqrt(` gives
+                // `√(`, and the `\` of a next name finishes the one before (`\alpha\beta`). Left
+                // as `\sqrt`, the backslash also stopped build-up (#4255). LaTeX input keeps its
+                // control words for its own parser (`\sqrt{2}`).
+                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
+                    pos = p;
+                    transformed = true;
                 }
             }
             pos = me::insert_text(&mut math.nodes, &pos, &c.to_string(), style);
