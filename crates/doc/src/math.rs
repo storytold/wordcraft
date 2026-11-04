@@ -488,27 +488,36 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    for (i, n) in a.iter().enumerate() {
-        lin_node(n, s, depth + 1);
-        // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
-        if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
-            let ends_bare = s.chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '.');
-            if ends_bare && a.get(i + 1).and_then(first_lin_char).is_some_and(|c| c.is_alphanumeric() || c == '.') {
-                s.push(' ');
-            }
+    let absorbs = |c: char| !crate::math_linear::is_boundary(c);
+    // Whether the last item ends in a bare operand the next item's first character would extend.
+    let mut open = false;
+    for n in a {
+        let mut piece = String::new();
+        lin_node(n, &mut piece, depth + 1);
+        // A bare trailing operand ends at a space: what follows is its own item.
+        if open && piece.chars().next().is_some_and(absorbs) {
+            s.push(' ');
         }
+        s.push_str(&piece);
+        open = ends_in_operand(n) && piece.chars().next_back().is_some_and(absorbs);
     }
 }
 
-/// The first character `n` is written with, when that is cheap to tell (letters and digits).
-fn first_lin_char(n: &MNode) -> Option<char> {
+/// Whether `n` is written ending in an operand the parser would extend (`1/2` then `x` reads `1/(2x)`).
+fn ends_in_operand(n: &MNode) -> bool {
     match n {
-        MNode::Run(r) => r.text.chars().next(),
-        MNode::Func { name, .. } => name.first().and_then(first_lin_char),
-        MNode::Script { kind, base, .. } if *kind != ScriptKind::Pre => base.first().and_then(first_lin_char),
-        MNode::Lim { e, .. } => e.first().and_then(first_lin_char),
-        MNode::Frac { num, .. } => num.first().and_then(first_lin_char),
-        _ => None,
+        MNode::Rad { deg, deg_hide, .. } => *deg_hide || deg.is_empty(),
+        MNode::Script { .. }
+        | MNode::Lim { .. }
+        | MNode::Frac { .. }
+        | MNode::Nary { .. }
+        | MNode::Func { .. }
+        | MNode::Bar { .. }
+        | MNode::BorderBox { .. }
+        | MNode::Boxed { .. }
+        | MNode::GroupChr { .. }
+        | MNode::Phant { .. } => true,
+        _ => false,
     }
 }
 
@@ -557,6 +566,18 @@ fn lin_script(a: &[MNode], s: &mut String, depth: usize) {
     lin_operand(a, s, depth);
 }
 
+/// A structure's trailing operand. A bare function name would take what follows as its argument.
+fn lin_trailing(e: &[MNode], s: &mut String, depth: usize) {
+    match e {
+        [MNode::Run(r)] if crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str()) => {
+            s.push('(');
+            s.push_str(&r.text);
+            s.push(')');
+        }
+        _ => lin_operand(e, s, depth),
+    }
+}
+
 fn lin_node(n: &MNode, s: &mut String, depth: usize) {
     match n {
         MNode::Run(r) => s.push_str(&r.text),
@@ -568,7 +589,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 FracKind::NoBar => '¦',
                 FracKind::Bar => '/',
             });
-            lin_operand(den, s, depth);
+            lin_trailing(den, s, depth);
         }
         MNode::Script { kind, base, sub, sup } => {
             if *kind == ScriptKind::Pre {
@@ -577,7 +598,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 s.push('^');
                 lin_script(sup, s, depth);
                 s.push('▒');
-                lin_operand(base, s, depth);
+                lin_trailing(base, s, depth);
                 return;
             }
             lin_operand(base, s, depth);
@@ -593,7 +614,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         MNode::Rad { deg, deg_hide, e } => {
             if *deg_hide || deg.is_empty() {
                 s.push('√');
-                lin_operand(e, s, depth);
+                lin_trailing(e, s, depth);
             } else {
                 s.push_str("√(");
                 lin_arg(deg, s, depth);
@@ -613,7 +634,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 lin_script(sup, s, depth);
             }
             s.push('▒');
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         MNode::Delim { beg, end, elems, .. } => {
             // A standard pair writes as itself; anything else uses explicit `├X … Y┤`.
@@ -645,7 +666,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         MNode::Func { name, e } => {
             lin_arg(name, s, depth);
             s.push('\u{2061}');
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         MNode::Lim { upper, e, lim } => {
             lin_operand(e, s, depth);
@@ -658,19 +679,19 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         }
         MNode::Bar { top, e } => {
             s.push(if *top { '¯' } else { '▁' });
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         MNode::BorderBox { e, .. } => {
             s.push('▭');
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         MNode::Boxed { e } => {
             s.push('□');
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         MNode::GroupChr { chr, e, .. } => {
             s.push(*chr);
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
         // A numbered equation (`E=mc^2#(1)`) is written as its one row.
         MNode::EqArr { rows } if rows.len() == 1 && rows.first().is_some_and(|r| has_number_mark(r)) => {
@@ -705,7 +726,7 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
         }
         MNode::Phant { e, .. } => {
             s.push('⟡');
-            lin_operand(e, s, depth);
+            lin_trailing(e, s, depth);
         }
     }
 }
@@ -1076,6 +1097,65 @@ mod tests {
         assert_eq!(to_linear(&[sc(ScriptKind::Sub, "x", "i", ""), run("y")]), "x_i y");
         // Nothing extra when the script already ends in a bracket or a symbol follows.
         assert_eq!(to_linear(&[sc(ScriptKind::Sub, "x", "i", ""), run("+")]), "x_i+");
+    }
+
+    #[test]
+    fn a_trailing_operand_keeps_the_item_after_it() {
+        // Discord report: `1/2` built, then `x^2` read back as 1/(2x^2).
+        let x2 = MNode::Script { kind: ScriptKind::Sup, base: vec![run("x")], sub: vec![], sup: vec![run("2")] };
+        let half = MNode::Frac { kind: FracKind::Bar, num: vec![run("1")], den: vec![run("2")] };
+        let sqrt2 = MNode::Rad { deg: vec![], deg_hide: true, e: vec![run("2")] };
+        let sin_x = MNode::Func { name: vec![MNode::Run(MRun::plain("sin"))], e: vec![run("x")] };
+        let sum = MNode::Nary { chr: '∑', sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e: vec![run("k")], lim_loc: None, grow: false };
+        let bar = MNode::Bar { top: true, e: vec![run("a")] };
+        let boxed = MNode::Boxed { e: vec![run("a")] };
+        let paren = MNode::Delim { beg: Some('('), end: Some(')'), sep: None, elems: vec![vec![run("x")]], grow: true, shp_match: false };
+        // A function name as a denominator: `1/sin x^2` would read as sin(x^2).
+        let sin_den = MNode::Frac { kind: FracKind::Bar, num: vec![run("1")], den: vec![MNode::Run(MRun::plain("sin"))] };
+        for n in [
+            vec![half.clone(), x2.clone()],
+            vec![half.clone(), run("x")],
+            vec![sqrt2.clone(), run("x")],
+            vec![sin_x, run("y")],
+            vec![sum.clone(), run("y")],
+            vec![bar.clone(), run("b")],
+            vec![boxed.clone(), run("b")],
+            // CodeRabbit on #4717: prefix structures and brackets after a fraction.
+            vec![half.clone(), sqrt2.clone()],
+            vec![half.clone(), bar],
+            vec![half.clone(), boxed],
+            vec![half.clone(), sum.clone()],
+            vec![half.clone(), paren],
+            vec![sin_den.clone(), x2.clone()],
+            vec![sin_den.clone()],
+        ] {
+            let lin = to_linear(&n);
+            assert_eq!(parse_linear(&lin), n, "{lin}");
+        }
+        // CodeRabbit on #4717: a bare function name as any trailing operand would take what follows.
+        let sin = || vec![MNode::Run(MRun::plain("sin"))];
+        for k in [
+            MNode::Rad { deg: vec![], deg_hide: true, e: sin() },
+            MNode::Bar { top: true, e: sin() },
+            MNode::BorderBox { hide: [false; 4], strike: [false; 4], e: sin() },
+            MNode::Boxed { e: sin() },
+            MNode::GroupChr { chr: '⏟', top: false, e: sin() },
+            MNode::Nary { chr: '∑', sub_hide: true, sup_hide: true, sub: vec![], sup: vec![], e: sin(), lim_loc: None, grow: false },
+            MNode::Func { name: vec![MNode::Run(MRun::plain("cos"))], e: sin() },
+            MNode::Script { kind: ScriptKind::Sup, base: vec![run("y")], sub: vec![], sup: sin() },
+            MNode::Lim { upper: false, e: vec![run("a")], lim: sin() },
+        ]
+        .into_iter()
+        // Phantoms and pre-scripts end in an operand too (review of fef571118).
+        .chain(["⟡x", "⟡(sin)", "_i^j▒x", "_i^j▒(sin)"].iter().flat_map(|t| parse_linear(t)))
+        {
+            for n in [vec![k.clone()], vec![k.clone(), x2.clone()], vec![k, run("y")]] {
+                let lin = to_linear(&n);
+                assert_eq!(parse_linear(&lin), n, "{lin}");
+            }
+        }
+        assert_eq!(to_linear(&[half.clone(), x2]), "1/2 x^2");
+        assert_eq!(to_linear(&[half, run("+")]), "1/2+");
     }
 
     #[test]
