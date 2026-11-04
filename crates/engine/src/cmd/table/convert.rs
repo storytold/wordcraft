@@ -387,6 +387,21 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     let end = b.path.last() - usize::from(a.path.last() < b.path.last() && b.off == 0);
     let paras: Vec<Paragraph> = (a.path.last()..=end).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).cloned()).collect();
     let (cells, cols) = text_table_paras(paras, sep, columns)?;
+    // Control markers cannot pair across cell stories. Check the proposed cells before
+    // replacing the source paragraphs, or balancing the new table would remove the form.
+    let controls_fit = cells.iter().flatten().all(|para| {
+        para.objects
+            .iter()
+            .try_fold(0usize, |depth, object| match object {
+                InlineObject::ControlStart { .. } => depth.checked_add(1),
+                InlineObject::ControlEnd => depth.checked_sub(1),
+                _ => Some(depth),
+            })
+            .is_some_and(|depth| depth == 0)
+    });
+    if !controls_fit {
+        return Err(CmdError::Failed("select text without content-control boundaries across table cells to convert".into()));
+    }
     // A table has at most 63 columns; a longer row would lose its last fields.
     if cols > wordcraft_doc::table::MAX_COLS {
         return Err(CmdError::Failed("a table can have at most 63 columns".into()));

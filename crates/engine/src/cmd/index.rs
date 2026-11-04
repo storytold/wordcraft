@@ -10,7 +10,7 @@ use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::{Block, Paragraph, Path, Pos, StoryRef};
 
-use super::references::{FieldCode, leader};
+use super::references::{FieldCode, field_arg, leader};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
@@ -44,11 +44,12 @@ fn xe_instr(s: &Session, v: &Value, main: &str) -> Result<String, CmdError> {
     let mut instr = if sub.is_empty() { format!("XE \"{main}\"") } else { format!("XE \"{main}:{sub}\"") };
     if let Some(see) = p::str(v, "crossReference").map(|t| clean(t, 200)).filter(|t| !t.is_empty()) {
         instr.push_str(&format!(" \\t \"{see}\""));
-    } else if let Some(bm) = p::str(v, "bookmark").filter(|b| !b.trim().is_empty()) {
+    } else if let Some(bm) = p::str(v, "bookmark").map(str::trim).filter(|b| !b.is_empty()) {
         if !s.doc.bookmarks().iter().any(|(n, _)| n == bm) {
             return Err(CmdError::Params(format!("no bookmark `{bm}`")));
         }
-        instr.push_str(&format!(" \\r {}", bm.trim()));
+        // A name read from a file may hold a space, a quote or a backslash.
+        instr.push_str(&format!(" \\r {}", field_arg(bm)));
     }
     if p::bool(v, "bold").unwrap_or(false) {
         instr.push_str(" \\b");
@@ -391,6 +392,36 @@ mod tests {
 
     fn index_lines(s: &Session) -> Vec<String> {
         s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)).map(|p| p.plain_text()).collect()
+    }
+
+    /// #3669: the bookmark is looked up trimmed, and a name with a space or a quote (one a file
+    /// can hold) is quoted in the XE field, so it reads back whole.
+    #[test]
+    fn mark_entry_trims_and_quotes_its_bookmark() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Intro text.\nMore text."));
+        s.run("select.text", &json!({"text": "Intro"})).unwrap();
+        s.run("insert.bookmark", &json!({"name": "Intro"})).unwrap();
+        let odd = "My \"Mark\" \\b";
+        let p = s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        p.insert_object(0, InlineObject::BookmarkStart { name: odd.into() }, &CharProps::default()).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.markEntry", &json!({"entry": "Alpha", "bookmark": " Intro "})).unwrap();
+        s.run("references.markEntry", &json!({"entry": "Beta", "bookmark": odd})).unwrap();
+        let mut instrs: Vec<String> = s
+            .doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .filter_map(|o| match o {
+                InlineObject::Field { instr, .. } if instr.starts_with("XE") => Some(instr.clone()),
+                _ => None,
+            })
+            .collect();
+        instrs.sort();
+        assert_eq!(instrs, vec![r#"XE "Alpha" \r Intro"#, r#"XE "Beta" \r "My \"Mark\" \\b""#]);
+        let beta = FieldCode::parse(&instrs[1]);
+        assert_eq!((beta.arg('r'), beta.has('b')), (Some(odd), false));
     }
 
     /// #402: Mark Entry writes XE switches (subentry, bold page, cross-reference, Mark All) and
