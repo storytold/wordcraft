@@ -81,6 +81,12 @@ fn click_events(app: &mut WordApp, pos: egui::Pos2, button: egui::PointerButton,
 /// Programmatic calls never open the Save prompt, so closing unsaved work must be explicit:
 /// save first, or pass `"force": true` (only a real boolean true counts) to discard it (#1268).
 pub(crate) fn close_refused(app: &WordApp, id: &str, params: &Value) -> Option<&'static str> {
+    // `file.close` closes only the drawn window when another window shows the same document:
+    // the document and its work stay open, so nothing is lost and nothing is refused (the
+    // interactive path asks nothing either) (#3274).
+    if app.closes_only_its_window(id, params) {
+        return None;
+    }
     // The document the command closes: `file.close` the shown one, `file.closeDocument` the one
     // its `id` names (the active one by default) (#3274).
     let target = match id {

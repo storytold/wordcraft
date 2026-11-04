@@ -533,6 +533,42 @@ fn closing_one_of_two_windows_on_a_document_asks_nothing() {
     assert!(a.quit_requested, "one prompt for the document");
 }
 
+/// #3274: a programmatic `file.close` on a document shown in two windows closes the window
+/// alone, as the window's own close does: the document and its work stay open, so nothing is
+/// lost and the control channel must not refuse it as unsaved work it would never lose.
+#[test]
+fn a_programmatic_close_of_one_of_two_windows_on_a_document_is_accepted() {
+    let ctx = backend();
+    let mut a = app("Kept");
+    let doc = a.session.document_id();
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 2);
+    assert!(a.session.dirty, "the document has unsaved work");
+
+    // The control channel's refusal: it must not stand in the way of a close that keeps the
+    // document open.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_none(), "closing a window alone loses nothing: {refused:?}");
+
+    // And the command itself runs, closing the window and leaving the document and its work.
+    let r = crate::control::handle(&mut a, &ctx, &crate::control::ControlRequest::new("engine.execute", json!({"command": "file.close"})).0);
+    let r = match r {
+        crate::control::Outcome::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
+    };
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.window_count(), 1, "the window closed");
+    assert_eq!(a.session.document_id(), doc, "the document stays open");
+    assert!(a.session.dirty, "its work stays");
+    assert_eq!(text(&a), "Kept");
+
+    // The last window closes the document, so the same command is refused for its unsaved work.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_some(), "closing the document would lose the work: {refused:?}");
+}
+
 /// Two windows, the second (focused) on an untouched blank document: an app whose host
 /// answers file dialogs only when the test does, plus the dialog's answer channel.
 fn blank_beside_a_document() -> (egui::Context, WordApp, Shown, u64) {

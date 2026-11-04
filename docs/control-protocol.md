@@ -157,6 +157,10 @@ and `file.new` or `file.open` goes on from there (#1712); closing it doesn't qui
 `doc` naming a document in the background, `file.close` closes that document and its window under
 the same rule (unsaved changes need `{"force": true}`), and the active window stays active.
 
+When another window shows the same document, `file.close` closes only the window it is sent to:
+the document and its unsaved work stay open, so nothing is lost and the command is **not**
+refused (#3274).
+
 `file.new`, `file.open`, `file.recover` (with `restore`) and the mailings merges open their
 result as **another document beside** the open ones and leave the unsaved one alone, so they
 lose nothing and are never refused.
@@ -198,3 +202,17 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+### Physical print sheet layout
+
+`ui.printSubmit`, `ui.print` and `file.printPdf` accept `pagesPerSheet`: the integer
+1 (default), 2, 4, 6, 9 or 16, or `"booklet"` / `"bookletReverse"` for left/right binding.
+These settings change only the print PDF, leaving document Page Setup unchanged.
+Selection/range/parity are applied first. N-up fills cells in row order; booklet mode
+pads the selected pages to a multiple of four and pairs outer/inner pages. Copies
+repeat complete sheet plans, preserving blank slots at copy boundaries. Native copies
+remain a spooler setting. Two-up and booklet sheets are landscape. Use duplex on the
+short edge for folded booklets; this does not configure a printer's duplex capability.
+The preview shows physical sheet sides, before copies, using the same sheet plan.
+Explicit `paper` chooses the physical sheet; otherwise the first selected page supplies
+its size. Independent Page Setup multiple-page modes (#2414) are not required.
