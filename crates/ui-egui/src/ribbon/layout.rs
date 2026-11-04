@@ -150,7 +150,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             t.row(|r| {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Left:")).small()));
                 r.cell(|ui| {
-                    let resp = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    let resp =
+                        ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
                     apply_box(app, ui, &resp, "para.indents", json!({"left": l * k}));
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("Before:")).small()));
@@ -164,7 +165,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
             t.row(|r| {
                 r.cell(|ui| ui.label(egui::RichText::new(tl!("Right:")).small()));
                 r.cell(|ui| {
-                    let resp = ui.add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    let resp = ui
+                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
                     apply_box(app, ui, &resp, "para.indents", json!({"right": right * k}));
                 });
                 r.cell(|ui| spaced(ui, egui::RichText::new(tl!("After:")).small()));
