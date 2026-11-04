@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** trivial (Language lists: every installed and available Language pack's language can be chosen in Set Proofing Language, installed ones in Review › Language and the status bar; craft-i18n.rev at 9d6d54d: region names and the Language (Region) template in 35 locales, craft-i18n#145); previously trivial (craft-i18n.rev at cde4900: rows for Options › Language, the missing-pack bar and 28 Language pack language names in 35 locales, craft-i18n#136); previously trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -44,8 +44,7 @@ native-speaker review (human).
 - Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20). Arabic UI landed (#1195).
 - **Proofing: English, Polish, Portuguese, Italian, Russian, Czech, Indonesian and Spanish**, chosen per run from its language (`w:lang`, resolved through
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
-  Language… for any of 38 languages and Set As Default for the document and future blank documents). Languages without proofing tools get
-  the styles; Review › Language and the status bar set it). Languages without proofing tools get
+  Language… for every built-in language and every installed or available Language pack language, and Set As Default for the document and future blank documents). Languages without proofing tools get
   no spelling or grammar marks (as in Word without the language's tools) instead of being flagged
   as English. Detail in [Proofing per language](#proofing-per-language).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
@@ -178,6 +177,14 @@ pinned pack index and installed through the font store into `<font store>/langua
   offering it; it never shows for a language without a pack, and closes per document.
 - Help › About › Language data shows the full licence texts of the embedded English data and the
   installed packs.
+- One language list: Set Proofing Language lists the built-in languages and every installed or
+  available pack's language (Bulgarian, Belarusian, Spanish (Cuba)…), each once and sorted by
+  name; Review › Language and the status bar's menu show the short list plus the installed packs'
+  languages. A pack's language is stored as the tag WordCraft names (`bg-BG`, `sr-Latn-RS`,
+  `de-AT`, Word's `ca-ES-valencia` for Valencian), which finds that pack again, so the text is
+  proofed by it; a bare tag (`nl`) is the same row as its regioned one (`nl-NL`), compared by tag
+  (language, script, region, variant), never by the name shown. Every pack in the published
+  index has an English name.
 - language-packs-2 is published and pinned (75 packs, craft-i18n `20467b63`), adding the
   compounding languages (Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian,
   Persian, Esperanto); Mongolian and Thai stay hidden. Install reads it,
@@ -256,8 +263,11 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | craft-i18n.rev at 9d6d54d (craft-i18n#145): 69 region names and the `{language} ({region})` template (full-width in ja, ko, zh) in 35 locales, AI-assisted without native-speaker review |
+| 2026-11-04 | trivial | craft-i18n.rev at cde4900 (craft-i18n#136): translated rows for Options › Language (Your languages, Add a language…, Set as default, Dictionary files), the missing-pack bar and 28 Language pack language names in 35 locales, AI-assisted without native-speaker review |
 | 2026-11-03 | trivial | craft-proof pin moved to craft-libs main with #589 and #590: French suggestions offer the elided form first (`Jadore` → `J'adore` before `J adore`; English keeps plural fixes first), and Valencian (`ca-ES-valencia`) text reads the `ca-valencia` pack |
 | 2026-11-03 | minor | Arabic (`ar`) interface: ~2,730 catalog rows from craft-i18n, `ar-*` locales, mirrored shell (ribbon, panes, File page, dialogs, menus), Arabic UI font fallback, document canvas independent (#1195); 28 languages; Hebrew UI still open |
+| 2026-11-03 | trivial | Language lists: Set Proofing Language, Review › Language and the status bar offer the Language pack languages (Bulgarian was in none); every published pack named in English (Belarusian); Valencian is `ca-ES-valencia`; rows are matched by tag, not by the name shown |
 | 2026-11-03 | trivial | Language packs: language-packs-2 published and pinned, 75 packs, with Danish, German, Dutch, Swedish, Norwegian, Hungarian, Estonian, Croatian, Persian and Esperanto |
 | 2026-11-02 | trivial | Language packs (CP4.4): language-packs-1 published and pinned, 61 packs; Lithuanian, Romanian, Catalan, French, Greek, Slovak, Serbian and Latvian available; Dutch, German and the other compounding languages wait on craft-proof; Basque, Ukrainian and Uyghur excluded |
 | 2026-11-01 | minor | Language packs (CP4.3–CP4.5): install and remove a language's spelling and hyphenation from File › Options › Language or the missing-pack bar, About › Language data, the commands; the default build embeds English data only; the language requests point at their packs: Lithuanian and Romanian available once language-packs-1 is published, the others waiting on craft-proof engine support |
