@@ -695,13 +695,15 @@ fn collapse(pl: &mut ParaLayout) {
     pl.rp.borders = None;
 }
 
-/// The paragraph's text for finding line breaks, with each note reference read as a word joiner
-/// (U+2060): Word keeps a footnote or endnote mark with the text before it ("end.¹" never leaves
-/// "¹" alone at the start of the next line, #5402) and with punctuation after it. The reference's
-/// U+FFFC has the line-break class CB, which UAX #14 breaks on both sides. A word joiner takes as
-/// many bytes in UTF-8, so offsets are unchanged; a space beside the mark still breaks after it.
+/// The paragraph's text for finding line breaks, with each note reference read as a narrow
+/// no-break space (U+202F): Word keeps a footnote or endnote mark with the text before it ("end.¹"
+/// never leaves "¹" alone at the start of the next line, #5402) and with punctuation after it. The
+/// reference's U+FFFC has the line-break class CB, which UAX #14 breaks on both sides. U+202F is
+/// class GL: no break after it (LB12) or before it after text (LB12a), but a space before the mark
+/// still breaks after it (LB18), which a word joiner would forbid (LB11). It takes as many bytes in
+/// UTF-8, so offsets are unchanged.
 fn note_refs_glued(p: &Paragraph) -> std::borrow::Cow<'_, str> {
-    const JOINER: char = '\u{2060}';
+    const JOINER: char = '\u{202f}';
     if JOINER.len_utf8() != OBJ.len_utf8() || !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) {
         return p.text.as_str().into();
     }
