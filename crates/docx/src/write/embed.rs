@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn smart_art_cut_to_the_limits_on_save_reopens_editable_and_says_so_once() {
-        // A model deserialised as is (a `.json` document) can hold more than SmartArt keeps; the
+        // A model deserialised as is (a `.json` document) can go beyond SmartArt's limits; the
         // save wrote it whole and it reopened as a plain diagram (#3648).
         use std::sync::Arc;
         use wordcraft_doc::graphic::{Graphic, GraphicKind};
