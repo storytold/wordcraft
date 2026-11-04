@@ -4,6 +4,7 @@ use super::{
     Block, CmdError, CmdResult, InlineObject, Paragraph, Path, Pos, Selection, Session, SortKey, StoryRef, Table, Value, json, p, para_block,
     parse_number, sel_result, sort_key,
 };
+use wordcraft_doc::props::VMerge;
 
 /// Sort the table's rows by a column. Numbers are read in each cell's language (`1,5` is one and
 /// a half in Polish) and sort first, numerically; other text sorts in the column's language.
@@ -13,6 +14,10 @@ pub(super) fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
     let header = p::bool(v, "header");
     let (tp, _, _) = cell(s)?;
     let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
+    // Moving a continuation separately from its start would break the merged cell.
+    if t.rows.iter().flat_map(|row| &row.cells).any(|cell| cell.props.vmerge != VMerge::None) {
+        return Err(CmdError::Failed("a table with vertically merged cells cannot be sorted".into()));
+    }
     let skip = usize::from(header.unwrap_or(t.rows.first().is_some_and(|r| r.props.header))).min(t.rows.len());
     let column = || t.rows.iter().skip(skip).map(|r| r.cells.get(col));
     let lang = column().flatten().find_map(|c| cell_lang(&s.doc, c)).or_else(|| crate::cmd::default_lang(s));
