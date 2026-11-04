@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CharProps, CmdError, CmdResult, InlineObject, NoteKind, Paragraph, PartKind, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p,
+    para_block,
+};
 
 pub(super) fn note(s: &mut Session, v: &Value, kind: NoteKind) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").to_string();

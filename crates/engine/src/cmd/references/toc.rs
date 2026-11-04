@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
+    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
+};
 
 /// A level range such as `1-3` (or one level, `2`), clamped to 1–9.
 pub fn level_range(s: &str) -> Option<(u8, u8)> {
@@ -179,13 +182,44 @@ pub(super) fn toc_range(s: &Session) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// The TOC title Word's table keeps above a section break (#4041): the TOC field's paragraph at
+/// `start` holds nothing but the field (Word's blank paragraph ending the title's one-column
+/// section, which the field moves into), and a TOC Heading paragraph of its own sits just above
+/// it. The title's block.
+fn title_above_break(s: &Session, start: usize) -> Option<usize> {
+    let field = s.doc.body.get(start)?.as_para()?;
+    let blank = field.text.chars().all(|c| c == OBJ)
+        && field.objects.iter().all(|o| match o {
+            InlineObject::Field { instr, .. } => {
+                let f = FieldCode::parse(instr);
+                f.name == "TOC" && !f.is_table_of_figures()
+            }
+            InlineObject::BookmarkStart { .. } | InlineObject::BookmarkEnd { .. } | InlineObject::ControlEnd => true,
+            _ => false,
+        });
+    if field.section.is_none() || !blank {
+        return None;
+    }
+    let i = start.checked_sub(1)?;
+    let title = s.doc.body.get(i)?.as_para()?;
+    (title.props.style.as_deref() == Some("TOCHeading") && title.section.is_none() && toc_field(title).is_none()).then_some(i)
+}
+
 /// Removes the TOC blocks `start..=end` and returns where the TOC was. A field paragraph that ends
 /// a section stays, emptied, so its section break isn't lost (#3889). A heading paragraph of its
 /// own just above the field's paragraph (Word's tables start the field after their heading) goes
-/// with the table.
+/// with the table. When that heading is above a section break that the field's otherwise blank
+/// paragraph ends (Word's table over entries in columns), the blank paragraph and its break go
+/// too, as Word's Remove Table of Contents takes everything in its control (#4041): the text
+/// before then belongs to the section after.
 pub(super) fn remove_toc(s: &mut Session, start: usize, end: usize) -> Result<usize, CmdError> {
     for i in (start + 1..=end).rev() {
         s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
+    }
+    if let Some(title) = title_above_break(s, start) {
+        s.doc.remove_block(StoryRef::Body, &Path::top(start))?;
+        s.doc.remove_block(StoryRef::Body, &Path::top(title))?;
+        return Ok(title);
     }
     let at = match s.doc.para_mut(StoryRef::Body, &Path::top(start)) {
         Ok(p) if p.section.is_some() => {
@@ -352,6 +386,14 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
             regenerate_toc(s, None, &tabs)?;
             return sel_result(s);
         }
+        // Word's table with its title above a section break (entries in columns): replacing it
+        // keeps that layout, as Word's Insert Table of Contents does (#4041). The title stays
+        // above the break (retitled when a title is given), the field takes the new settings in
+        // its paragraph ending the title's section, and the new entries follow in their columns.
+        Some((start, _)) if title_above_break(s, start).is_some() => {
+            replace_toc_above_break(s, v, start, &tabs)?;
+            return sel_result(s);
+        }
         Some((start, end)) => {
             let start = remove_toc(s, start, end)?;
             s.doc.insert_block(StoryRef::Body, &Path::top(start), Block::Para(Paragraph::new()))?;
@@ -385,6 +427,36 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     regenerate_toc(s, Some(leader), &tabs)?;
     s.clamp_selection();
     sel_result(s)
+}
+
+/// Replaces a TOC whose title sits above the section break its field's paragraph ends
+/// (`title_above_break`): the field takes `v`'s settings, the title `v`'s `title` if one is given
+/// (otherwise it is kept, as Word's Insert Table of Contents keeps it), and the entries are rebuilt.
+fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(String, Vec<TabStop>)]) -> Result<(), CmdError> {
+    let instr = toc_instr(v);
+    let field = s.doc.para_mut(StoryRef::Body, &Path::top(start))?;
+    for o in &mut field.objects {
+        if let InlineObject::Field { instr: old, result, dirty, .. } = o {
+            let f = FieldCode::parse(old);
+            if f.name == "TOC" && !f.is_table_of_figures() {
+                old.clone_from(&instr);
+                result.clear();
+                *dirty = false;
+            }
+        }
+    }
+    field.touch();
+    if let (Some(title), Some(i)) = (p::str(v, "title"), start.checked_sub(1)) {
+        let old = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
+        let mut head = Paragraph::with_text(title, old.props_of_char(0).clone());
+        head.props = old.props.clone();
+        head.mark = old.mark.clone();
+        *old = head;
+    }
+    let leader = leader(p::str(v, "tabLeader").unwrap_or("dot"));
+    regenerate_toc(s, Some(leader), tabs)?;
+    s.clamp_selection();
+    Ok(())
 }
 
 /// A hidden `_Toc` bookmark around the heading at body block `i` (after its leading page breaks),
@@ -505,9 +577,21 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let page =
                 l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
-            let text = if show_page { format!("{}{sep}{page}", e.text) } else { e.text.clone() };
-            let props = CharProps { link: links.get(k).cloned().flatten(), ..Default::default() };
-            let mut para = Paragraph::with_text(&text, props).styled(&format!("TOC{}", e.level + 1));
+            let link = links.get(k).cloned().flatten();
+            // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes
+            // it, so updating it in Word follows the heading to its new page.
+            let pageref = link.as_deref().and_then(|l| l.strip_prefix('#')).filter(|_| show_page).map(|b| format!("PAGEREF {b} \\h"));
+            let text = match (show_page, &pageref) {
+                (true, None) => format!("{}{sep}{page}", e.text),
+                (true, Some(_)) => format!("{}{sep}", e.text),
+                (false, _) => e.text.clone(),
+            };
+            let props = CharProps { link, ..Default::default() };
+            let mut para = Paragraph::with_text(&text, props.clone()).styled(&format!("TOC{}", e.level + 1));
+            if let Some(instr) = pageref {
+                let field = InlineObject::Field { instr, result: page.to_string(), locked: false, dirty: false, code: false, form: String::new() };
+                para.insert_object(para.len(), field, &props)?;
+            }
             para.mark = CharProps::default();
             if e.text.contains('\t') {
                 para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
