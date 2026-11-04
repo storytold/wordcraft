@@ -299,9 +299,9 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
-**Wayland:** on a Wayland desktop the app runs natively, with file drag-and-drop. Through
-XWayland the window flickered while being resized (#2939). To run through XWayland anyway, start
-the app with `WORDCRAFT_X11=1`:
+**Wayland:** on a Wayland desktop the app runs natively. Through XWayland the window
+flickered while being resized (#2939). To run through XWayland anyway, start the app with
+`WORDCRAFT_X11=1`:
 
 ```sh
 WORDCRAFT_X11=1 wordcraft

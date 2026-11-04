@@ -367,15 +367,16 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 }
 
 /// Whether to force winit's X11 backend (XWayland on a Wayland desktop). `var` reads the
-/// environment. A Wayland session stays native unless `WORDCRAFT_X11` asks for X11 (#2939);
-/// `WORDCRAFT_WAYLAND` keeps meaning native Wayland.
+/// environment. A Wayland session (`WAYLAND_DISPLAY` or `WAYLAND_SOCKET`, either of which winit
+/// connects with) stays native unless `WORDCRAFT_X11` asks for X11 (#2939); `WORDCRAFT_WAYLAND`
+/// keeps meaning native Wayland.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn use_x11(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
     let set = |k: &str| var(k).is_some_and(|v| !v.is_empty() && v != "0");
     if set("WORDCRAFT_WAYLAND") || var("DISPLAY").is_none() {
         return false;
     }
-    set("WORDCRAFT_X11") || var("WAYLAND_DISPLAY").is_none()
+    set("WORDCRAFT_X11") || (var("WAYLAND_DISPLAY").is_none() && var("WAYLAND_SOCKET").is_none())
 }
 
 /// Parses the command line, installs logging and the panic hook, restores preferences and window
@@ -687,6 +688,7 @@ mod backend_tests {
     #[test]
     fn a_wayland_session_stays_native_unless_x11_is_asked_for() {
         assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1")])));
+        assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_SOCKET", "3")])));
         assert!(use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1")])));
         assert!(!use_x11(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("WORDCRAFT_X11", "1"), ("WORDCRAFT_WAYLAND", "1")])));
     }
