@@ -337,15 +337,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings, and the dictionary each language found. An app started
-/// from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`, so this is how it finds a
-/// dictionary kept in a folder of the user's own.
+/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
+/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
+/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
+/// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
     let id = egui::Id::unique("options_dictionaries_folder");
@@ -373,6 +371,15 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    note(ui, "An installed Language pack is used after this folder.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Dictionary files")).strong());
+    dictionary_files(ui);
+}
+
+/// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
+/// couldn't be read, looked up again after the folder changes.
+fn dictionary_files(ui: &mut Ui) {
     // The dictionary each language found, looked up again after the folder changes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
@@ -519,7 +526,11 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     };
     ui.label(RichText::new(text).small().weak());
     ui.add_space(8.0);
-    crate::language_packs::options_section(app, ui);
+    crate::language_packs::your_languages_section(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Dictionaries");
+    dictionaries(app, ui);
+    crate::language_packs::add_language_window(app, &ui.ctx().clone());
 }
 
 /// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
@@ -641,6 +652,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         templates_folder(app, ui);
     }
     ui.add_space(8.0);
+    section(ui, "OpenDocument files");
+    odf_files(app, ui);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));
@@ -654,6 +668,98 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("tools.customizeRibbon", json!({}));
         }
     });
+}
+
+/// How OpenDocument files opened from now on fill in what the standard leaves to the
+/// application (docs/odf-interpretation.md): in Microsoft Word's style, in LibreOffice's, or with
+/// the user's own choice for each case.
+fn odf_files(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::odf_profile::{MAX_LENGTH, OdfPreset};
+    let profile = app.session.prefs.odf.clone();
+    // The preset as a drop-down, like the units and region above.
+    // The two display styles, then Custom for the user's own choices.
+    let presets = [OdfPreset::Word, OdfPreset::LibreOffice, OdfPreset::Custom];
+    let shown = profile.preset.label();
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Where the standard leaves the look open, follow:"));
+        let combo = craft_ui::ComboBox::from_id_salt("options_odf_preset").selected_text(tl!(shown)).width(200.0).show_ui(ui, |ui| {
+            for preset in presets {
+                if ui.selectable_label(profile.preset == preset, tl!(preset.label())).clicked() && profile.preset != preset {
+                    chosen = Some(preset);
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    if let Some(preset) = chosen {
+        // Custom starts from the choices in use.
+        let mut odf = if preset == OdfPreset::Custom { serde_json::to_value(profile.effective()).unwrap_or_default() } else { json!({}) };
+        if let Some(o) = odf.as_object_mut() {
+            o.insert("preset".into(), json!(preset.id()));
+        }
+        set(app, json!({ "odf": odf }));
+    }
+    note(ui, "Applies to OpenDocument files opened from now on. What the standard defines is always followed.");
+    if profile.preset != OdfPreset::Custom {
+        return;
+    }
+    let e = profile.effective();
+    let u = unit();
+    let k = u.pt_per_unit();
+    egui::Grid::new("options_odf").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        for (key, label, pt) in [
+            ("pageMargin", "Page margins:", e.page_margin),
+            ("headerMinHeight", "Header and footer height:", e.header_min_height),
+            ("columnGap", "Gap between columns:", e.column_gap),
+        ] {
+            let id = ui.label(tl!(label)).id;
+            let mut v = pt / k;
+            if ui.add(egui::DragValue::new(&mut v).speed(0.5 / k).range(0.0..=MAX_LENGTH / k).measure(u).max_decimals(2)).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: (v * k).clamp(0.0, MAX_LENGTH)}}));
+            }
+            ui.end_row();
+        }
+        // Line widths in points, as the ribbon shows them: a hairline is a fraction of a point.
+        let id = ui.label(tl!("Shape line width:")).id;
+        let mut w = e.hairline;
+        if ui
+            .add(egui::DragValue::new(&mut w).speed(0.05).range(0.05..=24.0).max_decimals(2).suffix(format!(" {}", tl!("pt"))))
+            .labelled_by(id)
+            .changed()
+        {
+            set(app, json!({"odf": {"hairline": w}}));
+        }
+        ui.end_row();
+        for (key, label, rgb) in [("shapeFill", "Shape fill colour:", e.shape_fill), ("shapeLine", "Shape line colour:", e.shape_line)] {
+            let id = ui.label(tl!(label)).id;
+            let mut c = [rgb.0, rgb.1, rgb.2];
+            if egui::color_picker::color_edit_button_srgb(ui, &mut c).labelled_by(id).changed() {
+                set(app, json!({"odf": {key: wordcraft_doc::props::Rgb(c[0], c[1], c[2]).hex()}}));
+            }
+            ui.end_row();
+        }
+    });
+    for (key, label, value) in [
+        ("headerHeightIncludesSpacing", "A header's height includes its spacing from the text", e.header_height_includes_spacing),
+        ("dynamicSpacing", "A tall header uses up its spacing from the text", e.dynamic_spacing),
+        ("tabsFromIndent", "Tab stops are measured from the paragraph's indent", e.tabs_from_indent),
+        ("pageFrameParagraphIsPage", "A page frame placed against a paragraph is placed against the page edge", e.page_frame_paragraph_is_page),
+        (
+            "inlineInvalidRelationIsBaseline",
+            "An in-line frame placed against a paragraph or the page is placed against the baseline",
+            e.inline_invalid_relation_is_baseline,
+        ),
+        ("pictureLinesFitPictures", "A line holding only pictures is as tall as the pictures", e.picture_lines_fit_pictures),
+        ("balanceSectionColumns", "A section's columns end balanced at the end of the document too", e.balance_section_columns),
+        ("sumParagraphSpacing", "The space between paragraphs is the space after plus the space before", e.sum_paragraph_spacing),
+        ("widowControl", "Widow and orphan control when no style says", e.widow_control),
+    ] {
+        let mut v = value;
+        if ui.checkbox(&mut v, tl!(label)).changed() {
+            set(app, json!({"odf": {key: v}}));
+        }
+    }
 }
 
 /// The user templates folder (#2852): where File › New finds personal templates and Save as Word
