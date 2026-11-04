@@ -211,6 +211,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             ("I. II. III.", "outline"),
                             ("A. B. C.", "upperLetter"),
                             ("a) b) c)", "lowerLetter"),
+                            ("a. b. c.", "lowerLetterDot"),
                             ("i. ii. iii.", "lowerRoman"),
                         ] {
                             mi(ui, app, l, "para.numbering", json!({"kind": k}));

@@ -885,3 +885,44 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #4281: the Numbering drop-down lists "a. b. c." and applies it, then switching to another
+/// preset changes the list instead of turning it off.
+#[test]
+fn the_numbering_menu_offers_a_dot_b_dot_c_dot() {
+    use egui_kittest::kittest::{By, Queryable};
+    let item = |label: &'static str| By::new().label_contains(label);
+    let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("text.insert", json!({"text": "One"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let label = |h: &mut egui_kittest::Harness<'_, crate::WordApp>| {
+        let l = h.state_mut().session.layout();
+        l.pages.iter().flat_map(|p| &p.items).find_map(|i| match i {
+            wordcraft_layout::Placed::Lines { para, l0: 0, .. } => para.label.as_ref().map(|lb| lb.text.clone()),
+            _ => None,
+        })
+    };
+    h.get_by_label("Numbering options").click();
+    h.run();
+    for want in ["1. 2. 3.", "a) b) c)", "a. b. c.", "i. ii. iii."] {
+        assert!(h.query(item(want)).is_some(), "the menu lists {want}");
+    }
+    h.get(item("a. b. c.")).click();
+    h.run();
+    assert_eq!(label(&mut h).as_deref(), Some("a."));
+    h.get_by_label("Numbering options").click();
+    h.run();
+    h.get(item("A. B. C.")).click();
+    h.run();
+    assert_eq!(label(&mut h).as_deref(), Some("A."), "another preset changes the list");
+}
