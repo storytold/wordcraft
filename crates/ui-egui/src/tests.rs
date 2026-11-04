@@ -3444,6 +3444,57 @@ fn the_print_button_shows_only_with_a_print_hook() {
     }
 }
 
+/// Return on the Print page prints, as in Word, where ⌘P opens on Print as the default
+/// button; the document isn't typed into.
+#[test]
+fn return_on_the_print_page_prints() {
+    let printed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut a = app();
+    let seen = printed.clone();
+    a.services.print = Some(Box::new(move |_| {
+        seen.set(seen.get() + 1);
+        Ok(())
+    }));
+    let before = body_text(&a);
+    a.run("file.print", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert_eq!(printed.get(), 0);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(printed.get(), 1, "Return printed once");
+    assert_eq!(body_text(h.state()), before, "the document is unchanged");
+    // Held down, Return repeats (egui marks a press of a key already down as a repeat): one job.
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    for _ in 0..4 {
+        h.event(enter(true));
+        h.run_steps(1);
+    }
+    h.event(enter(false));
+    h.run_steps(1);
+    assert_eq!(printed.get(), 2, "a held Return prints once");
+    // The built-in file browser over the page takes Return for itself, even with nothing in it
+    // focused: Return there saves or opens, and prints nothing.
+    let _ = h.state_mut().run("ui.fileBrowser", json!({"purpose": "document"}));
+    h.run_steps(4);
+    assert!(h.state().file_browser.open.is_some(), "the browser opened");
+    h.ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(printed.get(), 2, "Return in the file browser prints nothing");
+}
+
 /// #2958: the Print button leads the settings, above the printer and the settings it prints
 /// with (as in Word), and it wears the accent the app gives a dialog's primary button, so the
 /// page's one action is found first and reads as one rather than as another setting.
@@ -3532,7 +3583,7 @@ fn the_print_preview_fills_the_pane_zooms_and_scrolls_both_ways() {
     let page = |h: &egui_kittest::Harness<'_, WordApp>| h.get(By::new().role(Role::Image)).rect();
     let fit = page(&h);
     assert!(fit.height() > 650.0, "the page fills the pane's height: {fit:?}");
-    assert!(h.query(By::new().role(Role::Label).label("Page 1 of 1")).is_some(), "the page indicator stays");
+    assert!(h.query(By::new().role(Role::Label).label("Sheet 1 of 1")).is_some(), "the sheet indicator stays");
 
     for _ in 0..5 {
         h.get_by_label("Zoom In").click();
