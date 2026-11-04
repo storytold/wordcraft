@@ -1,5 +1,5 @@
 use super::grid::{Exclusion, Grid};
-use super::*;
+use super::{Arc, CharProps, Document, FaceRef, FieldCtx, Level, NumFormat, NumeralMode, ParaProps, ResolvedChar, TabLeader};
 
 /// How a run set in one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2/3, Webdings)
 /// shows its characters. Those fonts are proprietary and usually missing: a substitute has other

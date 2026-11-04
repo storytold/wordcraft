@@ -1,5 +1,5 @@
 use super::language::mi_check;
-use super::*;
+use super::{Align2, Rect, Sense, Tokens, Ui, Value, WordApp, big, group, json, small, vec2};
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
 /// labelled buttons in columns of three. Each shows the command's own icon and label.
@@ -17,7 +17,7 @@ pub(super) fn custom_groups(app: &mut WordApp, ui: &mut Ui, groups: &[wordcraft_
             for column in ids.chunks(3) {
                 stack(ui, |ui| {
                     for (id, label) in column {
-                        small(ui, app, crate::widgets::command_icon(id), Some(label), label, id, json!({}), false);
+                        small(ui, app, crate::widgets::command_icon(id), Some(label), label, crate::widgets::ButtonAction::new(id, json!({}), false));
                     }
                 });
             }
@@ -66,7 +66,7 @@ pub(super) fn esc_cancelled(ui: &Ui, r: &egui::Response, id: egui::Id) -> bool {
 }
 
 pub(super) fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
         add(ui);
     });
@@ -110,7 +110,7 @@ pub(super) fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, i
 pub(super) fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
+    let resp = ui.add_enabled(enabled, crate::rtl::menu_item(ui, text, &sc, 200.0));
     if resp.clicked() {
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();

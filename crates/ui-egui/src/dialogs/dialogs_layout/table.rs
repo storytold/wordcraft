@@ -1,4 +1,4 @@
-use super::*;
+use super::{Serialize, Ui, Value, WordApp, buttons, heading, json, run, unit};
 
 // ---------------------------------------------------------------------------------------------
 // Formula
@@ -126,7 +126,7 @@ pub(super) fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool 
                 ui.selectable_value(&mut f.column, i, label);
             }
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.radio_value(&mut f.descending, false, tl!("Ascending"));
             ui.radio_value(&mut f.descending, true, tl!("Descending"));
         });
@@ -253,16 +253,18 @@ fn alert(ui: &mut Ui, text: &Option<String>) {
 pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsForm) -> bool {
     // Several cells split one by one keep their rows.
     let rows_on = f.cells <= 1 || f.merge_first;
-    egui::Grid::new("split_cells").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
-        ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63));
-        ui.end_row();
+    crate::rtl::Table::new("split_cells").columns(2).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Number of columns:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Number of rows:")));
+            r.cell(|ui| ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63)));
+        });
     });
     let mut merge = f.merge_first;
-    if ui.add_enabled(f.several, egui::Checkbox::new(&mut merge, tl!("Merge cells before split"))).changed() {
+    if ui.add_enabled_ui(f.several, |ui| ui.checkbox(&mut merge, tl!("Merge cells before split"))).inner.changed() {
         f.set_merge(merge);
     }
     alert(ui, &f.error);
@@ -379,13 +381,15 @@ impl TextToTableForm {
 pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> bool {
     let before = (f.separator.clone(), f.other_char.clone(), f.columns);
     heading(ui, "Table size");
-    egui::Grid::new("text_to_table").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
-        ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.label(f.rows.to_string());
-        ui.end_row();
+    crate::rtl::Table::new("text_to_table").columns(2).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Number of columns:")));
+            r.cell(|ui| ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)));
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Number of rows:")));
+            r.cell(|ui| ui.label(f.rows.to_string()));
+        });
     });
     heading(ui, "AutoFit behavior");
     ui.horizontal(|ui| {
@@ -395,19 +399,23 @@ pub(super) fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTab
     ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
     ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
     heading(ui, "Separate text at");
-    egui::Grid::new("text_to_table_sep").num_columns(2).show(ui, |ui| {
-        ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs"));
-        ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
-        ui.end_row();
-        ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-            let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
-            if r.changed() {
-                f.separator = "other".into();
-            }
+    crate::rtl::Table::new("text_to_table_sep").columns(2).show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs")));
+            r.cell(|ui| ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas")));
         });
-        ui.end_row();
+        t.row(|r| {
+            r.cell(|ui| ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs")));
+            r.cell(|ui| {
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+                    if edit.changed() {
+                        f.separator = "other".into();
+                    }
+                });
+            });
+        });
     });
     if (f.separator.as_str(), f.other_char.as_str()) != (before.0.as_str(), before.1.as_str()) {
         f.guess_columns();

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
+    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+};
 
 impl Reader<'_> {
     pub(super) fn read_inline_children(&mut self, sc: &mut StoryCtx, pb: &mut PB, e: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
@@ -105,7 +108,7 @@ impl Reader<'_> {
             // Some generators write a break directly under the paragraph instead of inside a run.
             "w:br" | "w:cr" => {
                 let props = self.run_props_none(ctx);
-                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+                self.read_run_child(sc, pb, k, (&props, rels), &mut None, depth + 1);
             }
             _ => {}
         }
@@ -131,21 +134,19 @@ impl Reader<'_> {
         };
         let mut note: Option<(NoteKind, u32, Option<String>)> = None;
         for k in r.els() {
-            self.read_run_child(sc, pb, k, &props, rels, &mut note, depth + 1);
+            self.read_run_child(sc, pb, k, (&props, rels), &mut note, depth + 1);
         }
         if let Some((kind, id, custom)) = note.take() {
             self.emit_obj(sc, pb, InlineObject::NoteRef { kind, id, custom: custom.unwrap_or_default() }, &props);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn read_run_child(
         &mut self,
         sc: &mut StoryCtx,
         pb: &mut PB,
         k: &El,
-        props: &CharProps,
-        rels: &Rels,
+        (props, rels): (&CharProps, &Rels),
         note: &mut Option<(NoteKind, u32, Option<String>)>,
         depth: usize,
     ) {
@@ -301,7 +302,7 @@ impl Reader<'_> {
                     self.emit_obj(sc, pb, o, props);
                 } else if let Some(c) = children_of_choice(k) {
                     for x in c.els() {
-                        self.read_run_child(sc, pb, x, props, rels, note, depth + 1);
+                        self.read_run_child(sc, pb, x, (props, rels), note, depth + 1);
                     }
                 }
             }

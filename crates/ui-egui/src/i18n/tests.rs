@@ -34,35 +34,40 @@ fn translations(code: &str) -> Vec<String> {
 #[test]
 fn system_locales_map_to_languages() {
     needs_catalogs!();
-    assert_eq!(lang_from_tag("zh_CN.UTF-8"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-CN"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-SG"), Some(lang("zh-hans")));
-    assert_eq!(lang_from_tag("zh-Hans-HK"), Some(lang("zh-hans")), "a script beats the region");
-    assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-HK"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("zh-Hant"), Some(lang("zh-hant")));
-    assert_eq!(lang_from_tag("ja-JP"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ja_JP.eucJP@euro"), Some(lang("ja")));
-    assert_eq!(lang_from_tag("ko-KR"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
-    assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("C"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
-    assert_eq!(lang_from_tag("fr-FR"), Some(lang("fr")));
-    assert_eq!(lang_from_tag(UNSUPPORTED), None);
-    assert_eq!(lang_from_tag(""), None);
-    assert_eq!(lang_from_tag("_"), None);
-    assert_eq!(lang_from_tag("sr"), Some(lang("sr")), "Cyrillic is the default script");
-    assert_eq!(lang_from_tag("sr-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Cyrl-RS"), Some(lang("sr")));
-    assert_eq!(lang_from_tag("sr-Latn-RS"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("sr-Latn"), Some(lang("sr-latn")));
-    assert_eq!(lang_from_tag("de"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-DE"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de_AT.UTF-8"), Some(lang("de")));
-    assert_eq!(lang_from_tag("de-CH"), Some(lang("de")));
-    assert_eq!(lang_from_tag("DE_de.UTF-8@euro"), Some(lang("de")));
+    let cases = [
+        ("zh_CN.UTF-8", Some(lang("zh-hans"))),
+        ("zh-CN", Some(lang("zh-hans"))),
+        ("zh", Some(lang("zh-hans"))),
+        ("zh-SG", Some(lang("zh-hans"))),
+        ("zh-Hans-HK", Some(lang("zh-hans"))),
+        ("zh_TW.UTF-8", Some(lang("zh-hant"))),
+        ("zh-HK", Some(lang("zh-hant"))),
+        ("zh-Hant", Some(lang("zh-hant"))),
+        ("ja-JP", Some(lang("ja"))),
+        ("ja_JP.eucJP@euro", Some(lang("ja"))),
+        ("ko-KR", Some(lang("ko"))),
+        ("ko_KR.UTF-8", Some(lang("ko"))),
+        ("en-GB", Some(Lang::EN)),
+        ("C", Some(Lang::EN)),
+        ("POSIX", Some(Lang::EN)),
+        ("fr-FR", Some(lang("fr"))),
+        (UNSUPPORTED, None),
+        ("", None),
+        ("_", None),
+        ("sr", Some(lang("sr"))),
+        ("sr-RS", Some(lang("sr"))),
+        ("sr-Cyrl-RS", Some(lang("sr"))),
+        ("sr-Latn-RS", Some(lang("sr-latn"))),
+        ("sr-Latn", Some(lang("sr-latn"))),
+        ("de", Some(lang("de"))),
+        ("de-DE", Some(lang("de"))),
+        ("de_AT.UTF-8", Some(lang("de"))),
+        ("de-CH", Some(lang("de"))),
+        ("DE_de.UTF-8@euro", Some(lang("de"))),
+    ];
+    for (tag, expected) in cases {
+        assert_eq!(lang_from_tag(tag), expected, "locale {tag}");
+    }
 }
 
 /// A language tag no catalog will ever have: `qaa`–`qtz` are reserved for local use (ISO 639-2),
@@ -344,10 +349,40 @@ fn chinese_interface_fonts_load_and_cover_simplified_hanzi() {
 }
 
 #[test]
+fn traditional_chinese_interface_puts_an_installed_traditional_font_first() {
+    needs_catalogs!();
+    assert!(Lang::all().filter(|l| l.prefers_hant()).map(Lang::code).eq(["zh-hant"]));
+    assert!(lang("zh-hant").prefers_hans());
+    assert!(Lang::hant_font_chars().contains(&'說'));
+    let order = |hant: bool, system_cjk: bool| {
+        crate::theme::font_definitions_language(true, false, hant, system_cjk).families[&egui::FontFamily::Proportional].clone()
+    };
+    let is_hant = |n: &String| n.starts_with("system hant ");
+    let hant = order(true, true);
+    assert!(!order(false, true).iter().any(is_hant));
+    assert!(!order(true, false).iter().any(is_hant));
+    let Some(installed) = wordcraft_fonts::system_hant_ui_font(&[]) else {
+        assert_eq!(hant, order(false, true), "no Traditional Chinese font installed: the Simplified Chinese order");
+        return;
+    };
+    let at = hant.iter().position(is_hant).unwrap();
+    assert_eq!(hant[at], format!("system hant {}", installed.family));
+    for f in wordcraft_fonts::ui_cjk_fonts(true) {
+        let embedded = hant.iter().position(|n| *n == format!("{} {}", f.family, f.style)).unwrap();
+        assert!(at < embedded, "{} comes before {}", hant[embedded], hant[at]);
+    }
+    assert!(hant.iter().position(|n| n == "Inter").is_some_and(|i| i < at), "{hant:?}");
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions_language(true, false, true, true));
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    assert!(ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "說這為戶")));
+}
+
+#[test]
 fn korean_interface_fonts_load_and_cover_hangul() {
     needs_catalogs!();
     let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions_language(false, true, true));
+    ctx.set_fonts(crate::theme::font_definitions_language(false, true, false, true));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "한글"));
     let (catalogs, names) = Lang::cjk_font_text_for(false, true);
@@ -375,7 +410,7 @@ fn cjk_catalogs_are_covered_by_the_embedded_interface_faces() {
     for code in ["zh-hans", "zh-hant", "ja", "ko"] {
         let l = lang(code);
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), false));
+        ctx.set_fonts(crate::theme::font_definitions_language(l.prefers_hans(), l.prefers_korean(), l.prefers_hant(), false));
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let entries = translations(code);
         let chars: std::collections::BTreeSet<char> =
@@ -1153,4 +1188,114 @@ fn the_flatpak_manifest_pins_the_craft_i18n_rev() {
     let commit = source.lines().find_map(|l| l.trim().strip_prefix("commit:")).expect("the craft-i18n source pins a commit");
     assert_eq!(commit.trim().trim_matches(['\'', '"']), rev);
     assert!(manifest.contains("CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n"), "the build embeds the catalogs");
+}
+
+/// A right-to-left test language whose catalog is `source`, selected as the current language.
+fn arabic_fixture(source: &'static str) -> Lang {
+    let ar = fixture_lang("ar", source);
+    set_current(ar);
+    ar
+}
+
+#[test]
+fn arabic_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let Some(ar) = Lang::from_code("ar") else {
+        eprintln!("skipped: the embedded catalogs have no Arabic");
+        return;
+    };
+    for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant", "ar-Arab-AE"] {
+        assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+    }
+    assert_eq!(first_supported(["xx-XX", "ar-MA", "en-US"]), Some(ar));
+    assert_eq!(normalize_pref("AR"), Some("ar"));
+    assert!(ar.rtl());
+    assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+    assert!(!ar.uses_cjk());
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "AR"})).unwrap();
+    assert_eq!(result["effective"], "ar");
+    assert_eq!(app.ui.language, "ar");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), ar);
+    assert!(app.run("ui.language", serde_json::json!({"value": "ar-unknown"})).is_err());
+    assert_eq!(app.ui.language, "ar", "invalid preferences must keep the saved language");
+}
+
+/// Arabic comes back from the lookups exactly as the catalog has it, in typing order: egui's text
+/// layout orders the words of each line itself, so nothing here reverses them. Placeholders are
+/// filled in place and text for the document stays as typed.
+#[test]
+fn arabic_lookups_keep_typing_order() {
+    let ar = arabic_fixture(concat!(
+        "\tTable of Contents\tجدول المحتويات\n",
+        "\tPaste Special…\tلصق خاص…\n",
+        "\tAbout WordCraft\tحول WordCraft\n",
+        "\tPassword:\tكلمة المرور:\n",
+        "\tTable of\\nContents\tجدول\\nالمحتويات\n",
+        "\tPage {page} of {pages}\tالصفحة {page} من {pages}\n",
+        "\tExported {path}\tتم التصدير إلى {path}\n",
+        "preview\tTitle\tالعنوان\n",
+        "\tHome\tالرئيسية\n",
+        "\tFont\tالخط\n",
+    ));
+    assert!(ar.rtl());
+    assert_eq!(tr(ar, "Table of Contents"), "جدول المحتويات");
+    assert_eq!(tr(ar, "Paste Special…"), "لصق خاص…");
+    assert_eq!(tr(ar, "About WordCraft"), "حول WordCraft");
+    assert_eq!(tr(ar, "Password:"), "كلمة المرور:");
+    // A two-line ribbon label keeps its two lines.
+    assert_eq!(tr(ar, "Table of\nContents"), "جدول\nالمحتويات");
+    // Placeholders are filled in place; inserted text is never touched, and the text for the
+    // document is the same string.
+    let page = fmt_plain(tr(ar, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]);
+    assert_eq!(page, "الصفحة 3 من 9");
+    assert_eq!(fmt_plain(tr(ar, "Exported {path}"), &[("path", "draft-{words}.docx")]), "تم التصدير إلى draft-{words}.docx");
+    // The preview context is looked up the same way.
+    assert_eq!(trc(ar, "preview", "Title"), "العنوان");
+    // A string without a translation stays English, untouched.
+    assert_eq!(tr(ar, "unknown future label"), "unknown future label");
+    set_current(ar);
+    // A ribbon location reads from the right: the tab first, the mark pointing left.
+    assert_eq!(location("Home › Font"), "الرئيسية ‹ الخط");
+    // A search query typed in reading order is a plain substring of the label.
+    assert!(lowercase(t("Table of Contents")).contains("جدول المحتويات"));
+    set_current(Lang::EN);
+    assert_eq!(location("Home › Font"), "Home › Font");
+}
+
+/// File names and paths shown in a right-to-left line are set apart and marked: the name in its
+/// own isolate with its extension kept left to right, a path as a left-to-right isolate with a
+/// mark after every separator so neighbouring Arabic folders do not swap. Other languages get
+/// the text untouched.
+#[test]
+fn names_and_paths_are_isolated_in_a_right_to_left_interface() {
+    set_current(Lang::EN);
+    assert_eq!(isolate("تقرير 2.docx"), "تقرير 2.docx");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "C:/ملفات/تقرير.docx");
+    let ar = fixture_lang("ar", "\tHome\tالرئيسية\n");
+    set_current(ar);
+    assert_eq!(isolate("تقرير 2.docx"), "\u{2068}تقرير 2\u{200E}.docx\u{2069}");
+    assert_eq!(isolate("ملاحظات"), "\u{2068}ملاحظات\u{2069}", "no extension, no mark");
+    assert_eq!(isolate("v1.2 تقرير"), "\u{2068}v1.2 تقرير\u{2069}", "a dot that is not an extension");
+    assert_eq!(isolate_path(r"C:\ملفات\تقرير.docx"), "\u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}");
+    assert_eq!(isolate_path("C:/ملفات/تقرير.docx"), "\u{2066}C:/\u{200E}ملفات/\u{200E}تقرير\u{200E}.docx\u{2069}");
+    set_current(Lang::EN);
+}
+
+/// A path inside a sentence (the open failure on the status bar) is isolated in a right-to-left
+/// interface, so Arabic folders do not scramble; in English the message holds the path as it is.
+#[test]
+fn a_path_in_a_message_is_isolated_in_a_right_to_left_interface() {
+    let path = r"C:\ملفات\تقرير.docx";
+    set_current(Lang::EN);
+    let mut a = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    assert!(a.report_open_failure(path, "bad").contains(path));
+    set_current(fixture_lang("ar", "\tCouldn't open {path}: {error}\tتعذر فتح {path}: {error}\n"));
+    let msg = a.report_open_failure(path, "bad");
+    set_current(Lang::EN);
+    assert_eq!(msg, "تعذر فتح \u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}: \u{2068}bad\u{2069}");
 }

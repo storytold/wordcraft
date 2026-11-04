@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// Which story a position is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
