@@ -183,3 +183,30 @@ fn kept_heading_follows_an_initial_picture_that_cannot_start_below_it() {
         assert_eq!(layout.caret(&Pos { story: StoryRef::Body, path: Path(vec![2, 0, 0, 0]), off: 0 }).unwrap().page, picture_page);
     }
 }
+
+/// A table's own gap consumes room before its repeated header and first body row.
+#[test]
+fn kept_heading_counts_the_tables_own_space_before() {
+    for (gap, keep, page) in [(0.0, true, 0), (50.0, true, 1), (50.0, false, 0), (-50.0, true, 0), (f32::INFINITY, true, 0)] {
+        let mut doc = control(28.0, 40.0, true, 1, keep);
+        doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap().props.space_before = Some(gap);
+        assert_eq!(heading_page(&doc), page, "gap={gap}, keep={keep}");
+    }
+    let mut doc = control(28.0, 40.0, true, 1, true);
+    doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap().props.space_before = Some(50.0);
+    doc.body.remove(0);
+    let layout = lay(&doc);
+    assert_eq!(layout.caret(&Pos::body(0, 0)).unwrap().page, 0, "a fitting heading at page top stays");
+    assert_eq!(layout.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 }).unwrap().page, 0);
+}
+
+/// The table is below the heading even when that heading starts a continuous section.
+#[test]
+fn kept_heading_counts_table_gap_at_continuous_section_start() {
+    let mut doc = control(28.0, 40.0, true, 1, true);
+    let previous = doc.last_section.clone();
+    doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(previous));
+    doc.last_section.start = wordcraft_doc::section::SectionStart::Continuous;
+    doc.table_mut(StoryRef::Body, &Path::top(2)).unwrap().props.space_before = Some(50.0);
+    assert_eq!(heading_page(&doc), 1);
+}

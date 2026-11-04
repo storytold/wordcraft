@@ -283,6 +283,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | trivial | PR #5166: the kept-table probe includes finite positive capped table space-before at the projected table cursor, including a heading at a continuous-section top. Synthetic keep/disabled-keep, invalid-gap, page-top and continuous-section regressions; no new native Word comparison or readiness change. |
 | 2026-11-03 | trivial | PR #5166 — Keep headings with tables (2026-11-03): A body heading kept with the next inline table uses the laid-out header, first body row and float clearance. Existing synthetic Word comparisons and layout regressions cover the narrow rule. Floating tables, longer paragraph chains and general oversized-row pagination retain their existing limitations. |
 | 2026-11-03 | trivial | Keep body headings with the real inline-table prefix after float clearance; retain synthetic Word controls and boundary regressions; broader pagination gaps remain open (#5166). |
 | 2026-11-01 | trivial | SEQ fields in text boxes are numbered where their boxes are anchored, in output and after F9, and a REF finds a bookmark in a text box |

@@ -128,7 +128,10 @@ pub(crate) fn kept_table_can_start(ctx: &mut Ctx, pb: &PageBuilder, block: usize
     ctx.track_totals = track;
     // Use the same full-width float clearance as placement, without moving the page cursor.
     let x = pb.col_x() + laid.x;
-    let start = below(&body_wraps(ctx, pb), start, x, x + laid.width);
+    // Placement tests the table's cursor after the heading, not the heading's current cursor.
+    // In a continuous section the heading can start at pb.top halfway down a physical page.
+    let gap = table.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && start > pb.top + 0.01).map_or(0.0, |s| s.min(MAX_TABLE_SPACE));
+    let start = below(&body_wraps(ctx, pb), start + gap, x, x + laid.width);
     let room = pb.bottom - start;
     let headers = table.rows.iter().take_while(|row| row.props.header).count();
     let header_height: f32 = laid.rows.iter().take(headers).map(|row| row.height).sum();
