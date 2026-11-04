@@ -129,9 +129,30 @@ pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
             big(ui, app, "macros", "Macros", "ui.dialog", json!({"name": "vbaMacros"}), false);
             stack(ui, |ui| {
                 let label = if recording { "Stop Recording" } else { "Record Macro" };
-                small(ui, app, "macros", Some(label), label, crate::widgets::ButtonAction::new("developer.recordMacro", json!({"stop": recording}), recording));
-                small(ui, app, "macros", Some("Macro Security"), "Macro Security", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "macroSecurity"}), false));
-                small(ui, app, "plus", Some("Ribbon Buttons"), "Ribbon Buttons", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "ribbonButtons"}), false));
+                small(
+                    ui,
+                    app,
+                    "macros",
+                    Some(label),
+                    label,
+                    crate::widgets::ButtonAction::new("developer.recordMacro", json!({"stop": recording}), recording),
+                );
+                small(
+                    ui,
+                    app,
+                    "macros",
+                    Some("Macro Security"),
+                    "Macro Security",
+                    crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "macroSecurity"}), false),
+                );
+                small(
+                    ui,
+                    app,
+                    "plus",
+                    Some("Ribbon Buttons"),
+                    "Ribbon Buttons",
+                    crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "ribbonButtons"}), false),
+                );
             });
         });
     }

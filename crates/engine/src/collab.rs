@@ -1011,76 +1011,90 @@ fn send_awareness(s: &mut Session, force: bool) {
     }
 }
 
-/// Handles one pushed message. Returns whether the interface should repaint.
-fn handle(s: &mut Session, p: Pushed) -> bool {
-    let msg = match p.incoming {
-        Incoming::Message(m) => m,
+/// A transport's process exited, flooded the app or sent an overlong message. Returns whether the
+/// interface should repaint.
+fn handle_transport(s: &mut Session, plugin: &str, incoming: Incoming) -> bool {
+    match incoming {
+        Incoming::Message(_) => false,
         Incoming::Exited(why) => {
             let now = s.collab.now;
             let mut any = false;
-            if let Some(r) = s.collab.room.as_mut().filter(|r| r.plugin == p.plugin) {
+            if let Some(r) = s.collab.room.as_mut().filter(|r| r.plugin == plugin) {
                 r.state = RoomState::Offline;
                 r.message = Some(format!("Offline: {why}"));
                 r.exited_at = Some(now);
                 any = true;
             }
-            if let Some(plugin) = wordcraft_plugin::get(&p.plugin) {
-                plugin.exited();
+            if let Some(running) = wordcraft_plugin::get(plugin) {
+                running.exited();
                 if any {
-                    plugin.count_failure(&why);
+                    running.count_failure(&why);
                 }
             }
-            return any;
+            any
         }
         Incoming::Overlong => {
-            if let Some(plugin) = wordcraft_plugin::get(&p.plugin) {
-                plugin.count_failure("a message larger than 64 MiB was dropped");
+            if let Some(running) = wordcraft_plugin::get(plugin) {
+                running.count_failure("a message larger than 64 MiB was dropped");
             }
-            return false;
+            false
         }
         Incoming::Flood => {
-            if let Some(plugin) = wordcraft_plugin::get(&p.plugin) {
-                plugin.fail("stopped: it sent more than 1,000 messages a second");
+            if let Some(running) = wordcraft_plugin::get(plugin) {
+                running.fail("stopped: it sent more than 1,000 messages a second");
             }
-            if let Some(r) = s.collab.room.as_mut().filter(|r| r.plugin == p.plugin) {
+            if let Some(r) = s.collab.room.as_mut().filter(|r| r.plugin == plugin) {
                 r.state = RoomState::Offline;
-                r.message = Some(format!("{} was stopped: it flooded the app", p.plugin));
+                r.message = Some(format!("{plugin} was stopped: it flooded the app"));
             }
-            return true;
+            true
         }
+    }
+}
+
+/// Answers a transport's request (`host/log`, `collab/snapshot`; the rest aren't available here).
+fn answer_request(s: &mut Session, plugin: &str, id: Json, method: &str, params: &Json) {
+    let answer = match method {
+        "host/log" => {
+            let text: String = params.get("text").and_then(Json::as_str).unwrap_or("").chars().take(4000).collect();
+            log::info!("plugin {}: {text}", plugin);
+            Ok(json!({}))
+        }
+        "collab/snapshot" => snapshot(s, plugin, params),
+        // Protocol 2.2's invalidation is for formula functions, which WordCraft doesn't have:
+        // unknown here as everywhere (not "not now").
+        "host/functions/invalidate" => Err(wordcraft_plugin::HostError::unknown()),
+        m if m.starts_with("host/") => Err(wordcraft_plugin::HostError {
+            code: -32000,
+            message: format!("{m} is only available while the add-in runs a command"),
+            data: json!({"code": "NotNow"}),
+        }),
+        _ => Err(wordcraft_plugin::HostError::unknown()),
+    };
+    if plugin == IN_MEMORY || s.collab.in_process.iter().any(|x| x == plugin) {
+        let msg = match answer {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": e.code, "message": e.message, "data": e.data}}),
+        };
+        s.collab.answers.push(msg);
+    } else if let Some(running) = wordcraft_plugin::get(plugin)
+        && let Err(e) = running.respond(&id, answer)
+    {
+        log::warn!("plugin {plugin}: answering {method}: {e}");
+    }
+}
+
+/// Handles one pushed message. Returns whether the interface should repaint.
+fn handle(s: &mut Session, p: Pushed) -> bool {
+    let msg = match p.incoming {
+        Incoming::Message(m) => m,
+        other => return handle_transport(s, &p.plugin, other),
     };
     let method = msg.get("method").and_then(Json::as_str).unwrap_or("").to_string();
     let params = msg.get("params").cloned().unwrap_or(Json::Null);
     // Requests: answered now, in any order.
     if let Some(id) = msg.get("id").cloned() {
-        let answer = match method.as_str() {
-            "host/log" => {
-                let text: String = params.get("text").and_then(Json::as_str).unwrap_or("").chars().take(4000).collect();
-                log::info!("plugin {}: {text}", p.plugin);
-                Ok(json!({}))
-            }
-            "collab/snapshot" => snapshot(s, &p.plugin, &params),
-            // Protocol 2.2's invalidation is for formula functions, which WordCraft doesn't have:
-            // unknown here as everywhere (not "not now").
-            "host/functions/invalidate" => Err(wordcraft_plugin::HostError::unknown()),
-            m if m.starts_with("host/") => Err(wordcraft_plugin::HostError {
-                code: -32000,
-                message: format!("{m} is only available while the add-in runs a command"),
-                data: json!({"code": "NotNow"}),
-            }),
-            _ => Err(wordcraft_plugin::HostError::unknown()),
-        };
-        if p.plugin == IN_MEMORY || s.collab.in_process.contains(&p.plugin) {
-            let msg = match answer {
-                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": e.code, "message": e.message, "data": e.data}}),
-            };
-            s.collab.answers.push(msg);
-        } else if let Some(plugin) = wordcraft_plugin::get(&p.plugin)
-            && let Err(e) = plugin.respond(&id, answer)
-        {
-            log::warn!("plugin {}: answering {method}: {e}", p.plugin);
-        }
+        answer_request(s, &p.plugin, id, &method, &params);
         return false;
     }
     let Some(room) = params.get("room").and_then(Json::as_str).map(str::to_string) else {

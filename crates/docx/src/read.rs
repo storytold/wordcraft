@@ -324,19 +324,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
-    // The document chat (craft-collab `docs/chat.md`): modelled, never kept as an opaque part. A
-    // damaged one is left out with a warning; the document opens all the same.
-    if let Some(rel) = root_rels.by_type(wordcraft_doc::chat::RELATIONSHIP).filter(|x| !x.external)
-        && let Some(bytes) = pkg.get(&rel.target)
-    {
-        match wordcraft_doc::chat::Chat::from_part_bytes(bytes) {
-            Ok(chat) => r.doc.chat = Arc::new(chat),
-            Err(e) => log::warn!("docx: ignoring the chat part {}: {e}", rel.target),
-        }
-    }
-    // The document's ribbon (tabs, groups, macro buttons) is modelled when that's all it holds;
-    // then it isn't kept as a package part as well.
-    let modelled = read_ribbon(&mut r.doc, pkg, &root_rels);
+    // The document chat and ribbon are modelled, not kept as package parts as well.
+    let modelled = read_modelled_parts(&mut r.doc, pkg, &root_rels);
     r.keep_unmodelled(&root, &root_rels, &rels, &modelled);
     if !r.embedded.parts.is_empty() {
         let manifest = r.embedded.to_bytes();
@@ -352,6 +341,23 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     let mut doc = r.doc;
     doc.ensure_nonempty();
     Ok((doc, left, bytes, graphic))
+}
+
+/// The package parts the model holds (the document chat, the ribbon), read into `doc`: returns
+/// the package relationships the ribbon came through, which aren't kept as parts.
+fn read_modelled_parts(doc: &mut Document, pkg: &Package, root_rels: &Rels) -> Vec<String> {
+    // The document chat (craft-collab `docs/chat.md`): modelled, never kept as an opaque part. A
+    // damaged one is left out with a warning; the document opens all the same.
+    if let Some(rel) = root_rels.by_type(wordcraft_doc::chat::RELATIONSHIP).filter(|x| !x.external)
+        && let Some(bytes) = pkg.get(&rel.target)
+    {
+        match wordcraft_doc::chat::Chat::from_part_bytes(bytes) {
+            Ok(chat) => doc.chat = Arc::new(chat),
+            Err(e) => log::warn!("docx: ignoring the chat part {}: {e}", rel.target),
+        }
+    }
+    // The document's ribbon (tabs, groups, macro buttons) is modelled when that's all it holds.
+    read_ribbon(doc, pkg, root_rels)
 }
 
 /// The document's ribbon part, when the model holds all of it (tabs, groups, macro buttons):

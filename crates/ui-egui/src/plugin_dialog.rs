@@ -444,7 +444,7 @@ fn form(ui: &mut Ui, d: &mut PluginDialog) -> bool {
                 (FieldKind::Choice, Edit::Choice(c)) => {
                     let label = ui.label(&f.label);
                     let shown = f.options.iter().find(|o| o.id == *c).map(|o| o.label.clone()).unwrap_or_default();
-                    let combo = egui::ComboBox::from_id_salt(("plugin-choice", i)).width(260.0).selected_text(shown).show_ui(ui, |ui| {
+                    let combo = craft_ui::ComboBox::from_id_salt(("plugin-choice", i)).width(260.0).selected_text(shown).show_ui(ui, |ui| {
                         for o in &f.options {
                             ui.selectable_value(c, o.id.clone(), &o.label);
                         }

@@ -74,7 +74,8 @@ pub fn parse_exact(bytes: &[u8]) -> Option<Ribbon> {
                 }
                 let builtin = tab.attr("idMso").map(str::to_string);
                 let id = tab.attr("id").unwrap_or("").to_string();
-                if builtin.is_some() == !id.is_empty() {
+                // Exactly one of `idMso` (a built-in tab) and `id` (a tab of its own).
+                if builtin.is_some() != id.is_empty() {
                     return None;
                 }
                 let mut t = RibbonTab { id, builtin, label: tab.attr("label").unwrap_or("").to_string(), groups: Vec::new() };

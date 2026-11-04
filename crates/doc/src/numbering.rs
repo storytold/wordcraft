@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::DocError;
 use crate::props::{Align, CharProps};
 use crate::section::NumFormat;
-use crate::DocError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

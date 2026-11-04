@@ -13,8 +13,8 @@
 pub mod bidi;
 mod byte_store;
 pub mod cfb_guard;
-pub mod chat;
 pub mod chart;
+pub mod chat;
 mod cjk_numbers;
 pub mod cluster;
 pub mod collate;
@@ -62,10 +62,10 @@ use serde::{Deserialize, Serialize};
 
 pub use control::{ContentControl, ControlKind, ControlLock, ControlRange, ControlWrap};
 pub use fields::FieldRange;
-pub use ribbon::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
+pub use ribbon::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 pub use section::SectionProps;
 pub use styles::{Style, StyleKind, StyleSheet};
 pub use table::{Cell, Row, Table};

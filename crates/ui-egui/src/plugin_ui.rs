@@ -159,7 +159,14 @@ pub fn ribbon_groups(app: &mut WordApp, ui: &mut Ui, tab: &str) {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(1.0, 0.0);
                     for b in column {
-                        let resp = small(ui, app, &b.icon, Some(&b.label), &b.label, crate::widgets::ButtonAction::new("plugins.run", b.run_params(), false));
+                        let resp = small(
+                            ui,
+                            app,
+                            &b.icon,
+                            Some(&b.label),
+                            &b.label,
+                            crate::widgets::ButtonAction::new("plugins.run", b.run_params(), false),
+                        );
                         described(resp, b);
                     }
                 });

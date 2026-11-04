@@ -1088,11 +1088,9 @@ impl Live {
     fn shell(&mut self, s: &mut Session, m: &Json) {
         match m.get("type").and_then(Json::as_str).unwrap_or("") {
             // The shell already told the server: nothing to do but show it.
-            "craft-live:save" => {
-                if !self.cfg.view {
-                    self.save_asked = true;
-                    self.out.push(Action::Status(tl!("Saving to Nextcloud…").to_string()));
-                }
+            "craft-live:save" if !self.cfg.view => {
+                self.save_asked = true;
+                self.out.push(Action::Status(tl!("Saving to Nextcloud…").to_string()));
             }
             "craft-live:close" => self.close(s),
             "craft-live:getPeers" => self.post_peers(s),

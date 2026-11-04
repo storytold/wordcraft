@@ -35,11 +35,11 @@ use serde_json::Value;
 pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
-pub use wordcraft_collab as collab_core;
 pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,
     ViewState, WindowView, blank_document, next_math_session, plugin_document_id, set_system_locale,
 };
+pub use wordcraft_collab as collab_core;
 /// The outcome a command reports for IME receipt classification.
 ///
 /// A command that can be called by an input method must classify its committed effects. Only a
