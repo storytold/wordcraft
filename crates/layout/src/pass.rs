@@ -111,6 +111,7 @@ fn new_ctx<'a>(
         floats_above: HashMap::new(),
         hf: Arc::new(HfLinks::new(doc.sections())),
         alphas: Default::default(),
+        header_repeats: 0,
     }
 }
 
@@ -594,6 +595,7 @@ pub(crate) struct Snap<'a> {
     eq_count: u32,
     page_field: u32,
     pub(crate) boxes: usize,
+    header_repeats: usize,
 }
 
 impl<'a> Snap<'a> {
@@ -613,6 +615,7 @@ impl<'a> Snap<'a> {
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
             boxes: ctx.boxes.total(),
+            header_repeats: ctx.header_repeats,
         }
     }
 
@@ -636,6 +639,7 @@ impl<'a> Snap<'a> {
         ctx.counters_saved = Some(self.counters.clone());
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
+        ctx.header_repeats = self.header_repeats;
     }
 }
 
