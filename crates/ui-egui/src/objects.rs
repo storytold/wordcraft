@@ -676,7 +676,7 @@ fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit
     let obj = hit_object(app, o)?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
-    opts.dark = app.session.view.dark_mode;
+    opts.dark = crate::canvas::dark_page(app);
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = o.bounds();
     let img = wordcraft_render::render_items(

@@ -135,6 +135,7 @@ impl Session {
         let current = document_id == self.document_id && rev == self.rev;
         self.sel = sel;
         self.view = view;
+        self.view.read_page_color = self.prefs.read_page_color;
         self.pending = pending;
         self.goal_x = goal_x;
         self.page_hint = page_hint;
