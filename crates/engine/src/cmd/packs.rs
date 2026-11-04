@@ -529,5 +529,159 @@ mod tests {
         let _ = packs::without_region("\u{0}-\u{202e}");
     }
 
+    /// A font store that has never fetched the list (a fresh install), or whose cached list is
+    /// for an older pin: `index` has nothing until a fetch.
+    struct Uncached(FixedBackend);
+
+    impl Backend for Uncached {
+        fn index(&self) -> Result<Vec<Pack>, String> {
+            Ok(Vec::new())
+        }
+        fn fetch_index(&self, c: &packs::Cancel) -> Result<Vec<Pack>, String> {
+            self.0.fetch_index(c)
+        }
+        fn network_on(&self) -> bool {
+            self.0.network_on()
+        }
+        fn enable_network(&self) -> Result<(), String> {
+            self.0.enable_network()
+        }
+        fn install(&self, pack: &Pack, cancel: &packs::Cancel, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+            self.0.install(pack, cancel, progress)
+        }
+        fn remove(&self, locale: &str) -> Result<(), String> {
+            self.0.remove(locale)
+        }
+        fn packs_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn installed(&self) -> Vec<packs::Installed> {
+            self.0.installed()
+        }
+    }
+
+    /// The sample packs and Greenlandic (`kl`), a language no system has a dictionary for.
+    fn with_greenlandic() -> FixedBackend {
+        let mut b = FixedBackend::sample();
+        let kl = Pack { locale: "kl".into(), name: "Kalaallisut".into(), ..b.packs[0].clone() };
+        b.packs.push(kl);
+        b
+    }
+
+    fn with_uncached<T>(b: FixedBackend, f: impl FnOnce(&mut Session, &Uncached) -> T) -> T {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
+        let b = Arc::new(Uncached(b));
+        packs::set_backend(Some(b.clone() as Arc<dyn Backend>));
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        f(&mut s, &b)
+    }
+
+    /// Martin's test of a fresh install: Greenlandic text, no list fetched yet. The bar still
+    /// offers the language (never English, nor one with a dictionary); getting it fetches the
+    /// list and installs its pack. A language the list then has no pack for (Klingon) stops
+    /// being offered.
+    #[test]
+    fn with_no_list_yet_the_bar_still_offers_the_language() {
+        with_uncached(with_greenlandic(), |s, b| {
+            s.run("document.setText", &json!({"text": "Hello there\nAluu, qanoq ippit?\ntlhIngan Hol"})).unwrap();
+            for (para, lang) in [(1, "kl-GL"), (2, "tlh")] {
+                s.run("caret.set", &json!({"pos": {"block": para, "off": 0}})).unwrap();
+                s.run("select.paragraph", &json!({})).unwrap();
+                s.run("review.language", &json!({"lang": lang})).unwrap();
+            }
+            assert!(packs::available().is_empty() && packs::missing(s).is_empty(), "no list: no pack to offer");
+            for tag in ["kl-GL", "tlh"] {
+                assert!(wordcraft_proof::missing_dictionary(Some(tag)).is_some(), "{tag} has no dictionary here");
+            }
+            assert_eq!(packs::unlisted(s), ["kl-GL", "tlh"], "English is never offered");
+            // Downloading off: getting it fails up front, and asks for nothing.
+            assert!(packs::start_get("kl-GL").is_err());
+            assert!(!packs::fetched());
+            b.0.network.store(true, Ordering::Relaxed);
+            assert_eq!(packs::start_get("kl-GL"), Ok(false), "fetched and installed here (no background thread)");
+            assert!(packs::is_installed("kl"));
+            assert!(packs::fetched());
+            assert!(packs::unlisted(s).is_empty(), "the list is known now: Klingon, which it lacks, isn't offered");
+            assert!(packs::missing(s).is_empty());
+        });
+    }
+
+    /// Review: a get refused because downloading is off isn't remembered, so a later fetch (the
+    /// person's Refresh in Options) doesn't install it unasked.
+    #[test]
+    fn a_refused_get_is_not_installed_by_a_later_fetch() {
+        with_uncached(with_greenlandic(), |_, b| {
+            assert!(packs::start_get("kl-GL").is_err(), "downloading off");
+            b.0.network.store(true, Ordering::Relaxed);
+            assert_eq!(packs::start_refresh(), Ok(false));
+            assert!(packs::find("kl").is_some(), "the list has it");
+            assert!(!packs::is_installed("kl"), "but nobody asked for it after the refusal");
+        });
+    }
+
+    /// The list was fetched, but lists nothing for the language: the bar stops offering it.
+    #[test]
+    fn a_language_the_fetched_list_lacks_is_no_longer_offered() {
+        with_uncached(FixedBackend::sample(), |s, b| {
+            s.run("document.setText", &json!({"text": "tlhIngan Hol"})).unwrap();
+            s.run("select.all", &json!({})).unwrap();
+            s.run("review.language", &json!({"lang": "tlh"})).unwrap();
+            assert_eq!(packs::unlisted(s), ["tlh"]);
+            b.0.network.store(true, Ordering::Relaxed);
+            assert_eq!(packs::start_get("tlh"), Ok(false));
+            assert!(packs::installed().is_empty(), "nothing to install");
+            assert!(packs::unlisted(s).is_empty() && packs::missing(s).is_empty());
+        });
+    }
+
+    /// With downloading already on and no list (or one for an older pin), the window fetches it
+    /// once in the background, asking nothing; never with downloading off, never twice.
+    #[test]
+    fn a_missing_list_is_fetched_once_when_downloading_is_on() {
+        let _g = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _reset = Reset;
+        let b = Arc::new(Uncached(with_greenlandic()));
+        packs::set_backend(Some(b.clone() as Arc<dyn Backend>));
+        assert!(!packs::refresh_if_stale(), "no background thread (the CLI, MCP): never");
+        packs::set_background(Some(Arc::new(|| {})));
+        assert!(!packs::refresh_if_stale(), "downloading off: no request");
+        b.0.network.store(true, Ordering::Relaxed);
+        assert!(!packs::refresh_if_stale(), "asked once a session: turned on later, the person's own click fetches");
+        // A new session (the backend set again) with downloading on.
+        packs::set_backend(Some(b.clone() as Arc<dyn Backend>));
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("document.setText", &json!({"text": "Aluu"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("review.language", &json!({"lang": "kl"})).unwrap();
+        let before = packs::finished();
+        assert!(packs::refresh_if_stale());
+        wait_for_finish(before);
+        assert!(packs::fetched());
+        assert_eq!(packs::missing(&s).into_iter().map(|p| p.locale).collect::<Vec<_>>(), ["kl"], "the bar offers the pack");
+        assert!(!packs::refresh_if_stale(), "once a session");
+        assert!(packs::installed().is_empty(), "nothing installed without a click");
+    }
+
+    /// Martin's test: choosing a language with nothing selected (the caret only) sets the typing
+    /// language; the bar offers its pack before anything is typed.
+    #[test]
+    fn the_caret_typing_language_asks_for_its_pack() {
+        with_backend(FixedBackend::sample(), |s, _| {
+            s.run("document.setText", &json!({"text": "Hello there"})).unwrap();
+            s.run("caret.set", &json!({"pos": {"block": 0, "off": 11}})).unwrap();
+            assert!(packs::missing(s).is_empty());
+            s.run("review.language", &json!({"lang": "nl-NL"})).unwrap();
+            assert!(s.sel.is_collapsed());
+            assert!(!packs::document_languages(s).iter().any(|l| l == "nl-NL"), "no Dutch text yet");
+            assert_eq!(packs::caret_language(s).as_deref(), Some("nl-NL"));
+            assert_eq!(packs::missing(s).into_iter().map(|p| p.locale).collect::<Vec<_>>(), ["nl"]);
+            // Do not check spelling or grammar at the caret: nothing asked.
+            s.run("review.language", &json!({"lang": "nl-NL", "noProof": true})).unwrap();
+            assert_eq!(packs::caret_language(s), None);
+            assert!(packs::missing(s).is_empty());
+        });
+    }
+
     use crate::packs::Pack;
 }
