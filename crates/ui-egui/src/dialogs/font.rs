@@ -1,4 +1,4 @@
-use super::{Dialog, Value, WordApp, json};
+use super::{Dialog, Ui, Value, WordApp, json, vec2};
 
 /// The Font dialog preview's size: the Size box's points between 6 and 72, else 12. `"NaN"` and
 /// `"inf"` parse as floats too, and a NaN font size trips epaint's glyph assertion (#3663).
@@ -78,7 +78,7 @@ pub(super) fn font_sample_box(
     let ppp = ui.ctx().pixels_per_point();
     let text = tl!("AaBbYyZz");
     let key = format!("fontsample:{text}:{props:?}:{mark:?}:{paper:?}:{display_paper:?}:{dark}:{w}:{ppp}");
-    let tex = app.previews.get_or(ui.ctx(), &key, || crate::previews::font_sample(text, props, mark, w, h, ppp, paper, dark));
+    let tex = app.previews.get_or(ui.ctx(), &key, || crate::previews::font_sample(text, props, mark, (w, h, ppp), paper, dark));
     let (r, _) = ui.allocate_exact_size(vec2(w + 4.0, h + 2.0), egui::Sense::hover());
     let t = crate::theme::Tokens::get(ui.ctx());
     let page = crate::theme::c32(display_paper);
@@ -90,6 +90,20 @@ pub(super) fn font_sample_box(
     if hidden {
         ui.label(egui::RichText::new(tl!("Hidden text is not shown unless you display it.")).small().weak());
     }
+}
+
+/// One of the Font dialog's font boxes: type to find a font, with the missing-font warning
+/// `shown_as` (the families drawn instead of `current`, see [`WordApp::font_dialog_warning`]).
+pub(super) fn font_box(
+    ui: &mut egui::Ui,
+    (id, current): (&str, &str),
+    items: &[String],
+    preview: &dyn Fn(&mut egui::Ui, &str) -> egui::Response,
+    shown_as: Option<&str>,
+) -> Option<String> {
+    let options =
+        crate::widgets::FontComboOptions { id, width: 220.0, current, items, recent: &[], preview: Some(preview), tip: tl!("Font"), shown_as };
+    crate::widgets::font_combo_with_recent_hint(ui, options)
 }
 
 /// The character properties the Font dialog's fields stand for.
