@@ -69,6 +69,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) hf: Arc<HfLinks<'a>>,
     /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
     pub(crate) alphas: contour::Alphas,
+    /// Items re-placed as repeated table header rows so far, in the whole layout (see
+    /// [`MAX_HEADER_ITEMS`]).
+    pub(crate) header_repeats: usize,
 }
 
 struct ParaEnvInput<'a> {
@@ -89,6 +92,8 @@ struct ParaEnvInput<'a> {
 pub(crate) struct Pin {
     pub(crate) story: StoryRef,
     pub(crate) sect: SectionProps,
+    /// Rendered header Margin boundary; absent in footers and height probes.
+    pub(crate) margin_top: Option<f32>,
     pub(crate) number: u32,
     pub(crate) mirror: bool,
     pub(crate) behind: Vec<Placed>,
@@ -108,7 +113,14 @@ pub(crate) fn page_anchored(f: &Float) -> bool {
 /// Run `f`, a layout of header or footer `id` for page `number` of `sect`, with the floats in its
 /// table cells that are placed on the page put there (see [`Pin`]). Returns `f`'s result and those
 /// floats' items, in page coordinates: behind the header's text, and in front.
-pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl FnOnce(&mut Ctx) -> T) -> (T, Vec<Placed>, Vec<Placed>) {
+pub(crate) fn with_pin<T>(
+    ctx: &mut Ctx,
+    id: u32,
+    sect: &SectionProps,
+    number: u32,
+    margin_top: Option<f32>,
+    f: impl FnOnce(&mut Ctx) -> T,
+) -> (T, Vec<Placed>, Vec<Placed>) {
     let tables = ctx.doc.parts.get(&id).is_some_and(|p| p.blocks.iter().any(|b| matches!(**b, Block::Table(_))));
     if !tables {
         return (f(ctx), Vec::new(), Vec::new());
@@ -116,6 +128,7 @@ pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u
     let pin = Pin {
         story: StoryRef::Part(id),
         sect: sect.clone(),
+        margin_top,
         number,
         mirror: ctx.mirror,
         behind: Vec::new(),
@@ -134,10 +147,14 @@ pub(crate) fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u
 /// an address names the same bytes only while their allocation lives: the weak reference keeps
 /// it (not the bytes in it), so a picture loaded later can't be given a freed picture's address
 /// and length and be taken for it.
-pub(crate) type Outlines = HashMap<(String, usize, usize, [u32; 4]), (std::sync::Weak<Vec<u8>>, Option<Arc<Vec<(f32, f32)>>>)>;
+///
+/// Each also holds the pixels its picture took of a layout's decoding budget, which a layout
+/// finding the entry charges as if it had decoded the picture ([`contour::Alphas::charge`]).
+pub(crate) type Outlines = HashMap<(String, usize, usize, [u32; 4]), (std::sync::Weak<Vec<u8>>, Option<Arc<Vec<(f32, f32)>>>, u64)>;
 
 /// Picture `bytes`'s outline within `crop`, kept in `outlines` under `key`. One refused for this
 /// layout's decoding budget wraps as its rectangle and isn't kept: a later layout may decode it.
+/// One kept from before is charged to the budget as if decoded now.
 pub(crate) fn picture_outline(
     outlines: &mut Outlines,
     alphas: &mut contour::Alphas,
@@ -145,14 +162,17 @@ pub(crate) fn picture_outline(
     bytes: &Arc<Vec<u8>>,
     crop: [f32; 4],
 ) -> Option<Arc<Vec<(f32, f32)>>> {
-    if let Some((_, o)) = outlines.get(&key) {
+    if let Some((_, o, cost)) = outlines.get(&key) {
+        // Kept from an earlier layout, but it still costs this one's budget: the same pictures
+        // get outlines whatever the cache holds.
+        alphas.charge(bytes, *cost).ok()?;
         return o.clone();
     }
     let outline = alphas.outline(bytes, crop).ok()?.map(Arc::new);
     if outlines.len() >= 256 {
         outlines.clear();
     }
-    outlines.insert(key, (Arc::downgrade(bytes), outline.clone()));
+    outlines.insert(key, (Arc::downgrade(bytes), outline.clone(), alphas.cost(bytes)));
     outline
 }
 
@@ -315,20 +335,31 @@ impl Ctx<'_> {
             if float.wrap != Wrap::Inline || float.rot != 0.0 {
                 continue;
             }
-            let key = (*id, w.to_bits());
-            let h = match self.fitted.get(&key) {
-                Some(h) => *h,
-                None => {
-                    let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
-                    h
-                }
-            };
-            if let Some(h) = h {
+            if let Some(h) = self.fitted_height(*id, *w) {
                 out.push((k, h));
             }
         }
         out
+    }
+
+    /// The height of text box `id`, `w` wide, when it resizes to fit its text (once per layout).
+    fn fitted_height(&mut self, id: u32, w: f32) -> Option<f32> {
+        let key = (id, w.to_bits());
+        if let Some(h) = self.fitted.get(&key) {
+            return *h;
+        }
+        let h = textbox::fitted_height(self, id, w);
+        self.fitted.insert(key, h);
+        h
+    }
+
+    /// The height floating object `o`, `w` wide and `h` tall, takes: a text box that resizes to
+    /// fit its text is as tall as its text, anything else its own height.
+    pub(crate) fn float_height(&mut self, o: &InlineObject, w: f32, h: f32) -> f32 {
+        match o {
+            InlineObject::Shape { story: Some(id), .. } => self.fitted_height(*id, w).unwrap_or(h),
+            _ => h,
+        }
     }
 
     /// The cache key of `p` laid out with these inputs, and its first automatic equation number

@@ -1,3 +1,4 @@
+mod alt_chunks;
 mod bidi;
 mod bidi_runs;
 mod cell_margin_inheritance;
@@ -12,6 +13,7 @@ mod default_size;
 mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;
+mod emphasis_marks;
 mod fixtures;
 mod glossary;
 mod heading_levels;

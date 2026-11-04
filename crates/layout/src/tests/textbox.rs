@@ -12,6 +12,11 @@ fn lay(doc: &Document) -> DocLayout {
 
 /// A text box `w` × `h` showing `text`, inline at the end of body paragraph `para`; its story id.
 fn text_box(d: &mut Document, para: usize, text: &str, w: f32, h: f32, body: TextBody) -> u32 {
+    text_box_with(d, para, text, w, h, body, Default::default())
+}
+
+/// [`text_box`] placed as `float` says.
+fn text_box_with(d: &mut Document, para: usize, text: &str, w: f32, h: f32, body: TextBody, float: wordcraft_doc::para::Float) -> u32 {
     let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(text, Default::default()))]);
     if let Some(p) = d.parts.get_mut(&id) {
         p.body = body;
@@ -23,7 +28,7 @@ fn text_box(d: &mut Document, para: usize, text: &str, w: f32, h: f32, body: Tex
         fill: None,
         stroke: None,
         stroke_width: 1.0,
-        float: Default::default(),
+        float,
         story: Some(id),
         effects: Default::default(),
         freeform: None,
@@ -295,3 +300,103 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
 const FILLER: usize = 22;
+
+/// A floating box that resizes to fit its text takes its text's height too, both where it is
+/// drawn and the room the text beside it wraps around (an OpenDocument frame without a height).
+#[test]
+fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
+    use wordcraft_doc::para::{Float, Wrap};
+    let rect = |auto_fit: bool, h: f32| {
+        let mut d = Document::from_text("Beside the box the text runs on and on and on.");
+        let id = text_box(&mut d, 0, "Inside", 144.0, h, TextBody { auto_fit, ..Default::default() });
+        if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut)
+            && let Some(InlineObject::Shape { float, .. }) = p.objects.first_mut()
+        {
+            *float = Float { wrap: Wrap::Square, ..Default::default() };
+        }
+        frame_of(&lay(&d), id)
+    };
+    let fixed = rect(false, 1.0);
+    assert!(fixed.h < 2.0, "a box that keeps its height: {fixed:?}");
+    let grown = rect(true, 1.0);
+    assert!(grown.h > 15.0 && grown.h < 30.0, "one line and the margins: {grown:?}");
+    let shrunk = rect(true, 300.0);
+    assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
+}
+
+#[test]
+fn a_turned_linked_box_turns_only_its_own_lines() {
+    // Linked boxes show the first box's story; turning the second box turns the lines it shows,
+    // not the ones the first box shows (on screen and drawn item by item, as PDF export draws).
+    let mut d = Document::from_text("one\ntwo");
+    let text = "Words that run on well past the first little box. ".repeat(6);
+    let a = text_box(&mut d, 0, &text, 144.0, 48.0, TextBody::default());
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 300.0, rot: 30.0, ..Default::default() };
+    let b = text_box_with(&mut d, 1, "", 144.0, 400.0, TextBody::default(), float);
+    d.parts.get_mut(&a).unwrap().body.next = Some(b);
+    let l = lay(&d);
+    // (Words drawn turned, words drawn upright.)
+    let turned_texts = |draws: &[display::Draw]| -> (bool, bool) {
+        let mut inside = String::new();
+        let mut outside = String::new();
+        for x in draws {
+            match x {
+                display::Draw::Rotated { items, .. } => items.iter().for_each(|g| {
+                    if let display::Draw::Glyphs { text, .. } = g {
+                        inside.push_str(text)
+                    }
+                }),
+                display::Draw::Glyphs { text, .. } => outside.push_str(text),
+                _ => {}
+            }
+        }
+        (inside.contains("Words"), outside.contains("Words"))
+    };
+    let page = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    assert_eq!(turned_texts(&page), (true, true), "the first box's lines stay upright, the second's turn");
+    let shown = display::ItemDisplay::new(&d, &l.pages[0]);
+    let items: Vec<display::Draw> = l.pages[0].items.iter().flat_map(|it| shown.draws(it, &Default::default())).collect();
+    assert_eq!(turned_texts(&items), (true, true));
+}
+
+#[test]
+fn a_clipped_line_in_a_turned_box_is_drawn_once_turned_and_clipped() {
+    // Lines in a cell cut off at its edge (an exact-height row) inside a turned text box: drawn
+    // once, clipped, inside the box's turn (it was drawn upright and clipped, and again turned).
+    let mut d = Document::from_text("one");
+    let text = "Words in the box.";
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, x: 20.0, y: 100.0, rot: 30.0, ..Default::default() };
+    let b = text_box_with(&mut d, 0, text, 144.0, 200.0, TextBody::default(), float);
+    let l = lay(&d);
+    let mut page = l.pages[0].clone();
+    let in_box: Vec<usize> = page
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| matches!(it, Placed::Lines { story: StoryRef::Part(s), .. } if *s == b))
+        .map(|(i, _)| i)
+        .collect();
+    // Its lines taken as ones in a clipped cell (table 5, row 0, cell 0).
+    let Some(Placed::Lines { path, .. }) = in_box.first().and_then(|&i| page.items.get_mut(i)) else { panic!("the box has no lines") };
+    *path = wordcraft_doc::Path(vec![5, 0, 0, 0]);
+    let rect = Rect::new(0.0, 0.0, 1000.0, 1000.0);
+    page.items.push(Placed::Cell {
+        rect,
+        covered: false,
+        table: wordcraft_doc::Path(vec![5]),
+        row: 0,
+        cell: 0,
+        story: StoryRef::Part(b),
+        clip: true,
+    });
+    let draws = display::page_display(&d, &page, &display::DisplayOptions::default());
+    let upright_clips = draws.iter().filter(|x| matches!(x, display::Draw::Clip { .. })).count();
+    let turned_clips: usize = draws
+        .iter()
+        .map(|x| match x {
+            display::Draw::Rotated { items, .. } => items.iter().filter(|g| matches!(g, display::Draw::Clip { .. })).count(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!((upright_clips, turned_clips), (0, 1));
+}

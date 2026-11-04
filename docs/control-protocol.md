@@ -73,6 +73,22 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
+**Task pane docking.** `ui.paneDock` and `view.stylesPaneDock` use **physical** `left` / `right`
+(the window's left and right edges), matching Dock Left / Dock Right in the pane menu. That stays
+true in a right-to-left interface language: `{"dock":"left"}` always puts the pane on the physical
+left and the command reports `"left"`. A pane that has never been docked keeps its default
+start-/end-edge role when mirrored: start-default panes (e.g. Navigation) open on the physical
+right in Arabic, end-default panes (e.g. Comments) on the physical left. Saved docks and explicit
+requests are never flipped.
+
+Language packs (see [MCP](mcp.md#language-packs)) are commands like any other: `proof.packs`,
+`proof.installPack {"locale": "nl"}` and `proof.removePack {"locale": "nl"}`. Through the control
+channel they act on the running app's packs, and install only while its downloading setting is on;
+they never turn it on, and neither does a `ui.click` or `ui.key` on the app's Install, Add a
+language… or Refresh buttons. An install or a refresh runs in the background
+(`"started": true`); `proof.packs` reports its progress, then the result.
+`ui.dialog {"name": "languageData"}` opens About › Language data.
+
 ### Open documents
 
 Several documents can be open at once. Each has an id, a whole number that stays the same while
@@ -165,3 +181,17 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+### Physical print sheet layout
+
+`ui.printSubmit`, `ui.print` and `file.printPdf` accept `pagesPerSheet`: the integer
+1 (default), 2, 4, 6, 9 or 16, or `"booklet"` / `"bookletReverse"` for left/right binding.
+These settings change only the print PDF, leaving document Page Setup unchanged.
+Selection/range/parity are applied first. N-up fills cells in row order; booklet mode
+pads the selected pages to a multiple of four and pairs outer/inner pages. Copies
+repeat complete sheet plans, preserving blank slots at copy boundaries. Native copies
+remain a spooler setting. Two-up and booklet sheets are landscape. Use duplex on the
+short edge for folded booklets; this does not configure a printer's duplex capability.
+The preview shows physical sheet sides, before copies, using the same sheet plan.
+Explicit `paper` chooses the physical sheet; otherwise the first selected page supplies
+its size. Independent Page Setup multiple-page modes (#2414) are not required.
