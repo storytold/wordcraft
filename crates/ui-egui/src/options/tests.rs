@@ -259,8 +259,13 @@ fn options_panes_open_and_change_settings() {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
     h.state_mut().dialog = None;
     h.run_steps(2);
-    // #1063: the dictionaries folder and the dictionary each language found.
+    // #1063: the dictionaries folder and the dictionary each language found moved to Language
+    // (CP4.3); Proofing has no Dictionaries section.
+    assert!(h.query_by_label("Dictionaries folder:").is_none() && h.query_by_label_contains("Polish: ").is_none());
+    h.get_by_label("Language").click();
+    h.run_steps(4);
     assert!(h.query_by_label("Dictionaries folder:").is_some());
+    assert!(h.query_by_label("Dictionary files").is_some());
     assert!(h.query_by_label_contains("Polish: ").is_some(), "the Polish dictionary's line");
     h.get_by_label("Advanced").click();
     h.run_steps(4);
@@ -476,4 +481,47 @@ fn length_units_follow_the_interface_language() {
     h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
     h.run_steps(4);
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
+}
+
+/// File › Options › Advanced › OpenDocument files: the preset drop-down is `file.options` `odf`, and
+/// Custom starts from the choices in use and shows each case.
+#[test]
+fn advanced_opendocument_presets_and_custom_cases() {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    let mut a = app();
+    a.run("file.options", json!({"pane": "advanced"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Tab stops are measured from the paragraph's indent").is_none(), "a preset shows no cases");
+    let pick = |h: &mut egui_kittest::Harness<'static, WordApp>, name: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Where the standard leaves the look open, follow:").click();
+        h.run_steps(4);
+        h.get_by_label(name).click();
+        h.run_steps(4);
+    };
+    let preset = |h: &egui_kittest::Harness<'static, WordApp>| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Where the standard leaves the look open, follow:").value()
+    };
+    // Two display styles: Microsoft Word's (the default) and LibreOffice's.
+    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
+    pick(&mut h, "LibreOffice style");
+    assert_eq!(preset(&h).as_deref(), Some("LibreOffice style"));
+    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::libreoffice());
+    pick(&mut h, "Custom");
+    let odf = &h.state().session.prefs.odf;
+    assert_eq!(odf.preset, OdfPreset::Custom);
+    assert_eq!(OdfProfile { preset: OdfPreset::LibreOffice, ..odf.effective() }, OdfProfile::libreoffice(), "starting from LibreOffice's");
+    h.get_by_label("Tab stops are measured from the paragraph's indent").click();
+    h.run_steps(4);
+    assert!(!h.state().session.prefs.odf.effective().tabs_from_indent, "a case turned off");
+    pick(&mut h, "Microsoft Word style");
+    assert_eq!(preset(&h).as_deref(), Some("Microsoft Word style"));
+    assert_eq!(h.state().session.prefs.odf.effective(), OdfProfile::word());
 }
