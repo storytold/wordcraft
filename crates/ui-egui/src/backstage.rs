@@ -695,7 +695,7 @@ fn recent_row(app: &mut WordApp, ui: &mut Ui, entry: &RecentDocument, name: &str
         }
         if app.services.show_in_folder.is_some() && ui.button(tl!("Show in folder")).clicked() {
             if let Err(error) = app.run("ui.recentShowInFolder", json!({"path": path})) {
-                app.status(error);
+                ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), error));
             }
             ui.close();
         }
