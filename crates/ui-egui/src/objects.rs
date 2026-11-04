@@ -289,11 +289,15 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
-    // A header/footer picture drawn outside the header/footer band (down over the body) has no
-    // header text to edit there, so a click selects it as it does in Word, not the deferred text click.
-    let outside_band = matches!(object.story, StoryRef::Part(_))
-        && crate::canvas::page_at(pages, layout, scale, at).is_some_and(|(page, _, y)| layout.header_footer_zone(page, y).is_none());
-    if pressed && grab == Grab::Move && object.behind() && !outside_band && behind_draggable(app, &object) {
+    // While editing a header/footer, a click on its Behind Text picture where no header/footer
+    // text covers it (the plain hit test picked it: down over the body, or clear of the text in
+    // the band) selects it, as in Word; only over text does the click defer to that text.
+    // ponytail: headers/footers only; body Behind Text pictures clear of text could do the same.
+    let clear_of_text = matches!(object.story, StoryRef::Part(_))
+        && crate::canvas::page_at(pages, layout, scale, at)
+            .and_then(|(page, x, y)| layout.object_at_in(page, x, y, EDGE / scale.max(0.01), object.story))
+            .is_some_and(|o| o.pos() == object.pos());
+    if pressed && grab == Grab::Move && object.behind() && !clear_of_text && behind_draggable(app, &object) {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return false,

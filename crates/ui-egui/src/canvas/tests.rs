@@ -4927,10 +4927,23 @@ fn a_long_comment_balloon_paints_only_its_first_ten_rows() {
     }
 }
 
-/// A Behind Text picture anchored in the header but drawn far down the page, over the body: while
-/// editing the header a click on it selects it; from the body a click there is body text.
+/// A Behind Text header picture: while editing the header a click on it selects it wherever no
+/// header text covers it (far down over the body, or in the band clear of the text), as in Word;
+/// over the header text the click edits the text. From the body a click there is body text.
 #[test]
-fn header_picture_outside_the_header_band_is_selected_while_editing_the_header() {
+fn header_picture_clear_of_header_text_is_selected_while_editing_the_header() {
+    // Far down the page, over the body.
+    header_picture_click(200.0, 400.0, Some((300.0, f32::MAX)), true);
+    // In the header band, below the header's text line.
+    header_picture_click(300.0, 56.0, Some((50.0, 72.0)), true);
+    // Over the header's text, at its start: the click goes to the text.
+    header_picture_click(72.0, 36.0, None, false);
+}
+
+/// Puts a Behind Text header picture at (`x`, `y`), checks its top lies within `band` (when
+/// given), clicks near its top-left corner from the body and then while editing the header, and checks the
+/// second click selects it (`selects`) or leaves the caret in the header's text.
+fn header_picture_click(x: f32, y: f32, band: Option<(f32, f32)>, selects: bool) {
     use egui::{Event, PointerButton};
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     a.run("insert.editHeader", json!({})).unwrap();
@@ -4940,10 +4953,12 @@ fn header_picture_outside_the_header_band_is_selected_while_editing_the_header()
     image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
     let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
-    a.run("arrange.bounds", json!({"x": 200, "y": 400})).unwrap();
+    a.run("arrange.bounds", json!({"x": x, "y": y})).unwrap();
     a.run("arrange.wrap", json!({"wrap": "behindText"})).unwrap();
     let rect = a.session.layout().object(&pos, 0).unwrap().rect;
-    assert!(rect.y > 300.0, "the picture sits well below the header band: {rect:?}");
+    if let Some((lo, hi)) = band {
+        assert!(rect.y >= lo && rect.y < hi, "the picture sits where the case wants it: {rect:?}");
+    }
     a.run("insert.closeHeader", json!({})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -4959,7 +4974,8 @@ fn header_picture_outside_the_header_band_is_selected_while_editing_the_header()
     let page = h.state().canvas.page_rects[0];
     let scale = h.state().canvas.scale;
     let frame = crate::frame::to_screen(page, scale, rect);
-    let at = frame.center();
+    // Near its top-left corner: on the header text line when the picture is placed over it.
+    let at = frame.min + egui::vec2(10.0, 6.0) * scale;
     let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
     let click = |h: &mut egui_kittest::Harness<'_, WordApp>| {
         h.event(Event::PointerMoved(at));
@@ -4979,5 +4995,10 @@ fn header_picture_outside_the_header_band_is_selected_while_editing_the_header()
     }
     click(&mut h);
     let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
-    assert_eq!(picked, Some(pos), "while editing the header a click on its picture selects it");
+    if selects {
+        assert_eq!(picked, Some(pos), "while editing the header a click on its picture selects it ({x}, {y})");
+    } else {
+        assert_eq!(picked, None, "over the header's text the click edits the text ({x}, {y})");
+        assert!(matches!(h.state().session.sel.focus.story, StoryRef::Part(_)), "still in the header");
+    }
 }
