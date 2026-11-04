@@ -68,6 +68,10 @@ Paper: documents created here, and HTML, Markdown and text files (which give no 
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
 LC_ALL / LC_PAPER / LANG or the platform. Set WORDCRAFT_REGION=en-US (or another tag) for the
 same output on every machine.
+
+OpenDocument (.odt, .ott, .fodt) files fill in what their standard leaves to the application in
+Microsoft Word's style (WORDCRAFT_ODF=word, the default) or LibreOffice's
+(WORDCRAFT_ODF=libreoffice); see docs/odf-interpretation.md.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
@@ -86,11 +90,18 @@ fn missing_argument() -> Failure {
 /// ([`password_from`]). As in the app, a document opened with one is saved with it again, so
 /// `convert` does not quietly write a copy the password no longer protects.
 fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
+    open_in(path, password, odf_profile()?)
+}
+
+/// [`open`] with the OpenDocument style `odf`, which the session keeps: a later `file.open` or
+/// `file.new` in a `run` script reads files the same way.
+fn open_in(path: &Path, password: Option<&str>, odf: wordcraft_doc::odf_profile::OdfProfile) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
+    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region, &odf)?;
     let mut s = session(doc);
+    s.prefs.odf = odf;
     s.path = Some(path.into());
     if encrypted {
         s.password = password.map(wordcraft_engine::io::Password::new);
@@ -170,6 +181,24 @@ fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
     s.system_region = system_region();
     s
+}
+
+/// How OpenDocument files fill in what their standard leaves open: `WORDCRAFT_ODF` names a preset
+/// (`word`, Microsoft Word's style and the default, or `libreoffice`; `wordcraft` is taken too).
+fn odf_profile() -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
+    odf_from(std::env::var("WORDCRAFT_ODF").ok())
+}
+
+/// [`odf_profile`] from `WORDCRAFT_ODF`'s value, if set.
+fn odf_from(var: Option<String>) -> Result<wordcraft_doc::odf_profile::OdfProfile, String> {
+    use wordcraft_doc::odf_profile::{OdfPreset, OdfProfile};
+    match var.filter(|v| !v.trim().is_empty()) {
+        None => Ok(OdfProfile::default()),
+        Some(v) => match OdfPreset::from_id(&v).filter(|p| *p != OdfPreset::Custom) {
+            Some(p) => Ok(OdfProfile::of(p)),
+            None => Err(format!("WORDCRAFT_ODF={v}: one of word, libreoffice")),
+        },
+    }
 }
 
 /// The system region, read as the app reads it (locale variables, else the platform's locale).
@@ -504,6 +533,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 // run starts with one open document.
                 (None, t) => {
                     let mut s = session(wordcraft_doc::Document::new());
+                    // The script's own `file.open`s read OpenDocument files in `WORDCRAFT_ODF`'s style.
+                    s.prefs.odf = odf_profile()?;
                     let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
                     s.run("file.new", &params).map_err(|e| e.to_string())?;
@@ -758,6 +789,12 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {

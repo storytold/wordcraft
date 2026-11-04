@@ -104,9 +104,9 @@ impl Exporter<'_> {
                 if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {
                     let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
                     s.set_stroke(None);
-                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                    for (g, paint) in c.soft_bands(rad) {
                         if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0), *corner) {
-                            s.set_fill(Some(paint_fill(&c.faded(a))));
+                            s.set_fill(Some(paint_fill(&paint)));
                             s.draw_path(&p);
                         }
                     }
@@ -286,6 +286,12 @@ impl Exporter<'_> {
             .media
             .get(&pic.media)
             .and_then(|b| image::ImageReader::new(std::io::Cursor::new(b.as_slice())).with_guessed_format().ok()?.into_dimensions().ok());
+        // Centred once at its natural size (an ODT page background that doesn't repeat).
+        if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("center")) {
+            let (iw, ih) = centred_size(pw, ph, w, h);
+            self.picture(s, &Rect::new((w - iw) / 2.0, (h - ih) / 2.0, iw, ih), &pic.media, &[0.0; 4], 1.0);
+            return;
+        }
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("tile")) {
             let (tw, th) = (pw as f32 * 0.75, ph as f32 * 0.75);
             if tw >= 1.0 && th >= 1.0 && (w / tw).ceil() * (h / th).ceil() <= MAX_TILES {
@@ -332,5 +338,29 @@ impl Exporter<'_> {
         if fade {
             s.pop();
         }
+    }
+}
+
+/// A centred page picture's size: its natural size (pixels at 96 dpi), scaled down by one factor
+/// for both sides when it is more than four pages wide or tall, so it keeps its shape.
+fn centred_size(pw: u32, ph: u32, w: f32, h: f32) -> (f32, f32) {
+    let (nw, nh) = (pw as f32 * 0.75, ph as f32 * 0.75);
+    if !(nw > 0.0 && nh > 0.0) {
+        return (0.0, 0.0);
+    }
+    let k = ((w * 4.0) / nw).min((h * 4.0) / nh).min(1.0);
+    (nw * k, nh * k)
+}
+
+#[cfg(test)]
+mod centred_tests {
+    #[test]
+    fn a_centred_picture_too_big_keeps_its_shape() {
+        // Fits: natural size.
+        assert_eq!(super::centred_size(400, 200, 612.0, 792.0), (300.0, 150.0));
+        // Very wide: scaled by one factor to four pages wide, height in proportion.
+        let (w, h) = super::centred_size(40_000, 1_000, 100.0, 100.0);
+        assert!((w - 400.0).abs() < 0.01 && (h - 10.0).abs() < 0.01, "{w} x {h}");
+        assert_eq!(super::centred_size(0, 10, 100.0, 100.0), (0.0, 0.0));
     }
 }

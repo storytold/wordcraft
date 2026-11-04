@@ -28,25 +28,28 @@ pub(super) fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Layouts", None, app, |ui, app| {
         let t = Tokens::get(ui.ctx());
-        egui::Grid::new("smart_art_layout_gallery").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
-            for (k, layout) in SmartArtLayout::ALL.into_iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(vec2(46.0, 31.0), Sense::click());
-                let on = g.layout == layout;
-                let fill = if on {
-                    t.checked
-                } else if resp.hovered() {
-                    t.hover
-                } else {
-                    t.ribbon
-                };
-                ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
-                crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
-                if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
-                    let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
-                }
-                if k % 4 == 3 {
-                    ui.end_row();
-                }
+        crate::rtl::Table::new("smart_art_layout_gallery").columns(0).spacing(vec2(2.0, 2.0)).show(ui, |table| {
+            for layouts in SmartArtLayout::ALL.chunks(4) {
+                table.row(|row| {
+                    for layout in layouts.iter().copied() {
+                        row.cell(|ui| {
+                            let (r, resp) = ui.allocate_exact_size(vec2(46.0, 31.0), Sense::click());
+                            let on = g.layout == layout;
+                            let fill = if on {
+                                t.checked
+                            } else if resp.hovered() {
+                                t.hover
+                            } else {
+                                t.ribbon
+                            };
+                            ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+                            crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
+                            if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
+                                let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
+                            }
+                        });
+                    }
+                });
             }
         });
     });
