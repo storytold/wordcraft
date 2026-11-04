@@ -264,6 +264,23 @@ fn another_document_ends_the_session_without_sharing_it() {
 }
 
 #[test]
+fn switching_away_ends_the_session_but_keeps_the_other_documents_undo() {
+    let mut a = Session::new(wordcraft_engine::doc::Document::new());
+    let room_doc = a.document_id();
+    a.run("file.new", &json!({})).unwrap();
+    let other = a.document_id();
+    a.run("text.insert", &json!({"text": "Other text"})).unwrap();
+    assert!(a.can_undo());
+    a.run("view.switchWindows", &json!({"id": room_doc})).unwrap();
+    a.run("text.insert", &json!({"text": "Room text"})).unwrap();
+    a.collab_join_in_memory(json!({"room": "r", "mode": "share"})).unwrap();
+    a.run("view.switchWindows", &json!({"id": other})).unwrap();
+    assert!(a.active_room().is_none(), "another document ends the session");
+    assert_eq!(a.document_id(), other);
+    assert!(a.can_undo(), "the document switched to keeps its own undo");
+}
+
+#[test]
 fn joining_is_read_only_and_undo_is_per_person() {
     let mut a = Session::new(wordcraft_engine::doc::Document::from_text("one"));
     let mut b = Session::new(wordcraft_engine::doc::Document::new());

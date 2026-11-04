@@ -534,9 +534,17 @@ fn leave_room(s: &mut Session, reason: Option<&str>, tell: bool) {
     }
     s.collab.answers.extend(std::mem::take(&mut *r.outbox.borrow_mut()));
     remove_recovery(s, &r.room);
-    // Back to an ordinary document: its own undo starts afresh; new ids as usual.
-    s.reset_history();
-    s.doc.set_id_space(wordcraft_doc::IdSpace::default());
+    // The room's document is an ordinary one again: its own undo starts afresh; new ids as
+    // usual. Another document that is active now keeps its history; a closed one needs nothing.
+    let ordinary = |s: &mut Session| {
+        s.reset_history();
+        s.doc.set_id_space(wordcraft_doc::IdSpace::default());
+    };
+    if s.document_id() == r.document {
+        ordinary(s);
+    } else if s.is_open(r.document) {
+        let _ = s.with_document(r.document, ordinary);
+    }
     if let Some(why) = reason
         && !tell
     {

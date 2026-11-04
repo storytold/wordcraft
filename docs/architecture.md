@@ -81,10 +81,10 @@ crate name links to its source tree.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-05 | trivial | `hostile_file_params_never_panic` runs `file.*`, `insert.picture` and `insert.textFromFile` with junk params and unusable paths (#3719) |
+| 2026-11-04 | minor | `collab` (L2): live sessions (plugin protocol 2); `plugin` reads add-ins' output all the time (the push channel); `engine` has the room, `collab.*` and per-user undo |
+| 2026-11-04 | minor | `plugin` (L3): out-of-process add-ins; `plugins.run` runs their answers as one undo step |
 | 2026-11-02 | trivial | craft-proof's row: without the Language data English spelling falls back to an installed Hunspell English or the built-in Moby list, and only pattern hyphenation is off (#5202 review) |
 | 2026-11-01 | minor | `proof` left the workspace: it is `craft-proof` in storytold/craft-libs (with its history), and the spelling and hyphenation data is craft-i18n's `language-data/` (`CRAFT_I18N_DIR`); `assets/spelling` and `assets/hyphenation` are gone |
 | 2026-10-28 | major | Recounted workspace crates, layers and Rust source lines; refreshed proofing languages and documented current engine/layout module boundaries and source links |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |
-| 2026-10-14 | minor | `plugin` (L3): out-of-process add-ins; `plugins.run` runs their answers as one undo step |
-| 2026-10-15 | minor | `collab` (L2): live sessions (plugin protocol 2); `plugin` reads add-ins' output all the time (the push channel); `engine` has the room, `collab.*` and per-user undo |

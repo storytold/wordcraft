@@ -22,15 +22,17 @@ use crate::theme::Tokens;
 
 /// Shows add-in pages: implemented by the desktop app with its web view.
 pub trait OfficeHost {
-    /// Shows the page for `key` (loading `url` the first time) over `rect`, in points.
-    fn show(&mut self, key: &str, url: &str, rect: egui::Rect, pixels_per_point: f32);
+    /// Shows the page for `key` (loading `url` the first time) over `rect`, in points. `allowed`:
+    /// the origins the page may navigate to and send messages from ([`allowed_origins`]); a link
+    /// anywhere else opens in the browser.
+    fn show(&mut self, key: &str, url: &str, allowed: &[String], rect: egui::Rect, pixels_per_point: f32);
     /// Hides the page (it keeps its state).
     fn hide(&mut self, key: &str);
     /// Closes the page.
     fn close(&mut self, key: &str);
     /// Loads `url` for `key` without showing it (a function file's page, for `ExecuteFunction`
     /// commands); nothing if that page is already there.
-    fn load_hidden(&mut self, key: &str, url: &str);
+    fn load_hidden(&mut self, key: &str, url: &str, allowed: &[String]);
     /// The messages pages sent since the last call: (key, JSON).
     fn take_messages(&mut self) -> Vec<(String, String)>;
     /// Answers the page for `key` (`__craftOfficeReply(json)`).
@@ -94,6 +96,56 @@ pub struct Panes {
     shown: Option<String>,
 }
 
+/// The origin of a web address, `scheme://host[:port]` in lower case (no user, path, query or
+/// fragment; the scheme's default port dropped). `None` when it isn't an `http(s)` address.
+pub fn origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h).to_ascii_lowercase();
+    let default = if scheme == "https" { ":443" } else { ":80" };
+    let host_port = host_port.strip_suffix(default).unwrap_or(&host_port);
+    if host_port.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{host_port}"))
+}
+
+/// The origins an add-in's page may be at, as Office allows them: the page's own and the
+/// manifest's `<AppDomains>` (a domain without a scheme is `https`; `https://*.example.com`
+/// takes every subdomain).
+pub fn allowed_origins(plugin: &str, url: &str) -> Vec<String> {
+    let domains = wordcraft_plugin::get(plugin).and_then(|p| p.manifest.office.as_ref().map(|o| o.app_domains.clone())).unwrap_or_default();
+    let mut allowed: Vec<String> = origin(url).into_iter().collect();
+    for d in domains {
+        let d = d.trim();
+        let full = if d.contains("://") { d.to_string() } else { format!("https://{d}") };
+        if let Some(o) = origin(&full)
+            && !allowed.contains(&o)
+        {
+            allowed.push(o);
+        }
+    }
+    allowed
+}
+
+/// Whether a page at `url` is at one of the `allowed` origins ([`allowed_origins`]).
+pub fn origin_allowed(url: &str, allowed: &[String]) -> bool {
+    let Some(o) = origin(url) else { return false };
+    allowed.iter().any(|a| {
+        if *a == o {
+            return true;
+        }
+        // `https://*.example.com`: a subdomain of example.com, same scheme.
+        a.split_once("://*.").is_some_and(|(scheme, base)| {
+            o.split_once("://").is_some_and(|(s, host)| s == scheme && host.strip_suffix(base).is_some_and(|sub| sub.ends_with('.') && sub.len() > 1))
+        })
+    })
+}
+
 fn key(plugin: &str, pane: Option<&str>, url: &str) -> String {
     format!("{plugin}#{}", pane.unwrap_or(url))
 }
@@ -126,7 +178,7 @@ pub fn run_function(app: &mut WordApp, plugin: &str, url: &str, function: &str, 
     if app.office.calls.len() >= MAX_CALLS {
         return;
     }
-    host.load_hidden(&k, url);
+    host.load_hidden(&k, url, &allowed_origins(plugin, url));
     if !app.office.function_pages.iter().any(|(fk, _)| *fk == k) {
         app.office.function_pages.push((k.clone(), plugin.to_string()));
     }
@@ -166,6 +218,10 @@ fn close(app: &mut WordApp, i: usize) {
     }
     if app.office.shown.as_deref() == Some(pane.key.as_str()) {
         app.office.shown = None;
+    }
+    // The same pane stays current when one before it closes.
+    if i < app.office.current {
+        app.office.current -= 1;
     }
     app.office.current = app.office.current.min(app.office.open.len().saturating_sub(1));
 }
@@ -349,7 +405,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 hide_shown(app);
             }
             if let Some(host) = app.services.office.as_mut() {
-                host.show(&pane.key, &pane.url, rect, ppp);
+                host.show(&pane.key, &pane.url, &allowed_origins(&pane.plugin, &pane.url), rect, ppp);
             }
             app.office.shown = Some(pane.key);
         }
@@ -367,5 +423,33 @@ fn hide_shown(app: &mut WordApp) {
         && let Some(host) = app.services.office.as_mut()
     {
         host.hide(&k);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{origin, origin_allowed};
+
+    #[test]
+    fn origins_are_scheme_host_and_port() {
+        assert_eq!(origin("https://Add-In.example/pane.html?x=1#y").as_deref(), Some("https://add-in.example"));
+        assert_eq!(origin("https://a.example:443/").as_deref(), Some("https://a.example"));
+        assert_eq!(origin("https://a.example:8443").as_deref(), Some("https://a.example:8443"));
+        assert_eq!(origin("https://user:pw@a.example/x").as_deref(), Some("https://a.example"));
+        assert_eq!(origin("file:///etc/passwd"), None);
+        assert_eq!(origin("javascript:alert(1)"), None);
+        assert_eq!(origin("https:///x"), None);
+    }
+
+    #[test]
+    fn a_page_may_be_only_at_its_own_origin_or_an_app_domain() {
+        let allowed = vec!["https://add-in.example".to_string(), "https://*.login.example".to_string()];
+        assert!(origin_allowed("https://add-in.example/other.html", &allowed));
+        assert!(origin_allowed("https://id.login.example/auth", &allowed));
+        assert!(!origin_allowed("https://login.example/auth", &allowed));
+        assert!(!origin_allowed("https://evil.example/", &allowed));
+        assert!(!origin_allowed("https://add-in.example.evil.example/", &allowed));
+        assert!(!origin_allowed("http://add-in.example/", &allowed));
+        assert!(!origin_allowed("about:blank", &allowed));
     }
 }

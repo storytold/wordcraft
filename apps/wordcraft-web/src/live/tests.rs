@@ -120,6 +120,9 @@ fn the_shell_config_and_odd_users_work_too() {
     }))
     .unwrap();
     assert!(c.user["id"].as_str().unwrap().starts_with("guest-"));
+    // Random hex, never made from the secret token (every peer sees the id).
+    let suffix = c.user["id"].as_str().unwrap().strip_prefix("guest-").unwrap();
+    assert!(suffix.len() == 8 && suffix.chars().all(|ch| ch.is_ascii_hexdigit()), "{suffix}");
     assert_eq!(c.user["name"], c.user["id"]);
     assert!(wordcraft_engine::collab::valid_color(c.user["color"].as_str().unwrap()));
     assert_eq!(c.format, "docx");

@@ -497,6 +497,7 @@ fn body(ui: &mut Ui, d: &mut ShareDialog, dirty: bool) -> Action {
 fn go(app: &mut WordApp, d: &ShareDialog) -> Result<(), String> {
     let (plugin, _) = d.transports.get(d.transport).cloned().ok_or_else(|| tl!("Choose a connection").to_string())?;
     app.run("collab.setUser", json!({"name": d.name.trim(), "color": d.color}))?;
+    let was_dirty = app.session.dirty;
     let params = if d.join {
         if d.discard {
             // The user chose to lose the unsaved changes: joining may replace the document.
@@ -510,7 +511,12 @@ fn go(app: &mut WordApp, d: &ShareDialog) -> Result<(), String> {
     if wordcraft_plugin::get(&plugin).is_some_and(|p| p.manifest.command(command).is_none()) {
         return Err(crate::i18n::fmt(tl!("This add-in has no {command} command"), &[("command", command)]));
     }
-    app.run("plugins.run", json!({"plugin": plugin, "command": command, "params": params}))?;
+    // Until a session replaces the document, its unsaved changes are still there to save.
+    let started = app.run("plugins.run", json!({"plugin": plugin, "command": command, "params": params}));
+    if started.is_err() || (app.session.active_room().is_none() && app.dialog.is_none()) {
+        app.session.dirty |= was_dirty;
+    }
+    started?;
     if app.session.active_room().is_none() && app.dialog.is_none() {
         return Err(tl!("The add-in didn't start a live session").to_string());
     }

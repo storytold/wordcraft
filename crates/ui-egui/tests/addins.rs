@@ -199,7 +199,7 @@ struct Web {
 }
 
 impl wordcraft_ui_egui::office_pane::OfficeHost for FakeWeb {
-    fn show(&mut self, key: &str, url: &str, _rect: egui::Rect, _ppp: f32) {
+    fn show(&mut self, key: &str, url: &str, _allowed: &[String], _rect: egui::Rect, _ppp: f32) {
         let mut w = self.0.lock().unwrap();
         if !w.shown.iter().any(|(k, _)| k == key) {
             w.shown.push((key.into(), url.into()));
@@ -211,7 +211,7 @@ impl wordcraft_ui_egui::office_pane::OfficeHost for FakeWeb {
     fn close(&mut self, key: &str) {
         self.0.lock().unwrap().closed.push(key.into());
     }
-    fn load_hidden(&mut self, key: &str, url: &str) {
+    fn load_hidden(&mut self, key: &str, url: &str, _allowed: &[String]) {
         self.0.lock().unwrap().hidden_pages.push((key.into(), url.into()));
     }
     fn call(&mut self, key: &str, entry: &str, json: &str) {
