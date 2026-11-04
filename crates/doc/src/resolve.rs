@@ -177,7 +177,7 @@ pub struct ResolvedPara {
     pub contextual_spacing: bool,
     /// Left/right indents are inside/outside: they swap on even pages.
     pub mirror_indents: bool,
-    /// Preserve the right indent when snapping to the document grid.
+    /// Automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
     #[serde(default = "default_adjust_right_indent")]
     pub adjust_right_indent: bool,
     pub keep_next: bool,

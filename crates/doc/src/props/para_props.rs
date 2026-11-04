@@ -295,7 +295,7 @@ pub struct ParaProps {
     /// outside ones, so they swap sides on even (left-hand) pages.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror_indents: Option<bool>,
-    /// `w:adjustRightInd`: preserve the right indent when snapping to a document grid.
+    /// `w:adjustRightInd`: automatically adjust the right indent for the document grid when enabled; keep the specified right indent when disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjust_right_indent: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
