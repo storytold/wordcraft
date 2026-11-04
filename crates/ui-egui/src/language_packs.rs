@@ -168,9 +168,8 @@ pub(crate) const MORE_LANGUAGES: [(&str, &str); 28] = [
 /// the Language dialog name it; else the pack's own name; else its locale.
 pub(crate) fn language_of(pack_locale: &str, endonym: &str) -> String {
     let tag = crate::ribbon::tag_for_pack(pack_locale);
-    let named = crate::ribbon::language_name(Some(&tag));
-    if !named.eq_ignore_ascii_case(&tag) {
-        return tl!(&named).to_string();
+    if !crate::ribbon::language_name(Some(&tag)).eq_ignore_ascii_case(&tag) {
+        return crate::ribbon::display_name(Some(&tag));
     }
     if endonym.is_empty() { pack_locale.to_string() } else { endonym.to_string() }
 }

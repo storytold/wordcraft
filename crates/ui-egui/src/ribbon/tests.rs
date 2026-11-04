@@ -308,6 +308,32 @@ fn rows_are_matched_by_tag_not_by_display_name() {
     assert_eq!(language_checks("pt", &[("pt-PT".to_string(), "Portuguese (Brazil)".to_string())]).listed, [false]);
 }
 
+/// CP4.3 review: a name built from a language and a region (`Swedish (Finland)`) has no catalog row
+/// of its own, so the language, the region and the `{language} ({region})` template are looked up
+/// separately and joined. English stays as `language_name` builds it.
+#[test]
+fn a_language_and_region_name_is_translated_in_parts() {
+    use super::language::display_name_with;
+    let fake = |s: &str| -> String {
+        match s {
+            "Swedish" => "X".into(),
+            "Finland" => "Y".into(),
+            "{language} ({region})" => "{language} \u{2013} {region}".into(),
+            other => other.to_string(),
+        }
+    };
+    assert_eq!(display_name_with(Some("sv-FI"), &fake), "X \u{2013} Y");
+    // A whole name is looked up as it is; the template isn't used for it.
+    assert_eq!(display_name_with(Some("sv-SE"), &fake), "X");
+    // Without a catalogue (English) the name is byte-identical to the English name.
+    for tag in ["sv-FI", "es-CU", "fr-CA", "de-CH", "pt-AO", "en-SG", "sr-Latn-BA", "pl-PL", "nl", "xx-YY", "xx", "ca-valencia"] {
+        assert_eq!(super::language::display_name(Some(tag)), language_name(Some(tag)), "{tag}");
+    }
+    assert_eq!(language_name(Some("sv-FI")), "Swedish (Finland)");
+    // Matching never uses a translated name: Finnish Swedish and Swedish of Sweden stay two rows.
+    assert!(!super::language::same_language("sv-FI", "sv-SE"));
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]

@@ -96,7 +96,7 @@ pub(crate) fn short_languages() -> Vec<(String, String)> {
             more.push((tag, name));
         }
     }
-    more.sort_by_cached_key(|(_, n)| sort_key(tl!(n)));
+    more.sort_by_cached_key(|(t, n)| sort_key(&display_of(t, n)));
     out.extend(more);
     out
 }
@@ -113,7 +113,7 @@ pub(crate) fn all_languages() -> Vec<(String, String)> {
     });
     for (tag, name) in builtin.chain(packs) {
         if !out.iter().any(|(t, _)| t.eq_ignore_ascii_case(&tag)) {
-            out.push((tag, tl!(&name).to_string()));
+            out.push((tag.clone(), display_of(&tag, &name)));
         }
     }
     out.sort_by_cached_key(|(_, n)| sort_key(n));
@@ -126,7 +126,7 @@ pub(crate) fn language_list(current: &str) -> Vec<(String, String)> {
     let mut list = all_languages();
     // A tag the list has under another spelling (`nl` for `nl-NL`) is that row, not another.
     if !current.is_empty() && !list.iter().any(|(t, _)| same_language(current, t)) {
-        list.push((current.to_string(), tl!(&language_name(Some(current))).to_string()));
+        list.push((current.to_string(), display_name(Some(current))));
         list.sort_by_cached_key(|(_, n)| sort_key(n));
     }
     list
@@ -170,15 +170,53 @@ pub(crate) fn sort_key(name: &str) -> (String, String) {
     (folded, lower)
 }
 
+/// A language's name in English, as the lists build it: a whole name (`Polish`, `Serbian (Latin)`)
+/// or a language with a region the lists have no entry for (`Swedish` and `Finland`).
+enum NameParts {
+    Whole(String),
+    Regioned { language: String, region: String },
+}
+
 /// The English name of a proofing language tag, as the status bar shows it (no tag: WordCraft's
 /// default, US English): a listed language by its name; another region of one by the language
 /// and the region ("French (Canada)"); a bare language subtag by its usual variant; else the tag.
 pub(crate) fn language_name(tag: Option<&str>) -> String {
+    match name_parts(tag) {
+        NameParts::Whole(n) => n,
+        NameParts::Regioned { language, region } => format!("{language} ({region})"),
+    }
+}
+
+/// [`language_name`] in the interface language: a whole name is looked up as it is, a language
+/// with a region is the translated `{language} ({region})` of the translated language and region
+/// (a name built at run time has no catalog row of its own). English is unchanged.
+pub(crate) fn display_name(tag: Option<&str>) -> String {
+    display_name_with(tag, &|s| tl!(s).to_string())
+}
+
+/// [`display_name`] with the lookup given (`translate`: English in, interface language out).
+pub(super) fn display_name_with(tag: Option<&str>, translate: &dyn Fn(&str) -> String) -> String {
+    match name_parts(tag) {
+        NameParts::Whole(n) => translate(&n),
+        NameParts::Regioned { language, region } => {
+            crate::i18n::fmt(&translate("{language} ({region})"), &[("language", &translate(&language)), ("region", &translate(&region))])
+        }
+    }
+}
+
+/// The name a list shows for `tag` whose English name is `name`: [`display_name`] for the name
+/// WordCraft has for the tag, else `name` as it is (a pack's own name for a language WordCraft
+/// has none for).
+pub(crate) fn display_of(tag: &str, name: &str) -> String {
+    if name == language_name(Some(tag)) { display_name(Some(tag)) } else { name.to_string() }
+}
+
+fn name_parts(tag: Option<&str>) -> NameParts {
     let tag = tag.unwrap_or("en-US");
     let named = |t: &str| known().find(|(l, _)| l.eq_ignore_ascii_case(t)).map(|(_, n)| *n);
     // Any language the Language dialog offers (French, German…) by its name, not its tag (#860).
     if let Some(name) = named(tag) {
-        return name.to_string();
+        return NameParts::Whole(name.to_string());
     }
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
@@ -191,12 +229,12 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
                 .find(|(l, _)| l.split('-').next().is_some_and(|p| p.eq_ignore_ascii_case(primary)))
                 .map(|(_, n)| n.split(" (").next().unwrap_or(n));
             match language {
-                Some(language) => format!("{language} ({})", region_name(r)),
-                None => tag.to_string(),
+                Some(language) => NameParts::Regioned { language: language.to_string(), region: region_name(r) },
+                None => NameParts::Whole(tag.to_string()),
             }
         }
         // A bare language subtag ("pt", "pl"): the variant WordCraft proofs.
-        None => match wordcraft_engine::proof::ProofLang::from_tag(Some(tag)) {
+        None => NameParts::Whole(match wordcraft_engine::proof::ProofLang::from_tag(Some(tag)) {
             wordcraft_engine::proof::ProofLang::Pl => "Polish".into(),
             wordcraft_engine::proof::ProofLang::Hr => "Croatian".into(),
             wordcraft_engine::proof::ProofLang::Pt => "Portuguese (Brazil)".into(),
@@ -213,7 +251,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             _ => named_starting(tag)
                 .or_else(|| known().find(|(t, _)| t.contains('-') && wordcraft_engine::packs::without_region(t).eq_ignore_ascii_case(tag)))
                 .map_or_else(|| tag.to_string(), |(_, n)| (*n).to_string()),
-        },
+        }),
     }
 }
 
@@ -295,7 +333,7 @@ fn region_name(code: &str) -> String {
 
 /// The language at the caret (resolved through the styles), translated, for the status bar.
 pub(crate) fn caret_language(app: &WordApp) -> String {
-    tl!(&language_name(caret_lang_tag(app).as_deref())).to_string()
+    display_name(caret_lang_tag(app).as_deref())
 }
 
 /// The formatting at the caret, resolved through the styles and the document default.
@@ -349,11 +387,11 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
     let no_proof = st.get("noProof").and_then(Value::as_bool).unwrap_or(false);
     let entries = short_languages();
     let checks = language_checks(&current, &entries);
-    if let Some(name) = checks.extra {
-        mi_check(ui, app, &name, true, "review.language", json!({"lang": current}));
+    if checks.extra.is_some() {
+        mi_check(ui, app, &display_name(Some(&current)), true, "review.language", json!({"lang": current}));
     }
     for ((tag, name), on) in entries.iter().zip(checks.listed) {
-        mi_check(ui, app, name, on, "review.language", json!({"lang": tag}));
+        mi_check(ui, app, &display_of(tag, name), on, "review.language", json!({"lang": tag}));
     }
     ui.separator();
     mi_check(ui, app, "Do Not Check Spelling or Grammar", no_proof, "review.language", json!({"noProof": !no_proof}));
