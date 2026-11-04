@@ -87,6 +87,20 @@ fn direct_band_sizes_preserve_zero_and_bound_invalid_or_oversized_values() {
 }
 
 #[test]
+fn direct_band_sizes_accept_negative_zero_only() {
+    let input = docx(&table(
+        r#"<w:tblStyleRowBandSize w:val="-0"/><w:tblStyleColBandSize w:val="-00"/>"#,
+        "",
+        r#"<w:tblPrEx><w:tblStyleRowBandSize w:val="-1"/><w:tblStyleColBandSize w:val="-"/></w:tblPrEx>"#,
+    ));
+    let doc = wordcraft_docx::read(&input).unwrap();
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((tbl.props.band_size, tbl.props.col_band_size), (Some(0), Some(0)));
+    let ex = tbl.rows[0].props.exceptions.as_ref().expect("row exception retained");
+    assert_eq!((ex.band_size, ex.col_band_size), (None, None));
+}
+
+#[test]
 fn direct_band_sizes_ignore_fractional_and_exponent_values() {
     let input = docx(&table(r#"<w:tblStyleRowBandSize w:val="1.5"/><w:tblStyleColBandSize w:val="1e2"/>"#, "", ""));
     let doc = wordcraft_docx::read(&input).unwrap();
