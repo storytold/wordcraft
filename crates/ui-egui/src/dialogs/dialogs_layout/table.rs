@@ -301,7 +301,7 @@ pub struct TextToTableForm {
 }
 
 impl TextToTableForm {
-    /// The selected paragraphs; none when the selection can't be converted (a table inside it).
+    /// The selected paragraphs; none when the selection can't be converted (a table or section break inside it).
     pub fn read(app: &WordApp) -> Option<TextToTableForm> {
         let lines = wordcraft_engine::cmd::table::text_table_lines(&app.session).ok()?;
         // Tabs when the text has them, else paragraphs (Word doesn't guess commas).

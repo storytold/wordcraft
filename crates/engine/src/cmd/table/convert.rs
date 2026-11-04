@@ -253,19 +253,23 @@ fn auto_formula_instr(t: &Table, r: usize, c: usize, raw: &str, lang: Option<&st
 }
 
 /// The paragraphs Convert Text to Table would convert: the selected ones, as text. Refused
-/// rather than dropping content when a table lies between them.
+/// rather than dropping content when a table or a section break lies among them.
 pub fn text_table_lines(s: &Session) -> Result<Vec<String>, CmdError> {
     let (a, b) = s.sel.ordered();
     if a.path.parent() != b.path.parent() || a.story != b.story {
         return Err(CmdError::Failed("select paragraphs to convert".into()));
     }
-    let lines: Vec<String> =
-        (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).map(|p| p.plain_text())).collect();
+    let paras: Vec<&Paragraph> = (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i))).collect();
     // Refuse rather than drop content: a table between the paragraphs would be removed with them.
-    if lines.len() != b.path.last() - a.path.last() + 1 {
+    if paras.len() != b.path.last() - a.path.last() + 1 {
         return Err(CmdError::Failed("select only paragraphs to convert".into()));
     }
-    Ok(lines)
+    // A paragraph ending a section carries its page setup; converting it would delete the
+    // section. (The last section's properties live on the document, not a paragraph.)
+    if paras.iter().any(|p| p.section.is_some()) {
+        return Err(CmdError::Failed("the selection crosses a section break; select text within one section to convert".into()));
+    }
+    Ok(paras.iter().map(|p| p.plain_text()).collect())
 }
 
 /// The cells Convert Text to Table makes of `lines`, row by row, and the column count. `sep`
@@ -378,7 +382,7 @@ pub(super) fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     };
     let columns = p::u64(v, "columns").map(|n| n.clamp(1, wordcraft_doc::table::MAX_COLS as u64) as usize);
     let (a, b) = s.sel.ordered();
-    // Checks the selection: only paragraphs, a table between them is refused.
+    // Checks the selection: only paragraphs; a table or section break among them is refused.
     text_table_lines(s)?;
     let paras: Vec<Paragraph> = (a.path.last()..=b.path.last()).filter_map(|i| s.doc.para(a.story, &a.path.with_last(i)).cloned()).collect();
     let (cells, cols) = text_table_paras(paras, sep, columns)?;

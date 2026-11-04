@@ -7923,6 +7923,58 @@ fn convert_text_to_table_refuses_to_drop_content() {
     assert_eq!(s.undo_depth(), depth);
 }
 
+/// Three paragraphs; the first ends a 432 × 648 pt next-page section, the last section is
+/// 612 × 792 pt (issue #5548's repro).
+fn two_section_doc() -> Session {
+    use wordcraft_doc::section::SectionProps;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a\tb\nc\td\ne\tf"}));
+    let first = SectionProps { page_w: 432.0, page_h: 648.0, ..Default::default() };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(first));
+    s.doc.last_section.page_w = 612.0;
+    s.doc.last_section.page_h = 792.0;
+    s
+}
+
+#[test]
+fn convert_text_to_table_refuses_across_a_section_break() {
+    // Issue #5548: the paragraph ending a section was removed with its page setup.
+    let at = |i: u32| json!({"story": "body", "path": [i], "off": 0});
+    for (from, to) in [(0, 2), (0, 0), (0, 1)] {
+        for params in [json!({}), json!({"separator": "paragraph"}), json!({"separator": "comma", "autofit": "window"})] {
+            let mut s = two_section_doc();
+            run(&mut s, "select.range", json!({"anchor": at(from), "focus": at(to)}));
+            let (before, depth) = (s.doc.clone(), s.undo_depth());
+            assert!(s.run("table.fromText", &params).is_err(), "{from}..{to} {params}");
+            assert!(s.doc == before, "{from}..{to} {params}: the document changed");
+            assert_eq!(s.undo_depth(), depth);
+            let sections = s.doc.sections();
+            assert_eq!(sections.len(), 2);
+            assert_eq!(sections.iter().map(|(_, p)| (p.page_w, p.page_h)).collect::<Vec<_>>(), [(432.0, 648.0), (612.0, 792.0)]);
+        }
+    }
+    // Within one section it still converts: the last two paragraphs, in the final section.
+    let mut s = two_section_doc();
+    run(&mut s, "select.range", json!({"anchor": at(1), "focus": at(2)}));
+    run(&mut s, "table.fromText", json!({}));
+    assert_eq!(table_texts(&s), [["c", "d"], ["e", "f"]]);
+    assert_eq!(s.doc.sections().iter().map(|(_, p)| (p.page_w, p.page_h)).collect::<Vec<_>>(), [(432.0, 648.0), (612.0, 792.0)]);
+}
+
+#[test]
+fn convert_text_to_table_through_the_last_paragraph_of_one_section() {
+    // The last section's properties are the document's, not a paragraph's: converting every
+    // paragraph of a single-section document is not refused, and keeps its page setup.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "a\tb\nc\td"}));
+    s.doc.last_section.page_w = 432.0;
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "table.fromText", json!({}));
+    assert_eq!(table_texts(&s), [["a", "b"], ["c", "d"]]);
+    assert_eq!(s.doc.sections().len(), 1);
+    assert_eq!(s.doc.last_section.page_w, 432.0);
+}
+
 #[test]
 fn convert_text_to_table_keeps_inline_content() {
     // Issue #3751: the cells were rebuilt from plain text, losing formatting, pictures, links
