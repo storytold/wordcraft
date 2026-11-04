@@ -39,8 +39,8 @@ commands:
                   compare two PDFs of a document page by page (SSIM, line breaks, offsets);
                   needs poppler (pdftoppm, pdftotext)
   field-oracle <codes.txt | --code CODE>... [--out table.md] [--cli wordcraft-cli] [--no-word]
-                  run field codes in real Word (COM) and in wordcraft-cli, print a comparison table
-                  (xtask/field-oracle/scout-1.txt is the first corpus; Word and PowerShell needed)
+                  manual only, never CI: compare codes in real Word (COM) and wordcraft-cli;
+                  uses synthetic codes and closes the temporary Word document without saving
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";

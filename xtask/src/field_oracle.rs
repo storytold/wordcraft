@@ -19,6 +19,9 @@ usage: cargo xtask field-oracle <codes.txt | --code CODE>... [--out table.md] [-
   --out       also write the table to this file
   --cli       a built wordcraft-cli (default: cargo run -p wordcraft-cli)
   --no-word   skip Word and print WordCraft's results only
+
+Manual only, never CI: when Word is enabled, this starts real Microsoft Word through COM.
+Use only synthetic field codes; the temporary Word document is closed without saving.
 ";
 
 /// The codes in `text`: one per line, blank and `#` lines skipped.
