@@ -306,7 +306,7 @@ fn ambiguous_numeric_label_join_keeps_the_cached_full_context() {
         ]
         .concat(),
     );
-    let abs = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == 1).unwrap();
+    let abs = std::sync::Arc::make_mut(&mut s.doc.numbering).abstracts.iter_mut().find(|a| a.id == 1).unwrap();
     abs.levels[1].text = "%2".into();
     abs.levels[2].text = "%3".into();
     s.run("references.updateFields", &json!({"all":true})).unwrap();
