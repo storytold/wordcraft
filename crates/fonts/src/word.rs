@@ -416,7 +416,7 @@ pub fn missing_metric_fonts() -> Vec<(&'static str, String)> {
     missing_metric_fonts_in(FontDb::global())
 }
 
-fn missing_metric_fonts_in(db: &FontDb) -> Vec<(&'static str, String)> {
+pub(crate) fn missing_metric_fonts_in(db: &FontDb) -> Vec<(&'static str, String)> {
     CORE_METRIC_FONTS
         .iter()
         .filter_map(|(word, twins)| {
