@@ -91,6 +91,9 @@ pub(super) struct Body<'a> {
     lists_saved: Vec<(Vec<(Option<String>, bool)>, Vec<bool>, u32)>,
     tables: Vec<TableB>,
     cells: Vec<Cell>,
+    /// How many containers each open cell's content makes open (its top level, where sections
+    /// are kept around the blocks as in the body's).
+    cell_tops: Vec<usize>,
     /// Each open cell's formula, as a Word formula field code (§19.646 `table:formula`).
     formulas: Vec<Option<String>>,
     pub(super) in_text: bool,
@@ -238,6 +241,7 @@ impl<'a> Body<'a> {
             item_used: Vec::new(),
             tables: Vec::new(),
             cells: Vec::new(),
+            cell_tops: Vec::new(),
             formulas: Vec::new(),
             in_text: false,
             skip: 0,
@@ -757,9 +761,15 @@ impl<'a> Body<'a> {
 }
 
 impl Body<'_> {
-    /// Whether what is read goes in the body's top level or a text box's (not a table's cell, a
-    /// note or a comment): where sections are kept around the blocks.
+    /// Whether what is read goes in the body's top level, a text box's or a table cell's (not a
+    /// note's or a comment's): where sections are kept around the blocks.
     fn at_story_top(&self) -> bool {
+        // A table cell's (the innermost one's).
+        if let Some(&top) = self.cell_tops.last()
+            && self.containers.len() == top
+        {
+            return true;
+        }
         match &self.note {
             None => self.containers.len() == 1 && self.tables.is_empty(),
             Some(n) => n.text_box.is_some() && self.containers.len() == n.containers + 1 && self.tables.len() == n.tables,
@@ -1293,6 +1303,7 @@ impl Body<'_> {
                 self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, borders, margins, direction, picture, ..Default::default() });
                 self.formulas.push(get(a, "table:formula").and_then(super::cell_formula::word_of));
                 self.containers.push(Vec::new());
+                self.cell_tops.push(self.containers.len());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used), self.list_id));
             }
             "covered-table-cell" => {
@@ -1770,6 +1781,7 @@ impl Body<'_> {
             }
             "table-cell" => {
                 self.end_para();
+                self.cell_tops.pop();
                 let mut blocks = if self.containers.len() > 1 { self.containers.pop().unwrap_or_default() } else { Vec::new() };
                 if let Some(f) = self.formulas.pop().flatten() {
                     super::cell_formula::into_field(&mut blocks, f);

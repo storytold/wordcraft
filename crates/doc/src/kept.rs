@@ -37,6 +37,9 @@ pub struct KeptXml {
     pub wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
     /// While reading: the same by paragraph `rev`, until [`Kept::seal`].
     pub pending_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
+    /// The same for paragraphs with twins (an empty paragraph has many): by fingerprint and
+    /// [`Paragraph::rev`], which stays while the paragraph does (a writer opens each once).
+    pub twin_wraps: HashMap<(u64, u64), (Vec<Arc<str>>, u32)>,
     /// The same wrappers around the body's tables, by [`table_fingerprint`] (tables that are
     /// the only one of their kind).
     pub table_wraps: HashMap<u64, (Vec<Arc<str>>, u32)>,
@@ -174,10 +177,11 @@ impl KeptXml {
     }
     /// The wrappers kept around paragraph `p`, while it still is what was read.
     pub fn wrap(&self, p: &Paragraph) -> Option<&(Vec<Arc<str>>, u32)> {
-        if self.wraps.is_empty() {
+        if self.wraps.is_empty() && self.twin_wraps.is_empty() {
             return None;
         }
-        self.wraps.get(&fingerprint(p))
+        let fp = fingerprint(p);
+        self.wraps.get(&fp).or_else(|| self.twin_wraps.get(&(fp, p.rev)))
     }
     /// The index kept as read starting at paragraph `p`: how many paragraphs it takes, their
     /// [`run_fingerprint`] when read, its markup.
@@ -492,10 +496,12 @@ impl crate::Document {
                 *count.entry(*fp).or_default() += 1;
             }
             for (rev, fp) in fps {
-                if let Some(w) = k.pending_wraps.remove(&rev)
-                    && count.get(&fp) == Some(&1)
-                {
-                    k.wraps.insert(fp, w);
+                if let Some(w) = k.pending_wraps.remove(&rev) {
+                    if count.get(&fp) == Some(&1) {
+                        k.wraps.insert(fp, w);
+                    } else {
+                        k.twin_wraps.insert((fp, rev), w);
+                    }
                 }
             }
             k.pending_wraps.clear();

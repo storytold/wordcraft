@@ -216,7 +216,8 @@ impl Writer {
                 if c.blocks.is_empty() {
                     out.push_str("<text:p text:style-name=\"Standard\"/>");
                 }
-                self.blocks(&c.blocks, out, depth + 1);
+                // With the sections kept around its blocks, closed in it.
+                self.story_blocks(&c.blocks, out, depth + 1);
                 self.close_ins(out);
                 out.push_str("</table:table-cell>");
                 for _ in 1..span {

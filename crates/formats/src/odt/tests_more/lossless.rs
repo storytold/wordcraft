@@ -774,3 +774,70 @@ fn a_reference_mark_is_written_as_one_and_as_a_bookmark() {
     assert!(c.contains(r#"<text:reference-mark text:name="point"/>"#) && c.contains(r#"text:name="intro"/>"#), "{c}");
     assert!(c.contains(r#"<text:bookmark-start text:name="intro"/>"#) || c.contains(r#"<text:bookmark text:name="intro"/>"#), "{c}");
 }
+
+#[test]
+fn a_section_in_a_table_cell_is_kept_in_it() {
+    // A section in a cell (StarOffice's specification template holds hidden ones): the table
+    // edited, written from the model, the section around the cell's paragraphs still, closed in
+    // the cell, whatever in the cell is edited.
+    let content = r##"<office:body><office:text><table:table table:name="Spec"><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell office:value-type="string"><text:p>Status</text:p></table:table-cell><table:table-cell office:value-type="string"><text:section text:name="Status" text:display="none"><text:p>Preliminary words.</text:p><text:p>Standard words.</text:p></text:section></table:table-cell></table:table-row></table:table><text:p>After the table.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "cell section", content, styles: "", meta: "" })).unwrap();
+    let edit = |d: &wordcraft_doc::Document, which: &str| {
+        let mut e = d.clone();
+        for b in e.body.iter_mut() {
+            if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+                for r in &mut t.rows {
+                    for c in &mut r.cells {
+                        for b in c.blocks.iter_mut() {
+                            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+                                && p.text.starts_with(which)
+                            {
+                                p.props.style = Some("Edited".into());
+                                p.touch();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        e
+    };
+    for e in [edit(&d, "Status"), edit(&d, "Standard")] {
+        let saved = export(&e).unwrap();
+        assert!(parts_well_formed(&saved).is_ok());
+        let c = content_of(&saved);
+        let cell = c.split("<table:table-cell").nth(2).and_then(|r| r.split("</table:table-cell>").next()).unwrap_or("");
+        assert_eq!(cell.matches("<text:section ").count(), cell.matches("</text:section>").count(), "{c}");
+        assert!(!c.split("</table:table>").nth(1).unwrap_or("").contains("</text:section>"), "{c}");
+        let back = import(&saved).unwrap();
+        let shown = back.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with("After")).unwrap();
+        assert!(shown.runs.iter().all(|r| r.props.hidden != Some(true)));
+    }
+    // Only the first cell edited: the section is written around the second cell's paragraphs.
+    let c = content_of(&export(&edit(&d, "Status")).unwrap());
+    let cell = c.split("<table:table-cell").nth(2).unwrap_or("");
+    assert!(cell.contains(r#"<text:section text:name="Status" text:display="none">"#), "{c}");
+}
+
+#[test]
+fn a_section_opened_by_an_empty_paragraph_is_kept_and_opened_once() {
+    // LibreOffice's agenda templates: a section starting at an empty paragraph, with empty twins
+    // elsewhere. Kept; and a copy of that paragraph doesn't open it again.
+    let content = r##"<office:body><office:text><text:p/><text:section text:name="Topics"><text:p/><text:p>A topic.</text:p></text:section><text:p/><text:p>After.</text:p></office:text></office:body>"##;
+    let d = import(&package(&Sample { name: "twins", content, styles: "", meta: "" })).unwrap();
+    let c = content_of(&export(&d).unwrap());
+    assert_eq!(c.matches(r#"<text:section text:name="Topics">"#).count(), 1, "{c}");
+    let topic = c.find("A topic.").unwrap_or(0);
+    assert!(c.find("<text:section").unwrap_or(usize::MAX) < topic && topic < c.find("</text:section>").unwrap_or(0), "{c}");
+    // The empty paragraph opening it copied to the end.
+    let mut e = d.clone();
+    let i = e.body.iter().position(|b| b.as_para().is_some_and(|p| p.text.starts_with("A topic"))).unwrap();
+    if let Some(opener) = e.body.get(i - 1).cloned() {
+        e.body.push(opener);
+    }
+    let saved = export(&e).unwrap();
+    assert!(parts_well_formed(&saved).is_ok());
+    let c = content_of(&saved);
+    assert_eq!(c.matches("<text:section ").count(), 1, "{c}");
+    assert_eq!(c.matches("</text:section>").count(), 1, "{c}");
+}

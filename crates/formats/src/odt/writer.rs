@@ -226,6 +226,8 @@ pub(super) struct Writer {
     /// The file's tracked changes markup written as read marks, written as read among the
     /// regions (each once).
     kept_changes: std::collections::BTreeSet<String>,
+    /// The sections kept as read opened so far (their markup's address: see `open_wrap`).
+    wraps_opened: std::collections::HashSet<usize>,
     /// Lists kept as read given an `xml:id` (see `kept_run`).
     kept_lists: usize,
     /// The reference marks (§6.6.2) begun over text in the paragraph being written, to end.
@@ -743,9 +745,9 @@ impl Writer {
     /// kept as read that open before it and close after it, at the top only.
     fn wrapped_para(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String, depth: usize) {
         let wrap = p.wrap.as_deref().filter(|_| self.wraps_at(depth));
-        self.open_wrap(wrap, out);
+        let skipped = self.open_wrap(wrap, out);
         self.para_in(p, chain, out);
-        self.close_wrap(wrap, out);
+        self.close_wrap(wrap, skipped, out);
     }
 
     /// Whether blocks at `depth` are written with the section wrappers kept around them: the
@@ -789,9 +791,9 @@ impl Writer {
             Some(FBlock::Para(q)) => q.wrap.as_deref().map(|w| (Vec::new(), w.1)),
             _ => None,
         };
-        self.open_wrap(p.wrap.as_deref().map(|w| (w.0.clone(), 0)).as_ref(), out);
+        let _ = self.open_wrap(p.wrap.as_deref().map(|w| (w.0.clone(), 0)).as_ref(), out);
         out.push_str(&markup);
-        self.close_wrap(last.as_ref(), out);
+        self.close_wrap(last.as_ref(), 0, out);
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
         if let Some(l) = p.list
@@ -832,21 +834,29 @@ impl Writer {
         }
     }
 
-    /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`).
-    fn open_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) {
+    /// The sections kept as read that open before a top-level block (`wrap`, see `Para::wrap`),
+    /// each once (a copy of the paragraph opening one shares its markup): how many were
+    /// skipped so.
+    fn open_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) -> u32 {
+        let mut skipped = 0u32;
         for tag in wrap.map(|w| w.0.as_slice()).unwrap_or(&[]) {
+            if !self.wraps_opened.insert(std::sync::Arc::as_ptr(tag).cast::<u8>() as usize) {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
             self.close_ins(out);
             // With the section style it names.
             self.kept_defs_of(tag);
             out.push_str(tag);
             self.sections_open += 1;
         }
+        skipped
     }
 
     /// The sections kept as read that close after a top-level block: only those open (one
     /// whose start was edited away isn't), so what is written stays balanced.
-    fn close_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, out: &mut String) {
-        for _ in 0..wrap.map_or(0, |w| w.1) {
+    fn close_wrap(&mut self, wrap: Option<&(Vec<std::sync::Arc<str>>, u32)>, skipped: u32, out: &mut String) {
+        for _ in 0..wrap.map_or(0, |w| w.1.saturating_sub(skipped)) {
             if self.sections_open > 0 {
                 self.close_ins(out);
                 out.push_str("</text:section>");
@@ -888,9 +898,9 @@ impl Writer {
                 FBlock::Table(t) => {
                     if depth < model::MAX_DEPTH {
                         let wrap = t.wrap.as_deref().filter(|_| self.wraps_at(depth));
-                        self.open_wrap(wrap, out);
+                        let skipped = self.open_wrap(wrap, out);
                         self.table(t, out, depth);
-                        self.close_wrap(wrap, out);
+                        self.close_wrap(wrap, skipped, out);
                     }
                     i += 1;
                 }
@@ -905,7 +915,7 @@ impl Writer {
                         _ => None,
                     };
                     let (opens, closes) = (wrap_of(start).map(|w| (w.0.clone(), 0)), wrap_of(end.saturating_sub(1)).map(|w| (Vec::new(), w.1)));
-                    self.open_wrap(opens.as_ref(), out);
+                    let _ = self.open_wrap(opens.as_ref(), out);
                     self.list_styles.push(kinds);
                     let lname = format!("{}L{}", self.prefix, self.list_styles.len());
                     let id_of_list = id;
@@ -969,7 +979,7 @@ impl Writer {
                         }
                         out.push_str("</text:list>");
                     }
-                    self.close_wrap(closes.as_ref(), out);
+                    self.close_wrap(closes.as_ref(), 0, out);
                     out.push('\n');
                 }
                 FBlock::Para(p) => {
