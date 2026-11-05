@@ -145,8 +145,8 @@ pub fn metafile_size(bytes: &[u8]) -> Option<(f32, f32, &'static str)> {
     if !wordcraft_metafile::is_metafile(bytes) {
         return None;
     }
-    let pic = wordcraft_metafile::parse(bytes).ok()?;
-    let (w, h) = (pic.width, pic.height);
+    // The frame comes from the header where the file has one, so no bitmap is decoded for it.
+    let (w, h) = wordcraft_metafile::size(bytes).ok()?;
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return None;
     }
