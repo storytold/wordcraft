@@ -2,6 +2,21 @@ use super::arrange::group_menu_command;
 use super::*;
 use wordcraft_engine::Session;
 
+/// #2601: Dropped / In margin send just the position and `keep`, so every selected paragraph keeps
+/// its own lines, distance and font; None sends only the position.
+#[test]
+fn drop_cap_menu_keeps_the_options() {
+    use super::insert::drop_cap_payload;
+    assert_eq!(drop_cap_payload("dropped"), json!({"position": "dropped", "keep": true}));
+    assert_eq!(drop_cap_payload("margin"), json!({"position": "margin", "keep": true}));
+    assert_eq!(drop_cap_payload("none"), json!({"position": "none"}), "None takes it all away");
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Once")), crate::Services::default());
+    app.run("insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"})).unwrap();
+    app.run("insert.dropCap", drop_cap_payload("margin")).unwrap();
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
+    assert_eq!((state.position, state.lines, state.distance, state.font.as_deref()), ("margin", 5, 7.0, Some("Liberation Mono")));
+}
+
 /// #4349: Insert › Shapes offers the basic shapes as a grid of drawn tiles, each named for
 /// screen readers and by its tooltip; a click inserts that shape.
 #[test]
