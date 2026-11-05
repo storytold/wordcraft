@@ -1,6 +1,8 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
-use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
+use super::find::{
+    FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, replacement_message, special_menu, swallow_shortcut_text,
+};
 use super::font::{apply_font, font_box, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
@@ -478,13 +480,19 @@ fn find_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.label(egui::RichText::new(message.as_str()).weak());
     }
     let mut close = false;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if replace_mode {
             if ui.button(tl!("Replace All")).clicked() {
-                match app.run("edit.replaceAll", opts.clone()) {
-                    Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
-                    Err(e) => *message = e,
-                }
+                *message = replacement_message(app.run("edit.replaceAll", opts.clone()));
+            }
+            let why = app.session.why_disabled("edit.replaceAllInSelection");
+            let button = ui.add_enabled(why.is_none(), egui::Button::new(tl!("Replace All in Selection")));
+            let button = match why {
+                Some(why) => button.on_disabled_hover_text(tl!(why)),
+                None => button.on_hover_text(tl!("Replace matches only in the currently selected text.")),
+            };
+            if button.clicked() {
+                *message = replacement_message(app.run("edit.replaceAllInSelection", opts.clone()));
             }
             if ui.button(tl!("Replace")).clicked() {
                 let _ = app.run("edit.replace", opts.clone());

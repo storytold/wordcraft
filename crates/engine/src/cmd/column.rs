@@ -183,6 +183,10 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         // Copy and Cut of whole cells take a table of them (#1744).
         "edit.copy" | "edit.cut" if cells => run(s, v),
         "edit.copy" => copy(s, &segs),
+        // Scoped Replace All reads these actual selected stretches itself, not the bounding
+        // stream range (which would include unselected table columns or block text).
+        "edit.replaceAllInSelection" => run(s, v),
+        "edit.replaceAll" if p::str(v, "in") == Some("selection") => run(s, v),
         "edit.cut" => {
             let r = copy(s, &segs)?;
             delete(s, &segs)?;

@@ -12,6 +12,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod find_selection;
 mod font_sizes;
 mod fonts;
 mod ime_noop;

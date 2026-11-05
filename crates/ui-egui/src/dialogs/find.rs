@@ -123,6 +123,14 @@ pub(super) fn special_menu(ui: &mut Ui, extra: &FindExtra) -> Option<&'static st
     picked
 }
 
+/// Both Replace All actions report only the matches they actually replaced.
+pub(super) fn replacement_message(result: Result<Value, String>) -> String {
+    match result {
+        Ok(r) => crate::i18n::fmt(tl!("All done. We made {count} replacements."), &[("count", &r["replaced"].to_string())]),
+        Err(e) => e,
+    }
+}
+
 /// What Search lists before anything is typed: common commands (#819).
 pub(super) const SEARCH_SUGGESTIONS: [&str; 3] = ["review.spelling", "review.wordCount", "file.print"];
 
