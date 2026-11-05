@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn overflowing_numeric_entities_use_replacement_character() {
+    for reference in ["&#4294967296;", "&#x100000000;", "&#X100000000;", "&#99999999999999999999999999999;", "&#1114112;", "&#xD800;"] {
+        let flow = parse(&format!("<p>before{reference}after</p>"));
+        assert_eq!(paras(&flow)[0].text(), "before\u{FFFD}after", "{reference}");
+    }
+    // Leading zeroes still decode; malformed references remain literal.
+    assert_eq!(unescape("&#00000000000000000000000000065;"), "A");
+    for reference in ["&#;", "&#x;", "&#+4294967296;", "&#x+100000000;", "&#4294967296x;"] {
+        assert_eq!(unescape(reference), reference);
+    }
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");

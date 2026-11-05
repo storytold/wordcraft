@@ -377,7 +377,20 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
             }
             b'&' => {
                 let rest = s.get(i..).unwrap_or("");
-                match within(rest, 33).find(';').and_then(|k| decode_entity(rest.get(1..k)?).map(|ch| (ch, k))) {
+                match within(rest, 33).find(';').and_then(|k| {
+                    let name = rest.get(1..k)?;
+                    if let Some(num) = name.strip_prefix('#') {
+                        // CommonMark limits numeric references even though HTML does not.
+                        let (digits, max) = match num.strip_prefix(['x', 'X']) {
+                            Some(hex) => (hex, 6),
+                            None => (num, 7),
+                        };
+                        if digits.len() > max {
+                            return None;
+                        }
+                    }
+                    decode_entity(name).map(|ch| (ch, k))
+                }) {
                     Some((ch, k)) => {
                         flush!();
                         push_text(&mut nodes, &ch, base);

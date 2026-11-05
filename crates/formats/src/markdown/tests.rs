@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn numeric_reference_digit_limits_preserve_markdown_literals() {
+    for (reference, expected) in [
+        ("&#4294967296;", "&#4294967296;"),
+        ("&#x100000000;", "&#x100000000;"),
+        ("&#87654321;", "&#87654321;"),
+        ("&#xabcdef0;", "&#xabcdef0;"),
+        ("&#X0000041;", "&#X0000041;"),
+        ("&#00000065;", "&#00000065;"),
+        ("&#0000065;", "A"),
+        ("&#x000041;", "A"),
+        ("&#9999999;", "\u{FFFD}"),
+        ("&#x10FFFF;", "\u{10FFFF}"),
+        ("&#0;", "\u{FFFD}"),
+        ("&#xD800;", "\u{FFFD}"),
+        ("&amp;", "&"),
+    ] {
+        let doc = import(&format!("before{reference}after"));
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), format!("before{expected}after"), "{reference}");
+    }
+}
+
 fn inl(s: &str) -> Vec<Inline> {
     parse_inlines(s, &Fmt::default(), 0, &Refs::new())
 }
