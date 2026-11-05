@@ -752,3 +752,137 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+/// Each paragraph's inlines as text, equations as `[linear]` (`[[linear]]` for display ones),
+/// pictures as `<img>`.
+fn inline_marks(f: &Flow) -> Vec<String> {
+    f.blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => Some(p),
+            FBlock::Table(_) => None,
+        })
+        .map(|p| {
+            p.inlines
+                .iter()
+                .map(|i| match i {
+                    Inline::Text(t, _) => t.clone(),
+                    Inline::Equation { linear, display: false } => format!("[{linear}]"),
+                    Inline::Equation { linear, display: true } => format!("[[{linear}]]"),
+                    Inline::Image(_) => "<img>".into(),
+                    _ => String::new(),
+                })
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn ms_equation_comments_import_their_office_math() {
+    // #5582's reproduction: the conditional comment's equation stands where the comment does,
+    // and MathML beside it still imports.
+    let html = r#"<!DOCTYPE html><html xmlns:m="http://schemas.microsoft.com/office/2004/12/omml"><body>
+<p>Before <!--[if gte msEquation 12]><m:oMath><m:r><m:t>x=1</m:t></m:r></m:oMath><![endif]--> after</p>
+<p>Math <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>y</mi><mo>=</mo><mn>2</mn></math> end</p>
+</body></html>"#;
+    assert_eq!(inline_marks(&parse(html)), ["Before [x=1] after", "Math [y=2] end"]);
+}
+
+#[test]
+fn ms_equation_fallback_picture_is_not_imported_too() {
+    // Word writes a picture for readers without Office Math right after the comment.
+    let html = r#"<p class=MsoNormal><!--[if gte msEquation 12]><m:oMathPara><m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath></m:oMathPara><![endif]--><![if !msEquation]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]></p><p>next</p>"#;
+    assert_eq!(inline_marks(&parse(html)), ["[[a/b]]", "next"]);
+}
+
+#[test]
+fn ms_equation_para_reads_as_one_display_equation_per_o_math() {
+    // As the DOCX reader: `a=bc=d` is no equation of the file's, and the fallback still goes.
+    let html = r#"<p><!--[if gte msEquation 12]><m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr><m:oMath><m:r><m:t>a=b</m:t></m:r></m:oMath><m:oMath><m:r><m:t>c=d</m:t></m:r></m:oMath></m:oMathPara><![endif]--><![if !msEquation]>gone<![endif]></p>"#;
+    assert_eq!(inline_marks(&parse(html)), ["[[a=b]][[c=d]]"]);
+}
+
+#[test]
+fn ms_equation_fallback_stays_when_the_equations_are_not_all_read() {
+    const FALLBACK: &str = "<![if !msEquation]>kept<![endif]>";
+    let q = "<m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>";
+    let page = |math: &str| format!("<p><!--[if gte msEquation 12]>{math}<![endif]-->{FALLBACK}</p>");
+    // One of several reads as nothing.
+    assert_eq!(inline_marks(&parse(&page(&format!("{q}<m:oMath></m:oMath>")))), ["[q]kept"]);
+    let para = format!("<m:oMathPara>{q}<m:oMath></m:oMath></m:oMathPara>");
+    assert_eq!(inline_marks(&parse(&page(&para))), ["[[q]]kept"]);
+    // More equations than one comment brings in.
+    let many = q.repeat(crate::omml::MAX_EQUATIONS + 1);
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[q]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // As many as it can, in one `m:oMathPara`.
+    let many = format!("<m:oMathPara>{}</m:oMathPara>", q.repeat(crate::omml::MAX_EQUATIONS + 1));
+    let marks = inline_marks(&parse(&page(&many)));
+    assert_eq!(marks, [format!("{}kept", "[[q]]".repeat(crate::omml::MAX_EQUATIONS))]);
+    // Exactly the cap is all of them.
+    let all = inline_marks(&parse(&page(&q.repeat(crate::omml::MAX_EQUATIONS))));
+    assert_eq!(all, ["[q]".repeat(crate::omml::MAX_EQUATIONS)]);
+    // An equation too long to read whole.
+    let long = format!("<m:oMath><m:r><m:t>q</m:t></m:r>{}</m:oMath>", "<m:r></m:r>".repeat(crate::mathml::MAX_NODES));
+    let marks = inline_marks(&parse(&page(&long)));
+    assert!(marks.first().is_some_and(|m| m.ends_with("]kept")), "{marks:?}");
+}
+
+#[test]
+fn other_comments_and_hostile_ms_equation_comments_stay_harmless() {
+    assert_eq!(inline_marks(&parse("<p>a<!-- [if gte msEquation 12] not math -->b</p>")), ["ab"]);
+    assert_eq!(inline_marks(&parse("<p>a<!--[if gte mso 9]><xml><w:WordDocument/></xml><![endif]-->b</p>")), ["ab"]);
+    // Unclosed comment, unclosed section, empty equation, junk: nothing panics, no stray text.
+    for html in [
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q",
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><m:oMath></m:oMath><![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation 12]>]]]><<<>>>&amp;<![endif]-->b</p>",
+        "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>é</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>",
+    ] {
+        let marks = inline_marks(&parse(html));
+        assert!(marks.iter().all(|m| !m.contains("m:") && !m.contains("endif")), "{html}: {marks:?}");
+    }
+    assert_eq!(inline_marks(&parse("<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath>-->b</p>")), ["a[q]b"]);
+    // In the head, it is not body content.
+    let head = "<html><head><!--[if gte msEquation 12]><m:oMath><m:r><m:t>h</m:t></m:r></m:oMath><![endif]--></head><body><p>x</p></body></html>";
+    assert_eq!(inline_marks(&parse(head)), ["x"]);
+}
+
+#[test]
+fn ms_equation_fallback_stays_when_no_equation_is_read_or_it_is_unclosed() {
+    // An Office Math comment that reads as nothing leaves the fallback picture in its place.
+    let empty = r#"<p>a<!--[if gte msEquation 12]><m:oMath></m:oMath><![endif]--><![if !msEquation]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(empty)), ["a<img>b"]);
+    // A fallback opener without its end doesn't swallow the rest of the page.
+    let unclosed = "<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c</p>";
+    assert_eq!(inline_marks(&parse(unclosed)), ["a[q]b", "c"]);
+}
+
+#[test]
+fn ms_equation_fallback_ends_at_its_own_endif() {
+    // Word's fallback holds a VML section of its own: the fallback ends at the endif matching it.
+    let vml = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]><span><![if !vml]><img width=20 height=30 src="data:image/png;base64,iVBORw0KGgo="><![endif]>v</span><![endif]>b</p>"#;
+    assert_eq!(inline_marks(&parse(vml)), ["a[q]b"]);
+    // An unclosed fallback doesn't take a later, unrelated section's endif as its own.
+    let other = r#"<p>a<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>b</p><p>c<![if !vml]>d<![endif]>e</p>"#;
+    assert_eq!(inline_marks(&parse(other)), ["a[q]b", "cde"]);
+}
+
+#[test]
+fn many_unclosed_ms_equation_fallbacks_import_quickly() {
+    // Each unclosed fallback opener searched the rest of the page for its end, so a page of
+    // equations each followed by one took quadratic time: about a minute here, now well under a
+    // second.
+    let one = "<!--[if gte msEquation 12]><m:oMath><m:r><m:t>q</m:t></m:r></m:oMath><![endif]--><![if !msEquation]>";
+    let html = format!("<p>a{}b</p>", one.repeat(40_000));
+    let t = std::time::Instant::now();
+    let f = parse(&html);
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    let marks = inline_marks(&f);
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0].matches("[q]").count(), 40_000);
+    assert!(marks[0].starts_with("a[q]") && marks[0].ends_with("[q]b"), "{}", marks[0].get(..40).unwrap_or(""));
+}

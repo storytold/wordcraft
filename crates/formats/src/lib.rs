@@ -18,6 +18,7 @@ pub mod mathml;
 pub mod mht;
 pub mod model;
 pub mod odt;
+pub mod omml;
 pub mod rtf;
 pub mod sheet;
 pub mod txt;
