@@ -10,7 +10,10 @@ Viewing keeps the current page layout. Navigation, zoom, selection, copying,
 search, printing and exporting copies remain available. Document edits, comments,
 formatting, history changes, encryption changes, macros that write and Zotero
 writes are refused by the session, including commands sent through automation.
-The canvas does not request IME text input while Viewing is active.
+The navigation caret remains visible, but the canvas does not request IME text input
+while Viewing is active. Returning to another window does not restore equation editing.
+If Zotero is working in this document, wait for it to finish before entering Viewing;
+this prevents an incomplete citation when its insertion spans several calls.
 
 Editing dialogs, including Insert Table, Link, Bookmark, custom Table of Contents,
 Create Source, Templates, Macros, Compare and Combine, are refused before they open through

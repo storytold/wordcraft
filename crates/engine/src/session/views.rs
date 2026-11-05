@@ -148,7 +148,8 @@ impl Session {
         self.goal_x = goal_x;
         self.page_hint = page_hint;
         self.column_mode = column_mode;
-        self.math = math;
+        // A stale window must not route navigation back into equation editing.
+        self.math = if viewing { None } else { math };
         if current {
             self.hf_return = hf_return;
             self.typing_open = typing_open;

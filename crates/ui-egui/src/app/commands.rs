@@ -101,6 +101,16 @@ impl WordApp {
 
     /// Refuse an edit and publish its localized status before dispatch can start a UI side effect.
     fn check_viewing(&mut self, id: &str, params: &Value) -> Result<(), String> {
+        // Refuse entry before changing mode, including a toggle through automation.
+        // Exiting Viewing and malformed values retain the normal command behavior.
+        if id == "view.viewing"
+            && !self.session.view.viewing
+            && (params.get("value").is_none() || params.get("value").and_then(Value::as_bool) == Some(true))
+            && let Some(reason) = self.zotero.viewing_entry_error(self.session.document_id())
+        {
+            self.status(reason.clone());
+            return Err(reason);
+        }
         if self.viewing_blocks_command(id, params) {
             let reason = tl!("Editing is blocked in Viewing mode.").to_string();
             self.status(reason.clone());

@@ -204,3 +204,24 @@ fn viewing_language_preferences_do_not_rewrite_the_current_blank_document() {
     assert!(!s.view.viewing);
     assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("ro-RO"));
 }
+
+/// A stale equation-editing snapshot cannot capture arrows after another window enters Viewing.
+#[test]
+fn viewing_does_not_restore_equation_editing_from_a_window_snapshot() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.equation", &json!({"linear": "x+y"})).unwrap();
+    assert!(s.math.is_some());
+    let ordinary = s.copy_view();
+    s.put_view(ordinary);
+    assert!(s.math.is_some(), "ordinary Editing retains its equation session");
+    let older = s.copy_view();
+    s.run("view.viewing", &json!({"value": true})).unwrap();
+    let before = s.doc.clone();
+    let depth = s.undo_depth();
+    s.put_view(older);
+    assert!(s.math.is_none());
+    assert!(s.view.viewing);
+    s.run("caret.docStart", &json!({})).unwrap();
+    assert!(s.doc.same_content(&before));
+    assert_eq!(s.undo_depth(), depth);
+}
