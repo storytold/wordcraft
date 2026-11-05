@@ -22,6 +22,8 @@ struct Breaker<'e> {
     first_left: f32,
     default_tab: f32,
     hanging_at: Option<f32>,
+    /// Where default tab stops are counted from (see [`next_tab`]).
+    tab_origin: f32,
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
@@ -186,6 +188,7 @@ impl<'e> Breaker<'e> {
             first_left: rp.indent_left + rp.indent_first,
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
+            tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
             shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
@@ -295,7 +298,7 @@ impl<'e> Breaker<'e> {
         let end = lab.x + lab.width;
         match self.level.map(|l| l.suffix).unwrap_or(LevelSuffix::Tab) {
             LevelSuffix::Tab => {
-                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at).pos;
+                let t = next_tab(end, &self.rp.tabs, self.default_tab, self.hanging_at, self.tab_origin).pos;
                 // The level's own tab stop after the number, when it comes first.
                 match self.level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
                     Some(p) if p < t => p,
@@ -417,16 +420,17 @@ impl<'e> Breaker<'e> {
                 continue;
             }
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
-            // A picture sits on the baseline of its run: the line keeps that font's ascent
-            // and descent, and grows above the baseline to fit a taller picture.
-            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
+            // A picture sits on the baseline of its run (raised or lowered by its position):
+            // the line keeps that font's ascent and descent, and grows to fit it.
+            let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h + c.obj_d > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
-                    (st.ascent, st.descent)
+                    // A lowered picture reaches below the baseline: the line's descent grows.
+                    (st.ascent, st.descent.max(c.obj_d))
                 }
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
@@ -565,6 +569,13 @@ impl<'e> Breaker<'e> {
             (LineSpacing::AtLeast(v), None) => natural.max(v),
             (LineSpacing::Exactly(v), _) => v,
         };
+        // The empty line's caret follows the alignment, as an empty paragraph's does.
+        let slack = (self.base_right - rp.indent_left).max(0.0);
+        let shift = match rp.align {
+            Align::Center => slack / 2.0,
+            Align::Right => slack,
+            _ => 0.0,
+        };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
         self.lines.push(Line {
@@ -575,7 +586,7 @@ impl<'e> Breaker<'e> {
             text_desc: desc,
             c0: self.n,
             c1: self.n,
-            xs: vec![x0],
+            xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
             leaders: Vec::new(),
             end: LineEnd::Para,
             start: pl.text_len,
@@ -599,8 +610,11 @@ impl<'e> Breaker<'e> {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
         let lead = self.first_x0.unwrap_or(0.0) - self.first_left.max(rp.indent_left);
-        // In margin, the letter's right edge stays the distance away from the text's edge.
-        let dx = if rp.drop_cap_margin { lead.max(0.0) + pl.drop_cap_w + rp.drop_cap_distance } else { dw.min(lead) };
+        // In margin, the letter's right edge stays the distance left of the text column (or of a
+        // hanging first line), whatever the alignment or first-line indent: always in the margin.
+        let edge = self.first_left.min(rp.indent_left);
+        let in_margin = (self.first_x0.unwrap_or(0.0) - edge).max(0.0) + pl.drop_cap_w + rp.drop_cap_distance;
+        let dx = if rp.drop_cap_margin { in_margin } else { dw.min(lead) };
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if self.rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {
@@ -730,7 +744,7 @@ impl Scan {
         resolve_tab(pl, &mut self.pending_tab, &mut self.xs, self.c0, self.x, &mut self.x);
         let rp = &bk.rp;
         let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, bk.width, (rp.indent_left, rp.indent_right)));
-        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at));
+        let stop = ptab.unwrap_or_else(|| next_tab(self.x, &rp.tabs, bk.default_tab, bk.hanging_at, bk.tab_origin));
         // A positional tab whose place the text has passed goes there on the next line
         // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
         if ptab.is_some() && stop.pos < self.x - 0.01 && has_content(pl, self.c0, j) {
