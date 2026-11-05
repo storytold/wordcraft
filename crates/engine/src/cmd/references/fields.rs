@@ -1,3 +1,4 @@
+use super::numbers::{body_bookmark_paths, para_numbers, ref_number};
 use super::properties::{
     bookmark_ends_in_its_paragraph, bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
     set_summary_property, summary_property, text_result,
@@ -335,6 +336,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
+    // Build each body lookup once, only when a supported numeric REF needs it.
+    let mut numbers = None;
+    let mut bookmark_paths = None;
     let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
     // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
@@ -374,6 +378,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let r = if name == "REF" {
                         if has_switch(instr, 'p') {
                             None
+                        } else if let Some(sw) = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c)) {
+                            if has_switch(instr, 'd') || has_switch(instr, 't') {
+                                continue; // Preserve cached results for unsupported delimiter/text switches.
+                            }
+                            let numbers = numbers.get_or_insert_with(|| para_numbers(&s.doc));
+                            let from = (story == StoryRef::Body).then_some(&path);
+                            let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
+                            paths.get(target).and_then(|tp| ref_number(numbers, tp, from, sw))
                         } else {
                             bookmark_text(&s.doc, target).or_else(|| {
                                 let key = target.to_lowercase();
