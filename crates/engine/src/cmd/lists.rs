@@ -148,8 +148,20 @@ pub fn caret_list(s: &Session) -> Option<u32> {
 
 /// The nine levels list `num` shows (its own level definitions over its abstract list's).
 pub fn levels_of(s: &Session, num: u32) -> Option<Vec<Level>> {
-    s.doc.numbering.num(num)?;
-    Some((0..LEVELS).map(|i| s.doc.numbering.level(num, i as u8).cloned().unwrap_or_else(|| default_level(i))).collect())
+    let n = s.doc.numbering.num(num)?;
+    // This list's start overrides (a typed "5. " starts at 5) win over the definition's start,
+    // also for a level that falls back to the default.
+    Some(
+        (0..LEVELS)
+            .map(|i| {
+                let mut l = s.doc.numbering.level(num, i as u8).cloned().unwrap_or_else(|| default_level(i));
+                if let Some((_, start)) = n.start_overrides.iter().find(|(lv, _)| *lv as usize == i) {
+                    l.start = *start;
+                }
+                l
+            })
+            .collect(),
+    )
 }
 
 /// Level `i` of a new multilevel list: 1. a. i.

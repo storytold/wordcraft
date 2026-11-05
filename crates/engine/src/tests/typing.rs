@@ -406,6 +406,17 @@ fn typed_numbers_start_a_list_at_that_number() {
     assert_eq!(paras(&s), vec![("3. x".to_string(), None, false)]);
 }
 
+/// The numbering-format panel reads a list through `levels_of`: a typed start shows there too, and
+/// the levels the list has no override for keep their own start.
+#[test]
+fn a_typed_list_start_shows_in_the_list_levels() {
+    let s = typed("5. a");
+    let num = crate::cmd::lists::caret_list(&s).expect("in a list");
+    let levels = crate::cmd::lists::levels_of(&s, num).expect("levels");
+    assert_eq!(levels[0].start, 5);
+    assert!(levels[1..].iter().all(|l| l.start == 1));
+}
+
 /// The label is removed by the AutoFormat: with Track Changes on, what this author typed goes
 /// outright, but a label that was already in the paragraph is marked deleted, so Reject All
 /// brings it back.
