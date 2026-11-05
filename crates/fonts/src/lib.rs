@@ -246,13 +246,18 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
             let mut buf = UnicodeBuffer::new();
             let mut prev = '\0';
             let mut it = sub.char_indices().peekable();
+            // The mapped next character, once read ahead: `map` sees each character once.
+            let mut ahead = None;
             while let Some((i, c)) = it.next() {
-                let mut m = map(c);
+                let mut m = ahead.take().unwrap_or_else(|| map(c));
                 if khmer::is_triisap(m)
                     && let Some(&(_, next)) = it.peek()
-                    && khmer::takes_u_form(prev, map(next), triisap_u)
                 {
-                    m = khmer::U_FORM;
+                    let n = map(next);
+                    ahead = Some(n);
+                    if khmer::takes_u_form(prev, n, triisap_u) {
+                        m = khmer::U_FORM;
+                    }
                 }
                 buf.add(m, (r.start + i) as u32);
                 prev = m;
@@ -458,6 +463,19 @@ mod tests {
         let off = shape(&face, "office", &[feature("-liga").unwrap()], |c| c);
         assert!(on.len() <= off.len());
         assert_eq!(off.len(), 6);
+    }
+
+    /// The character map sees each character once, also the one read ahead of a Khmer triisap.
+    #[test]
+    fn each_character_is_mapped_once() {
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        let text = "a\u{17A2}\u{17CA}\u{17B7}b\u{17CA}";
+        let calls = std::cell::Cell::new(0);
+        shape(&face, text, &[], |c| {
+            calls.set(calls.get() + 1);
+            c
+        });
+        assert_eq!(calls.get(), text.chars().count());
     }
 
     #[test]
