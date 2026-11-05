@@ -162,7 +162,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
             }
             (rect.x, rect.y)
         }
-        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width)),
+        None => (layout.x, below(exclusions, *y, layout.x, layout.x + layout.width, layout.rows.first().map_or(0.0, |r| r.height))),
     };
     let mut row_y = ty;
     for row in &layout.rows {
