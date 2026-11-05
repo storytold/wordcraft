@@ -1279,7 +1279,7 @@ fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> 
 }
 
 fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Password { name, params, password, message } = d else {
+    let Dialog::Password { name, then, params, password, message } = d else {
         return false;
     };
     ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
@@ -1300,8 +1300,9 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if let Some(o) = p.as_object_mut() {
             o.insert("password".into(), json!(password.as_str()));
         }
-        // `execute`, not `run`: Save Changes was asked when the open began.
-        match app.execute("file.open", p) {
+        // `execute`, not `run`: Save Changes was asked when the open began. The command that
+        // asked runs again, so a protected template still starts a new document (#3433).
+        match app.execute(then, p) {
             Ok(_) => {
                 app.ui.backstage = false;
                 return true;

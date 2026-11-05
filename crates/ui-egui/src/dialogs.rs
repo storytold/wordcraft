@@ -414,10 +414,12 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<CellMarginsForm>,
     },
-    /// Opening a password-protected document (#55): the password, then `file.open` with
-    /// `params` again. The password is never serialised or printed.
+    /// Opening a password-protected document (#55): the password, then the command that asked
+    /// for it (`then`: `file.open`, or `file.newFromTemplate` for a protected template, #3433)
+    /// with `params` again. The password is never serialised or printed.
     Password {
         name: String,
+        then: String,
         #[serde(skip)]
         params: Value,
         #[serde(skip)]

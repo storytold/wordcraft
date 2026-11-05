@@ -2830,6 +2830,88 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// A template WordCraft can be handed, saved by the engine with `text` (and `password`).
+fn template_file(path: &std::path::Path, text: &str, password: Option<&str>) -> Vec<u8> {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    s.run("file.save", &json!({"path": path.to_string_lossy(), "password": password})).unwrap();
+    std::fs::read(path).unwrap()
+}
+
+/// #3433: a Word template the platform hands the app (the command line, a double-click in the
+/// file manager, the Finder) starts a new, untitled document based on it, in place of the
+/// untouched blank document, as Word does; saving can't write over the template. A document is
+/// still opened as itself, and File › Open still opens a template itself, to edit it.
+#[test]
+fn a_template_the_platform_hands_the_app_starts_a_new_document() {
+    let dir = scratch("platform-template");
+    let path = dir.join("Letterhead.DOTX");
+    let bytes = template_file(&path, "Letterhead text", None);
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    let r = a.open_from_platform(&name, None).unwrap();
+    assert_eq!(r.get("pending"), None, "{r}");
+    assert_eq!(a.session.documents().len(), 1, "the blank startup document gave way");
+    assert_eq!(a.session.path, None);
+    assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(name.as_str()));
+    assert!(body_text(&a).contains("Letterhead text"));
+    assert_eq!(a.title_stem(), "Document1");
+    a.run("text.insert", json!({"text": "Dear reader, "})).unwrap();
+    let _ = a.run("file.save", json!({}));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "Save never writes over the template");
+    assert_eq!(a.session.path, None);
+
+    // A document opens as itself, beside the new one.
+    let doc = dir.join("Report.docx");
+    template_file(&doc, "Report text", None);
+    a.open_from_platform(&doc.to_string_lossy(), None).unwrap();
+    assert_eq!(a.session.path.as_deref(), Some(doc.as_path()));
+    // File › Open edits the template itself.
+    let mut b = app();
+    b.open_file(&name, None).unwrap();
+    assert_eq!(b.session.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3433: a protected template from the platform asks for its password, and the password box
+/// retries the command that asked, so the template still starts a new document instead of
+/// opening itself.
+#[test]
+fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_document() {
+    let dir = scratch("platform-template-password");
+    let path = dir.join("Locked.dotm");
+    let bytes = template_file(&path, "Locked template", Some("sesame"));
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    a.open_from_platform(&name, None).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    let (then, params) = match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { then, params, .. }) => (then.clone(), params.clone()),
+        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
+    };
+    assert_eq!(then, "file.newFromTemplate");
+    let mut with = params;
+    with["password"] = json!("sesame");
+    a.execute(&then, with).unwrap();
+    assert!(body_text(&a).contains("Locked template"), "{}", body_text(&a));
+    assert_eq!((a.session.path.as_ref(), a.session.password.is_some()), (None, false));
+    assert_eq!(a.session.documents().len(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn word_templates_are_told_by_their_extension() {
+    use crate::documents::is_word_template;
+    for t in ["a.dotx", "a.dotm", "a.dot", "A.DOTX", "/x/y.Dotm", "C:\\x\\y.DOT"] {
+        assert!(is_word_template(t), "{t}");
+    }
+    for t in ["a.docx", "a.doc", "dotx", "a.dotx.docx", "a.ott", "", "a."] {
+        assert!(!is_word_template(t), "{t}");
+    }
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
