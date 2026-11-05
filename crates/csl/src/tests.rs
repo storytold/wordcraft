@@ -426,10 +426,11 @@ fn name_options_merge_names_and_name_child() {
     let xml = whole(r#"<citation><layout><names variable="author" delimiter=", "><name delimiter="; " et-al-min="3"/></names></layout></citation>"#);
     let s = parse(xml.as_bytes()).unwrap();
     let Element::Names(n) = &s.citation.elements[0] else { panic!("not names") };
-    assert_eq!(n.options.delimiter, Some("; ".into())); // the name child wins
+    assert_eq!(n.options.delimiter, Some("; ".into())); // the name child's, not the <names> one
     assert_eq!(n.options.et_al_min, Some(3));
-    // A sort-separator of ", " is the default join: silent.
-    assert!(s.warned().is_empty(), "{:?}", s.warned());
+    // The <names> delimiter separates name variables (unsupported), never names: warned.
+    assert_eq!(s.warned().len(), 1, "{:?}", s.warned());
+    assert!(s.warned()[0].contains("name variables"), "{:?}", s.warned());
 }
 
 #[test]

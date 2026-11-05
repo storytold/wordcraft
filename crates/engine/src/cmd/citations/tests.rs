@@ -1010,6 +1010,27 @@ fn csl_styles_add_list_and_remove() {
 }
 
 #[test]
+fn re_adding_a_style_under_a_new_name_takes_the_old_file_with_it() {
+    let (mut s, dir, src) = csl_session("replace");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    assert!(dir.join("numeric.csl").is_file());
+    // The same style under another file name: the replacement wins and the superseded file
+    // is deleted, so the next start loads exactly one style with this id.
+    let other = dir.parent().unwrap().join(format!("wordcraft-csl-replace-other-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&other);
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("renamed.csl"), CSL_NUMERIC.as_bytes()).unwrap();
+    let r = s.run("references.cslStyles", &json!({"add": other.join("renamed.csl").to_string_lossy()})).unwrap();
+    assert_eq!(r["id"], json!("http://wordcraft.test/numeric"), "{r}");
+    assert!(dir.join("renamed.csl").is_file(), "the new file is installed");
+    assert!(!dir.join("numeric.csl").exists(), "the superseded file is gone");
+    let listed = s.run("references.cslStyles", &json!({})).unwrap();
+    assert_eq!(listed["styles"].as_array().unwrap().len(), 1, "one entry, not two: {listed}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+#[test]
 fn csl_style_cites_and_lists() {
     let (mut s, dir, src) = csl_session("use");
     s.run("references.cslStyles", &json!({"add": src})).unwrap();
@@ -1076,6 +1097,31 @@ fn csl_style_choice_survives_docx_save_and_reopen() {
     reopened.run("references.updateFields", &json!({})).unwrap();
     assert!(reopened.doc.plain_text(StoryRef::Body).contains("[1]"), "{}", reopened.doc.plain_text(StoryRef::Body));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_csl_title_matching_a_builtin_alias_resolves_to_the_csl_style() {
+    // A style titled "IEEE" (or "Chicago Manual of Style…") must not fall into the built-in
+    // alias-prefix match: the exact name, then the installed styles, then the aliases.
+    let (mut s, dir, src) = csl_session("title");
+    s.run("references.cslStyles", &json!({"add": src})).unwrap();
+    // The numeric fixture's title is "WordCraft Test Numeric"; rename its id to a builtin-like
+    // title by asking through a second style file whose title is exactly "IEEE".
+    let ieee = dir.parent().unwrap().join(format!("wordcraft-csl-title-ieee-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ieee);
+    std::fs::create_dir_all(&ieee).unwrap();
+    std::fs::write(ieee.join("ieee.csl"), CSL_NUMERIC.replace("WordCraft Test Numeric", "IEEE Transactions Numeric")).unwrap();
+    s.run("references.cslStyles", &json!({"add": ieee.join("ieee.csl").to_string_lossy()})).unwrap();
+    // A title that begins like a built-in alias ("IEEE Transactions…") is the installed style:
+    // without the CSL-first step the alias prefix silently picked the built-in IEEE.
+    s.run("references.citationStyle", &json!({"style": "IEEE Transactions Numeric"})).unwrap();
+    assert_eq!(s.bib_style, "csl:http://wordcraft.test/numeric", "the installed style, not the built-in IEEE");
+    // An exact built-in name still wins, and the plain alias keeps working.
+    let (mut plain, _d, _src) = csl_session("title2");
+    plain.run("references.citationStyle", &json!({"style": "ieee"})).unwrap();
+    assert_eq!(plain.bib_style, "IEEE");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&ieee);
 }
 
 #[test]

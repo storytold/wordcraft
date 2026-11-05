@@ -40,10 +40,10 @@ impl TermSet {
     pub fn en_us() -> TermSet {
         let mut set = TermSet(BTreeMap::new());
 
-        // Months (long and short; the appendix keeps March, April, May, June and July
-        // unabbreviated, and abbreviates September as "Sept.").
+        // Months (long and short; the locale keeps May, June and July unabbreviated, and
+        // abbreviates September as "Sept.").
         let months_long = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-        let months_short = ["Jan.", "Feb.", "March", "April", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."];
+        let months_short = ["Jan.", "Feb.", "Mar.", "Apr.", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."];
         for (i, m) in months_long.iter().enumerate() {
             set.set(&format!("month-{:02}", i + 1), Form::Long, same(m));
             set.set(&format!("month-{:02}", i + 1), Form::Short, same(months_short[i]));
@@ -82,7 +82,7 @@ impl TermSet {
         set.set("line", Form::Short, Term::new("l.", "ll."));
         set.set("note", Form::Long, Term::new("note", "notes"));
         set.set("note", Form::Short, Term::new("n.", "nn."));
-        set.set("opus", Form::Long, Term::new("opus", "operas"));
+        set.set("opus", Form::Long, Term::new("opus", "opera"));
         set.set("opus", Form::Short, Term::new("op.", "opp."));
         set.set("page", Form::Long, Term::new("page", "pages"));
         set.set("page", Form::Short, Term::new("p.", "pp."));

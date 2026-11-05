@@ -94,8 +94,12 @@ fn answer_on(session: &mut Session, method: &str, params: Value) -> Result<Value
 impl Default for Headless {
     fn default() -> Self {
         let mut session = Session::new(wordcraft_doc::Document::new());
-        // The CSL styles the user installed, loaded the way the app loads them (#1058).
-        if let Some(dir) = wordcraft_control_key::settings_dir() {
+        // The CSL styles the user installed, loaded the way the app loads them (#1058). A
+        // run without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) wires none, so an
+        // agent neither reads the developer's own styles nor writes into their folder.
+        if std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
+            && let Some(dir) = wordcraft_control_key::settings_dir()
+        {
             session.set_csl_styles_dir(dir.join(Session::CSL_STYLES_DIR));
         }
         Headless { session, roots: None }

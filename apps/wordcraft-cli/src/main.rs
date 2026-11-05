@@ -170,8 +170,12 @@ fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
     s.system_region = system_region();
     // The user's CSL styles from `<settings>/styles`, wired up the way the app does it;
-    // without the folder (or on a machine without one) the built-ins stay (#1058).
-    if let Some(dir) = wordcraft_control_key::settings_dir() {
+    // without the folder (or on a machine without one) the built-ins stay (#1058). A run
+    // without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) wires none, so an agent
+    // neither reads the developer's own styles nor writes into their folder.
+    if std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
+        && let Some(dir) = wordcraft_control_key::settings_dir()
+    {
         s.set_csl_styles_dir(dir.join(Session::CSL_STYLES_DIR));
     }
     s

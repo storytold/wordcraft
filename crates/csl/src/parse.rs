@@ -523,7 +523,7 @@ fn names_el(el: &El, w: &mut Warnings) -> Option<Names> {
         return None;
     }
     let mut options = NameOptions::default();
-    apply_name_attrs(el, &mut options, w);
+    apply_name_attrs_at(el, &mut options, w, true);
     let mut with_label = None;
     let mut label_precedes_names = false;
     let mut substitute = None;
@@ -582,12 +582,27 @@ fn label_common(el: &El) -> Label {
 }
 
 /// Name options from a `<names>` element or a `<name>` child (the child wins where both
-/// set them): the inheritable attributes plus the plain `delimiter` styles also write on
-/// these elements. Attributes outside the subset warn.
+/// set them): the inheritable attributes plus the plain `delimiter` a `<name>` carries (in
+/// CSL 1.0.2 a `delimiter` on `<names>` itself separates the name *variables* — editors from
+/// translators — which this renderer doesn't do, so it warns instead; between names the
+/// delimiter comes from `<name delimiter>` or the inherited `name-delimiter`). Attributes
+/// outside the subset warn.
 fn apply_name_attrs(el: &El, options: &mut NameOptions, w: &mut Warnings) {
+    apply_name_attrs_at(el, options, w, false);
+}
+
+/// [`apply_name_attrs`] with `names_element` saying which element this is.
+fn apply_name_attrs_at(el: &El, options: &mut NameOptions, w: &mut Warnings, names_element: bool) {
     inheritable_name_attrs(el, options);
     if let Some(v) = el.attr("delimiter") {
-        options.delimiter = Some(clamp(v));
+        if names_element {
+            w.push(
+                "a <names> delimiter separates the name variables, which is not supported; use <name delimiter> or name-delimiter between names"
+                    .into(),
+            );
+        } else {
+            options.delimiter = Some(clamp(v));
+        }
     }
     warn_unsupported_name_attrs(el, w);
 }
