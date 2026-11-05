@@ -27,13 +27,16 @@ use generated::table_of_figures;
 pub use generated::{figures_instr, update_generated};
 pub use render::{cite, entry};
 pub use sources::update_citations;
-use sources::{citation, sources};
+use sources::{citation, import_library, sources};
 pub use styles::{Cite, CiteStyle, Name, Names, Order, STYLES, find_style, style};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("references.sources", "Manage Sources", "References › Citations & Bibliography", sources)
             .params(r#"{"add"?: Source, "remove"?: tag, "import"?: path (a Word bibliography file, `b:Sources` / `Sources.xml`)} → list"#),
+        CommandSpec::new("references.importSources", "Import Sources Library", "References › Citations & Bibliography", import_library).params(
+            r#"{"path": string, "format"?: "bibtex|ris|csl-json|auto" (default: the extension, else the content)} → {"added": n, "updated": n, "skipped": [{"tag"?, "reason"}], "total": n} (entries the file held)"#,
+        ),
         CommandSpec::new("references.citation", "Insert Citation", "References › Citations & Bibliography", citation).params(r#"{"tag"?: string, "source"?: Source (added if new), "pages"?: string}"#),
         CommandSpec::new("references.citationStyle", "Style", "References › Citations & Bibliography", |s, v| {
             let st = p::str(v, "style").unwrap_or("APA");

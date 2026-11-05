@@ -125,6 +125,150 @@ fn import_sources(s: &mut Session, path: &str) -> Result<(), CmdError> {
     }
 }
 
+/// The library format a file's extension names, or `None` to sniff the content.
+#[cfg(not(target_arch = "wasm32"))]
+fn library_ext(path: &str, bytes: &[u8]) -> Option<&'static str> {
+    match std::path::Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("bib") => Some("bib"),
+        Some("ris") => Some("ris"),
+        Some("json") => Some("json"),
+        _ => sniffed_format(bytes),
+    }
+}
+
+/// The citation-library format of the content, when it can be told: an RIS record opening the
+/// file, CSL-JSON items, or a BibTeX `@`-entry opening a line anywhere.
+#[cfg(not(target_arch = "wasm32"))]
+fn sniffed_format(b: &[u8]) -> Option<&'static str> {
+    /// The slice from its first non-whitespace byte.
+    fn after_ws(x: &[u8]) -> &[u8] {
+        x.iter().position(|c| !c.is_ascii_whitespace()).and_then(|i| x.get(i..)).unwrap_or(&[])
+    }
+    let b = b.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(b);
+    let t = after_ws(b);
+    // `TY  - …` (spacing around the hyphen tolerated): an RIS record opens the file.
+    if t.get(..2).is_some_and(|x| x.eq_ignore_ascii_case(b"TY")) && after_ws(t.get(2..).unwrap_or(&[])).first() == Some(&b'-') {
+        return Some("ris");
+    }
+    if t.first() == Some(&b'{') || t.first() == Some(&b'[') {
+        let top: Value = serde_json::from_slice(b).ok()?;
+        let items = match &top {
+            Value::Array(a) => a.as_slice(),
+            Value::Object(o) => o.get("items").and_then(Value::as_array).map_or(&[][..], Vec::as_slice),
+            _ => &[],
+        };
+        if items.iter().any(|it| it.as_object().is_some_and(|o| o.contains_key("id") || o.contains_key("type"))) {
+            return Some("json");
+        }
+    }
+    // An `@`-entry opening a line anywhere: BibTeX.
+    b.split(|c| *c == b'\n').any(|line| after_ws(line).first() == Some(&b'@')).then_some("bib")
+}
+
+/// Whether a parsed source holds any field worth keeping: entries with nothing usable are
+/// skipped by an import, not added empty.
+#[cfg(not(target_arch = "wasm32"))]
+fn has_any_field(src: &Source) -> bool {
+    [
+        &src.author,
+        &src.title,
+        &src.year,
+        &src.journal,
+        &src.volume,
+        &src.pages,
+        &src.publisher,
+        &src.city,
+        &src.url,
+        &src.editor,
+        &src.edition,
+        &src.issue,
+        &src.month,
+        &src.day,
+        &src.accessed,
+        &src.doi,
+    ]
+    .iter()
+    .any(|f| !f.is_empty())
+}
+
+/// Import a citation library — BibTeX, RIS or CSL-JSON, the formats reference managers export —
+/// into Manage Sources (`references.importSources`). A library is keyed data: a source whose tag
+/// is already here is updated in place, unlike a Word bibliography `import`, which leaves an
+/// existing tag alone. A source with no usable field is skipped with a reason, and one with no
+/// tag gets a tag the way a new source does.
+pub(super) fn import_library(s: &mut Session, v: &Value) -> CmdResult {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, v);
+        return Err(CmdError::Failed("reading files by path isn't available on the web".into()));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = p::req_str(v, "path")?;
+        let forced = match p::str(v, "format").unwrap_or("auto").to_ascii_lowercase().as_str() {
+            "auto" => None,
+            "bibtex" => Some("bib"),
+            "ris" => Some("ris"),
+            "csl-json" => Some("json"),
+            other => return Err(CmdError::Params(format!("`format` must be bibtex, ris, csl-json or auto, not `{other}`"))),
+        };
+        // Refused by size before it is read in: the file is named by the user and could be any
+        // size on disk. The 1 KiB margin lets the parser's own message govern files between the caps.
+        let cap = wordcraft_formats::MAX_LIBRARY_BYTES as u64 + 1024;
+        let bytes = crate::io::read_file_capped(path, cap, "source library").map_err(|e| CmdError::Params(e.to_string()))?;
+        let ext = forced
+            .or_else(|| library_ext(path, &bytes))
+            .ok_or_else(|| CmdError::Params(format!("{path}: not a BibTeX, RIS or CSL-JSON library; give `format` or a .bib/.ris/.json file")))?;
+        let sources = wordcraft_formats::import_sources(ext, &bytes)
+            .unwrap_or_else(|| Err("not a BibTeX, RIS or CSL-JSON library".into()))
+            .map_err(|e| CmdError::Params(format!("{path}: {e}")))?;
+        let mut added = 0;
+        let mut updated = 0;
+        let mut skipped: Vec<Value> = Vec::new();
+        // Each tag's place in the list, and the tags taken, once: an update-in-place or a minted
+        // tag must not rescan the sources per entry (#4890). Minted tags follow `auto_tag`: the
+        // stem, then 1, 2… while taken.
+        let mut index: std::collections::HashMap<String, usize> = s.doc.sources.iter().enumerate().map(|(i, x)| (x.tag.clone(), i)).collect();
+        let mut next: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for mut src in sources {
+            if src.tag.is_empty() && !has_any_field(&src) {
+                skipped.push(json!({"reason": "no usable field"}));
+                continue;
+            }
+            if src.tag.is_empty() {
+                let base = auto_tag_base(&src);
+                let n = next.entry(base.clone()).or_insert(0);
+                let mut tag = if *n == 0 { base.clone() } else { format!("{base}{}", *n) };
+                while index.contains_key(&tag) {
+                    *n += 1;
+                    tag = format!("{base}{}", *n);
+                }
+                *n = n.saturating_add(1);
+                src.tag = tag;
+            }
+            match index.get(&src.tag).copied() {
+                Some(i) => {
+                    if let Some(x) = s.doc.sources.get_mut(i) {
+                        *x = src;
+                    }
+                    updated += 1;
+                }
+                None => {
+                    index.insert(src.tag.clone(), s.doc.sources.len());
+                    s.doc.sources.push(src);
+                    added += 1;
+                }
+            }
+        }
+        if added + updated > 0 {
+            update_citations(s)?;
+            s.touch();
+        }
+        let total = added + updated + skipped.len();
+        Ok(json!({"added": added, "updated": updated, "skipped": skipped, "total": total}))
+    }
+}
+
 pub(super) fn citation(s: &mut Session, v: &Value) -> CmdResult {
     if v.get("source").is_some() {
         sources(s, &json!({"add": v.get("source")}))?;

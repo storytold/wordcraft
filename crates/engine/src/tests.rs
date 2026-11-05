@@ -4641,6 +4641,41 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+    // `references.importSources` reads files, so the junk above (no string `path`) can't reach
+    // its read path: give it real hostile ones — every one is a `Params` error, never a panic.
+    {
+        let dir = std::env::temp_dir().join(format!("wordcraft-import-hostile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("empty.bib"), b"").unwrap();
+        std::fs::write(dir.join("wrong.txt"), b"not any kind of library").unwrap();
+        // A sparse 100 MB library: refused by its size, before the whole thing is read in.
+        std::fs::File::create(dir.join("big.bib")).unwrap().set_len(100 << 20).unwrap();
+        let mut s = Session::new(crate::sample::sample_document());
+        for bad in [
+            json!({}),
+            json!({"path": 5}),
+            json!({"path": ""}),
+            json!({"path": dir.to_string_lossy()}),
+            json!({"path": dir.join("missing.bib").to_string_lossy()}),
+            json!({"path": dir.join("empty.bib").to_string_lossy()}),
+            json!({"path": dir.join("wrong.txt").to_string_lossy()}),
+            json!({"path": dir.join("missing.ris").to_string_lossy(), "format": "nope"}),
+            json!({"path": dir.join("big.bib").to_string_lossy()}),
+        ] {
+            match s.run("references.importSources", &bad) {
+                Err(crate::CmdError::Params(_)) => {}
+                other => panic!("expected a Params error for {bad}, got {other:?}"),
+            }
+        }
+        // The oversized file is refused at the read, so the error names the cap (and the file
+        // is never read in, however large it is).
+        match s.run("references.importSources", &json!({"path": dir.join("big.bib").to_string_lossy()})) {
+            Err(e) => assert!(e.to_string().contains("larger than 16 MB"), "{e}"),
+            Ok(r) => panic!("expected a Params error for big.bib, got {r}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// A panic that `Session::run`'s guard turned into an error, in a command or one it ran: still a

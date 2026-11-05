@@ -785,3 +785,163 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
 }
+
+/// `references.importSources`: a citation library is keyed data — a matching tag is updated in
+/// place (keeping its place in the list), a new one is added, and one `update_citations` covers
+/// the whole import.
+#[test]
+fn import_sources_upserts_by_tag() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-upsert-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.bib");
+    std::fs::write(&path, b"@article{doe2020, author = {Doe, Jane}, title = {The new title}, year = {2021}}\n@book{knuth84, author = {Knuth, Donald E.}, title = {The TeXbook}, year = {1984}}\n").unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "See "})).unwrap();
+    s.run("references.sources", &json!({"add": {"tag": "doe2020", "author": "Doe, Jane", "title": "The old title", "year": "2020"}})).unwrap();
+    s.run("references.citation", &json!({"tag": "doe2020"})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("(Doe, 2020)"), "{}", s.doc.plain_text(StoryRef::Body));
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(r["updated"], json!(1), "{r}");
+    assert_eq!(r["total"], json!(2), "{r}");
+    assert_eq!(r["skipped"], json!([]), "{r}");
+    // The matching tag is updated in place: its place in the list is kept.
+    assert_eq!(s.doc.sources.len(), 2);
+    assert_eq!(s.doc.sources[0].tag, "doe2020");
+    assert_eq!(s.doc.sources[0].title, "The new title");
+    assert_eq!(s.doc.sources[1].tag, "knuth84");
+    // The import's one update_citations refreshed the citation to the new year.
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("(Doe, 2021)") && !t.contains("(Doe, 2020)"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RIS carries no key: tags are minted the way a new source's are, and a collision in one import
+/// gets the stem, then `1`, `2`…
+#[test]
+fn import_sources_generates_tags() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-tags-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.ris");
+    let ris = "TY  - JOUR\nAU  - Doe, Jane\nTI  - First paper\nPY  - 2020\nER  - \n\
+               TY  - JOUR\nAU  - Doe, Jane\nTI  - Second paper\nPY  - 2020\nER  - \n\
+               TY  - BOOK\nTI  - Anonymous editing\nPY  - 2019\nER  - \n";
+    std::fs::write(&path, ris).unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    // `references.sources` mints Roe21 for a source with no tag.
+    s.run("references.sources", &json!({"add": {"author": "Roe, Sam", "title": "An untitled year", "year": "2021"}})).unwrap();
+    assert_eq!(s.doc.sources[0].tag, "Roe21");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(3), "{r}");
+    let tags: Vec<&str> = s.doc.sources.iter().map(|x| x.tag.as_str()).collect();
+    assert_eq!(tags, ["Roe21", "Doe20", "Doe201", "Src19"], "{tags:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without a library extension the content says the format, and `format` forces the reader; an
+/// unknown `format` or a wrong-format file is a parameter error, never a crash.
+#[test]
+fn import_sources_sniffs_and_forces_the_format() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-sniff-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, bytes: &[u8]| {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p.to_string_lossy().to_string()
+    };
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    // No library extension: the content says BibTeX (`@` opening a line).
+    let path = write("notes.txt", b"free text\n@misc{noext, title = {Sniffed}}\n");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[0].tag, "noext");
+    // Leading `TY  -`: RIS without the extension.
+    let path = write("library", b"TY  - BOOK\nTI  - Sniffed RIS\nPY  - 2019\nER  - \n");
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[1].tag, "Src19");
+    // A JSON array of items with `id`/`type`: CSL-JSON.
+    let path = write("items.txt", br#"[{"id": "x1", "type": "book", "title": "Sniffed JSON"}]"#);
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[2].tag, "x1");
+    // RIS under a .json name: `format` forces the reader.
+    let path = write("forced.json", b"TY  - JOUR\nAU  - Doe, Jane\nTI  - Forced\nPY  - 2020\nER  - \n");
+    let r = s.run("references.importSources", &json!({"path": path, "format": "ris"})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.doc.sources[3].tag, "Doe20");
+    // An unknown `format` and a wrong-format file are parameter errors, never crashes.
+    assert!(s.run("references.importSources", &json!({"path": path, "format": "endnote"})).is_err());
+    let path = write("wrong.txt", b"just some text, nothing to import");
+    assert!(matches!(s.run("references.importSources", &json!({"path": path})), Err(CmdError::Params(_))));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A CSL-JSON `{}` item parses but holds nothing: skipped with a reason, not an error.
+#[test]
+fn import_sources_skips_empty_entries() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-skip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.json");
+    std::fs::write(&path, br#"[{}, {"id": "web1", "type": "webpage", "title": "Fact sheet", "URL": "https://example.com"}]"#).unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(r["skipped"], json!([{"reason": "no usable field"}]), "{r}");
+    assert_eq!(r["total"], json!(2), "{r}");
+    assert_eq!(s.doc.sources.len(), 1);
+    assert_eq!(s.doc.sources[0].tag, "web1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The whole import is one undo step, and a citation works right after it.
+#[test]
+fn import_sources_is_one_undo_step_and_cites_after() {
+    let dir = std::env::temp_dir().join(format!("wc-import-lib-undo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.bib");
+    std::fs::write(&path, b"@article{doe2020, author = {Doe, Jane}, title = {A study}, year = {2020}, journal = {Journal of Things}}\n").unwrap();
+    let path = path.to_string_lossy().to_string();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Cite here: "})).unwrap();
+    let depth = s.undo_depth();
+    let r = s.run("references.importSources", &json!({"path": path})).unwrap();
+    assert_eq!(r["added"], json!(1), "{r}");
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step for the whole import");
+    // One undo takes the whole import back out.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(s.doc.sources.is_empty(), "{:?}", s.doc.sources);
+    // Import again: a citation works right after it.
+    s.run("references.importSources", &json!({"path": path})).unwrap();
+    s.run("references.citation", &json!({"tag": "doe2020"})).unwrap();
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains("Cite here: (Doe, 2020)"), "{t}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `engine.commands` (control channel, MCP, the CLI's command list) is the registry's
+/// describe(); the catalog row makes command search and keytips see it too.
+#[test]
+fn import_sources_is_listed_in_engine_commands() {
+    let listed = crate::cmd::registry().describe();
+    let me = listed.as_array().unwrap().iter().find(|c| c["id"] == "references.importSources").unwrap();
+    assert_eq!(me["label"], "Import Sources Library");
+    assert_eq!(me["location"], "References › Citations & Bibliography");
+    assert!(
+        crate::catalog::entries()
+            .iter()
+            .any(|(tab, group, _, id)| { *tab == "References" && *group == "Citations" && *id == "references.importSources" })
+    );
+}

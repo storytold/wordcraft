@@ -1,6 +1,6 @@
 use super::shell::{Next, go};
 #[cfg(not(target_arch = "wasm32"))]
-use super::{AfterPick, Asked, FileDialogRequest};
+use super::{AfterPick, Asked, Dialog, FileDialogRequest};
 use super::{RefsDialog, Serialize, Source, Tokens, Ui, Value, WordApp, buttons, json, vec2};
 
 // ---------------------------------------------------------------------------------------------
@@ -220,14 +220,14 @@ pub(super) fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> N
         }
     }
     if (ok || cancel) && f.back {
-        return go(RefsDialog::Sources { selected: None });
+        return go(RefsDialog::Sources { selected: None, message: String::new() });
     }
     if ok || cancel { Next::Close } else { Next::Stay }
 }
 
 /// The Source Manager: the document's sources with New…, Import…, Edit…, Delete and Insert
 /// Citation; each button runs the command an agent would.
-pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<usize>) -> Next {
+pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<usize>, message: &mut String) -> Next {
     let t = Tokens::get(ui.ctx());
     let list: Vec<String> = app
         .session
@@ -262,12 +262,14 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
             next = go(RefsDialog::Source(Box::new(SourceForm::new(false, true))));
         }
         // Import… (desktop): a Word bibliography file (`b:Sources`, Word's own Sources.xml) adds
-        // its sources to this document (#2640); the list above follows on the next frame.
+        // its sources to this document (#2640), and a reference-manager library (BibTeX, RIS,
+        // CSL-JSON: .bib/.ris/.json) imports the same way (#1058); the outcome shows in the
+        // status line below and the list above follows on the next frame.
         #[cfg(not(target_arch = "wasm32"))]
         if ui.button(tl!("Import…")).clicked()
             && let Asked::Done(Err(e)) = app.ask_file(FileDialogRequest::Open { purpose: "sources".into() }, AfterPick::Sources)
         {
-            app.status(e);
+            sources_status(app, e);
         }
         if ui.add_enabled(src.is_some(), egui::Button::new(tl!("Edit…"))).clicked()
             && let Some(s) = &src
@@ -291,6 +293,10 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
             next = Next::Close;
         }
     });
+    if !message.is_empty() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(&*message).small());
+    }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
@@ -300,4 +306,17 @@ pub(super) fn sources_ui(app: &mut WordApp, ui: &mut Ui, selected: &mut Option<u
         });
     });
     next
+}
+
+/// Say the source import's outcome in the Source Manager's status line; when the dialog was
+/// closed while the file was picked, the window's status bar says it instead (#1058).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn sources_status(app: &mut WordApp, msg: String) {
+    if let Some(Dialog::Refs(d)) = &mut app.dialog
+        && let RefsDialog::Sources { message, .. } = &mut **d
+    {
+        *message = msg;
+        return;
+    }
+    app.status(msg);
 }

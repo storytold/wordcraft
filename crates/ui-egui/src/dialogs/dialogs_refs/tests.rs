@@ -426,3 +426,83 @@ fn the_source_manager_imports_a_word_sources_file() {
     assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| m.contains("Imported 2 sources")), "{:?}", h.state().status_msg);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #1058, #2640: Manage Sources ▸ Import… asks the host's file dialog for a Word sources file
+/// or a source library and, once the answer arrives, imports it: the sources show in the list
+/// and the dialog's status line says the outcome. Importing the same library again updates it.
+#[test]
+fn import_button_imports_a_source_library() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::mpsc::{Sender, channel};
+
+    use egui_kittest::kittest::Queryable;
+
+    use crate::file_dialogs::{FileDialogAnswer, FileDialogRequest};
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-refs-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let bib = dir.join("studio.bib");
+    std::fs::write(
+        &bib,
+        "@book{knuth84,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n  publisher = {Addison-Wesley},\n  year = {1984}\n}\n@article{rivera2024,\n  author = {Rivera, Alex},\n  title = {Shared Spaces},\n  journal = {Journal of Studios},\n  year = {2024}\n}\n",
+    )
+    .unwrap();
+    // A host that shows file dialogs asynchronously: nothing is answered until the test does.
+    let shown: Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>> = Rc::default();
+    let log = shown.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |req| {
+            let (tx, rx) = channel();
+            log.borrow_mut().push((req, tx));
+            rx
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    a.run("references.sources", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    // The button sits beside the other list actions, in their row, between New… and Edit…
+    // (checked here in place of eyeballing the screenshot).
+    let (new, edit) = (h.get_by_label("New…").rect(), h.get_by_label("Edit…").rect());
+    let (import, cite) = (h.get_by_label("Import…").rect(), h.get_by_label("Insert Citation").rect());
+    assert!((new.center().y - import.center().y).abs() < 1.0, "Import… is in the list-actions row");
+    assert!(new.right() <= import.left() && import.right() <= edit.left(), "Import… is between New… and Edit…");
+    assert!(import.right() <= cite.left(), "Import… is before Insert Citation");
+    h.get_by_label("Import…").click();
+    h.run_steps(2);
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "sources".into() });
+    assert!(h.state().file_dialog_open(), "the host's file dialog is open");
+    let (_, tx) = shown.borrow_mut().pop().unwrap();
+    tx.send(Ok(vec![bib.to_string_lossy().into_owned()])).unwrap();
+    h.run_steps(3);
+    let a = h.state();
+    assert!(!a.file_dialog_open());
+    assert_eq!(a.session.doc.sources.len(), 2);
+    assert_eq!(a.session.doc.sources[0].tag, "knuth84");
+    assert!(h.query(egui_kittest::kittest::By::new().label_contains("knuth84")).is_some(), "the list shows the imported source");
+    let Some(Dialog::Refs(d)) = &a.dialog else { panic!("the Source Manager stays open") };
+    let RefsDialog::Sources { message, .. } = &**d else { panic!("the Source Manager is open") };
+    assert_eq!(message, "2 added, 0 updated");
+    assert!(h.query_by_label("2 added, 0 updated").is_some(), "the status line is drawn");
+    // The same library again updates the sources in place rather than duplicating them.
+    h.get_by_label("Import…").click();
+    h.run_steps(2);
+    let (_, tx) = shown.borrow_mut().pop().unwrap();
+    tx.send(Ok(vec![bib.to_string_lossy().into_owned()])).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.sources.len(), 2, "no duplicates");
+    let Some(Dialog::Refs(d)) = &h.state().dialog else { panic!("still open") };
+    let RefsDialog::Sources { message, .. } = &**d else { panic!("the Source Manager is open") };
+    assert_eq!(message, "0 added, 2 updated");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -251,6 +251,7 @@ References|Footnotes|Footnote Options|references.noteOptions
 References|Research|Researcher|references.researcher
 References|Citations|Insert Citation|references.citation
 References|Citations|Manage Sources|references.sources
+References|Citations|Import Sources Library|references.importSources
 References|Citations|Style|references.citationStyle
 References|Citations|Bibliography|references.bibliography
 References|Captions|Insert Caption|references.caption
