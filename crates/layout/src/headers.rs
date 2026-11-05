@@ -235,15 +235,15 @@ pub(crate) fn headers_footers_refer_to_pages(doc: &Document) -> bool {
     })
 }
 
-/// Where each bookmark in the body starts: the number and number format of the page it is placed
-/// on (with two of the same name, the first in the document).
+/// Where each bookmark in the body and its text boxes starts: the number and number format of the
+/// page it is placed on (with two of the same name, the first in the document).
 pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize, &SectionProps)]) -> fields::BookmarkPages {
     // Each paragraph's bookmarks: name, offset, and its line in the paragraph layout last looked
     // up (the pieces of a paragraph usually share one).
-    let mut wanted: HashMap<Path, Vec<(String, usize, Option<(usize, usize)>)>> = HashMap::new();
+    let mut wanted: HashMap<(StoryRef, Path), Vec<(String, usize, Option<(usize, usize)>)>> = HashMap::new();
     let mut seen = HashSet::new();
-    for path in doc.para_paths(StoryRef::Body) {
-        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+    for (story, path) in doc.body_para_paths() {
+        let Some(p) = doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { .. })) {
             continue;
         }
@@ -251,7 +251,7 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
             if let InlineObject::BookmarkStart { name } = o
                 && seen.insert(name.as_str())
             {
-                wanted.entry(path.clone()).or_default().push((name.clone(), off, None));
+                wanted.entry((story, path.clone())).or_default().push((name.clone(), off, None));
             }
         }
     }
@@ -262,8 +262,9 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
         }
         let format = sections.get(page.section).map(|(_, s)| s.page_num_format).unwrap_or_default();
         for it in &page.items {
-            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, .. } = it else { continue };
-            let Some(marks) = wanted.get_mut(path) else { continue };
+            let Placed::Lines { story, path, para, l0, l1, .. } = it else { continue };
+            let key = (*story, path.clone());
+            let Some(marks) = wanted.get_mut(&key) else { continue };
             let layout = Arc::as_ptr(para) as usize;
             marks.retain_mut(|(name, off, line)| {
                 let li = match *line {
@@ -281,7 +282,7 @@ pub(crate) fn bookmark_pages(doc: &Document, pages: &[Page], sections: &[(usize,
                 false
             });
             if marks.is_empty() {
-                wanted.remove(path);
+                wanted.remove(&key);
             }
         }
     }

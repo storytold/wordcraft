@@ -375,8 +375,8 @@ fn mark(d: &mut Document, path: &Path, off: usize, name: &str) {
     d.para_mut(StoryRef::Body, path).unwrap().insert_object(off, InlineObject::BookmarkStart { name: name.into() }, &Default::default()).unwrap();
 }
 
-/// Bookmarks in the second half of a paragraph split over two pages, in a table cell and in a
-/// section numbered in roman numerals are found on the page and in the format they land in.
+/// Bookmarks in the second half of a paragraph split over two pages, in a table cell, in a text box
+/// and in a section numbered in roman numerals are found on the page and in the format they land in.
 #[test]
 fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections() {
     // One long paragraph over two pages, marked at its start and its end.
@@ -397,6 +397,30 @@ fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections(
     d.para_mut(StoryRef::Body, &cell).unwrap().insert_text(0, "In a cell", &Default::default()).unwrap();
     mark(&mut d, &cell, 0, "Cell");
     page_ref_footer(&mut d, &["Cell"]);
+    assert_eq!(footer_shown(&lay(&d)), ["2", "2"]);
+
+    // A text box anchored on the second page.
+    use wordcraft_doc::para::ShapeKind;
+    let mut d = Document::from_text("First\nSecond");
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    let mut bp = Paragraph::with_text("In a box", Default::default());
+    bp.insert_object(0, InlineObject::BookmarkStart { name: "Box".into() }, &Default::default()).unwrap();
+    let story = d.add_part(PartKind::TextBox, vec![para_block(bp)]);
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, shape, &Default::default()).unwrap();
+    page_ref_footer(&mut d, &["Box"]);
     assert_eq!(footer_shown(&lay(&d)), ["2", "2"]);
 
     // The second section numbers its pages in lower-case roman numerals.

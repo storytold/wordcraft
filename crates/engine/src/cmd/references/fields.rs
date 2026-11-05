@@ -5,9 +5,10 @@ use super::properties::{
 };
 use super::toc::{heading_style_level, update_toc};
 use super::{
-    Block, CharProps, CmdError, CmdResult, FieldCode, InlineObject, NumFormat, Paragraph, Path, Pos, Selection, Session, StoryRef, Value, p,
-    sel_result,
+    Anchor, Block, CharProps, CmdError, CmdResult, FieldCode, Float, InlineObject, NumFormat, OBJ, Paragraph, PartKind, Path, Pos, Selection,
+    Session, ShapeKind, StoryRef, Value, Wrap, p, para_block, sel_result,
 };
+use wordcraft_layout::hit::ObjectHit;
 
 /// The `\*` format switch value for a caption's number format (OOXML names work too).
 pub fn seq_format(name: &str) -> &'static str {
@@ -23,8 +24,8 @@ pub fn seq_format(name: &str) -> &'static str {
 /// Separators Word offers between a chapter number and a caption number.
 pub const CHAPTER_SEPARATORS: [&str; 5] = ["-", ".", ":", "\u{2014}", "\u{2013}"];
 
-/// Insert a caption paragraph below (or above) the caret's paragraph, table or object: the label,
-/// a chapter number (`STYLEREF n \s` and a separator) and a `SEQ label \* format \s n` number
+/// Insert a caption below (or above) the caret's paragraph, table or object: the label, a chapter
+/// number (`STYLEREF n \s` and a separator) and a `SEQ label \* format \s n` number
 /// (ECMA-376 §17.16.5.56, §17.16.5.59).
 pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     let label: String = p::str(v, "label").unwrap_or("Figure").chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect();
@@ -51,6 +52,15 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     if !text.is_empty() {
         para.insert_text(para.len(), &format!(": {text}"), &CharProps::default())?;
     }
+    // A selected floating picture or shape of the main text: in a text box under it (#3129).
+    let floating = crate::cmd::objects::object_selection(s)
+        .and_then(|(pos, o)| o.frame().map(|(_, _, f)| (pos, f.clone())))
+        .filter(|(pos, f)| f.wrap != Wrap::Inline && pos.story == StoryRef::Body);
+    if let Some((pos, float)) = floating
+        && let Some(pic) = s.layout().object(&pos, s.page_hint)
+    {
+        return floating_caption(s, &pic, &float, para, above);
+    }
     // A selected picture, shape or chart: next to the paragraph holding it, in the same cell or
     // text box (#1230). Otherwise next to the caret's top-level block: a paragraph, or the whole
     // table it is in.
@@ -72,11 +82,65 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// The caption of the floating picture or shape `pic`, as Word makes it: in a text box with no
+/// fill, outline or margins that fits its text, as wide as the picture and right under it (over
+/// it with `above`), wrapped like it and anchored in its paragraph.
+fn floating_caption(s: &mut Session, pic: &ObjectHit, float: &Float, para: Paragraph, above: bool) -> CmdResult {
+    let id = s.doc.try_add_part(PartKind::TextBox, vec![para_block(para)])?;
+    if let Some(part) = s.doc.parts.get_mut(&id) {
+        part.body.auto_fit = true;
+        part.body.inset = Some([0; 4]);
+    }
+    let (x, top) = (pic.rect.x - pic.origin.x, pic.rect.y - pic.origin.y);
+    let obj = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: pic.rect.w,
+        h: 18.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float {
+            wrap: float.wrap,
+            wrap_text: float.wrap_text,
+            h_rel: Anchor::Column,
+            v_rel: Anchor::Paragraph,
+            x,
+            y: top + pic.rect.h,
+            dist: float.dist,
+            dist_top: float.dist_top,
+            dist_bottom: float.dist_bottom,
+            ..Float::default()
+        },
+        story: Some(id),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    let pos = pic.pos();
+    let at = Pos { off: pos.off + OBJ.len_utf8(), ..pos };
+    s.doc.insert_object(&at, obj, &CharProps::default())?;
+    update_seq(s)?;
+    // Keep the height the box fits to; above the picture, its bottom meets the picture's top.
+    s.touch();
+    if let Some(h) = s.layout().object(&at, pic.page).map(|o| o.rect.h) {
+        let p = s.doc.para_mut(at.story, &at.path)?;
+        if let Some(o) = p.object_at_mut(at.off) {
+            o.set_size(pic.rect.w, h);
+            if above && let Some(f) = o.float_mut() {
+                f.y = top - h;
+            }
+        }
+        p.touch();
+    }
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
+    sel_result(s)
+}
+
 /// Renumber the body's SEQ fields in document order, honouring `\* format`, `\s level` (restart
 /// after each heading of that level), `\r n` (reset to n), `\c` (repeat) and `\h` (hide), and
-/// fill body STYLEREF fields ([`wordcraft_layout::styleref`]): chapter numbers (`STYLEREF n \s`,
-/// the last level-n heading's number, or its count when the heading isn't numbered) and the
-/// text or number of the nearest paragraph of a style.
+/// fill the STYLEREF fields of the body and its text boxes ([`wordcraft_layout::styleref`]):
+/// chapter numbers (`STYLEREF n \s`, the last level-n heading's number, or its count when the
+/// heading isn't numbered) and the text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     // Numbers first: a STYLEREF to a heading that holds a SEQ field shows its new number.
     let numbers = seq_results(&s.doc);
@@ -155,22 +219,27 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
     }
 }
 
-/// The fresh results of the body's unlocked STYLEREF fields ([`update_seq`]), from the text
-/// `doc` holds: the SEQ fields in the headings they find should already show their numbers.
+/// The fresh results of the unlocked STYLEREF fields in the body and in the text boxes anchored
+/// there, which look from their anchor's paragraph ([`update_seq`]), from the text `doc` holds:
+/// the SEQ fields in the headings they find should already show their numbers.
 fn styleref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut out = Vec::new();
     // Built on the first STYLEREF.
     let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
-    for path in doc.para_paths(StoryRef::Body) {
-        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+    let mut body = Path::top(0);
+    for (story, path) in doc.body_para_paths() {
+        if story == StoryRef::Body {
+            body = path.clone();
+        }
+        let Some(p) = doc.para(story, &path) else { continue };
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
             if FieldCode::parse(instr).name != "STYLEREF" {
                 continue;
             }
             let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(doc));
-            if let Some(i) = ix.index_of(&path) {
-                out.push((StoryRef::Body, path.clone(), k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
+            if let Some(i) = ix.index_of(&body) {
+                out.push((story, path.clone(), k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
             }
         }
     }
