@@ -535,7 +535,7 @@ fn prepare_view(app: &mut WordApp, ui: &Ui, full: Rect, layout: &DocLayout) -> C
     app.canvas.canvas_rect = Some(area);
     let animate = app.animations_on();
     let opts = ui.ctx().options(|o| o.input_options);
-    let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate));
+    let zoom_delta = ui.input(|i| app.canvas.wheel.zoom(i, &opts, animate, app.ui.pinch_zoom));
     let mut zoom_anchor = None;
     if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
         if !read_mode && let Some(p) = ui.input(|i| i.pointer.latest_pos()) {

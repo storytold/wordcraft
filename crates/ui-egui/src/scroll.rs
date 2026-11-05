@@ -265,18 +265,32 @@ impl CanvasScroll {
     /// This frame's zoom factor from Ctrl/⌘+wheel and pinch gestures (1.0: none). With `animate`
     /// it is egui's, which eases a wheel notch's zoom in over a few frames. Without, the wheel
     /// zooms in whole steps ([`ZOOM_STEP`]), each at once, however finely the turns arrive; a
-    /// pinch the system reports as a pinch still follows the fingers.
-    pub fn zoom(&mut self, input: &egui::InputState, opts: &InputOptions, animate: bool) -> f32 {
+    /// pinch the system reports as a pinch still follows the fingers. `pinch_zoom` (File › Options
+    /// › Display › Touchpad) decides whether two-finger pinch gestures zoom at all; off, they only
+    /// pan (Ctrl/⌘+wheel zoom stays).
+    pub fn zoom(&mut self, input: &egui::InputState, opts: &InputOptions, animate: bool, pinch_zoom: bool) -> f32 {
+        // A two-finger pinch arrives as [`Event::Zoom`]. Switched off (File › Options › Display ›
+        // Touchpad), it zooms nothing and only pans; Ctrl/⌘+wheel zoom always stays.
+        let pinch = input.events.iter().filter_map(|e| if let Event::Zoom(f) = e { Some(*f) } else { None }).product::<f32>();
         // Fingers on a touch screen are measured directly, never eased.
         if animate || input.multi_touch().is_some() {
             self.zoom_pending = 0.0;
-            return input.zoom_delta();
+            let zoom = input.zoom_delta();
+            if pinch_zoom || !zoom.is_finite() || zoom <= 0.0 {
+                return zoom;
+            }
+            // A switched-off pinch is the only thing in this frame's zoom: leave it at 100%.
+            // Otherwise divide the pinch back out, leaving the Ctrl/⌘+wheel zoom.
+            if pinch.is_finite() && pinch > 0.0 && pinch != 1.0 {
+                return zoom / pinch;
+            }
+            return zoom;
         }
         let mut zoom = 1.0_f32;
         let mut turned = 0.0_f32;
         for event in &input.events {
             match event {
-                Event::Zoom(factor) => zoom *= factor,
+                Event::Zoom(factor) if pinch_zoom => zoom *= factor,
                 Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } if modifiers.matches_any(opts.zoom_modifier) => {
                     let d = egui_points(*unit, *delta, input, opts);
                     turned += opts.scroll_zoom_speed * (d.x + d.y);
@@ -438,7 +452,7 @@ mod tests {
             }
             let id = egui::Id::unique("canvas scroll under test");
             let mut scroll = ui.data(|d| d.get_temp::<CanvasScroll>(id)).unwrap_or_default();
-            let zoom = ui.input(|i| scroll.zoom(i, &opts, animate));
+            let zoom = ui.input(|i| scroll.zoom(i, &opts, animate, true));
             ui.data_mut(|d| d.insert_temp(id, scroll));
             let out = egui::ScrollArea::vertical().show(ui, |ui| ui.allocate_space(egui::vec2(100.0, 5000.0)));
             seen = (out.state.clamped_offset().y, zoom);
@@ -561,6 +575,29 @@ mod tests {
         assert!(huge > notch_zoom && huge <= (MAX_ZOOM_STEPS * ZOOM_STEP).exp() * 1.001, "{huge}");
         for junk in [Event::Zoom(f32::NAN), Event::Zoom(0.0), wheel(MouseWheelUnit::Page, Vec2::new(0.0, f32::INFINITY), Modifiers::COMMAND)] {
             assert_eq!(egui_frame(&ctx, &mut n, false, vec![junk]).1, 1.0);
+        }
+    }
+
+    /// The pinch zoom setting (File › Options › Display › Touchpad) decides whether a pinch's
+    /// [`Event::Zoom`] zooms at all; off, it leaves the zoom at 100% (the pinch still pans).
+    #[test]
+    fn pinch_zoom_follows_the_setting() {
+        for pinch_zoom in [false, true] {
+            let ctx = egui::Context::default();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+            let input = egui::RawInput { events: vec![Event::Zoom(1.5)], time: Some(1.0), screen_rect: Some(screen), ..Default::default() };
+            let mut seen = 1.0;
+            ctx.run_ui(input, |ui| {
+                let opts = ui.ctx().options(|o| o.input_options);
+                let mut scroll = CanvasScroll::default();
+                seen = ui.input(|i| scroll.zoom(i, &opts, false, pinch_zoom));
+            })
+            .drop_without_applying_deltas();
+            if pinch_zoom {
+                assert_eq!(seen, 1.5, "pinch zoom enabled zooms");
+            } else {
+                assert_eq!(seen, 1.0, "pinch zoom off ignores the pinch");
+            }
         }
     }
 
