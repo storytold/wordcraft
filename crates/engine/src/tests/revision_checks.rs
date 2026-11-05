@@ -850,3 +850,26 @@ fn shading_on_a_cell_and_on_its_text_by_one_revision_are_listed_apart() {
     assert!(!text_shaded, "the text's shading is undone");
     assert_eq!(cell_shaded, Some(green), "the cell keeps its shading");
 }
+
+#[test]
+fn rejecting_a_listed_move_of_another_authors_insertion_puts_it_back_as_their_insertion() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "document.setText", json!({"text": "First one."}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Alice".into();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second one."}));
+    s.author = "Bob".into();
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 10}, "focus": {"block": 1, "off": 11}}));
+    run(&mut s, "edit.cut", json!({}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "edit.paste", json!({}));
+    let n = listed(&mut s, |c| c["kind"] == "moveFrom" && c["author"] == "Bob");
+    run(&mut s, "review.reject", json!({"change": n}));
+    let list = change_list(&mut s);
+    assert!(list.iter().all(|(_, who, _)| who == "Alice"), "Bob's move is undone, both ends: {list:?}");
+    assert!(list.contains(&("insert".into(), "Alice".into(), "Second one.".into())), "Alice's insertion is back where it was: {list:?}");
+    let text = |i| s.doc.para_at(&Pos::body(i, 0)).map(|p| p.plain_text()).unwrap_or_default();
+    assert_eq!((text(0), text(1), s.doc.body.len()), ("First one.".into(), "Second one.".into(), 2));
+}

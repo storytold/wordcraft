@@ -527,14 +527,7 @@ fn changes(s: &Session) -> Vec<Change> {
                 out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), target: Target::Runs });
             }
             if let Some((rev, kind)) = nested_deletion(&s.doc, c.ins, c.del) {
-                out.push(Change {
-                    a: mk(&path, r.start),
-                    b: mk(&path, r.end),
-                    kind,
-                    rev: Some(rev),
-                    props: Vec::new(),
-                    target: Target::Runs,
-                });
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: Some(rev), props: Vec::new(), target: Target::Runs });
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
