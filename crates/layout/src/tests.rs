@@ -773,17 +773,27 @@ fn cpu_cost(f: &mut impl FnMut()) -> f64 {
 
 /// How much more `big` costs than `small`, for `big` an input `scale` times the size of `small`'s:
 /// (small, big, big / small), ~`scale` when linear and ~`scale`² when quadratic. Each is the
-/// cheapest of several runs after a warm-up, the runs alternating so a busy spell slows both sizes
-/// alike; `small` is timed `scale` times over per run, so both timings are long against the clock's
-/// resolution.
+/// lowest ratio from several paired runs after a warm-up; the order alternates so a busy spell
+/// affects both sizes alike. `small` is timed `scale` times per run, so both timings are long
+/// against the clock's resolution.
 pub(crate) fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
     small();
     big();
     let mut small_scaled = || (0..scale).for_each(|_| small());
     let (mut t1, mut tk) = (f64::INFINITY, f64::INFINITY);
-    for _ in 0..5 {
-        t1 = t1.min(cpu_cost(&mut small_scaled) / scale as f64);
-        tk = tk.min(cpu_cost(&mut big));
+    for i in 0..5 {
+        let (small_time, big_time) = if i % 2 == 0 {
+            let small_time = cpu_cost(&mut small_scaled) / scale as f64;
+            let big_time = cpu_cost(&mut big);
+            (small_time, big_time)
+        } else {
+            let big_time = cpu_cost(&mut big);
+            let small_time = cpu_cost(&mut small_scaled) / scale as f64;
+            (small_time, big_time)
+        };
+        if !t1.is_finite() || big_time / small_time.max(1e-9) < tk / t1.max(1e-9) {
+            (t1, tk) = (small_time, big_time);
+        }
     }
     (t1, tk, tk / t1.max(1e-9))
 }
