@@ -61,7 +61,7 @@ fn no_flag_writes_nothing() {
 #[test]
 fn a_style_carrying_the_flag_round_trips() {
     let mut d = Document::from_text("Intro\nBody");
-    if let Some(st) = d.styles.styles.iter_mut().find(|s| s.id == "Heading1") {
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Heading1") {
         st.para.collapsed = Some(true);
     }
     let bytes = wordcraft_docx::write(&d).unwrap();

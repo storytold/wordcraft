@@ -35,12 +35,18 @@ sync_github_name = false
 real_name = "Saeed Azarehgar"
 
 [people.vangel76]
-sync_github_name = true
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
 
 [people.dkhlapov]
 real_name = "Dmitrii Khlapov"
 display_name = "Dima Khlapov"
 sync_github_name = false
+
+[people.rezendepauloh]
+real_name = "Paulo Henrique Gonçalves Rezende"
+sync_github_name = true
 
 [people.DanielKnourek]
 real_name = "Daniel Kňourek"
@@ -187,3 +193,6 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.entropybeater]
+display_name = "entropybeater"

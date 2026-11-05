@@ -1,5 +1,16 @@
 use super::{Arc, CmdError, CmdResult, Document, Pos, Selection, Session, StoryRef, Value, delete_selection, json, p, sel_result};
 
+/// Options › Language › Set as default: only the saved default proofing language (what future
+/// blank documents are written in), as Word's Set as Preferred. A setting, like `file.options`: the
+/// document, the selection, the undo history and the modified flag are left alone.
+pub(super) fn preferred_language(s: &mut Session, v: &Value) -> CmdResult {
+    let t = p::str(v, "lang").ok_or_else(|| CmdError::Params("`lang` is required".into()))?;
+    let l = wordcraft_proof::lang::normalize_tag(t)
+        .ok_or_else(|| CmdError::Params(format!("`lang` must be a language tag such as pl-PL or en-US, not {t:?}")))?;
+    s.prefs.default_language = Some(l.clone());
+    Ok(json!({"preferred": l}))
+}
+
 /// Set Proofing Language: the selection's language and "do not check spelling or grammar",
 /// or (`default`) the document's default and the saved language for future blank documents;
 /// `detect` is the per-user detection preference.
@@ -19,9 +30,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     }
     if p::bool(v, "default") == Some(true) {
         let l = lang.clone().ok_or_else(|| CmdError::Params("`default` needs `lang`".into()))?;
-        s.doc.styles.default_chr.lang = Some(l.clone());
+        Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(l.clone());
         // A Normal style that names its own language follows the new default.
-        if let Some(n) = s.doc.styles.styles.iter_mut().find(|x| x.id == "Normal")
+        if let Some(n) = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "Normal")
             && n.chr.lang.is_some()
         {
             n.chr.lang = Some(l);

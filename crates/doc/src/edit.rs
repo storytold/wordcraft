@@ -1054,7 +1054,7 @@ impl Document {
         let mut default_style = None;
         if keep_styles {
             if src.styles.get("Normal").is_none() {
-                src.styles.upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
+                Arc::make_mut(&mut src.styles).upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
             }
             // Ids given out here are taken too: two styles never get the same new one.
             let mut given = std::collections::HashSet::new();
@@ -1089,7 +1089,7 @@ impl Document {
             abs_map.insert(a.id, id);
             let mut a = crate::numbering::AbstractNum { id, ..a.clone() };
             a.levels.iter_mut().for_each(|l| restyle(&mut l.style));
-            self.numbering.abstracts.push(a);
+            Arc::make_mut(&mut self.numbering).abstracts.push(a);
         }
         let next_num = self.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
         let mut nums = BTreeMap::new();
@@ -1099,7 +1099,7 @@ impl Document {
             let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
             let mut n = crate::numbering::Num { id, abstract_id, ..n.clone() };
             n.level_overrides.iter_mut().for_each(|(_, l)| restyle(&mut l.style));
-            self.numbering.nums.push(n);
+            Arc::make_mut(&mut self.numbering).nums.push(n);
         }
         let renumber = |n: &mut Option<crate::props::NumRef>| {
             if let Some(n) = n.as_mut()
@@ -1138,7 +1138,7 @@ impl Document {
             }
             if self.styles.get(&st.id).is_none() {
                 renumber(&mut st.para.numbering);
-                self.styles.upsert(st);
+                Arc::make_mut(&mut self.styles).upsert(st);
             }
         }
         let rev = u32::try_from(self.revisions.len()).unwrap_or(u32::MAX);
