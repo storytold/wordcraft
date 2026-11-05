@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use wordcraft_doc::styles::{PartSet, TableStyleProps};
 use wordcraft_doc::{CharProps, Path, StoryRef};
 
-/// Resolved paragraph props at the caret.
-pub(super) fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
+/// Resolved paragraph props of the selection: those of the paragraph the caret is in, or of the
+/// last paragraph a selection covers when it ends at the next paragraph's start.
+pub fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
     // A selection ending at the next paragraph's start doesn't format that paragraph (#418), so
     // its state comes from the last paragraph it does cover.
     let (a, b) = s.sel.ordered();
@@ -125,8 +126,16 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
     for path in crate::cmd::selected_paths(s) {
         let Some(para) = s.doc.para(story, &path) else { continue };
         let rtl = s.doc.styles.resolve_para(&para.props.clone().overlaid(&props)).bidi;
+        let anchor_lock = props
+            .frame
+            .as_ref()
+            .filter(|frame| frame.anchor_lock.is_none())
+            .and_then(|_| para.props.frame.as_ref().and_then(|frame| frame.anchor_lock));
         let para = s.doc.para_mut(story, &path)?;
         para.props.overlay(&props);
+        if let (Some(anchor_lock), Some(frame)) = (anchor_lock, para.props.frame.as_mut()) {
+            frame.anchor_lock = Some(anchor_lock);
+        }
         if let Some(a) = align {
             para.props.align = Some(a.visual(rtl));
         }

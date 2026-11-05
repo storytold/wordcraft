@@ -1,10 +1,4 @@
 use super::*;
-use wordcraft_doc::odf_profile::OdfProfile;
-
-/// Open ODT `bytes` filling in what the standard leaves open as `profile` says.
-pub(crate) fn import_as(bytes: &[u8], profile: &OdfProfile) -> Document {
-    super::import_with(bytes, &wordcraft_doc::SectionProps::default(), profile).unwrap()
-}
 
 #[test]
 fn escaper_drops_noncharacters() {
@@ -304,7 +298,7 @@ fn page_layout_follows_the_first_master_page() {
     let mut sec = wordcraft_doc::SectionProps::default();
     apply_page_layout(xml, &mut sec);
     assert!(sec.landscape);
-    // A margin left unsaid is XSL's initial value, 0 (the standard's, whatever the profile).
+    // A margin left unsaid is XSL's initial value, 0.
     assert_eq!((sec.page_w, sec.page_h, sec.margin_left, sec.margin_top), (720.0, 360.0, 72.0, 0.0));
 }
 
@@ -1337,16 +1331,14 @@ fn unequal_columns_keep_their_widths_and_columns_without_a_gap_have_none() {
     let out = entry(&export(&doc).unwrap(), "styles.xml");
     assert!(out.contains(r#"<style:columns fo:column-count="2"><style:column style:rel-width"#), "{out}");
     assert_eq!(widths(&import(&export(&doc).unwrap()).unwrap()), [(148.8, 14.4), (304.8, 0.0)]);
-    // Equal shares: equal columns with their gap. No gap stated and no shares: the profile's gap
-    // (the standard gives none): WordCraft's half inch, LibreOffice's none.
+    // Equal shares: equal columns with their gap. No gap stated and no shares: WordCraft's half
+    // inch (the standard gives none).
     let equal = styles.replace(r#"rel-width="2*""#, r#"rel-width="1*""#);
     let c = import(&package(&content, Some(&equal))).unwrap().last_section.columns;
     assert!(c.widths.is_empty() && (c.space - 14.4).abs() < 0.01, "{c:?}");
     let bare = styles.replace(r#"<style:column style:rel-width="1*" fo:start-indent="0in" fo:end-indent="0.1in"/><style:column style:rel-width="2*" fo:start-indent="0.1in" fo:end-indent="0in"/>"#, "");
     let c = import(&package(&content, Some(&bare))).unwrap().last_section.columns;
     assert_eq!((c.count, c.space, c.widths.len()), (2, 36.0, 0));
-    let c = import_as(&package(&content, Some(&bare)), &OdfProfile::libreoffice()).last_section.columns;
-    assert_eq!((c.count, c.space, c.widths.len()), (2, 0.0, 0));
 }
 
 #[test]
