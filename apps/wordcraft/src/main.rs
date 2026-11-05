@@ -10,6 +10,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod animations;
+#[cfg(target_os = "linux")]
+mod appimage_env;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod clipboard;
@@ -412,9 +414,16 @@ fn main() -> eframe::Result {
     if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
+    // Linux: before anything reads another program's AppImage variables, or a thread starts (#5653).
+    #[cfg(target_os = "linux")]
+    let start_over_failed = appimage_env::drop_inherited();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
+    #[cfg(target_os = "linux")]
+    if let Some(e) = start_over_failed {
+        log::error!("couldn't start again without another program's AppImage variables; don't accept an update in this window: {e}");
+    }
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
