@@ -10,11 +10,13 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// Insert a page break at the caret. At the end of a paragraph the caret moves on to a new
 /// paragraph, which starts the next page (Word); otherwise it would stay after the break, drawn
-/// on the page the break ends, and a second press would be needed to reach the new one.
+/// on the page the break ends, and a second press would be needed to reach the new one. A table
+/// cell takes no page break (layout leaves it a marker), so there the caret stays in the cell's
+/// paragraph rather than gaining an empty one.
 pub(super) fn page_break(s: &mut Session) -> CmdResult {
     type_text(s, "\u{000C}")?;
     let at = s.sel.focus.clone();
-    if s.sel.is_collapsed() && s.doc.para_at(&at).is_some_and(|p| at.off >= p.len()) {
+    if at.path.cell().is_none() && s.doc.para_at(&at).is_some_and(|p| at.off >= p.len()) {
         let at = split_para(s, &at)?;
         s.sel = Selection::caret(at);
     }
