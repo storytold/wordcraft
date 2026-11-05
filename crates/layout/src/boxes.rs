@@ -511,7 +511,7 @@ fn box_float_table_rect(
             let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
             up.y = above - db - h - 0.01;
         }
-        if up.y + fr.origin.1 >= 0.0 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
+        if up.y + fr.origin.1 >= -0.02 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
             r = up;
         }
     }
