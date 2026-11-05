@@ -6874,6 +6874,7 @@ dependencies = [
  "base64 0.23.1",
  "cfb",
  "chrono",
+ "encoding_rs",
  "getrandom 0.3.4",
  "hmac",
  "image",
