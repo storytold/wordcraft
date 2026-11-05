@@ -1,22 +1,26 @@
 //! Tab stops (ODF 1.3 §17.7–17.8 `style:tab-stops`): position, alignment and leader, read from
-//! paragraph styles and written back. LibreOffice measures them from the paragraph's indent when
-//! its `TabsRelativeToIndent` setting is on (its default); WordCraft and Word from the margin.
+//! paragraph styles and written back. A file whose `TabsRelativeToIndent` setting is on measures
+//! them from the paragraph's indent (LibreOffice's default); otherwise from the margin, as Word.
 
-use crate::odt::tests::{NS_T, import_as, package};
+use crate::odt::tests::{NS_T, package};
 use crate::odt::{export, import};
-use wordcraft_doc::odf_profile::OdfProfile;
 use wordcraft_doc::props::{ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::{Document, Paragraph, para_block};
 
 const TABS: &str = r#"<style:tab-stops><style:tab-stop style:position="1in"/><style:tab-stop style:position="2in" style:type="center" style:leader-style="dotted" style:leader-text="."/><style:tab-stop style:position="3in" style:type="char" style:char="."/><style:tab-stop style:position="4in" style:type="right" style:leader-style="solid" style:leader-text="_"/><style:tab-stop style:position="5in" style:leader-text="-"/></style:tab-stops>"#;
 
+/// A `settings.xml` saying whether tab stops are measured from the indent.
+fn settings_xml(relative: bool) -> String {
+    format!(
+        r#"<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><office:settings><config:config-item-set config:name="ooo:configuration-settings"><config:config-item config:name="TabsRelativeToIndent" config:type="boolean">{relative}</config:config-item></config:config-item-set></office:settings></office:document-settings>"#
+    )
+}
+
 fn with_settings(content: &str, relative: Option<bool>) -> Vec<u8> {
     let mut bytes = package(content, None);
     if let Some(r) = relative {
         // Re-pack with a settings.xml.
-        let settings = format!(
-            r#"<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><office:settings><config:config-item-set config:name="ooo:configuration-settings"><config:config-item config:name="TabsRelativeToIndent" config:type="boolean">{r}</config:config-item></config:config-item-set></office:settings></office:document-settings>"#
-        );
+        let settings = settings_xml(r);
         let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content), ("settings.xml", settings.as_str())] {
@@ -61,18 +65,14 @@ fn tab_stops_are_read() {
 
 #[test]
 fn tabs_relative_to_the_indent_move_with_it() {
-    // The document's own setting rules; without one (the standard doesn't say) the profile's:
-    // LibreOffice's from the paragraph's indent, WordCraft's from the margin.
-    let first = |relative: Option<bool>, profile: &OdfProfile| {
-        let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), relative), profile);
+    // The document's own setting rules; without one (the standard doesn't say) from the margin.
+    let first = |relative: Option<bool>| {
+        let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), relative)).unwrap();
         tabs(&d).first().map(|t| t.pos)
     };
-    for profile in [OdfProfile::libreoffice(), OdfProfile::word()] {
-        assert_eq!(first(Some(true), &profile), Some(108.0));
-        assert_eq!(first(Some(false), &profile), Some(72.0));
-    }
-    assert_eq!(first(None, &OdfProfile::libreoffice()), Some(108.0));
-    assert_eq!(first(None, &OdfProfile::word()), Some(72.0));
+    assert_eq!(first(Some(true)), Some(108.0));
+    assert_eq!(first(Some(false)), Some(72.0));
+    assert_eq!(first(None), Some(72.0));
 }
 
 #[test]
@@ -131,8 +131,14 @@ fn tabs_are_measured_from_the_indent_a_style_gives() {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:parent-style-name="Indented"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="3in"/></style:tab-stops></style:paragraph-properties></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">a<text:tab/>b</text:p><text:p text:style-name="Indented">c<text:tab/>d</text:p></office:text></office:body></office:document-content>"#
     );
-    // LibreOffice's measure (its default when the document doesn't say).
-    let d = import_as(&package(&content, Some(&styles)), &OdfProfile::libreoffice());
+    // Measured from the indent, as the document says.
+    let settings = settings_xml(true);
+    let d = import(&crate::odt::tests::zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("settings.xml", settings.as_bytes()),
+    ]))
+    .unwrap();
     let own = d.body[0].as_para().unwrap().props.tabs.clone().unwrap_or_default();
     assert_eq!(own.iter().map(|t| t.pos).collect::<Vec<_>>(), [252.0], "3in from a 0.5in indent");
     let style = d.styles.get("Indented").unwrap().para.tabs.clone().unwrap_or_default();
@@ -163,7 +169,7 @@ fn tabs_measured_from_the_indent_are_written_so() {
     // A file measuring tabs from the indent (LibreOffice's own) is written back so, its stops
     // from the indent again: LibreOffice's default stops then count from the indent as before
     // (measured: with the setting false they moved to the margin's grid).
-    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true)), &OdfProfile::word());
+    let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(true))).unwrap();
     assert!(d.settings.odf.is_some_and(|o| o.tabs_from_indent));
     let saved = export(&d).unwrap();
     let s = crate::odt::tests::entry(&saved, "settings.xml");
@@ -173,7 +179,7 @@ fn tabs_measured_from_the_indent_are_written_so() {
     let back = import(&saved).unwrap();
     assert_eq!(tabs(&back).first().map(|t| t.pos), Some(108.0));
     // One measuring them from the margin stays so.
-    let d = import_as(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false)), &OdfProfile::word());
+    let d = import(&with_settings(&content(r#"fo:margin-left="0.5in""#), Some(false))).unwrap();
     let s = crate::odt::tests::entry(&export(&d).unwrap(), "settings.xml");
     assert!(s.contains(r#"config:name="TabsRelativeToIndent" config:type="boolean">false<"#), "{s}");
 }
