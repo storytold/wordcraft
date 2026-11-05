@@ -159,8 +159,8 @@ pub struct CanvasState {
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
     pub(crate) ime_faces: Vec<std::sync::Arc<wordcraft_fonts::FontFace>>,
-    /// The document face the composition is drawn in, as last installed
-    /// ([`crate::theme::composition_family`]).
+    /// The document face this window's composition is drawn in, as the fonts were last installed
+    /// (its [`crate::theme::composition_family`]).
     pub(crate) ime_face: Option<wordcraft_fonts::FaceRef>,
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
@@ -1622,20 +1622,13 @@ fn paint_composition(app: &mut WordApp, ctx: &egui::Context, painter: &egui::Pai
     if !new.is_empty() || face != app.canvas.ime_face {
         app.canvas.ime_faces.extend(new);
         app.canvas.ime_face = face;
-        // The interface fonts as last installed, the Arabic one included.
-        let fonts = crate::theme::font_definitions_language_arabic(
-            app.fonts_hans,
-            app.fonts_korean,
-            app.fonts_hant,
-            app.fonts_system_cjk,
-            app.fonts_system_arabic,
-        );
-        crate::theme::install_font_definitions(ctx, fonts, &app.canvas.ime_faces, app.canvas.ime_face);
+        // With every other window's faces too: the fonts are the app's.
+        app.apply_ui_fonts(ctx);
         ctx.request_repaint();
     }
-    // New fonts apply from the next frame; until the composition family is bound (or
+    // New fonts apply from the next frame; until the window's composition family is bound (or
     // without a style run) the composition is drawn as before, in the interface font.
-    let family = crate::theme::composition_family();
+    let family = crate::theme::composition_family(app.windows.shown());
     let bound = ctx.fonts(|f| f.definitions().families.contains_key(&family));
     // egui draws each glyph into its font atlas and panics on one wider than the atlas
     // (1,638-point text at 500% is about 11,000 points): keep the composition's glyphs

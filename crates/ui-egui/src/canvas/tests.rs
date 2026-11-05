@@ -3887,10 +3887,9 @@ fn the_composition_takes_the_documents_font_and_size() {
         h.step();
     }
     assert!(h.state().canvas.ime_face == Some(run.requested_face), "the composition takes that face");
-    let first = h.ctx.fonts(|f| f.definitions().families.get(&crate::theme::composition_family()).and_then(|v| v.first().cloned()));
+    let family = crate::theme::composition_family(h.state().windows.shown());
+    let first = h.ctx.fonts(|f| f.definitions().families.get(&family).and_then(|v| v.first().cloned()));
     assert!(first.as_deref().is_some_and(|n| n.starts_with("composition ") && n.contains(run.requested_face.family.as_str())), "{first:?}");
-    // Every font set the interface installs binds the family, so drawing with it can't panic.
-    assert!(crate::theme::font_definitions(false, false).families.contains_key(&crate::theme::composition_family()));
     // As drawn: at the text's size on screen, its first baseline on the line's. The caret's IME
     // rectangle gives the caret's top and the page's scale on screen.
     let ime = h.output().platform_output.ime.as_ref().map(|i| i.rect).expect("the caret's IME rectangle");
@@ -3999,11 +3998,12 @@ fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
 /// Kittest's `MissingGlyphPolicy::Panic` is right: a missing glyph is a bug. But the interface
 /// fonts need not carry Japanese (craft-fonts is optional, and a CI Linux runner has no
 /// Japanese system font), and these IME tests compose Japanese through the interface font
-/// chain, or the composition family (the document's face, then that chain). Draw a stand-in
-/// for exactly those characters; every other missing glyph still panics.
+/// chain, or a window's composition family (the document's face, then that chain). Draw a
+/// stand-in for exactly those characters; every other missing glyph still panics.
 fn kana_test_glyphs(ctx: &egui::Context) {
     ctx.add_glyph_rasterizer(egui::GlyphRasterizer::new("wordcraft::canvas::tests::kana", |req| {
-        let kana = (*req.family == egui::FontFamily::Proportional || *req.family == crate::theme::composition_family())
+        let composition = matches!(req.family, egui::FontFamily::Name(n) if n.starts_with("composition "));
+        let kana = (*req.family == egui::FontFamily::Proportional || composition)
             && !req.cluster.is_empty()
             && req.cluster.chars().all(|c| matches!(c, 'に' | 'ほ' | 'ん'));
         kana.then(|| egui::RasterizedGlyph {
