@@ -120,6 +120,11 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // A preference the UI marks as immediate (the Navigation tree style) reaches ui.json
+        // before the next frame, not only at exit.
+        if std::mem::take(&mut self.0.prefs_dirty) {
+            save_prefs(&self.0);
+        }
         self.3.show(frame);
     }
     fn on_exit(&mut self) {

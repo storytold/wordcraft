@@ -144,10 +144,10 @@ impl FontDb {
     /// Cached per (character set, excluded face, bold, italic) and dropped when the loaded faces
     /// change, like [`Self::fallback_for`], so relayout doesn't repeat the search.
     pub fn fallback_for_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
-        if chars.is_empty() {
+        let mut set: Vec<char> = chars.iter().copied().filter(|c| !crate::is_default_ignorable(*c)).collect();
+        if set.is_empty() {
             return None;
         }
-        let mut set: Vec<char> = chars.to_vec();
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
@@ -173,6 +173,33 @@ impl FontDb {
         cache.chars = cache.chars.saturating_add(key.0.len());
         cache.map.insert(key, found.clone());
         found
+    }
+
+    /// A face drawing an emoji presentation sequence (`1️⃣`, `⚖️`, `👩‍💻`) as the one emoji it is:
+    /// the first colour emoji family that maps every character of the sequence the shaper draws
+    /// (the variation selectors and joiners are the shaper's own), else the run's fallback face.
+    /// `None` when no loaded face covers the characters.
+    ///
+    /// Not cached: the colour families are tried first, a handful of lookups, and the run cache
+    /// under them already keeps the search cheap.
+    pub fn color_emoji_face(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        let need: Vec<char> = chars.iter().copied().filter(|c| !c.is_control() && !c.is_whitespace() && !crate::is_default_ignorable(*c)).collect();
+        if need.is_empty() {
+            return None;
+        }
+        let style = match (bold, italic) {
+            (true, true) => "Bold Italic",
+            (true, false) => "Bold",
+            (false, true) => "Italic",
+            (false, false) => "Regular",
+        };
+        for family in crate::COLOR_EMOJI {
+            let face = self.face(family, style);
+            if face.family.eq_ignore_ascii_case(family) && need.iter().all(|c| face.covers(*c)) {
+                return Some(face);
+            }
+        }
+        self.fallback_for_run(&need, exclude, bold, italic)
     }
 
     /// The face for a run, and the number of loaded faces the search last chose from.

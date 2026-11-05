@@ -619,6 +619,19 @@ impl WordApp {
                 }
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
+            "ui.navTreeStyle" => {
+                // `zed_linear` (A) or `fleet_connected` (B); no value reads it. Saved at once.
+                if let Some(v) = s("value") {
+                    let Some(style) = panes::NavTreeStyle::from_code(v) else {
+                        return Some(Err(format!("unknown navigation tree style {v:?}; use zed_linear or fleet_connected")));
+                    };
+                    if self.ui.nav_tree_style != style {
+                        self.ui.nav_tree_style = style;
+                        self.prefs_dirty = true;
+                    }
+                }
+                json!({"value": self.ui.nav_tree_style.code()})
+            }
             "ui.interfaceSize" => {
                 // `auto` (the display scale the system reports) or an absolute size in percent,
                 // 50–300 (clamped); no value reads it. `percent` in the result is the size the
@@ -1026,6 +1039,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"
+            | "ui.navTreeStyle"
             | "ui.interfaceSize"
             | "ui.animations"
             | "ui.language"
