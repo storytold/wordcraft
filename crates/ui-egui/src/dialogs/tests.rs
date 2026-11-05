@@ -1950,6 +1950,53 @@ fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
     }
 }
 
+/// Opens a modal state in `a`: the built-in file browser, a dialog by name, or Colors.
+fn open_modal_state(a: &mut WordApp, state: &str) {
+    match state {
+        "none" => {}
+        "fileBrowser" => {
+            let document = a.session.document_id();
+            a.show_file_browser(
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::AfterPick::OpenDocument { document },
+                false,
+            );
+        }
+        "colors" => a.colors = Some(crate::colors::ColorsDialog::new(None, crate::colors::Target::cmd("format.color"))),
+        dialog => a.dialog = Dialog::open(dialog, a),
+    }
+}
+
+/// The file browser, a modal dialog and Colors each block the window; nothing open or a modeless
+/// dialog doesn't.
+#[test]
+fn modal_open_is_true_for_the_file_browser_a_modal_dialog_and_colors() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        open_modal_state(&mut a, state);
+        assert_eq!(a.modal_open(), modal, "{state}");
+    }
+}
+
+/// #5124: whatever is open, a drag on the title bar macOS draws moves the window; where the system
+/// draws it, WordCraft's bar under it only does while nothing blocks it.
+#[test]
+fn the_title_bar_moves_the_window_in_every_modal_state() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        for mac in [true, false] {
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.integrated_titlebar = mac;
+            let mut h = app_harness(a);
+            h.run_steps(6);
+            open_modal_state(h.state_mut(), state);
+            h.run_steps(4);
+            assert_eq!(h.state().modal_open(), modal, "{state}");
+            assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac || !modal), "{state}, macOS: {mac}");
+            assert_eq!(h.state().modal_open(), modal, "{state} stays open");
+        }
+    }
+}
+
 /// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
 /// dialog's own and doesn't move the window.
 #[test]
