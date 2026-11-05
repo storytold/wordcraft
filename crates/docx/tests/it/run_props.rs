@@ -73,6 +73,7 @@ fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
     }
 }
 
+/// Keeps hidden paragraph-mark state distinct from hidden text across DOCX saves.
 #[test]
 fn special_hidden_paragraph_mark_survives_two_saves() {
     let styles = r#"
