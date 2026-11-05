@@ -18,6 +18,7 @@ use crate::theme::{Tokens, semibold};
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum ReviewDialog {
     Compare(CompareForm),
+    CompareVersions(CompareVersionsForm),
     AutoCorrect(Box<AutoCorrectForm>),
 }
 
@@ -26,6 +27,7 @@ impl ReviewDialog {
         match self {
             ReviewDialog::Compare(f) if f.combine => "combine",
             ReviewDialog::Compare(_) => "compare",
+            ReviewDialog::CompareVersions(_) => "compareVersions",
             ReviewDialog::AutoCorrect(_) => "autoCorrect",
         }
     }
@@ -35,16 +37,18 @@ impl ReviewDialog {
         match self {
             ReviewDialog::Compare(f) if f.combine => "Combine Documents",
             ReviewDialog::Compare(_) => "Compare Documents",
+            ReviewDialog::CompareVersions(_) => "Compare to Version",
             ReviewDialog::AutoCorrect(_) => "AutoCorrect",
         }
     }
 }
 
-/// The dialog `ui.dialog` opens by `name`: `compare`, `combine` or `autoCorrect`.
+/// The dialog `ui.dialog` opens by `name`: `compare`, `combine`, `compareVersions` or `autoCorrect`.
 /// `restrictEditing` opens the Restrict Editing pane instead (no dialog).
 pub fn open(name: &str, app: &mut WordApp) -> Option<ReviewDialog> {
     Some(match name {
         "compare" | "combine" => ReviewDialog::Compare(CompareForm::new(app, name == "combine")),
+        "compareVersions" | "compareToVersion" => ReviewDialog::CompareVersions(CompareVersionsForm::new(app)),
         "autoCorrect" => ReviewDialog::AutoCorrect(Box::new(AutoCorrectForm::new(app))),
         "restrictEditing" => {
             app.restrict.open = true;
@@ -58,6 +62,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<ReviewDialog> {
 pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut ReviewDialog) -> bool {
     match d {
         ReviewDialog::Compare(f) => compare_ui(app, ui, f),
+        ReviewDialog::CompareVersions(f) => compare_versions_ui(app, ui, f),
         ReviewDialog::AutoCorrect(f) => autocorrect_ui(app, ui, f),
     }
 }
@@ -302,6 +307,177 @@ fn compare_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareForm) -> bool {
             Ok(v) => {
                 let n = v.get("changes").and_then(Value::as_u64).unwrap_or(0).to_string();
                 app.status(crate::i18n::fmt(tl!("Compared: {changes} changes"), &[("changes", &n)]));
+                return true;
+            }
+            Err(e) => {
+                f.message = e;
+                return false;
+            }
+        }
+    }
+    cancel
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompareVersionsForm {
+    /// Original version index (0-based in `Session::versions`).
+    pub version: i64,
+    /// Revised source: "current" or a version index as string.
+    pub other: String,
+    pub author: String,
+    pub more: bool,
+    pub settings: [bool; 10],
+    pub character_level: bool,
+    pub show_in: String,
+    pub preserve_versions: bool,
+    pub message: String,
+}
+
+impl CompareVersionsForm {
+    pub fn new(app: &WordApp) -> CompareVersionsForm {
+        let last = app.session.versions.len().saturating_sub(1) as i64;
+        CompareVersionsForm {
+            version: if last >= 0 { last } else { 0 },
+            other: "current".into(),
+            author: app.session.author.clone(),
+            more: false,
+            settings: [true; 10],
+            character_level: false,
+            show_in: "new".into(),
+            preserve_versions: true,
+            message: String::new(),
+        }
+    }
+
+    pub fn params(&self, max_version: usize) -> Option<Value> {
+        if self.version < 0 || (self.version as usize) >= max_version {
+            return None;
+        }
+        let mut v = json!({
+            "version": self.version as u64,
+            "author": self.author.trim(),
+            "level": if self.character_level { "character" } else { "word" },
+            "showIn": self.show_in,
+            "preserveVersions": self.preserve_versions,
+        });
+        if self.other == "current" {
+            v["other"] = json!("current");
+        } else if let Ok(i) = self.other.parse::<u64>() {
+            if (i as usize) >= max_version {
+                return None;
+            }
+            v["other"] = json!(i);
+        } else {
+            return None;
+        }
+        for ((key, _), on) in COMPARE_SETTINGS.iter().zip(self.settings) {
+            v[*key] = json!(on);
+        }
+        Some(v)
+    }
+}
+
+fn version_label(label: &str, date: &str, i: usize) -> String {
+    if !label.is_empty() { format!("{i}: {label} ({date})") } else { format!("{i}: {date}") }
+}
+
+fn compare_versions_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CompareVersionsForm) -> bool {
+    let versions = &app.session.versions;
+    if versions.is_empty() {
+        ui.label(egui::RichText::new(tl!("No saved versions. Use File › Info › Version History to save a version first.")).weak());
+        let (_ok, cancel) = buttons(ui, false);
+        return cancel;
+    }
+    let label_at = |i: usize| -> String { versions.get(i).map(|(l, d, _)| version_label(l, d, i)).unwrap_or_else(|| i.to_string()) };
+    crate::rtl::Table::new("compare_versions").columns(2).spacing(vec2(16.0, 4.0)).top().show(ui, |t| {
+        t.row(|r| {
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Original version");
+                    let current = label_at(f.version.max(0) as usize);
+                    egui::ComboBox::from_id_salt("cv_original").selected_text(current).width(260.0).show_ui(ui, |ui| {
+                        for i in 0..versions.len() {
+                            ui.selectable_value(&mut f.version, i as i64, label_at(i));
+                        }
+                    });
+                });
+            });
+            r.cell(|ui| {
+                crate::rtl::vertical(ui, |ui| {
+                    heading(ui, "Revised document");
+                    let selected = if f.other == "current" {
+                        tl!("Current document").to_string()
+                    } else if let Ok(i) = f.other.parse::<usize>() {
+                        label_at(i)
+                    } else {
+                        f.other.clone()
+                    };
+                    egui::ComboBox::from_id_salt("cv_other").selected_text(selected).width(260.0).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut f.other, "current".to_string(), tl!("Current document"));
+                        for i in 0..versions.len() {
+                            if i as i64 == f.version {
+                                continue;
+                            }
+                            ui.selectable_value(&mut f.other, i.to_string(), label_at(i));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Label changes with:"));
+                        ui.add(egui::TextEdit::singleline(&mut f.author).desired_width(120.0));
+                    });
+                });
+            });
+        });
+    });
+    ui.checkbox(&mut f.preserve_versions, tl!("Keep saved version snapshots in the result"));
+    ui.add_space(4.0);
+    if ui.button(crate::rtl::arrows(if f.more { tl!("<< Less") } else { tl!("More >>") })).clicked() {
+        f.more = !f.more;
+    }
+    if f.more {
+        heading(ui, "Comparison settings");
+        crate::rtl::Table::new("compare_versions_settings").columns(2).spacing(vec2(16.0, 2.0)).show(ui, |t| {
+            for (pair, labels) in COMPARE_SETTINGS.chunks(2).enumerate() {
+                t.row(|r| {
+                    for (j, (_, label)) in labels.iter().enumerate() {
+                        r.cell(|ui| {
+                            if let Some(on) = f.settings.get_mut(pair * 2 + j) {
+                                ui.checkbox(on, tl!(label));
+                            }
+                        });
+                    }
+                });
+            }
+        });
+        crate::rtl::Table::new("compare_versions_show").columns(2).spacing(vec2(24.0, 2.0)).top().show(ui, |t| {
+            t.row(|r| {
+                r.cell(|ui| {
+                    crate::rtl::vertical(ui, |ui| {
+                        heading(ui, "Show changes at:");
+                        ui.radio_value(&mut f.character_level, false, tl!("Word level"));
+                        ui.radio_value(&mut f.character_level, true, tl!("Character level"));
+                    });
+                });
+                r.cell(|ui| {
+                    crate::rtl::vertical(ui, |ui| {
+                        heading(ui, "Show changes in:");
+                        for (v, l) in [("original", "Original document"), ("revised", "Revised document"), ("new", "New document")] {
+                            ui.radio_value(&mut f.show_in, v.to_string(), tl!(l));
+                        }
+                    });
+                });
+            });
+        });
+    }
+    error(ui, &f.message);
+    let params = f.params(versions.len());
+    let (ok, cancel) = buttons(ui, params.is_some());
+    if ok && let Some(params) = params {
+        match app.run("file.versions.compare", params) {
+            Ok(v) => {
+                let n = v.get("changes").and_then(Value::as_u64).unwrap_or(0).to_string();
+                app.status(crate::i18n::fmt(tl!("Compared versions: {changes} changes"), &[("changes", &n)]));
                 return true;
             }
             Err(e) => {

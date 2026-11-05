@@ -980,6 +980,7 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
         "review.trackingOptions" if no_settings(params) => Some("trackChangesOptions"),
         "review.compare" if !has_value(params, "path") && !has_value(params, "text") => Some("compare"),
         "review.combine" if !has_value(params, "path") && !has_value(params, "text") => Some("combine"),
+        "file.versions.compare" if !has_value(params, "version") => Some("compareVersions"),
         "review.wordCount" if no_settings(params) => Some("wordCount"),
         "review.language" if no_settings(params) => Some("language"),
         "tools.autocorrect" if no_settings(params) => Some("autoCorrect"),
