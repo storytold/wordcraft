@@ -317,7 +317,7 @@ pub struct TextFrame {
 pub struct ParaProps {
     /// Explicit conditional table-style flags (`w:cnfStyle`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cnf_style: Option<CnfStyle>,
+    pub cnf_style: Option<Box<CnfStyle>>,
     /// Paragraph style id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
@@ -448,7 +448,9 @@ impl ParaProps {
         self.overlay_pagination(patch);
         self.overlay_script_layout(patch);
         if let Some(p) = &patch.cnf_style {
-            self.cnf_style.get_or_insert_with(Default::default).overlay(p);
+            self.cnf_style
+                .get_or_insert_with(|| Box::new(CnfStyle::default()))
+                .overlay(p);
         }
     }
 

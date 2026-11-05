@@ -233,7 +233,7 @@ pub const DEFAULT_FONT_SIZE: f32 = 11.0;
 pub struct CharProps {
     /// Explicit conditional table-style flags (`w:cnfStyle`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cnf_style: Option<CnfStyle>,
+    pub cnf_style: Option<Box<CnfStyle>>,
     /// Character style id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
@@ -501,12 +501,13 @@ impl CharProps {
         self.minus_script_style(base);
         self.minus_document_marks(base);
         if let Some(cnf_style) = self.cnf_style.take() {
+            let cnf_style = *cnf_style;
             let cnf_style = match &base.cnf_style {
                 Some(base) => cnf_style.minus(base),
                 None => cnf_style,
             };
             if !cnf_style.is_empty() {
-                self.cnf_style = Some(cnf_style);
+                self.cnf_style = Some(Box::new(cnf_style));
             }
         }
         self
@@ -539,7 +540,9 @@ impl CharProps {
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.cnf_style {
-            self.cnf_style.get_or_insert_with(Default::default).overlay(p);
+            self.cnf_style
+                .get_or_insert_with(|| Box::new(CnfStyle::default()))
+                .overlay(p);
         }
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);

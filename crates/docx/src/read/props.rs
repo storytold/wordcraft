@@ -255,7 +255,7 @@ impl PropCtx {
         let mut c = CharProps::default();
         for k in e.els() {
             match k.name.as_str() {
-                "w:cnfStyle" => c.cnf_style = cnf_style(k),
+                "w:cnfStyle" => c.cnf_style = cnf_style(k).map(Box::new),
                 "w:rStyle" => c.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:rFonts" => {
                     // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
@@ -353,7 +353,7 @@ impl PropCtx {
         let mut mark = CharProps::default();
         for k in e.els() {
             match k.name.as_str() {
-                "w:cnfStyle" => p.cnf_style = cnf_style(k),
+                "w:cnfStyle" => p.cnf_style = cnf_style(k).map(Box::new),
                 "w:pStyle" => p.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:keepNext" => p.keep_next = Some(on_off(k)),
                 "w:keepLines" => p.keep_lines = Some(on_off(k)),
@@ -628,7 +628,7 @@ pub fn trpr(e: &El) -> RowProps {
     let mut r = RowProps::default();
     for k in e.els() {
         match k.name.as_str() {
-            "w:cnfStyle" => r.cnf_style = cnf_style(k),
+            "w:cnfStyle" => r.cnf_style = cnf_style(k).map(Box::new),
             "w:trHeight" => {
                 r.height = tw(k, "w:val").map(|v| v.abs());
                 r.height_rule = match k.attr("w:hRule").map(str::to_ascii_lowercase).as_deref() {
@@ -663,7 +663,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:cnfStyle" => c.cnf_style = cnf_style(k),
+            "w:cnfStyle" => c.cnf_style = cnf_style(k).map(Box::new),
             "w:tcW" => match k.attr("w:type") {
                 None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
                 Some("pct") => {

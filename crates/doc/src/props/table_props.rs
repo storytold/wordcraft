@@ -225,7 +225,7 @@ pub enum HeightRule {
 pub struct RowProps {
     /// Explicit conditional table-style flags (`w:cnfStyle`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cnf_style: Option<CnfStyle>,
+    pub cnf_style: Option<Box<CnfStyle>>,
     /// Points (meaning depends on `height_rule`).
     pub height: Option<f32>,
     pub height_rule: HeightRule,
@@ -274,7 +274,7 @@ pub enum VMerge {
 pub struct CellProps {
     /// Explicit conditional table-style flags (`w:cnfStyle`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cnf_style: Option<CnfStyle>,
+    pub cnf_style: Option<Box<CnfStyle>>,
     /// Preferred width, points.
     pub width: Option<f32>,
     /// Preferred width as a percentage of the table's (`w:tcW w:type="pct"`).
