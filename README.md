@@ -299,14 +299,17 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
-**Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
-winit (the windowing library) supports dragging files into the window only on X11. To use the
-native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), start it with `WORDCRAFT_WAYLAND=1`:
+**Wayland:** on a Wayland desktop the app runs natively. Through XWayland the window
+flickered while being resized (#2939). On GNOME it still runs through XWayland, because GNOME
+draws no window frames for native Wayland apps (#78). To choose the other way, start the app with
+`WORDCRAFT_X11=1` (XWayland, also a fallback if your input method misbehaves natively) or
+`WORDCRAFT_WAYLAND=1` (native):
 
 ```sh
-WORDCRAFT_WAYLAND=1 wordcraft
+WORDCRAFT_X11=1 wordcraft
 ```
+
+Natively the window manager places the window, so the saved window position is not restored.
 
 **Arch Linux (AUR).** Community members maintain three AUR packages; the project doesn't publish
 to the AUR itself. Install one of them:
