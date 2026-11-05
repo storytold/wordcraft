@@ -116,6 +116,12 @@ fn piece_bytes(p: &Piece) -> Vec<u8> {
 
 /// A document whose main text is the given pieces (extra subdocument text may follow).
 fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
+    text_doc_with(main, extra, FibSpec { ccp_hdd, ..Default::default() }, &[])
+}
+
+/// [`text_doc`] with the FIB knobs given (`ccp_text` is filled in from `main`; `pairs` must be empty) and extra
+/// Table-stream data placed after the piece table: `(pair index, bytes)` for each.
+fn text_doc_with(main: &[Piece], extra: &[Piece], spec: FibSpec, table_data: &[(usize, &[u8])]) -> Vec<u8> {
     let all: Vec<Piece> = main.iter().chain(extra.iter()).cloned().collect();
     let ccp_text: u32 = main.iter().map(|p| p.text.chars().count() as u32).sum();
     let mut word = vec![0u8; TEXT_FC as usize];
@@ -128,7 +134,13 @@ fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
     clx.extend_from_slice(&plc);
     let mut table = vec![0u8; CLX_AT as usize];
     table.extend_from_slice(&clx);
-    let spec = FibSpec { ccp_text, ccp_hdd, pairs: vec![(33, CLX_AT, clx.len() as u32)], ..Default::default() };
+    let mut pairs = vec![(33, CLX_AT, clx.len() as u32)];
+    for (pair, bytes) in table_data {
+        pairs.push((*pair, table.len() as u32, bytes.len() as u32));
+        table.extend_from_slice(bytes);
+    }
+    debug_assert!(spec.pairs.is_empty(), "text_doc_with sets the pairs itself");
+    let spec = FibSpec { ccp_text, pairs, ..spec };
     word[..fib_bytes(&spec).len()].copy_from_slice(&fib_bytes(&spec));
     cfb_file(&[("WordDocument", &word), ("0Table", &table)])
 }
@@ -245,6 +257,77 @@ fn empty_paragraphs_kept() {
     let f = text_doc(&[Piece { compressed: false, text: "a\r\rb\r".into() }], &[], 0);
     let doc = read(&f).expect("opens");
     assert_eq!(body_texts(&doc), ["a", "", "b"]);
+}
+
+/// A document of `n` copies of `mark` as one compressed piece.
+fn marks_doc(mark: char, n: usize) -> Vec<u8> {
+    text_doc(&[Piece { compressed: true, text: mark.to_string().repeat(n) }], &[], 0)
+}
+
+/// Paragraph marks are one byte each in the file but about 1 KB each in memory, so they have
+/// their own cap ([`super::MAX_PARAGRAPHS`]); a file past it is refused instead of growing
+/// until the machine runs out. A document exactly at the cap still opens.
+#[test]
+fn a_flood_of_paragraph_marks_is_refused() {
+    let at_cap = super::read_limited(&marks_doc('\r', 1000), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 1000);
+    let over = super::read_limited(&marks_doc('\r', 1001), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The paragraph cap is one budget for the whole document, not one per story: marks in the
+/// body and in a footnote add up. (A walk that got its own budget would open both over-cap files.)
+#[test]
+fn the_paragraph_cap_is_shared_by_the_body_and_a_footnote() {
+    // One footnote at CP 0 whose text is `note` marks, stored right after the body in the stream.
+    let doc_of = |body: usize, note: usize| {
+        let cps = |v: &[u32]| v.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+        let mut refs = cps(&[0, 1]);
+        refs.extend_from_slice(&[0, 0]); // the one reference's data
+        let txt = cps(&[0, note as u32, note as u32]); // story 0..note, then the limit
+        let spec = FibSpec { ccp_ftn: note as u32, ..Default::default() };
+        text_doc_with(
+            &[Piece { compressed: true, text: "\r".repeat(body) }],
+            &[Piece { compressed: true, text: "\r".repeat(note) }],
+            spec,
+            &[(2, &refs), (3, &txt)],
+        )
+    };
+    let at_cap = super::read_limited(&doc_of(600, 400), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 600);
+    assert_eq!(at_cap.parts.len(), 1);
+    let over = super::read_limited(&doc_of(600, 401), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+    let over = super::read_limited(&doc_of(601, 400), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// Cell marks are paragraph marks too: a never-closed row of them is refused the same way.
+#[test]
+fn a_flood_of_cell_marks_is_refused() {
+    let over = super::read_limited(&marks_doc('\u{7}', 5000), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The budget counts down across spends and notes the overrun (`walk` receives one shared by
+/// every story of the document).
+#[test]
+fn the_paragraph_budget_counts_down_and_notes_the_overrun() {
+    let budget = super::ParaBudget { left: std::cell::Cell::new(2), exceeded: std::cell::Cell::new(false) };
+    assert!(budget.spend() && budget.spend());
+    assert!(!budget.exceeded.get());
+    assert!(!budget.spend());
+    assert!(budget.exceeded.get());
+}
+
+/// The cap is far above any real document (10,000 pages of 50 paragraphs is 500,000), and a
+/// paragraph outside a table no longer carries a table context (a `ParaOut` was 1,224 bytes).
+#[test]
+fn the_paragraph_cap_leaves_room_and_a_paragraph_stays_small() {
+    const { assert!(super::MAX_PARAGRAPHS >= 1_000_000) };
+    assert!(std::mem::size_of::<crate::table::ParaOut>() < 1000, "{}", std::mem::size_of::<crate::table::ParaOut>());
+    let doc = read(&marks_doc('\r', 10)).expect("opens");
+    assert_eq!(doc.body.len(), 10);
 }
 
 #[test]
@@ -2660,7 +2743,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     assert_eq!(linked.first().map(|r| r.len), Some(n));
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
-    let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
+    let mut result = super::FieldResult::default();
+    (0..n).for_each(|_| result.push('y', wordcraft_doc::props::CharProps::default()));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
@@ -2673,7 +2757,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
 fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
-    let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
+    let mut result = super::FieldResult::default();
+    (0..1000).for_each(|i| result.push('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() }));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
@@ -2746,4 +2831,52 @@ fn prm_grpprls_past_the_work_budget_are_skipped() {
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
+}
+
+/// A field's cached result keeps one `CharProps` per formatting run, not one per character
+/// (365 bytes each: 4 million result characters took 1.4 GB).
+#[test]
+fn a_field_result_stores_one_props_per_run() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut r = super::FieldResult::default();
+    for _ in 0..200_000 {
+        r.push('x', CharProps::default());
+    }
+    assert_eq!(r.runs.len(), 1);
+    assert_eq!(r.runs.first().map(|(n, _)| *n), Some(200_000));
+    r.push('\u{e9}', bold.clone());
+    r.push('y', bold);
+    r.push('z', CharProps::default());
+    assert_eq!(r.runs.iter().map(|(n, _)| *n).collect::<Vec<_>>(), [200_000, 3, 1], "a two-byte char counts its bytes");
+    assert_eq!(r.text.len(), 200_004);
+}
+
+/// A hyperlink whose result changes formatting, with multi-byte text, keeps every run's text and
+/// links all of it; a plain field keeps its result text whole.
+#[test]
+fn field_results_keep_their_text_and_runs() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut result = super::FieldResult::default();
+    for (c, p) in
+        [('a', CharProps::default()), ('\u{e9}', CharProps::default()), ('\u{20ac}', bold.clone()), ('b', bold), ('c', CharProps::default())]
+    {
+        result.push(c, p);
+    }
+    let f = super::FieldBuild { depth: 1, instr: "HYPERLINK \"http://x\"".into(), sep: Some(result) };
+    let mut pb = super::ParaBuild::default();
+    super::finish_field(&mut pb, f, &super::Work::new(u64::MAX));
+    assert_eq!(pb.text, "a\u{e9}\u{20ac}bc");
+    assert_eq!(pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(), [3, 4, 1]);
+    assert!(pb.runs.iter().all(|r| r.props.link.as_deref() == Some("http://x")));
+    let doc = read(&text_doc(&[Piece { compressed: false, text: "\u{13} PAGE \u{14}1\u{e9}2\u{15}\r".into() }], &[], 0)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert!(
+        p.objects
+            .iter()
+            .any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { instr, result, .. } if instr == "PAGE" && result == "1\u{e9}2")),
+        "{:?}",
+        p.objects
+    );
 }

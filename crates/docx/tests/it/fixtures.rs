@@ -248,6 +248,46 @@ fn frame_zero_side_is_automatic() {
 }
 
 #[test]
+fn locked_frame_anchor_survives_two_saves() {
+    for (lock, expected) in [("", None), (" w:anchorLock=\"1\"", Some(true)), (" w:anchorLock=\"0\"", Some(false))] {
+        let mut document = read_body(&format!(r#"<w:p><w:pPr><w:framePr w:w="1440" w:h="720"{lock}/></w:pPr><w:r><w:t>Locked</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        assert_eq!(paragraph.props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+        if expected == Some(true) {
+            let Some(wordcraft_doc::Block::Para(paragraph)) = document.body.get_mut(0).map(std::sync::Arc::make_mut) else {
+                panic!("first block is the framed paragraph");
+            };
+            let frame = paragraph.props.frame.as_mut().unwrap();
+            frame.x = 36.0;
+            frame.y = 72.0;
+            frame.w = Some(108.0);
+        }
+        let json = serde_json::to_vec(&document).unwrap();
+        document = serde_json::from_slice(&json).unwrap();
+        if expected == Some(true) {
+            let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+            assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+        }
+        for pass in 0..2 {
+            let bytes = wordcraft_docx::write(&document).unwrap();
+            let xml = text(&unzip(&bytes), "word/document.xml");
+            let expected_xml = match expected {
+                Some(true) => "w:anchorLock=\"1\"",
+                Some(false) => "w:anchorLock=\"0\"",
+                None => "w:anchorLock=",
+            };
+            assert_eq!(xml.contains(expected_xml), expected.is_some(), "lock changed on save {}: {xml}", pass + 1);
+            document = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(paras(&document)[0].props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+            if expected == Some(true) {
+                let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+                assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+            }
+        }
+    }
+}
+
+#[test]
 fn omitted_paragraph_defaults_can_be_edited() {
     let styles =
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
@@ -4512,6 +4552,20 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// #2601: a drop-cap frame of two letters in two fonts. The first letter's font is the cap's; only
+/// the runs in that font get the text's font back, the other letter keeps its own.
+#[test]
+fn drop_cap_frame_keeps_other_fonts() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/></w:rPr><w:t>b</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/></w:rPr><w:t>c tale</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the frame merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap_font.as_deref(), Some("Liberation Mono"));
+    assert_eq!(p[0].props_of_char(0).font.as_deref(), Some("Liberation Serif"), "the cap letter gets the text's font");
+    assert_eq!(p[0].props_of_char(1).font.as_deref(), Some("Liberation Sans"), "the other letter keeps its own");
 }
 
 /// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole
