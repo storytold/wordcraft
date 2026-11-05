@@ -181,6 +181,10 @@ pub struct UiState {
     #[serde(rename = "dark", skip_serializing)]
     pub(crate) legacy_dark: Option<bool>,
     pub nav_tab: String,
+    /// How the Navigation pane's outline is drawn (File › Options › Display, and the pane's ▾
+    /// menu): Option A, the clean rail, or Option B, every branch connected.
+    #[serde(default, deserialize_with = "panes::lenient_nav_tree_style")]
+    pub nav_tree_style: panes::NavTreeStyle,
     /// View › Navigation Pane: open or closed as the person left it, kept between runs (#2526).
     /// The session owns it while running (see [`WordApp::prefs`]).
     pub nav_pane: bool,
@@ -320,6 +324,7 @@ impl Default for UiState {
             animations: theme::Animations::default(),
             legacy_dark: None,
             nav_tab: "headings".into(),
+            nav_tree_style: Default::default(),
             nav_pane: false,
             styles_pane_dock: wordcraft_engine::StylesPaneDock::Right,
             styles_pane_float: None,
@@ -496,6 +501,9 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
+    /// A preference changed that must reach `ui.json` at once (the tree style does; most others
+    /// are written when the app exits). The desktop host clears it after saving.
+    pub prefs_dirty: bool,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.
     pub mac_titlebar: chrome::MacTitleBar,
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.

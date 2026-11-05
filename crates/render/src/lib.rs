@@ -24,7 +24,9 @@ pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
 use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;
+pub mod emoji;
 pub mod icon_lib;
+pub use emoji::emoji_image;
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
 pub fn default_threads() -> u16 {

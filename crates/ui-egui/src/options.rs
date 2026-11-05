@@ -313,6 +313,27 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Navigation tree");
+    ui.label(tl!("Style of the roots (Navigation › Headings):"));
+    let current = app.ui.nav_tree_style;
+    let t = Tokens::get(ui.ctx());
+    let half = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).clamp(120.0, 430.0);
+    ui.horizontal(|ui| {
+        for style in [crate::panes::NavTreeStyle::ZedLinear, crate::panes::NavTreeStyle::FleetConnected] {
+            let on = current == style;
+            let text = egui::RichText::new(tl!(style.label())).size(11.5).color(if on { t.nav_tab_active_text } else { ui.visuals().text_color() });
+            let fill = if on { t.nav_tab_active } else { t.nav_tab_bg };
+            let button = egui::Button::new(text).fill(fill).stroke(egui::Stroke::new(1.0, if on { t.nav_tab_active } else { t.nav_tab_border }));
+            if ui.add_sized(vec2(half, 26.0), button).clicked() && !on {
+                crate::panes::set_nav_tree_style(app, style);
+            }
+        }
+    });
+    note(
+        ui,
+        "Switches between the minimal look with the curve only on the active item (Option A) and the look with every branch connected (Option B).",
+    );
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use craft_ui::panes::{Edge, PaneContent, PaneHost, PaneLabels, PaneRequest, PaneState, Place, SidePolicy};
 use egui::{Stroke, Ui, vec2};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
 use wordcraft_doc::section::NumFormat;
@@ -46,6 +47,61 @@ pub(crate) use state::float_rect;
 use state::pane_state;
 pub use state::{SavedDock, SavedPane, open};
 pub(crate) use state::{lenient_order, lenient_places};
+
+/// How the Navigation pane's outline is drawn (File › Options › Display › Navigation tree, and
+/// the pane's ▾ menu). Option A is the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NavTreeStyle {
+    /// Option A (Zed / Linear): continuous trunks and a circular chevron node per parent; the
+    /// blue elbow appears only on the active branch and on the selected row's pill.
+    #[serde(rename = "zed_linear")]
+    ZedLinear,
+    /// Option B (Fleet / Craft Pro): every child has a connecting elbow; nested trunks end on the
+    /// last child's curve, while a root rail runs on to the next root.
+    #[default]
+    #[serde(rename = "fleet_connected")]
+    FleetConnected,
+}
+
+impl NavTreeStyle {
+    pub const fn from_code(code: &str) -> Option<Self> {
+        if code.eq_ignore_ascii_case("zed_linear") || code.eq_ignore_ascii_case("a") {
+            Some(Self::ZedLinear)
+        } else if code.eq_ignore_ascii_case("fleet_connected") || code.eq_ignore_ascii_case("b") {
+            Some(Self::FleetConnected)
+        } else {
+            None
+        }
+    }
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::ZedLinear => "zed_linear",
+            Self::FleetConnected => "fleet_connected",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ZedLinear => "Option A: Zed / Linear (clean rail + active curve)",
+            Self::FleetConnected => "Option B: Fleet / Craft Pro (all branches connected)",
+        }
+    }
+}
+
+pub(crate) fn lenient_nav_tree_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<NavTreeStyle, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str().and_then(NavTreeStyle::from_code).unwrap_or_default())
+}
+
+/// Set the Navigation tree style and mark preferences dirty so the desktop host writes `ui.json`
+/// at once (§5.1). Both the Options pane and the pane's ▾ menu go through this helper.
+pub(crate) fn set_nav_tree_style(app: &mut WordApp, style: NavTreeStyle) {
+    if app.ui.nav_tree_style != style {
+        app.ui.nav_tree_style = style;
+        app.prefs_dirty = true;
+    }
+}
 
 /// The task panes, in their default order: each edge's first pane is outermost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -155,6 +211,23 @@ impl PaneContent<Pane> for Content<'_> {
         tl!(pane.title()).into()
     }
 
+    /// App items above Move/Float/Close: the Navigation tree's style, so it can be switched
+    /// without leaving the document (§5.2).
+    fn menu(&mut self, ui: &mut Ui, pane: &Pane) {
+        if *pane != Pane::Navigation {
+            return;
+        }
+        let current = self.app.ui.nav_tree_style;
+        for style in [NavTreeStyle::ZedLinear, NavTreeStyle::FleetConnected] {
+            let mark = if current == style { "✓" } else { "  " };
+            let label = format!("{mark} {}", tl!(style.label()));
+            if ui.selectable_label(current == style, label).clicked() && current != style {
+                set_nav_tree_style(self.app, style);
+            }
+        }
+        ui.separator();
+    }
+
     fn body(&mut self, ui: &mut Ui, pane: &Pane) {
         let app = &mut *self.app;
         crate::rtl::root(ui, |ui| match pane {
@@ -184,8 +257,6 @@ mod tests;
 
 #[cfg(test)]
 mod navigation_tests {
-    use std::sync::Arc;
-
     use super::*;
 
     /// Numbered headings are listed with the number they show, and numbered body paragraphs in
@@ -195,7 +266,7 @@ mod navigation_tests {
         use wordcraft_doc::props::NumRef;
         use wordcraft_doc::{CharProps, ListKind, Paragraph, para_block};
         let mut doc = Document::new();
-        let num = Arc::make_mut(&mut doc.numbering).add_list(ListKind::Legal);
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(ListKind::Legal);
         let para = |text: &str, style: &str, level: Option<u8>| {
             let mut p = Paragraph::with_text(text, CharProps::default()).styled(style);
             p.props.numbering = level.map(|level| NumRef { num, level });
@@ -214,7 +285,7 @@ mod navigation_tests {
     }
 
     #[test]
-    fn long_headings_wrap_without_stretching_navigation() {
+    fn long_headings_elide_without_stretching_navigation() {
         // A heading that runs well past the width, and a single word wider than the pane.
         let headings = ["An extremely long heading with words that must stay inside the navigation pane ".repeat(20), "x".repeat(400)];
         // Draw one heading in a pane of `width`: the pane rect, the heading row's rect, the label's
@@ -226,10 +297,28 @@ mod navigation_tests {
             let mut panel_rect = egui::Rect::NOTHING;
             let mut heading_rect = egui::Rect::NOTHING;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test")
-                    .default_size(width)
-                    .resizable(true)
-                    .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| nav_heading(ui, level, text, true, None).1).inner);
+                let result = egui::Panel::left("navigation_test").default_size(width).resizable(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| {
+                            nav_heading(
+                                ui,
+                                egui::Id::unique(("t", level)),
+                                level,
+                                text,
+                                true,
+                                None,
+                                &[],
+                                true,
+                                false,
+                                &[],
+                                super::NavTreeStyle::ZedLinear,
+                                false,
+                                false,
+                            )
+                            .1
+                        })
+                        .inner
+                });
                 panel_rect = result.response.rect;
                 heading_rect = result.inner.rect;
             });
@@ -250,11 +339,14 @@ mod navigation_tests {
                 let (panel_rect, heading_rect, rows, elided) = render(width, level, text);
                 assert!(panel_rect.width() < width + 20.0, "long heading expanded the {width}px pane to {panel_rect:?}");
                 assert!(heading_rect.max.x <= panel_rect.max.x, "heading escaped pane: {heading_rect:?} / {panel_rect:?}");
-                // The heading wraps onto further lines instead of ending in an ellipsis (#3015).
-                assert!(rows > 1, "long heading must wrap onto further lines at {width}px, got {rows}");
-                assert!(!elided, "long heading must not end in an ellipsis at {width}px");
-                // ... and its row grows with the text, where a short heading keeps one row.
-                assert!(heading_rect.height() > one_line.height(), "a wrapped heading row is taller at {width}px: {heading_rect:?} vs {one_line:?}");
+                // Writer's Navigator keeps the row on one line and ends it in an ellipsis (the
+                // 0.10 look); the whole heading shows on hover.
+                assert_eq!(rows, 1, "long heading must stay on one line at {width}px, got {rows}");
+                assert!(elided, "long heading must end in an ellipsis at {width}px");
+                assert!(
+                    (heading_rect.height() - one_line.height()).abs() < 0.5,
+                    "an elided heading keeps one row's height at {width}px: {heading_rect:?} vs {one_line:?}"
+                );
             }
         }
     }
@@ -268,7 +360,23 @@ mod navigation_tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
             let mut panel_left = 0.0;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| nav_heading(ui, level, "Kilns", false, None));
+                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| {
+                    nav_heading(
+                        ui,
+                        egui::Id::unique("t2"),
+                        level,
+                        "Kilns",
+                        false,
+                        None,
+                        &[],
+                        true,
+                        false,
+                        &[],
+                        super::NavTreeStyle::ZedLinear,
+                        false,
+                        false,
+                    )
+                });
                 panel_left = result.response.rect.min.x;
             });
             let x = output
@@ -283,8 +391,10 @@ mod navigation_tests {
             x - panel_left
         };
         let (top, second) = (text_left(0), text_left(1));
-        assert!(top < 40.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
-        assert!((second - top - 14.0).abs() < 0.5, "a level-2 heading is indented 14px under its parent: {top} / {second}");
+        // Every row reserves the chevron gap, so parents and leaves share the column; the step
+        // between levels is the 16 px column step (content 30 → 46).
+        assert!(top < 56.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
+        assert!((second - top - 16.0).abs() < 0.5, "a level-2 heading starts one level column in (30 → 46): {top} / {second}");
     }
 
     /// Collapsing a heading hides everything nested under it, and only that (#1997).

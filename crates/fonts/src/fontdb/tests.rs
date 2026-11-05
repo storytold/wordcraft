@@ -142,6 +142,31 @@ fn a_run_without_a_covering_face_keeps_the_per_character_path() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn an_emoji_sequence_prefers_a_colour_emoji_face() {
+    let db = FontDb::global();
+    let colour = crate::COLOR_EMOJI.iter().find(|f| db.face(f, "Regular").family.eq_ignore_ascii_case(f)).copied();
+    let Some(colour) = colour else {
+        eprintln!("skipped: no colour emoji font installed");
+        return;
+    };
+    let primary = db.face(FALLBACK_FAMILY, "Regular");
+    // "1️⃣": the keycap is the digit and the enclosing mark; the variation selector takes no
+    // glyph of its own, so a face that maps the two characters draws it as one emoji.
+    let keycap: Vec<char> = "1\u{FE0F}\u{20E3}".chars().collect();
+    let face = db.color_emoji_face(&keycap, primary.id(), false, false).expect("a colour emoji face");
+    assert!(face.family.eq_ignore_ascii_case(colour), "{} is not {colour}", face.family);
+    assert!(face.covers('1') && face.covers('\u{20E3}'));
+    // The variation selector neither chooses a face nor disqualifies one.
+    assert_eq!(
+        db.fallback_for_run(&['1', '\u{FE0F}'], primary.id(), false, false).map(|f| f.id()),
+        db.fallback_for_run(&['1'], primary.id(), false, false).map(|f| f.id())
+    );
+    // A text-presentation cluster is not an emoji sequence and keeps the ordinary fallback.
+    assert!(!crate::emoji_sequence(&"\u{2764}\u{FE0E}".chars().collect::<Vec<_>>()));
+}
+
+#[test]
 fn a_family_named_for_a_heavy_weight_is_that_heavy() {
     let face = |bytes: &'static [u8], family: &str| {
         make_face(FontBytes::Static(bytes), 0, family.into(), "Regular".into(), family.into(), Vec::new()).unwrap()

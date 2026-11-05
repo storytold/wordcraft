@@ -9,11 +9,17 @@ pub(super) struct SegKey {
     pub(super) complex: bool,
     /// Odd bidi level: shaped right to left.
     pub(super) rtl: bool,
+    /// A cluster drawn as one emoji in a colour emoji face (see [`emoji_sequence`]).
+    pub(super) emoji: bool,
 }
 
 impl SegKey {
     pub(super) fn same(&self, o: &SegKey) -> bool {
-        self.face.map(|f| f.id()) == o.face.map(|f| f.id()) && self.small == o.small && self.complex == o.complex && self.rtl == o.rtl
+        self.face.map(|f| f.id()) == o.face.map(|f| f.id())
+            && self.small == o.small
+            && self.complex == o.complex
+            && self.rtl == o.rtl
+            && self.emoji == o.emoji
     }
 }
 
