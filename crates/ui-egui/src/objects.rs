@@ -44,6 +44,8 @@ const NUDGE_FINE: f32 = 1.0;
 pub struct ObjectDrag {
     object: ObjectHit,
     drag: Drag,
+    /// The original page's screen origin when pressed, before any drag-time scrolling.
+    press_origin: Pos2,
     /// Smallest size it can be resized to, points.
     min: f32,
     picture: bool,
@@ -214,8 +216,14 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             if d.drag.grab == Grab::Rotate {
                 d.drag.turn_to(at, pages, scale, shift);
             } else {
-                // Pictures keep their proportions from a corner unless Shift; shapes only with Shift.
-                d.drag.update(at, pages, scale, d.min, d.picture != shift);
+                let locked_axis = if d.copy && shift && d.object.floating() {
+                    let horizontal = d.drag.update_axis(at, pages, scale, d.min, d.press_origin);
+                    Some(if horizontal { guides::Axis::Y } else { guides::Axis::X })
+                } else {
+                    // Pictures keep their proportions from a corner unless Shift; shapes only with Shift.
+                    d.drag.update(at, pages, scale, d.min, d.picture != shift);
+                    None
+                };
                 // Alignment guides: a move snaps to the page, the margins and the other objects
                 // (Alt: freely).
                 d.guides.clear();
@@ -223,7 +231,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                     // An inline one lands in the text: the insertion cursor follows the pointer.
                     d.drop_at = drop_point(app, layout, pages, scale, at, &d);
                 } else if d.drag.grab == Grab::Move && d.drag.moved && app.ui.alignment_guides && !ui.input(|i| i.modifiers.alt) {
-                    snap_move(layout, &mut d, scale);
+                    snap_move(layout, &mut d, scale, locked_axis);
                 }
             }
             if d.drag.moved && d.preview.is_none() && shows_pixels(&d) {
@@ -249,6 +257,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let drag = Drag::new(Grab::Move, object.page, object.rect, 0.0, at);
         app.canvas.obj_drag = Some(ObjectDrag {
             drag,
+            press_origin: pages.get(object.page).map_or(at, |p| p.min),
             object,
             min: 0.0,
             picture: false,
@@ -270,9 +279,13 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
-    // Ctrl on the object that is already selected starts a copy-drag instead.
-    let again = selected(app).is_some_and(|(p, _)| p == object.pos());
-    if pressed && adding && grab == Grab::Move && selected(app).is_some() && (ui.input(|i| i.modifiers.shift) || !again) {
+    // Ctrl on the object that is already selected starts a copy-drag instead, including
+    // Ctrl+Shift for an aligned copy. Shift alone keeps its additive-selection behavior.
+    let again = selected(app).is_some_and(|(p, _)| p == object.pos())
+        || (ui.input(|i| i.modifiers.command && i.modifiers.shift)
+            && wordcraft_engine::cmd::objects::picked_objects(&app.session).contains(&object.pos()));
+    let shift_only = ui.input(|i| i.modifiers.shift && !i.modifiers.command);
+    if pressed && adding && grab == Grab::Move && selected(app).is_some() && (shift_only || !again) {
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
@@ -283,6 +296,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         };
         app.canvas.obj_drag = Some(ObjectDrag {
             drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at),
+            press_origin: pages.get(object.page).map_or(at, |p| p.min),
             object,
             min,
             picture,
@@ -309,6 +323,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             let copy = grab == Grab::Move && ui.input(|i| i.modifiers.command);
             app.canvas.obj_drag = Some(ObjectDrag {
                 drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at),
+                press_origin: pages.get(object.page).map_or(at, |p| p.min),
                 object,
                 min,
                 picture,
@@ -352,9 +367,11 @@ fn drop_point(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 
 /// Snap a moved object's bounds (rotated ones by their turned box) to the guides of the page
 /// it's over: the page's edges and centre, its margins, the other floating objects there.
-fn snap_move(layout: &DocLayout, d: &mut ObjectDrag, scale: f32) {
+fn snap_move(layout: &DocLayout, d: &mut ObjectDrag, scale: f32, locked_axis: Option<guides::Axis>) {
     let Some(pg) = layout.pages.get(d.drag.to_page) else { return };
-    let candidates = guides::candidates(paper_width(pg), pg.h, pg.body, snap_targets(pg, &d.object));
+    // Guides may snap along the free axis, but must not pull an aligned copy off its axis.
+    let mut candidates = guides::candidates(paper_width(pg), pg.h, pg.body, snap_targets(pg, &d.object));
+    candidates.retain(|g| Some(g.axis) != locked_axis);
     let s = guides::snap(d.object.spin.bounds(d.drag.rect), &candidates, guides::SNAP_SCREEN / scale.max(0.01));
     d.drag.rect.x += s.dx;
     d.drag.rect.y += s.dy;
@@ -513,22 +530,30 @@ fn shows_pixels(d: &ObjectDrag) -> bool {
     (d.picture && d.object.spin.is_identity()) || d.drag.grab == Grab::Move || (d.drag.grab == Grab::Rotate && d.object.text_box.is_none())
 }
 
+/// The pixels-per-page-point for a `w` x `h` preview, lowered so neither side exceeds the GPU's
+/// `max_side` (the texture is painted into the object's rect, so a smaller one is only stretched).
+fn preview_scale(px: f32, w: f32, h: f32, max_side: usize) -> f32 {
+    let room = (max_side.min(wordcraft_render::MAX_SIDE as usize).max(2) - 1) as f32;
+    let px = if px.is_finite() { px } else { 1.0 };
+    px.min(room / w.max(h).max(1.0))
+}
+
 /// `o` drawn alone over its rotated bounds, as a texture, at the canvas's `scale` (screen points
 /// per page point).
 fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
     let obj = app.session.doc.para_at(&o.pos()).and_then(|p| p.object_at(o.off))?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
-    opts.dark = app.session.view.dark_mode;
+    opts.dark = crate::canvas::dark_page(app);
     let items = wordcraft_layout::display::object_display(&app.session.doc, page, obj, o.rect, o.text_box, &opts.display);
     let b = o.bounds();
-    let img = wordcraft_render::render_items(
-        &app.session.doc,
-        &items,
-        wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h),
-        scale * ctx.pixels_per_point(),
-        &opts,
-    );
+    let max_side = ctx.input(|i| i.max_texture_side);
+    let px = preview_scale(scale * ctx.pixels_per_point(), b.w, b.h, max_side);
+    let img = wordcraft_render::render_items(&app.session.doc, &items, wordcraft_geom::Rect::new(b.x, b.y, b.w, b.h), px, &opts);
+    // A texture over the device limit panics wgpu outside `Session::run`; fall back to the outline.
+    if img.width as usize > max_side || img.height as usize > max_side {
+        return None;
+    }
     let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     Some(ctx.load_texture("object-drag", ci, egui::TextureOptions::LINEAR))
 }

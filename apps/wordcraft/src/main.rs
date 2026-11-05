@@ -27,7 +27,7 @@ mod traffic_lights;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
-    window_geometry::{RawWindowState, WindowGeometry, take_rescue},
+    window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
 };
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
@@ -54,7 +54,13 @@ impl eframe::App for App {
         apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let window = self.4;
+        let mut window = self.4;
+        // Only until the off-screen check below has run: it is the one reader.
+        if self.1.is_some() {
+            let (on_a_monitor, primary_monitor_rect) = monitor_geometry(frame, ctx.pixels_per_point());
+            window.on_a_monitor = on_a_monitor;
+            window.primary_monitor_rect = primary_monitor_rect;
+        }
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
@@ -124,6 +130,37 @@ impl eframe::App for App {
             key_file.remove();
         }
     }
+}
+
+/// Whether a grippable part of the window is on a monitor, and the primary monitor bounds.
+/// Winit reports physical pixels; egui positions use points. `None` where the platform cannot
+/// report the window or primary monitor (Wayland, headless).
+fn monitor_geometry(frame: &eframe::Frame, pixels_per_point: f32) -> (Option<bool>, Option<egui::Rect>) {
+    let Some(w) = frame.winit_window() else {
+        return (None, None);
+    };
+    if !pixels_per_point.is_finite() || pixels_per_point <= 0.0 {
+        return (None, None);
+    }
+    let Some(pos) = w.outer_position().ok() else {
+        return (None, None);
+    };
+    let size = w.outer_size();
+    let physical_rect = |(x, y): (i32, i32), (width, height): (u32, u32)| {
+        egui::Rect::from_min_size(egui::pos2(x as f32, y as f32), egui::vec2(width as f32, height as f32))
+    };
+    let monitors: Vec<egui::Rect> =
+        w.available_monitors().map(|m| physical_rect((m.position().x, m.position().y), (m.size().width, m.size().height))).collect();
+    let on_a_monitor = (!monitors.is_empty()).then(|| reachable(physical_rect((pos.x, pos.y), (size.width, size.height)), &monitors));
+    let primary_monitor_rect = w.primary_monitor().map(|m| {
+        let pos = m.position();
+        let size = m.size();
+        egui::Rect::from_min_size(
+            egui::pos2(pos.x as f32, pos.y as f32) / pixels_per_point,
+            egui::vec2(size.width as f32, size.height as f32) / pixels_per_point,
+        )
+    });
+    (on_a_monitor, primary_monitor_rect)
 }
 
 /// Quit the way Command-Q does, on the next turn of the main queue.
@@ -329,6 +366,26 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
+/// the `-NS…` / `-Apple…` options (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) with
+/// the value after each. They are not files, and opening them as files fails.
+fn without_launch_args(args: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(a) = args.next() {
+        if a.starts_with("-psn_") {
+            continue;
+        }
+        if a.starts_with("-NS") || a.starts_with("-Apple") {
+            // Its value, unless the next argument is another flag.
+            args.next_if(|v| !v.starts_with('-'));
+            continue;
+        }
+        kept.push(a);
+    }
+    kept
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
 /// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
@@ -340,7 +397,9 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => {
+            app.report_open_failure(&name, &e);
+        }
     }
 }
 
@@ -350,7 +409,7 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 fn main() -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
-    if let Some(result) = craft_update::self_update::finish(&craft_update::suite::WORDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(result) = craft_update::self_update::finish(&wordcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
@@ -360,6 +419,8 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
+    // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
+    let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
@@ -425,7 +486,8 @@ fn main() -> eframe::Result {
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
     #[cfg(target_os = "windows")]
     graphics::configure(&mut options, eframe::wgpu::Backends::from_env());
-    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652).
+    // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (#2652). An x86_64
+    // build under Rosetta on Apple silicon keeps them (#5199).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
@@ -466,11 +528,13 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            // Language packs from the suite's font store; an Install click is the person's own.
+            wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
                 let doc = app.session.blank_document();
-                app.session.set_document(doc);
+                app.replace_startup_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
             if prefs_enabled()
@@ -504,7 +568,7 @@ fn main() -> eframe::Result {
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
+                    app.report_open_failure(&f, &e);
                 }
             }
             for f in other_files {
@@ -587,6 +651,33 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_arg_tests {
+    use super::without_launch_args;
+
+    fn strip(args: &[&str]) -> Vec<String> {
+        without_launch_args(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn macos_launch_arguments_are_not_files() {
+        assert_eq!(strip(&["-psn_0_12345", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["-AppleLanguages", "(en)", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["a.docx", "-NSDocumentRevisionsDebugMode", "YES", "b.docx"]), ["a.docx", "b.docx"]);
+        // A flag with no value after it, or followed by another flag, takes nothing with it.
+        assert_eq!(strip(&["a.docx", "-AppleLocale"]), ["a.docx"]);
+        assert_eq!(strip(&["-NSFoo", "--sample", "a.docx"]), ["--sample", "a.docx"]);
+    }
+
+    #[test]
+    fn real_arguments_are_kept() {
+        assert_eq!(strip(&["--control", "7981", "--sample", "-h"]), ["--control", "7981", "--sample", "-h"]);
+        // Files whose names merely start like a launch argument keep their place when they are paths.
+        assert_eq!(strip(&["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]), ["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]);
+        assert!(strip(&[]).is_empty());
     }
 }
 

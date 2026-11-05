@@ -763,6 +763,12 @@ fn main() -> ExitCode {
     if let Some(problem) = wordcraft_engine::cmd::source_date_epoch_problem() {
         eprintln!("wordcraft-cli: warning: {problem}");
     }
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {
