@@ -263,7 +263,9 @@ impl KeptXml {
     }
     /// Whether `doc`'s page setup is still as it was read.
     pub fn pages_as_read(&self, doc: &crate::Document) -> bool {
-        self.pages_fp.is_some_and(|fp| fp == pages_fingerprint(doc))
+        let Some(fp) = self.pages_fp else { return false };
+        let now = in_scope(doc, |sc| *sc.pages.get_or_insert_with(|| pages_fingerprint(doc))).unwrap_or_else(|| pages_fingerprint(doc));
+        fp == now
     }
     /// Whether `doc`'s style definitions are still as they were read.
     pub fn styles_as_read(&self, doc: &crate::Document) -> bool {
@@ -384,11 +386,62 @@ const MAX_REPLIES: usize = 10_000;
 /// What comment `root` is with its replies (and theirs): each one's author, date, state and
 /// text, and how many they are.
 pub fn comments_fingerprint(doc: &crate::Document, root: u32) -> (u64, usize) {
-    family_fingerprint(doc, root, &replies(doc))
+    family_fingerprint(doc, root, &scoped_replies(doc))
+}
+
+/// What a writer asks of a document's kept markup for many paragraphs, worked out once while
+/// [`while_writing`] it: each comment's replies, and its page setup's fingerprint. Without it a
+/// document of C comments took C² steps (and its page setup serialized once per note) to save.
+struct Scope {
+    /// The document's address: it can't move or change while borrowed for the writing.
+    doc: usize,
+    replies: Option<std::rc::Rc<HashMap<u32, Vec<u32>>>>,
+    pages: Option<u64>,
+}
+
+thread_local! {
+    static SCOPE: std::cell::RefCell<Option<Scope>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`replies`] was built (tests).
+    static REPLY_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Puts the scope before it back when dropped (when `f` returns or unwinds).
+struct Restore(Option<Scope>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        SCOPE.with(|s| *s.borrow_mut() = prev);
+    }
+}
+
+/// Run `f`, which writes `doc`, with what the kept markup asks of `doc` worked out at most once.
+pub fn while_writing<R>(doc: &crate::Document, f: impl FnOnce() -> R) -> R {
+    let key = std::ptr::from_ref(doc) as usize;
+    let prev = SCOPE.with(|s| s.replace(Some(Scope { doc: key, replies: None, pages: None })));
+    let _restore = Restore(prev);
+    f()
+}
+
+/// The scope for `doc`, if it is being written: `f` of it.
+fn in_scope<R>(doc: &crate::Document, f: impl FnOnce(&mut Scope) -> R) -> Option<R> {
+    let key = std::ptr::from_ref(doc) as usize;
+    SCOPE.with(|s| s.borrow_mut().as_mut().filter(|sc| sc.doc == key).map(f))
+}
+
+/// [`replies`], built once while `doc` is being written.
+fn scoped_replies(doc: &crate::Document) -> std::rc::Rc<HashMap<u32, Vec<u32>>> {
+    in_scope(doc, |sc| sc.replies.get_or_insert_with(|| std::rc::Rc::new(replies(doc))).clone()).unwrap_or_else(|| std::rc::Rc::new(replies(doc)))
 }
 
 /// Each comment's replies, by the comment's id.
 fn replies(doc: &crate::Document) -> HashMap<u32, Vec<u32>> {
+    #[cfg(test)]
+    REPLY_BUILDS.with(|n| n.set(n.get() + 1));
     let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
     for (id, c) in &doc.comments {
         if let Some(p) = c.parent {
@@ -693,5 +746,35 @@ mod tests {
         assert!(k.para(p).is_some());
         assert_eq!(k.group(p), Some((1, 1)));
         assert_eq!(k.story_fps.get(&id), Some(&story_fingerprint(&doc, id)));
+    }
+
+    /// Writing a document checks each kept paragraph's comments against what was read: the
+    /// comments' replies are looked up once for the whole document, not once per comment.
+    #[test]
+    fn writing_many_comments_looks_their_replies_up_once() {
+        use crate::para::InlineObject;
+        let n = 50u32;
+        let text = (0..n).map(|i| format!("Para {i}")).collect::<Vec<_>>().join("\n");
+        let mut doc = crate::Document::from_text(&text);
+        for i in 0..n {
+            let part = doc.add_part(crate::PartKind::Comment, vec![crate::para_block(Paragraph::with_text("Note", Default::default()))]);
+            doc.comments.insert(i, crate::Comment { parent: None, part, ..Default::default() });
+            doc.para_mut(crate::StoryRef::Body, &crate::Path::top(i as usize))
+                .unwrap()
+                .insert_object(0, InlineObject::CommentStart { id: i }, &Default::default())
+                .unwrap();
+        }
+        let mut k = KeptXml { format: "odt".into(), ..Default::default() };
+        for i in 0..n {
+            k.comment_fps.insert(i, comments_fingerprint(&doc, i).0);
+        }
+        let xml = "<text:p><office:annotation>x</office:annotation></text:p>";
+        let before = REPLY_BUILDS.with(std::cell::Cell::get);
+        let all = while_writing(&doc, || doc.body.iter().filter_map(|b| b.as_para()).all(|p| k.comments_as_read(&doc, p, xml)));
+        assert!(all, "every paragraph's comment is as read");
+        assert_eq!(REPLY_BUILDS.with(std::cell::Cell::get) - before, 1);
+        // Outside a writing, nothing is kept between calls.
+        assert!(doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| k.comments_as_read(&doc, p, xml)));
+        assert_eq!(REPLY_BUILDS.with(std::cell::Cell::get) - before, 2);
     }
 }
