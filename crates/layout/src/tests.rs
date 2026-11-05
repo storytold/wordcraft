@@ -2236,6 +2236,162 @@ fn turned_up_cell_text_reads_bottom_to_top() {
     assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
 }
 
+/// #2038 with turned cell text: a click just outside a floating table, in the 2pt around turned
+/// text that still takes a click, goes to the text beside or after the table, not into a cell; a
+/// click on the table's edge still lands in one. A table that doesn't float keeps such a click.
+#[test]
+fn a_click_just_outside_a_floating_table_skips_its_turned_cell_text() {
+    use TextDirection::{Down, Horizontal, Up};
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    // (the section's direction, the cells' direction, whether the table floats)
+    let cases = [
+        (Horizontal, Down, true),
+        (Horizontal, Up, true),
+        (Down, Horizontal, true),
+        (Up, Horizontal, true),
+        (Horizontal, Down, false),
+        (Horizontal, Up, false),
+    ];
+    for (section, cells, floats) in cases {
+        let case = format!("section {section:?}, cells {cells:?}, floating {floats}");
+        let mut d = Document::from_text("before\nafter");
+        d.last_section.text_direction = section;
+        let mut t = Table::new(2, 2, 200.0);
+        for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Turned", Default::default()))];
+            c.props.text_direction = cells;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = &l.pages[0];
+        assert_eq!(page.float_tables.len(), usize::from(floats), "{case}");
+        let area = page
+            .items
+            .iter()
+            .filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None })
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
+        let turned: Vec<Rect> = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } if path.0.len() > 1 => it.turned_bounds(),
+                _ => None,
+            })
+            .collect();
+        assert!(!turned.is_empty(), "{case}: the cells' text is turned");
+        // Points on each side of the table (on its edge, and 1 and 2pt outside) across from turned
+        // cell text, which takes a click up to 2pt from its bounds.
+        let near = |p: &Point| turned.iter().any(|r| r.expand(2.0).contains(*p));
+        let side = |r: &Rect, out: f32| {
+            let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+            [Point::new(cx, area.y - out), Point::new(cx, area.bottom() + out), Point::new(area.x - out, cy), Point::new(area.right() + out, cy)]
+        };
+        let outside: Vec<Point> = turned.iter().flat_map(|r| [side(r, 1.0), side(r, 2.0)]).flatten().filter(near).collect();
+        let edge: Vec<Point> = turned.iter().flat_map(|r| side(r, 0.0)).filter(near).collect();
+        assert!(!outside.is_empty() && !edge.is_empty(), "{case}: turned text within 2pt of the edge {area:?}: {turned:?}");
+        for p in outside {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert_eq!(hit.path.0.len() == 1, floats, "{case}: a click at {p:?} landed in {:?}", hit.path);
+        }
+        for p in edge {
+            let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+            assert!(hit.path.0.len() > 1, "{case}: a click on the edge at {p:?} landed in {:?}", hit.path);
+        }
+    }
+}
+
+/// The same rule when nothing upright but a floating table's cells is on the page (the page's
+/// paragraphs taken off the laid-out page): a click outside the table goes to other turned text
+/// there, and one by turned text of the table's own still lands in that cell, not in the nearest
+/// upright one.
+#[test]
+fn a_click_by_a_floating_table_with_no_upright_text_beside_it_prefers_turned_text() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let table = |dirs: [TextDirection; 2], floats: bool| {
+        let mut t = Table::new(1, 2, 200.0);
+        for (c, dir) in t.rows[0].cells.iter_mut().zip(dirs) {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell text", Default::default()))];
+            c.props.text_direction = dir;
+        }
+        if floats {
+            t.props.float = Some(TableFloat {
+                h_rel: Anchor::Column,
+                v_rel: Anchor::Paragraph,
+                x: 150.0,
+                dist: [9.0, 0.0, 9.0, 0.0],
+                overlap: true,
+                ..Default::default()
+            });
+        }
+        wordcraft_doc::Block::Table(t)
+    };
+    let lay_bare = |d: &Document| {
+        let mut l = lay(d);
+        l.pages[0].items.retain(|it| !matches!(it, Placed::Lines { path, .. } if path.0.len() == 1));
+        l
+    };
+    let cell_area = |l: &DocLayout, t: u32| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, table, .. } if table.0 == [t] => Some(*rect),
+                _ => None,
+            })
+            .reduce(|a, b| a.union(&b))
+            .unwrap()
+    };
+    // A floating table with an upright cell and a turned one: a click 1pt above the turned
+    // text lands in it, as it did before the floating-table rule.
+    let mut d = Document::from_text("before\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let area = cell_area(&l, 1);
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    assert_eq!(l.hit(0, p.x, p.y, StoryRef::Body).unwrap().path, Path(vec![1, 0, 1, 0]));
+    // An upright floating table and, below it, a table in the text flow with turned cells: a
+    // click below the floating one goes to that turned text, not to the floating table.
+    let mut d = Document::from_text("before\nbeside\nbeside\nbeside\nafter");
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal; 2], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(5), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 5));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let hit = l.hit(0, area.x + area.w / 2.0, area.bottom() + 6.0, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&5), "{hit:?}");
+    // Both: a click 1pt above the floating table's turned cell goes to the other turned text,
+    // which comes before the table's own.
+    let mut d = Document::from_text(&format!("before\n{}after", "beside\n".repeat(6)));
+    d.insert_block(StoryRef::Body, &Path::top(1), table([TextDirection::Horizontal, TextDirection::Down], true)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(8), table([TextDirection::Down; 2], false)).unwrap();
+    let l = lay_bare(&d);
+    assert_eq!(l.pages[0].float_tables, [Path::top(1)]);
+    let (area, flow) = (cell_area(&l, 1), cell_area(&l, 8));
+    assert!(flow.y > area.bottom() + 12.0, "{area:?} {flow:?}");
+    let turned = turned_lines(&l).turned_bounds().unwrap();
+    let p = Point::new(turned.x + turned.w / 2.0, area.y - 1.0);
+    assert!(turned.expand(2.0).contains(p) && !area.contains(p), "{p:?} {turned:?} {area:?}");
+    let hit = l.hit(0, p.x, p.y, StoryRef::Body).unwrap();
+    assert_eq!(hit.path.0.first(), Some(&8), "{hit:?}");
+}
+
 #[test]
 fn turned_text_wraps_in_an_exact_row() {
     let d = turned_table(TextDirection::Down, &"word ".repeat(30), Some(72.0));
