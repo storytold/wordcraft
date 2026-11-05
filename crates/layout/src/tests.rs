@@ -7280,24 +7280,23 @@ fn footer_tables_that_may_not_overlap_stay_apart_after_staying_on_the_page() {
 }
 
 #[test]
-fn three_footer_tables_stack_upwards_and_the_one_without_room_stays_visible() {
+fn footer_tables_that_may_not_overlap_sit_side_by_side_at_the_page_edge() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
+    // Word: the first stays at the bottom edge, the next ones move right beside it.
     let f = TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 785.0, overlap: false, ..Default::default() };
-    let cells = |row_h: f32| {
-        let l = lay(&footer_with_floating_tables(&[f, f, f], 1, Some(row_h)));
-        let h = l.pages[0].h;
-        let cells: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
-        (cells, h)
-    };
-    // Room for all three: each above the last, apart, on the page.
-    let (c, h) = cells(100.0);
+    let l = lay(&footer_with_floating_tables(&[f, f, f], 1, Some(150.0)));
+    let h = l.pages[0].h;
+    let c: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
     assert_eq!(c.len(), 3, "three tables: {c:?}");
     assert!(c.iter().all(|r| r.y >= -0.01 && r.bottom() <= h + 0.01), "off the page ({h}): {c:?}");
-    assert!(!c[0].intersects(&c[1]) && !c[1].intersects(&c[2]) && !c[0].intersects(&c[2]), "overlap: {c:?}");
-    // 300 pt each on a page about 842 pt tall: two fit; the third overlaps rather than vanish.
-    let (c, h) = cells(300.0);
-    assert!(c.iter().all(|r| r.y >= -0.01 && r.bottom() <= h + 0.01), "a table is off the page ({h}): {c:?}");
+    assert!(c.iter().all(|r| (r.y - c[0].y).abs() < 0.01), "all at the bottom edge: {c:?}");
+    assert!(c[1].x >= c[0].right() - 0.01 && c[2].x >= c[1].right() - 0.01, "each beside the last: {c:?}");
+    // With overlap allowed they share one place.
+    let g = TableFloat { overlap: true, ..f };
+    let l = lay(&footer_with_floating_tables(&[g, g, g], 1, Some(150.0)));
+    let c: Vec<_> = l.pages[0].footer.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert!(c.iter().all(|r| (r.x - c[0].x).abs() < 0.01 && (r.y - c[0].y).abs() < 0.01), "one place: {c:?}");
 }
 
 #[test]

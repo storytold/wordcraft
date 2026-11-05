@@ -499,24 +499,20 @@ fn box_float_table_rect(
     }
     let clamped = r;
     let mut r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
-    // Cleared downwards it would leave the page again: stack it above the tables in its way when
-    // there is room for that (a hair above them, so rounding can not leave it touching).
+    // Cleared downwards it would leave the page again. Word (observed) keeps such a table where
+    // the page edge put it and moves it right, beside the table it met; it does not stack them up
+    // or let one run off the bottom. It doesn't bring the table back onto the page across.
     if let Some(fr) =
         frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin).filter(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01)
     {
         let [dl, dt, dr, db] = f.dist_from_text();
-        let mut up = Rect::new(r.x, clamped.y, clamped.w, clamped.h);
+        let mut beside = Rect::new(clamped.x, clamped.y, clamped.w, clamped.h);
         for _ in 0..64 {
-            let area = up.inset(-dl, -dt, -dr, -db);
-            let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
-            up.y = above - db - h - 0.01;
+            let area = beside.inset(-dl, -dt, -dr, -db);
+            let Some(right) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.right()).reduce(f32::max) else { break };
+            beside.x = right + dl + 0.01;
         }
-        // With no room above either, it stays on the page over the others: seen, if overlapping.
-        r = if up.y + fr.origin.1 >= -0.02 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
-            up
-        } else {
-            Rect::new(r.x, clamped.y, clamped.w, clamped.h)
-        };
+        r = beside;
     }
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
