@@ -13,6 +13,7 @@ const NOTICE: &str = "ignoring the AppImage";
 struct Tmp(PathBuf);
 
 impl Tmp {
+    /// An empty folder named after `test` and this process, made afresh.
     fn new(test: &str) -> Tmp {
         let dir = std::env::temp_dir().join(format!("wordcraft-appimage-it-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -22,11 +23,14 @@ impl Tmp {
 }
 
 impl Drop for Tmp {
+    /// Removes the folder and what the test left in it.
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
+/// Runs the real app with `args`, as an AppImage app with `appimage` mounted at `appdir` would
+/// start it, and waits up to 30 s for it to exit (with no display it can't open a window).
 fn app(args: &[OsString], appimage: &Path, appdir: &Path) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_wordcraft"))
         .args(args)

@@ -65,6 +65,7 @@ mod tests {
     struct Tmp(PathBuf);
 
     impl Tmp {
+        /// An empty folder named after `test` and this process, made afresh.
         fn new(test: &str) -> Tmp {
             let dir = std::env::temp_dir().join(format!("wordcraft-appimage-{test}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -74,6 +75,7 @@ mod tests {
     }
 
     impl Drop for Tmp {
+        /// Removes the folder and what the test left in it.
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
