@@ -54,9 +54,13 @@ fn anchors_walk_dense_unrelated_markers_in_linear_work() {
     const N: usize = 2_000;
     let (small, big) = (dense_markers(N), dense_markers(crate::tests::SCALE * N));
     let check = |doc: &Document, n| assert_eq!(anchors(doc), vec![(0, Pos::body(0, n * wordcraft_doc::para::OBJ.len_utf8()))]);
-    let (s, b, ratio) = crate::tests::cost_ratio(crate::tests::SCALE, || check(&small, N), || check(&big, crate::tests::SCALE * N));
-    eprintln!("balloon anchor CPU: {s:.6}s -> {b:.6}s, {ratio:.2}x for 8x markers");
-    assert!(ratio < 24.0, "balloon anchor work grew {ratio:.2}x for 8x markers ({s:.6}s -> {b:.6}s)");
+    // The characters the paragraph's object lookups walk (`wordcraft_doc::work`), not a timing:
+    // about 8x for 8x the markers when the walk is linear, about 64x when it is quadratic.
+    let (s, b) = (wordcraft_doc::work::count(|| check(&small, N)), wordcraft_doc::work::count(|| check(&big, crate::tests::SCALE * N)));
+    let ratio = b as f64 / s.max(1) as f64;
+    eprintln!("balloon anchor steps: {s} -> {b}, {ratio:.1}x for 8x markers");
+    assert!(s > 0, "no steps counted, so the walk this test watches no longer counts them (wordcraft_doc::work)");
+    assert!(ratio <= 1.5 * crate::tests::SCALE as f64, "balloon anchor work grew {ratio:.1}x for 8x markers ({s} -> {b} steps)");
 }
 
 #[test]
