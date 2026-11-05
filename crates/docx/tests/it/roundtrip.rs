@@ -273,7 +273,7 @@ fn textbox_tight_wrap_survives_two_docx_saves() {
             .chain([Paragraph::with_text("ordinary", CharProps::default())])
             .collect(),
     );
-    doc.styles.upsert(Style {
+    Arc::make_mut(&mut doc.styles).upsert(Style {
         id: "TightWrapStyle".into(),
         name: "Tight Wrap Style".into(),
         para: ParaProps { textbox_tight_wrap: Some(TextboxTightWrap::AllLines), ..Default::default() },
