@@ -164,21 +164,30 @@ pub(crate) struct Vector {
 }
 
 impl Vector {
-    /// Approximate memory held: pixels and path segments.
+    /// Approximate memory held: pixels, path segments and the per-item bookkeeping.
     pub(crate) fn bytes(&self) -> usize {
-        let px: usize = self.pixmaps.iter().flatten().map(|p| p.width() as usize * p.height() as usize * 4).sum();
+        let px: usize = self.pixmaps.iter().flatten().map(|p| bitmap_bytes(p)).sum();
         px.saturating_add(geometry_bytes(&self.pic))
     }
 }
 
-/// Approximate memory held by a picture's path segments and text.
+/// Memory held by one decoded bitmap: its pixels plus the pixmap and its `Arc` header.
+fn bitmap_bytes(p: &Pixmap) -> usize {
+    usize::from(p.width()) * usize::from(p.height()) * 4 + std::mem::size_of::<Pixmap>() + 2 * std::mem::size_of::<usize>()
+}
+
+/// Approximate memory held by a picture's items: path segments and text, the item itself (a bitmap
+/// item stays in the list after its pixels move out) and the pixmap slot kept for it.
 fn geometry_bytes(pic: &Picture) -> usize {
+    let slot = std::mem::size_of::<Option<Arc<Pixmap>>>();
     pic.items
         .iter()
-        .map(|it| match it {
-            Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
-            Item::Bitmap { .. } => 0,
-            Item::Text(t) => t.text.len() + t.dx.len() * 4,
+        .map(|it| {
+            slot + match it {
+                Item::Path { segs, .. } => segs.len() * std::mem::size_of::<Seg>(),
+                Item::Bitmap { .. } => std::mem::size_of::<Item>(),
+                Item::Text(t) => t.text.len() + t.dx.len() * 4,
+            }
         })
         .sum()
 }
@@ -220,21 +229,24 @@ fn build_vector(bytes: &[u8]) -> Option<Vector> {
 /// bitmaps are box-averaged down to an eighth of the budget between them, in proportion to their
 /// size, as large raster pictures are (#3665, which uses half). An eighth because the cache starts
 /// over when full: several huge pictures on screen together must fit side by side, and not clear
-/// the small ones with them. Pictures within the budget keep their full resolution. Printing
-/// (`render_page`) draws the shrunk bitmaps too, as it does large raster pictures; PDF export parses
-/// the metafile itself and is unaffected.
+/// the small ones with them. Geometry that is itself an eighth or more leaves the bitmaps what is
+/// left of the whole budget instead. A picture that still cannot fit after shrinking stays uncached,
+/// as before. Pictures within the budget keep their full resolution. Printing (`render_page`) draws
+/// the shrunk bitmaps too, as it does large raster pictures; PDF export parses the metafile itself
+/// and is unaffected.
 pub(crate) fn fit_cache(mut pixmaps: Vec<Option<Pixmap>>, geometry: usize) -> Vec<Option<Pixmap>> {
-    let bytes = |p: &Pixmap| usize::from(p.width()) * usize::from(p.height()) * 4;
-    let total: usize = pixmaps.iter().flatten().map(bytes).sum();
-    if total.saturating_add(geometry) <= CACHE_BYTES {
+    let pixels = |p: &Pixmap| usize::from(p.width()) * usize::from(p.height()) * 4;
+    let total: usize = pixmaps.iter().flatten().map(pixels).sum();
+    let fixed: usize = pixmaps.iter().flatten().map(|p| bitmap_bytes(p) - pixels(p)).sum();
+    if total.saturating_add(fixed).saturating_add(geometry) <= CACHE_BYTES {
         return pixmaps;
     }
-    // With no room (the geometry alone is an eighth of the budget) nothing shrinks and the picture stays
-    // uncached, as before.
-    let room = (CACHE_BYTES / 8).saturating_sub(geometry) / 4;
+    let target = CACHE_BYTES / 8;
+    let budget = if geometry < target { target } else { CACHE_BYTES };
+    let room = budget.saturating_sub(geometry).saturating_sub(fixed) / 4;
     for pm in pixmaps.iter_mut().flatten() {
         // This bitmap's share of the pixels that fit.
-        let share = (room as u128 * bytes(pm) as u128 / total.max(1) as u128) as u64;
+        let share = (room as u128 * pixels(pm) as u128 / total.max(1) as u128) as u64;
         if let Some(small) = shrink(pm, share) {
             *pm = small;
         }

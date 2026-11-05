@@ -1067,6 +1067,29 @@ fn bitmaps_are_shrunk_in_proportion_only_when_the_picture_is_past_the_cache() {
     assert!(a.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (1, 2, 3, 255)), "flat stays flat");
 }
 
+/// Geometry of an eighth of the budget or more leaves the bitmaps a positive allowance, so the
+/// picture is still kept (and reused) when it fits the whole budget after shrinking; one whose
+/// geometry alone fills the budget stays uncached.
+#[test]
+fn heavy_geometry_still_leaves_the_bitmaps_a_cacheable_size() {
+    let px = vello_cpu::color::PremulRgba8 { r: 1, g: 2, b: 3, a: 255 };
+    let pm = |w: u16, h: u16| Some(Pixmap::from_parts(vec![px; usize::from(w) * usize::from(h)], w, h));
+    let bytes = |v: &[Option<Pixmap>]| v.iter().flatten().map(|p| usize::from(p.width()) * usize::from(p.height()) * 4).sum::<usize>();
+    let geometry = CACHE_BYTES / 8 + 4_000_000;
+    let fit = fit_cache(vec![pm(6000, 6000)], geometry);
+    let size = bytes(&fit);
+    assert!(size > 0 && size < 6000 * 6000 * 4, "shrunk, not dropped: {size} bytes");
+    assert!(size + geometry <= CACHE_BYTES, "{size} bytes");
+    // The shrunk picture is accepted by the cache and hit again.
+    let src = Arc::new(vec![0u8; 1]);
+    let mut c: MediaCache<u8> = MediaCache { map: Default::default(), bytes: 0 };
+    c.insert("heavy", &src, 7, size + geometry);
+    assert_eq!(c.get("heavy", &src), Some(7));
+    // Geometry that takes the whole budget leaves nothing to shrink to: the bitmap stays as it is.
+    let full = fit_cache(vec![pm(6000, 6000)], CACHE_BYTES);
+    assert_eq!(bytes(&full), 6000 * 6000 * 4);
+}
+
 /// #1899: a crop that keeps a sliver of the picture (3% here; a header's bar can be 2.7% of a
 /// page-sized metafile) stretches that sliver over the frame, as the file says, for vector and
 /// bitmap pictures alike. Both pictures are paper on the left half and red on the right.
