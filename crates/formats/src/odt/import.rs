@@ -988,9 +988,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         k.section_masters = section_masters;
     }
     doc.seal_kept();
-    let (fp, pages) = (wordcraft_doc::kept::styles_fingerprint(&doc), wordcraft_doc::kept::pages_fingerprint(&doc));
+    let (prints, pages) = (super::package::style_prints(&doc), wordcraft_doc::kept::pages_fingerprint(&doc));
     if let Some(k) = doc.kept.get_mut() {
-        (k.styles_fp, k.pages_fp) = (Some(fp), Some(pages));
+        (k.style_prints, k.pages_fp) = (prints, Some(pages));
     }
     Ok(doc)
 }

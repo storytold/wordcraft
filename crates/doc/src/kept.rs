@@ -74,9 +74,9 @@ pub struct KeptXml {
     pub order: Vec<String>,
     /// Files of the package kept definitions refer to (a style's fill picture), by path.
     pub files: BTreeMap<String, Arc<Vec<u8>>>,
-    /// The document's style definitions' [`styles_fingerprint`] when read: while it is the
-    /// same, the file's own style definitions can be written as they were.
-    pub styles_fp: Option<u64>,
+    /// What the format would write for each style definition when read, by [`KeptXml::defs`]'
+    /// key, as a hash: while a definition's is the same, the file's own is written as it was.
+    pub style_prints: BTreeMap<String, u64>,
     /// The document's page setup's [`pages_fingerprint`] when read: while it is the same, the
     /// file's own page layouts and master pages can be written as they were.
     pub pages_fp: Option<u64>,
@@ -267,20 +267,6 @@ impl KeptXml {
         let now = in_scope(doc, |sc| *sc.pages.get_or_insert_with(|| pages_fingerprint(doc))).unwrap_or_else(|| pages_fingerprint(doc));
         fp == now
     }
-    /// Whether `doc`'s style definitions are still as they were read.
-    pub fn styles_as_read(&self, doc: &crate::Document) -> bool {
-        self.styles_fp.is_some_and(|fp| fp == styles_fingerprint(doc))
-    }
-}
-
-/// What `doc`'s style definitions are: its styles, lists and default tab interval.
-pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
-        Ok(v) => v.hash(&mut h),
-        Err(_) => u64::MAX.hash(&mut h),
-    }
-    h.finish()
 }
 
 /// What a block is, as the kept markup knows it: its paragraphs' fingerprints and

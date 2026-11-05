@@ -128,12 +128,18 @@ fn unedited_style_definitions_are_written_as_read() {
     assert!(s.contains(r#"x:odd="1""#) && s.contains(r#"xmlns:x="urn:example:x""#), "{s}");
     assert_eq!(s.matches("<text:notes-configuration text:note-class=\"footnote\"").count(), 1, "{s}");
     assert_eq!(s.matches(r#"<style:style style:name="Standard""#).count(), 1, "{s}");
-    // A style changed in WordCraft: the definitions are WordCraft's.
-    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Normal") {
+    // A style changed in WordCraft: that one is WordCraft's, the others still the file's.
+    if let Some(st) = std::sync::Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Quote") {
         st.chr.bold = Some(true);
     }
     let s = styles_of(&export(&d).unwrap());
-    assert!(!s.contains(r#"x:odd="1""#), "{s}");
+    assert!(s.contains(r#"x:odd="1""#), "{s}");
+    assert!(
+        s.split(r#"<style:style style:name="Quotations""#)
+            .nth(1)
+            .is_some_and(|q| q.split("</style:style>").next().is_some_and(|q| q.contains(r#"fo:font-weight="bold""#))),
+        "{s}"
+    );
     assert_eq!(s.matches(r#"<style:style style:name="Standard""#).count(), 1, "{s}");
 }
 
@@ -158,4 +164,59 @@ fn a_file_a_kept_definition_names_is_written_with_it() {
     assert_eq!(got, png);
     let m = crate::odt::tests::entry(&saved, "META-INF/manifest.xml");
     assert!(m.contains(r#"manifest:full-path="Pictures/paper.png""#), "{m}");
+}
+
+/// A file defining what WordCraft doesn't model: a gradient, a paragraph style no text of its
+/// own uses, a default style's writing mode, and a frame style naming them.
+fn file_with_definitions() -> Vec<u8> {
+    let ns = crate::odt::tests::NS_T;
+    let draw =
+        r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0""#;
+    let styles = format!(
+        r##"<office:document-styles {ns} {draw}><office:styles><draw:gradient draw:name="Sunset" draw:style="linear" draw:start-color="#ff8800" draw:end-color="#ffff00"/><style:default-style style:family="paragraph"><style:paragraph-properties style:writing-mode="page" style:line-break="strict"/><style:text-properties fo:language="de" fo:country="DE"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Text_20_body" style:display-name="Text body" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:margin-bottom="7pt"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="Frame" style:family="graphic"><style:graphic-properties style:wrap="dynamic" style:vertical-pos="top"/></style:style></office:styles></office:document-styles>"##
+    );
+    let content = format!(
+        r#"<office:document-content {ns} {draw}><office:automatic-styles><style:style style:name="fr1" style:family="graphic" style:parent-style-name="Frame"><style:graphic-properties draw:fill="gradient" draw:fill-gradient-name="Sunset"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="Text_20_body">Text<draw:frame draw:style-name="fr1" text:anchor-type="paragraph" svg:width="2in" svg:height="1in"><draw:text-box><text:p>In</text:p></draw:text-box></draw:frame></text:p><text:p text:style-name="Eigen">Own</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::odt::tests::package(&content, Some(&styles))
+}
+
+#[test]
+fn changing_one_style_leaves_the_files_other_definitions_alone() {
+    use std::sync::Arc;
+    let bytes = file_with_definitions();
+    let as_read = |saved: &[u8]| {
+        let s = crate::odt::tests::entry(saved, "styles.xml");
+        assert!(s.contains(r#"draw:gradient draw:name="Sunset""#), "its gradient: {s}");
+        assert!(s.contains(r#"fo:margin-bottom="7pt""#), "a style WordCraft doesn't model: {s}");
+        assert!(s.contains(r#"style:wrap="dynamic""#), "what its frames derive from: {s}");
+        assert!(s.contains(r#"style:writing-mode="page""#) && s.contains(r#"fo:language="de""#), "its default style: {s}");
+        s
+    };
+    // A style no text uses.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).get_mut("Quote").unwrap().chr.size = Some(13.0);
+    let saved = crate::odt::export(&d).unwrap();
+    let s = as_read(&saved);
+    assert!(s.contains(r#"fo:font-size="13pt""#), "the change: {s}");
+    assert_eq!(crate::odt::import(&saved).unwrap().styles.get("Quote").unwrap().chr.size, Some(13.0));
+    // A style the file defined: that one is WordCraft's now, the others still the file's.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).get_mut("Eigen").unwrap().chr.size = Some(21.0);
+    let saved = crate::odt::export(&d).unwrap();
+    let s = as_read(&saved);
+    assert!(s.contains(r#"fo:font-size="21pt""#) && !s.contains(r#"fo:font-size="9pt""#), "{s}");
+    // A new list (`para.numbering`): the styles as read, and the list there.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    as_read(&crate::odt::export(&d).unwrap());
+    // Normal changed: the default style and Standard are WordCraft's.
+    let mut d = crate::odt::import(&bytes).unwrap();
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(15.0);
+    let s = crate::odt::tests::entry(&crate::odt::export(&d).unwrap(), "styles.xml");
+    assert!(s.contains(r#"fo:font-size="15pt""#), "{s}");
+    assert!(s.contains(r#"draw:gradient draw:name="Sunset""#) && s.contains(r#"fo:margin-bottom="7pt""#), "the rest stays: {s}");
+    // Nothing changed: the file's own, and none of WordCraft's over them.
+    let d = crate::odt::import(&bytes).unwrap();
+    as_read(&crate::odt::export(&d).unwrap());
 }

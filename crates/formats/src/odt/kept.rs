@@ -279,14 +279,39 @@ fn drawing_def(xml: &str) -> bool {
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its `office:styles` as read: every kept
 /// child of the file's, then WordCraft's own children the file had no such of. A drawing's
-/// definition both have stays WordCraft's (see [`drawing_def`]). For a document whose style
-/// definitions are as read.
-pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String]) -> String {
-    with_as_read(styles, "office:styles", "common", defs, order, &|_, d, ours| match ours {
-        Some(o) if drawing_def(o) => Some(o.to_string()),
+/// definition both have stays WordCraft's (see [`drawing_def`]), as does one in `changed`, which
+/// the document has changed since it was read.
+pub(super) fn with_common_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String], changed: &BTreeSet<String>) -> String {
+    with_as_read(styles, "office:styles", "common", defs, order, &|k, d, ours| match ours {
+        Some(o) if drawing_def(o) || changed.contains(k) => Some(o.to_string()),
         // (The default graphic style is the file's: WordCraft's drawings say what they need.)
         _ => Some(d.to_string()),
     })
+}
+
+/// Each child of `office:styles` in `styles` (a `styles.xml` WordCraft wrote), as a hash by its
+/// key: what to compare to tell which definitions a document has changed since it was read.
+pub(super) fn prints(styles: &str) -> BTreeMap<String, u64> {
+    use std::hash::{Hash, Hasher};
+    let (kids, _) = children(styles, "office:styles", "common");
+    kids.into_iter()
+        .filter_map(|(key, (a, b))| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            styles.get(a..b)?.hash(&mut h);
+            Some((key, h.finish()))
+        })
+        .collect()
+}
+
+/// The keys whose definition differs between `then` and `now` ([`prints`]). Standard goes with
+/// the default paragraph style: WordCraft writes Normal in the default style, and Standard empty
+/// over it, so the file's own Standard would hide a change to Normal.
+pub(super) fn changed(then: &BTreeMap<String, u64>, now: &BTreeMap<String, u64>) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = now.iter().filter(|(k, v)| then.get(*k) != Some(*v)).map(|(k, _)| k.clone()).collect();
+    if out.contains("common~style:default-style~paragraph") {
+        out.insert("common:Standard".to_string());
+    }
+    out
 }
 
 /// `styles` (a `styles.xml` WordCraft wrote) with its page layouts, master pages and their
