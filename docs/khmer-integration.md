@@ -6,8 +6,8 @@ This draft pins the companion heads of [craft-libs #551](https://github.com/stor
 and [craft-i18n #122](https://github.com/storytold/craft-i18n/pull/122), fetched through the upstream repositories.
 Merge the dependencies first and retain or update those pins. See [examples and evidence](khmer-evidence.md).
 
-Data embedding is currently disabled pending inherited frequency-source notices,
-maintainer Embeddable sign-off and the model/config policy decision. The Khmer
+Data embedding is currently disabled pending maintainer Embeddable sign-off and
+the model/config policy decision; the inherited-source notices are now recorded. The Khmer
 engine implementation and earlier data-enabled evidence remain for review;
 current builds use the no-data path. See the provenance section below.
 
@@ -208,15 +208,16 @@ The [per-file evidence record](https://github.com/storytold/craft-libs/pull/551)
 (`crates/khmer/PROVENANCE.md`) quotes these contributor statements and identifies
 all six pinned Aksara paths. SIL's README at
 [`54abc6b87f4ffa6a0c95c09836c7c86648002273`](https://github.com/silnrsi/khmerlbdict/blob/54abc6b87f4ffa6a0c95c09836c7c86648002273/README.md)
-lists SEAlang, CLDR names and further inputs. That is the evidence snapshot,
-not a confirmed historical SIL input revision. Its inherited CLDR version/notice
-and the source coverage for the combined frequency artifact remain unresolved.
+lists SEAlang, CLDR names and further inputs. Nathan Wells confirmed this exact
+revision as the January 2026 input. Its CLDR place names match CLDR 28 exactly,
+and that publication's historical Unicode-DFS-2015 notice and a modification
+statement are retained; `craft-khmer`'s licence text now includes them.
 
 The supplied MIT notices identify SBBIC Khmer (2025), SIL NRSI (2015), and Doug
 Cooper (2010, SEAlang). All three are retained in WordCraft's `NOTICE`, the shared
 crate's `LICENSE-AKSARA`, and the staged licence record. Those notices alone do
-not establish every inherited source's permissions. Under craft-i18n ADR 0004,
-the pack is Download-only pending evidence and maintainer Embeddable sign-off.
+not decide the class. With them recorded, the open factual questions are closed;
+under craft-i18n ADR 0004 the pack stays Download-only until maintainer Embeddable sign-off.
 The maintainer also needs to settle the ADR scope for trained models and converted
 configuration. Current `craft-khmer` rejects embedding this pending pack.
 

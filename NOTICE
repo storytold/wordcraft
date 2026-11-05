@@ -169,9 +169,10 @@ The Khmer engine is adapted from SBBIC Khmer's Aksara
 Nathan Wells, working as SBBIC, identifies the frequency dictionary as SIL
 khmerlbdict combined with his own work, and the other five inputs as his original
 SBBIC work. SIL's README lists SEAlang and CLDR among its inherited sources.
-The supplied MIT notices follow; they do not resolve every inherited source's
-permissions. Optional data embedding is disabled pending maintainer approval
-and inherited-source notices. See docs/khmer-integration.md for the evidence.
+The supplied MIT notices follow. The shared craft-khmer crate also retains the
+historical CLDR 28 (Unicode-DFS-2015) notice that SIL's place names inherit.
+Optional data embedding is disabled pending maintainer approval. See
+docs/khmer-integration.md for the evidence.
 
 MIT License
 
