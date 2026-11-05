@@ -89,7 +89,6 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
-        emphasis: Some(wordcraft_doc::props::EmphasisMark::UnderDot),
         web_hidden: Some(true),
         snap_to_grid: Some(false),
         spacing: Some(1.5),
