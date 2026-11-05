@@ -976,7 +976,8 @@ Proposed `task.py run` command bodies (the parent supplies task/job/evidence):
 Run the release app with `--sample --control 7981` and a temporary settings dir
 (`WORDCRAFT_NO_PREFS` for agent runs where appropriate). Use `ui.screenshot`, `ui.inspect`,
 `ui.click`, `ui.key`, `ui.text`, `ui.wheel`, save/open. Observe X11 and a real Wayland
-compositor (record compositor identity); use `WORDCRAFT_WAYLAND=1` where needed. Check regular
+compositor (record compositor identity): WordCraft starts on native Wayland, and `WORDCRAFT_X11=1`
+runs it through XWayland. Check regular
 clipboard, middle-click autoscroll (no PRIMARY paste), file drop, native IME and
 DeleteSurroundingBytes/outgoing surrounding text, real Russian/Arabic/Hebrew keyboard layouts,
 mixed DPI, window resize, a forced hidden screenshot pass, screenshot timeout/cancel and page

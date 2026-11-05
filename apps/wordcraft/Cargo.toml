@@ -51,6 +51,12 @@ dispatch2 = "0.3"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }
+# Checks that the X11 libraries are installed before choosing XWayland (see main.rs). Already in
+# the build through winit, at this version.
+x11-dl = "2.21"
+# Checks for libxkbcommon-x11 too, which winit's X11 backend needs for the keyboard and panics
+# without. Already in the build through winit, at this version and with this feature.
+xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 # The desktop's animation setting on Linux and the BSDs, read from the XDG settings portal over
 # D-Bus. Already in the build through AccessKit, at this version; this adds only its blocking API.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
