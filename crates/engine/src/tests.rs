@@ -1432,6 +1432,63 @@ fn copying_a_paragraph_that_switches_its_list_off_drops_the_styles_indents() {
     assert!(html.contains("margin-left:18pt"), "{html}");
 }
 
+/// #5537: indents given in characters (`w:firstLineChars` and friends, from the style or on the
+/// paragraph) are written in points measured in the paragraph mark's font size, as layout measures
+/// them.
+#[test]
+fn copying_paragraphs_with_character_indents_measures_them_in_the_marks_size() {
+    let mut s = normal_with_space_after();
+    if let Some(n) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Normal") {
+        n.para.indent_first_chars = Some(2.0);
+    }
+    run(&mut s, "document.setText", json!({"text": "One\nTwo"}));
+    if let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.get_mut(1).map(std::sync::Arc::make_mut) {
+        p.props.indent_left_chars = Some(3.0);
+        p.props.indent_right_chars = Some(1.0);
+    }
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(1, 3)}));
+    run(&mut s, "format.size", json!({"size": 18}));
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().mark.size, Some(18.0));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    let second = html.match_indices("<p").nth(1).map_or(html.len(), |(i, _)| i);
+    let (one, two) = html.split_at(second);
+    assert!(one.contains("One") && one.contains("text-indent:24pt"), "{html}");
+    assert!(
+        two.contains("Two") && two.contains("margin-left:54pt") && two.contains("margin-right:18pt") && two.contains("text-indent:36pt"),
+        "{html}"
+    );
+}
+
+/// #5537: a paragraph that switches its style's list off drops character indents inherited from the
+/// style, and keeps character indents of its own, as layout does.
+#[test]
+fn copying_a_list_off_paragraph_keeps_its_own_character_indents() {
+    let mut s = normal_with_space_after();
+    if let Some(n) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Normal") {
+        n.para.indent_left_chars = Some(3.0);
+        n.para.indent_first_chars = Some(2.0);
+    }
+    run(&mut s, "document.setText", json!({"text": "One"}));
+    if let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+    }
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:0pt") && !html.contains("text-indent"), "{html}");
+
+    if let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.indent_left_chars = Some(1.5);
+        p.props.indent_first_chars = Some(-0.5);
+    }
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("margin-left:18pt") && html.contains("text-indent:-6pt"), "{html}");
+}
+
 /// #5537: the issue's document, on the clipboard and pasted into another window, which only has
 /// the HTML: 12 pt after each paragraph, a left indent, a first-line indent, a centred paragraph.
 #[test]

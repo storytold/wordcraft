@@ -237,7 +237,11 @@ fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &
                 (pp.indent_left, pp.indent_right, pp.indent_first) = (None, None, None);
                 continue;
             }
-            let r = styles.resolve_para(&p.props);
+            let mut r = styles.resolve_para(&p.props);
+            // Indents in characters are measured in the paragraph mark's font size, as in layout.
+            if r.indent_chars.iter().any(|c| *c != 0.0) {
+                r.set_char_unit(styles.resolve_char(p.props.style.as_deref(), &p.mark).size);
+            }
             // A list item's indents come from its list, which the copy doesn't hold, and its
             // style's spacing is contextual: it gets none, as before. A numbered heading goes out
             // as a heading, so it keeps its spacing, but not those indents.
@@ -254,10 +258,12 @@ fn with_source_spacing(f: &Fragment, styles: &wordcraft_doc::StyleSheet, bare: &
             // A paragraph that switches its style's list off keeps only indents of its own, as
             // in layout.
             let off = p.props.numbering.is_some_and(|n| n.num == 0);
-            let own = |set: Option<f32>, v: f32| if off && set.is_none() { 0.0 } else { v };
+            let own = |pts: Option<f32>, chars: Option<f32>, v: f32| {
+                if off && pts.is_none() && chars.is_none_or(|c| c == 0.0) { 0.0 } else { v }
+            };
             // Other programs have no page margin for a negative indent to hang into.
-            let left = own(p.props.indent_left, r.indent_left).max(0.0);
-            let first = own(p.props.indent_first, r.indent_first).max(-left);
+            let left = own(p.props.indent_left, p.props.indent_left_chars, r.indent_left).max(0.0);
+            let first = own(p.props.indent_first, p.props.indent_first_chars, r.indent_first).max(-left);
             let pp = &mut p.props;
             pp.space_before = space(r.space_before, beside(i.checked_sub(1)));
             pp.space_after = space(r.space_after, beside(i.checked_add(1)));
