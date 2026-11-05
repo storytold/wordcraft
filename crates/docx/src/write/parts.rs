@@ -21,6 +21,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     } else {
         doc
     };
+    let shape_ids = doc.shape_ids();
     let mut wr = Writer {
         eq_number: 0,
         doc,
@@ -29,8 +30,10 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         next_rev_id: 0,
         open_moves: Vec::new(),
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
-        docpr: doc.shape_ids().last().copied().filter(|m| *m != u32::MAX).unwrap_or(0),
-        doc_ids: doc.shape_ids(),
+        docpr: shape_ids.last().copied().filter(|m| *m != u32::MAX).unwrap_or(0),
+        doc_ids: shape_ids,
+        issued: std::collections::HashSet::new(),
+        low: 1,
         shape_ids: std::collections::HashSet::new(),
         z: 251_658_240,
         footnotes: Vec::new(),

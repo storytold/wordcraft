@@ -42,3 +42,43 @@ fn fresh_docpr_ids_skip_used_ids_with_a_shape_at_the_largest_id() {
     sorted.dedup();
     assert_eq!(sorted.len(), 5, "duplicate docPr ids: {ids:?}");
 }
+
+#[test]
+fn fresh_docpr_ids_stay_unique_with_a_shape_just_below_the_largest_id() {
+    let mut d = Document::from_text("a\nb\nc");
+    d.media.insert("p.png".into(), std::sync::Arc::new(vec![137, 80, 78, 71, 13, 10, 26, 10]));
+    d.insert_object(&Pos::body(0, 1), shape(u32::MAX - 1), &Default::default()).unwrap();
+    for i in 1..3 {
+        let pic =
+            InlineObject::Image { media: "p.png".into(), w: 40.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        d.insert_object(&Pos::body(i, 1), pic, &Default::default()).unwrap();
+    }
+    let ids = docpr_ids(&wordcraft_docx::write(&d).unwrap());
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 3, "duplicate docPr ids: {ids:?}");
+    let max1 = (u32::MAX - 1).to_string();
+    assert_eq!(ids.iter().filter(|i| **i == max1).count(), 1, "{ids:?}");
+}
+
+#[test]
+fn fresh_docpr_ids_stay_unique_across_many_pictures_after_saturation() {
+    let n = 40;
+    let mut d = Document::from_text(&vec!["x"; n].join("\n"));
+    d.media.insert("p.png".into(), std::sync::Arc::new(vec![137, 80, 78, 71, 13, 10, 26, 10]));
+    d.insert_object(&Pos::body(0, 0), shape(u32::MAX - 1), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(1, 0), shape(1), &Default::default()).unwrap();
+    for i in 2..n {
+        let pic =
+            InlineObject::Image { media: "p.png".into(), w: 40.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        d.insert_object(&Pos::body(i, 0), pic, &Default::default()).unwrap();
+    }
+    let ids = docpr_ids(&wordcraft_docx::write(&d).unwrap());
+    assert_eq!(ids.len(), n, "{ids:?}");
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), n, "duplicate docPr ids: {ids:?}");
+}
