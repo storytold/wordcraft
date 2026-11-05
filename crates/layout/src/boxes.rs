@@ -500,7 +500,7 @@ fn box_float_table_rect(
     let clamped = r;
     let mut r = clear_of_float_tables(r, f, legacy, h_area.0, float_tables);
     // Cleared downwards it would leave the page again: stack it above the tables in its way when
-    // there is room for that.
+    // there is room for that (a hair above them, so rounding can not leave it touching).
     if let Some(fr) =
         frame.filter(|_| f.v_rel != Anchor::Page && f.v_rel != Anchor::Margin).filter(|fr| r.bottom() + fr.origin.1 > fr.sect.page_h + 0.01)
     {
@@ -509,7 +509,7 @@ fn box_float_table_rect(
         for _ in 0..64 {
             let area = up.inset(-dl, -dt, -dr, -db);
             let Some(above) = float_tables.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.y).reduce(f32::min) else { break };
-            up.y = above - db - h;
+            up.y = above - db - h - 0.01;
         }
         if up.y + fr.origin.1 >= 0.0 && !float_tables.iter().any(|o| !f.overlap && o.intersects(&up.inset(-dl, -dt, -dr, -db))) {
             r = up;
