@@ -174,14 +174,23 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     {
         list.start_overrides = vec![(0, start)];
     }
+    // The label goes. With Track Changes on, text this author just typed is removed, but text that
+    // was already there is marked deleted instead, so Reject All brings it back; the caret then
+    // sits after what stays.
+    let before = s.doc.para_at(&f).map_or(0, |p| p.len());
+    if s.doc.settings.track_changes {
+        crate::cmd::track_delete(s, &Pos { off: 0, ..f.clone() }, &f)?;
+    } else {
+        s.doc.para_mut(f.story, &f.path)?.delete(0, f.off)?;
+    }
+    let removed = before.saturating_sub(s.doc.para_at(&f).map_or(0, |p| p.len()));
     let para = s.doc.para_mut(f.story, &f.path)?;
-    para.delete(0, f.off)?;
     para.props.numbering = Some(NumRef { num, level: 0 });
     // A heading stays a heading (Word: "1. " in a Heading 1 gives a numbered Heading 1).
     if para.props.style.as_deref().is_none_or(|st| st == "Normal") {
         para.props.style = Some("ListParagraph".into());
     }
-    s.sel = Selection::caret(Pos { off: 0, ..f });
+    s.sel = Selection::caret(Pos { off: f.off.saturating_sub(removed), ..f });
     Ok(true)
 }
 

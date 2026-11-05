@@ -382,6 +382,53 @@ fn typing_1_dot_starts_numbering_again() {
     assert_ne!(num(0), num(3), "a new list restarts at 1");
 }
 
+/// Typed one character at a time like the keyboard: "1. " starts a list every time, and "2. ",
+/// "10) " … start one at the number typed instead of going back to 1.
+#[test]
+fn typed_numbers_start_a_list_at_that_number() {
+    let mut s = typed("1. a\n\n1. b\n\n2. c\n\n10) d\n\n7.x\n02. e");
+    let lower: Vec<_> = paras(&s).into_iter().map(|(t, level, _)| (t.to_lowercase(), level)).collect();
+    let want = [("a", Some(0)), ("b", Some(0)), ("c", Some(0)), ("d", Some(0)), ("7.x", None), ("02. e", None)];
+    assert_eq!(lower, want.map(|(t, l)| (t.to_string(), l)));
+    let shown: Vec<Option<String>> = numbers(&mut s).into_iter().map(|n| n.0).collect();
+    let shown: Vec<_> = shown.iter().map(|l| l.as_deref()).collect();
+    assert_eq!(&shown[..4], [Some("1."), Some("1."), Some("2."), Some("10)")], "a typed number is the number shown");
+    // "0" and a leading zero are ordinary text, and so is a number not followed by a space.
+    assert_eq!(&shown[4..], [None, None]);
+    // A list started at 2 keeps counting from there.
+    let mut s = typed("2. a\nb");
+    let shown: Vec<_> = numbers(&mut s).into_iter().map(|n| n.0).collect();
+    assert_eq!(shown, [Some("2.".to_string()), Some("3.".to_string())]);
+    // Undo right after takes only the AutoFormat back.
+    let mut s = typed("3. ");
+    run(&mut s, "edit.undo", json!({}));
+    typ(&mut s, "x");
+    assert_eq!(paras(&s), vec![("3. x".to_string(), None, false)]);
+}
+
+/// The label is removed by the AutoFormat: with Track Changes on, what this author typed goes
+/// outright, but a label that was already in the paragraph is marked deleted, so Reject All
+/// brings it back.
+#[test]
+fn a_tracked_number_label_that_was_already_there_is_marked_deleted() {
+    // "2." was there before Track Changes was turned on; the space after it is typed tracked.
+    let mut s = typed("2.");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, " ");
+    assert!(paras(&s)[0].1.is_some(), "{:?}", paras(&s));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.text == "2." && p.run_ranges().all(|(_, c)| c.del.is_some())), "{:?}", paras(&s));
+    assert_eq!(s.sel.focus, Pos::body(0, 2), "the caret is after the label that stays");
+    typ(&mut s, "x");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "2.");
+    // Typed with Track Changes on, the whole label never existed.
+    let mut s = typed("");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "2. x");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "x");
+    assert_eq!(s.sel.focus, Pos::body(0, 1));
+}
+
 #[test]
 fn undo_right_after_autoformat_undoes_only_the_autoformat() {
     let mut s = typed("* ");
