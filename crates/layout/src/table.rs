@@ -1125,7 +1125,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     b.extend(below.map(cell_at));
                 }
                 Placed::Rule { .. } => {
-                    let (above, below) = split_rule(it, row.height, cut, rest, shift);
+                    let (above, below) = split_rule(it, RuleSplit { row_height: row.height, cut, rest, shift });
                     a.extend(above);
                     b.extend(below);
                 }
@@ -1140,16 +1140,25 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     ))
 }
 
-fn split_rule(it: &Placed, row_height: f32, cut: f32, rest: f32, shift: f32) -> (Vec<Placed>, Vec<Placed>) {
-    let Placed::Rule { x0, y0, x1, y1, border } = it else { return (Vec::new(), Vec::new()) };
-    if (y0 - y1).abs() < 0.01 {
-        return split_horizontal_rule(it, row_height, cut, rest, shift);
-    }
-    split_diagonal_rule(*x0, *y0, *x1, *y1, *border, row_height, cut, rest, shift)
+#[derive(Clone, Copy)]
+struct RuleSplit {
+    row_height: f32,
+    cut: f32,
+    rest: f32,
+    shift: f32,
 }
 
-fn split_horizontal_rule(it: &Placed, row_height: f32, cut: f32, rest: f32, shift: f32) -> (Vec<Placed>, Vec<Placed>) {
+fn split_rule(it: &Placed, split: RuleSplit) -> (Vec<Placed>, Vec<Placed>) {
     let Placed::Rule { x0, y0, x1, y1, border } = it else { return (Vec::new(), Vec::new()) };
+    if (y0 - y1).abs() < 0.01 {
+        return split_horizontal_rule(it, split);
+    }
+    split_diagonal_rule(*x0, *y0, *x1, *y1, *border, split)
+}
+
+fn split_horizontal_rule(it: &Placed, split: RuleSplit) -> (Vec<Placed>, Vec<Placed>) {
+    let Placed::Rule { x0, y0, x1, y1, border } = it else { return (Vec::new(), Vec::new()) };
+    let RuleSplit { row_height, cut, rest, shift } = split;
     if *y0 <= 0.01 {
         return (vec![it.clone()], vec![Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border }]);
     }
@@ -1166,17 +1175,8 @@ fn split_horizontal_rule(it: &Placed, row_height: f32, cut: f32, rest: f32, shif
     }
 }
 
-fn split_diagonal_rule(
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-    border: Border,
-    row_height: f32,
-    cut: f32,
-    rest: f32,
-    shift: f32,
-) -> (Vec<Placed>, Vec<Placed>) {
+fn split_diagonal_rule(x0: f32, y0: f32, x1: f32, y1: f32, border: Border, split: RuleSplit) -> (Vec<Placed>, Vec<Placed>) {
+    let RuleSplit { row_height, cut, rest, shift } = split;
     let (top, bottom) = (y0.min(y1), y0.max(y1));
     if top < cut && bottom > cut {
         let (left_x, right_x) = if y0 <= y1 { (x0, x1) } else { (x1, x0) };
